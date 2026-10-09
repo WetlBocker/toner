@@ -1,0 +1,51 @@
+# Import with Inventory > Import. Passwords, tokens and SNMP communities are stored in Windows Credential Manager,
+# never in the database. Leave them out here to enter them in the device dialog instead.
+#
+# Vendors: cisco, juniper, arista, hpe, mikrotik (SSH) / fortinet, paloalto, meraki, unifi (web API) /
+#          snmp (any device that answers SNMP)
+# Optional columns for any device:  folder, tags, profile (a credential profile name), jump (another device's name),
+#                                   location, details, enabled, port
+devices:
+  - name: core-sw1
+    vendor: cisco
+    host: 10.0.0.2             # an IP address or a DNS name, e.g. core-sw1.corp.example.com
+    platform: cisco_ios        # cisco_xe, cisco_nxos, cisco_asa
+    username: readonly
+    folder: Chicago HQ/Core network
+    tags: core, wan
+    location: Chicago
+
+  - name: edge-fw
+    vendor: fortinet
+    host: 10.0.0.1
+    token: YOUR_API_TOKEN      # System > Administrators > REST API Admin
+    verify_ssl: false
+    ha_expected: true
+    folder: Chicago HQ/Edge
+    tags: edge, PCI
+
+  - name: pa-edge
+    vendor: paloalto
+    host: 10.0.0.4
+    token: YOUR_API_KEY        # Device > Administrators > API key
+    verify_ssl: false
+
+  - name: udm-pro
+    vendor: unifi              # one controller expands into every UniFi device
+    host: 10.0.0.3
+    username: netcheck-ro      # local read-only account on the console
+    site: default
+    verify_ssl: false
+
+  - name: dist-sw1
+    vendor: juniper
+    host: 10.1.0.20
+    username: readonly
+    profile: Network read-only # shares its username and password with every device that names it
+    jump: core-sw1             # reached over SSH through core-sw1 (a bastion or management switch)
+
+  - name: lab-ups
+    vendor: snmp               # generic: CPU, memory, storage, uptime, interfaces, errors, utilisation
+    host: 10.0.5.9
+    community: public          # kept in Credential Manager; SNMP v3 is set up in the device dialog
+    tags: power

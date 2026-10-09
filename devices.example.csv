@@ -1,0 +1,7 @@
+name,vendor,host,platform,username,password,site,location,details,port,verify_ssl,ha_expected,enabled,folder
+core-sw1,cisco,core-sw1.corp.example.com,ios,readonly,,,Chicago,Core switch rack 3,,,,yes,Chicago HQ/Core network
+edge-fw,fortinet,10.0.0.1,,,YOUR_API_TOKEN,,Chicago,Edge firewall,,no,yes,yes,Chicago HQ/Edge
+udm-pro,unifi,10.0.0.3,,netcheck-ro,,default,Denver,Branch gateway,,no,,yes,Denver branch
+dist-sw1,juniper,10.1.0.20,,readonly,,,Chicago,EX switch,,,,yes,Chicago HQ/Core network
+pa-edge,paloalto,10.1.0.1,,,YOUR_API_KEY,,Chicago,Perimeter firewall,,no,yes,yes,Chicago HQ/Edge
+meraki-org,meraki,api.meraki.com,,,YOUR_API_KEY,Acme Corp,,Cloud-managed branches,,,,yes,Denver branch

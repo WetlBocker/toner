@@ -1,0 +1,18 @@
+__pycache__/
+*.pyc
+*.db
+*.log
+.venv/
+venv/
+build/
+dist/
+*.spec
+
+# local, personal files: never commit inventories, keys or exports
+devices.yaml
+devices.csv
+devices.json
+sftp_host_key
+*.pem
+toner-backup-*
+toner-settings.json

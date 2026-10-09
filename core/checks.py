@@ -1,0 +1,36 @@
+"""The checks each vendor driver runs, so they can be switched on and off in Settings."""
+
+# vendor -> [(key, label)]. The key is what the driver tests with Driver.enabled(key).
+CATALOG = {
+    "cisco": [("cpu", "CPU"), ("memory", "Memory"), ("uptime", "Uptime and recent reboots"),
+              ("interfaces", "Interfaces and error counters"), ("bgp", "BGP peers"),
+              ("ospf", "OSPF adjacencies")],
+    "fortinet": [("resources", "CPU and memory"), ("firmware", "Firmware version"),
+                 ("wan links", "WAN links"), ("ha", "HA members"), ("vpn", "IPsec tunnels")],
+    "juniper": [("cpu", "CPU"), ("memory", "Memory"), ("uptime", "Uptime and recent reboots"),
+                ("alarms", "Chassis alarms"), ("interfaces", "Interfaces"), ("bgp", "BGP peers"),
+                ("ospf", "OSPF adjacencies")],
+    "arista": [("cpu", "CPU"), ("memory", "Memory"), ("uptime", "Uptime and recent reboots"),
+               ("temperature", "Temperature"), ("interfaces", "Interfaces"), ("bgp", "BGP peers"),
+               ("ospf", "OSPF adjacencies")],
+    "hpe": [("cpu", "CPU"), ("memory", "Memory"), ("uptime", "Uptime and recent reboots"),
+            ("interfaces", "Interfaces")],
+    "mikrotik": [("cpu", "CPU"), ("memory", "Memory"), ("uptime", "Uptime and recent reboots"),
+                 ("firmware", "RouterOS version"), ("interfaces", "Interfaces"), ("ospf", "OSPF adjacencies")],
+    "paloalto": [("resources", "CPU and memory"), ("uptime", "Uptime and recent reboots"),
+                 ("firmware", "PAN-OS version"), ("sessions", "Session table"), ("ha", "HA state"),
+                 ("interfaces", "Interfaces")],
+    "meraki": [("devices", "Device status"), ("uplinks", "Appliance uplinks"), ("licenses", "License status")],
+    "snmp": [("reachability", "Reachability and identity"), ("cpu", "CPU"), ("memory", "Memory"),
+             ("storage", "Disk and storage"), ("uptime", "Uptime and recent reboots"),
+             ("temperature", "Temperature sensors"), ("interfaces", "Interface status"),
+             ("interface errors", "Interface errors"), ("bandwidth", "Interface utilization")],
+    "unifi": [("site health", "Site health"), ("uptime", "Uptime and recent reboots"), ("cpu", "CPU"),
+              ("memory", "Memory"), ("temperature", "Temperature"), ("firmware", "Firmware updates"),
+              ("uplink", "Uplink state"), ("port errors", "Port errors"), ("clients", "AP client counts"),
+              ("channel util", "Channel utilization")],
+}
+
+
+def key(vendor, check):
+    return f"{vendor}:{check}"

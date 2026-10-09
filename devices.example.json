@@ -1,0 +1,11 @@
+{
+  "devices": [
+    {"name": "core-sw1", "vendor": "cisco", "host": "core-sw1.corp.example.com", "platform": "cisco_ios",
+     "username": "readonly", "location": "Chicago", "details": "Core switch rack 3",
+     "folder": "Chicago HQ/Core network"},
+    {"name": "edge-fw", "vendor": "fortinet", "host": "10.0.0.1", "token": "YOUR_API_TOKEN",
+     "verify_ssl": false, "ha_expected": true, "location": "Chicago"},
+    {"name": "udm-pro", "vendor": "unifi", "host": "10.0.0.3", "username": "netcheck-ro",
+     "site": "default", "location": "Denver"}
+  ]
+}

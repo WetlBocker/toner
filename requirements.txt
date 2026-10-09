@@ -1,0 +1,10 @@
+PySide6
+netmiko
+ntc-templates
+requests
+PyYAML
+keyring
+pyte
+pysnmp>=7.1,<8
+pyinstaller
+cryptography
