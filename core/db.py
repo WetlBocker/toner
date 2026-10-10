@@ -68,12 +68,15 @@ DEFAULT_SETTINGS = {
     # file servers and throughput tests (per computer: folders and paths)
     "fileserver": {}, "iperf_path": "",
     # proxy for every connection that can use one (see core/proxy.py; the proxy password is in Credential Manager)
+    # updates (see core/updates.py)
+    "update_check": True, "update_auto_install": False, "update_last_check": "", "update_skip": "", "update_pending": {},
     "proxy": {"mode": "system", "kind": "http", "host": "", "port": 8080, "username": "",
               "bypass": "localhost, 127.0.0.1"},
 }
 # Per-machine state that must not travel in an exported settings file (channel secrets stay in
 # Credential Manager, so an imported channel would be broken).
-NOT_PORTABLE = {"notify_channels", "notify_snooze_until", "inventory_expanded", "snippets", "fileserver", "iperf_path"}
+NOT_PORTABLE = {"notify_channels", "notify_snooze_until", "inventory_expanded", "snippets", "fileserver", "iperf_path",
+                "update_last_check", "update_skip", "update_pending"}
 
 DEVICE_FIELDS = ["name", "vendor", "host", "port", "platform", "username",
                  "site", "verify_ssl", "ha_expected", "enabled", "location", "details", "folder_id",

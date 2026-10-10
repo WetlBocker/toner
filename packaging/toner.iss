@@ -42,6 +42,14 @@ Name: "{userstartup}\Toner"; Filename: "{app}\Toner.exe"; Parameters: "--minimiz
 
 [Run]
 Filename: "{app}\Toner.exe"; Description: "Start Toner"; Flags: nowait postinstall skipifsilent
+; An update that Toner started itself runs silently with /relaunch=1 and opens Toner again when it is done.
+Filename: "{app}\Toner.exe"; Flags: nowait; Check: Relaunch
 
 ; Uninstalling removes the program only. The database, history, logs and saved passwords stay (in %APPDATA%\NetCheck and
 ; Windows Credential Manager), so a reinstall or upgrade picks up where it left off.
+
+[Code]
+function Relaunch: Boolean;
+begin
+  Result := ExpandConstant('{param:relaunch|0}') = '1';
+end;

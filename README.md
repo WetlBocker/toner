@@ -126,9 +126,28 @@ window is closed.
 The tests use fakes (simulated devices and APIs, a local SNMP agent, local TLS and SSH servers) and a throw-away
 database; they never touch your inventory or credentials.
 
+## About and updates
+
+**About** (the last section) shows the version, how this copy was installed, the program, data, database and log
+locations, the Python, Qt and Windows versions, the libraries Toner is built with and the license. **Copy details**
+puts all of it on the clipboard for a bug report.
+
+**Check for updates** looks at the newest GitHub release (once a day if "Check for updates automatically" is ticked,
+or whenever you press the button). A newer version puts a dot next to About, and shows its release notes with
+**Download and install**, **View release** and **Skip this version**. The installer is downloaded from GitHub over
+HTTPS only, its SHA-256 checksum is compared with the one GitHub published for the file, and only then is it run (a
+download that does not match, or a release with no checksum, is never run). Your inventory, history and saved passwords
+are kept. **Install updates automatically** downloads and verifies a new version as soon as it is found and installs it
+when you close Toner. Copies not set up with the installer (running from source, or unzipped) can check for updates but
+not install them.
+
+To publish a release for the update check to find: raise `VERSION` in `core\version.py`, run `packaging\build.ps1`, then
+create a GitHub release tagged `v<version>` (for example `v1.2.0`) and attach `Toner-Setup-<version>.exe`. GitHub adds the
+checksum itself.
+
 ## Build the installer
 
-    powershell -File packaging\build.ps1 -Version 1.0.0
+    powershell -File packaging\build.ps1
 
 This builds the program folder with PyInstaller, then `build\installer\Toner-Setup-1.0.0.exe` with
 [Inno Setup 6](https://jrsoftware.org/isinfo.php) (`winget install JRSoftware.InnoSetup`). The installer needs no

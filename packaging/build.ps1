@@ -1,9 +1,10 @@
 # Builds Toner: the program folder (PyInstaller), then Toner-Setup-<version>.exe (Inno Setup).
 #   powershell -File packaging\build.ps1 [-Version 1.0.1]
-param([string]$Version = "1.0.0")
+param([string]$Version = "")
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
+if (-not $Version) { $Version = (python -c "from core.version import VERSION; print(VERSION)").Trim() }   # core\version.py is the one place the version lives
 
 python -m PyInstaller --noconfirm --clean --windowed --onedir --name Toner --icon "$root\assets\toner.ico" `
     --collect-all netmiko --collect-all ntc_templates --collect-all pysnmp `

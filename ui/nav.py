@@ -66,6 +66,12 @@ class NavStack(QWidget):
         if self.list.currentRow() < 0:
             self.list.setCurrentRow(0)
 
+    def setBadge(self, widget, on):
+        """Mark a section that has something new (a dot after its name)."""
+        i = self.stack.indexOf(widget)
+        if i >= 0:
+            self.list.item(i).setText(self._names[i] + ("   \u25cf" if on else ""))
+
     def restyle(self):
         """Re-tint the icons after the theme or accent changed."""
         t = theme.current()

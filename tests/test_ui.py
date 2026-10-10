@@ -37,7 +37,7 @@ w = A.Main(); w.show(); S = w.settings
 P = {p.title: p for p in S.pages}
 
 print("== tab and save/revert")
-check("settings is a tab, no corner button", w.centralWidget().tabText(w.centralWidget().count() - 1) == "Settings")
+check("settings is a tab, no corner button", w.centralWidget().tabText(w.centralWidget().count() - 2) == "Settings" and w.centralWidget().tabText(w.centralWidget().count() - 1) == "About")
 check("11 categories listed", S.nav.count() >= 11 and "Notifications" in [S.nav.item(i).text() for i in range(S.nav.count())] and [S.nav.item(i).text() for i in range(3)] == ["General", "Thresholds", "Checks"])
 g = P["General"]; g.workers.setValue(4); g.retention.setValue(30); g.scan_over.setValue(0); g.verify.setChecked(True)
 check("nothing is stored until Save", db.get_setting("workers") == 10)

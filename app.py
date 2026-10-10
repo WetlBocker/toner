@@ -10,6 +10,7 @@ from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence, QPainter, QPixma
 from PySide6.QtWidgets import QApplication, QMainWindow, QMenu, QMessageBox, QSystemTrayIcon
 from core import audit, db, notify, reports, sessionlog
 from ui import theme
+from ui.about import AboutTab
 from ui.configs import ConfigsTab
 from ui.dashboard import DashboardTab
 from ui.device_view import DeviceView
@@ -84,6 +85,7 @@ class Main(QMainWindow):
         self.tools = ToolsTab()
         self.configs = ConfigsTab()
         self.settings = SettingsTab()
+        self.about = AboutTab()
         self.scheduler = Scheduler(self.results)
         self.backup_scheduler = BackupScheduler(self.configs)
         # Windows pop-ups come from a tray icon, shown while a desktop channel is enabled or the app runs in the background.
@@ -124,11 +126,15 @@ class Main(QMainWindow):
         self.dashboard.backup_requested.connect(lambda: (self.go("Configs"), self.configs.start()))
         self.tools.inventory_changed.connect(self.inventory_reloaded)
         self.settings.changed.connect(self.settings_applied)
+        self.about.update_available.connect(self._update_available)
+        self.about.update_cleared.connect(lambda: self.tabs.setBadge(self.about, False))
+        self.about.quit_requested.connect(self.quit_for_real)           # the installer has been started
         tabs = self.tabs = NavStack("Toner")
         for page, label, icon in ((self.dashboard, "Overview", "dashboard"), (self.results, "Results", "results"),
                                   (self.inventory, "Inventory", "inventory"), (self.configs, "Configs", "configs"),
                                   (self.history, "History", "history"), (self.reports, "Reports", "reports"),
-                                  (self.tools, "Tools", "tools"), (self.settings, "Settings", "settings")):
+                                  (self.tools, "Tools", "tools"), (self.settings, "Settings", "settings"),
+                                  (self.about, "About", "about")):
             tabs.addTab(page, label, icon)
         self.setCentralWidget(tabs)
         self.palette = CommandPalette(self)
@@ -199,6 +205,7 @@ class Main(QMainWindow):
             entries.append((f"Go to {name}", f"Ctrl+{i + 1}" if i < 9 else "", lambda i=i: self.tabs.setCurrentIndex(i)))
         entries += [("Run checks", "all enabled devices", lambda: (self.go("Results"), self.results.start())),
                     ("Back up configurations", "all enabled devices", lambda: (self.go("Configs"), self.configs.start())),
+                    ("Check for updates", "About", lambda: (self.go("About"), self.about.check(True))),
                     ("Add a device", "", lambda: (self.go("Inventory"), self.inventory.add())),
                     ("Scan the network for devices", "discovery", lambda: (self.go("Tools"), self.tools.tabs.setCurrentWidget(self.tools.discovery)))]
         for i in range(self.tools.tabs.count()):
@@ -215,6 +222,12 @@ class Main(QMainWindow):
     def _tray_clicked(self, reason):
         if reason in (QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.DoubleClick):
             self.show_window()
+
+    def _update_available(self, version):
+        self.tabs.setBadge(self.about, True)
+        if self.tray.isVisible():
+            self.tray.showMessage("Toner update available", f"Version {version} is ready. Open Toner > About to install it.",
+                                  QSystemTrayIcon.MessageIcon.Information, 8000)
 
     def show_desktop(self, title, body):
         self.update_tray(force=True)
@@ -275,6 +288,8 @@ class Main(QMainWindow):
             v.close()
         self.tools.shutdown()          # stop any running ping/scan/SSH session before exiting
         self.configs.shutdown()
+        self.about.apply_on_exit()     # a downloaded update installs as Toner closes, if automatic updating is on
+        self.about.shutdown()
         super().closeEvent(event)
 
 
@@ -291,6 +306,7 @@ def main():
         win.update_tray()                          # started with Windows: wait in the tray
     else:
         win.show()
+    win.about.start_background_checks()
     log.info("Toner started")
     code = app.exec()
     log.info("Toner stopped")
