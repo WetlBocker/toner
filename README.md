@@ -28,7 +28,16 @@ chart.
 
 **Reports** exports CSV, HTML and PDF.
 
-**Tools**: SSH console (every session logged), command runner (one command on many devices, read-only by default),
+**Sessions** keeps your connections: SSH, Telnet, Remote Desktop and Serial (console cable). Create one with New session,
+choose the type, and it is saved so a double-click connects later. Sessions live in a folder tree like the inventory's: make
+folders and subfolders (New folder, or New folder... while creating a session), drag sessions and folders between them, rename
+or delete a folder (what is in it moves up, nothing is lost), and search, edit and duplicate sessions. SSH, Telnet and Serial open in tabs inside Toner (several at once), follow the font and colours in
+Settings > Terminal, and every one is logged (Session logs). An SSH session can keep its password in Credential Manager,
+or use an inventory device's saved login, jump host and proxy; Telnet and SSH sessions follow the proxy settings. Serial
+sessions have a Send break button for ROMMON. Remote Desktop starts Windows' own client with a generated .rdp file, and
+Windows asks for the password. Inventory > Open SSH session and a device window's SSH button open a Sessions tab.
+
+**Tools**: command runner (one command on many devices, read-only by default),
 ping / traceroute / DNS, live ping graph, path monitor (MTR), port scanner, TLS certificate checker (also for the whole
 inventory), subnet calculator, device discovery, topology map from LLDP / CDP, SNMP (v1, v2c, v3: get, walk, bulk walk,
 interface table and rates, neighbours), syslog and trap receivers, MAC lookup and Wake-on-LAN, a TFTP server and an SFTP
@@ -145,6 +154,19 @@ To publish a release for the update check to find: raise `VERSION` in `core\vers
 create a GitHub release tagged `v<version>` (for example `v1.2.0`) and attach `Toner-Setup-<version>.exe`. GitHub adds the
 checksum itself.
 
+## Install or portable
+
+The installer's first page asks how to set Toner up:
+
+- **Install on this computer** adds Start Menu and desktop shortcuts, an entry in Installed apps, an uninstaller and an
+  optional start-with-Windows entry. Data is kept in `%APPDATA%\NetCheck`.
+- **Portable** copies Toner into a folder you choose (a USB drive, a share) and nothing else: no shortcuts, no registry
+  entries, no uninstaller. A `portable.flag` file beside `Toner.exe` makes Toner keep its database, settings, logs and
+  downloaded updates in a `data` folder next to it, so copying the whole folder moves everything. Delete the folder to
+  remove it. Saved passwords are the one thing that stays behind: they live in Windows Credential Manager on each computer.
+  A portable copy still checks for updates and updates itself in place, keeping its data.
+
+Both can also be chosen from a script: `Toner-Setup-1.1.0.exe /VERYSILENT /MODE=portable /DIR="E:\Toner"`.
 ## Build the installer
 
     powershell -File packaging\build.ps1

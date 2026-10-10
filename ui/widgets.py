@@ -1,8 +1,125 @@
 from PySide6.QtCore import QEvent, QPointF, QRect, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPen, QPixmap, QPolygonF
-from PySide6.QtWidgets import (QApplication, QCheckBox, QHBoxLayout, QLabel, QMenu, QStyle, QStyledItemDelegate,
-                               QStyleOptionViewItem, QToolButton, QVBoxLayout, QWidget, QWidgetAction)
+from PySide6.QtWidgets import (QAbstractSpinBox, QApplication, QCheckBox, QComboBox, QHBoxLayout, QLabel, QLayout, QLineEdit,
+                               QMenu, QSizePolicy, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QToolButton,
+                               QVBoxLayout, QWidget, QWidgetAction)
 from core import reports
+
+
+class FlowLayout(QLayout):
+    """A row of controls that wraps onto more lines when the window is too narrow, instead of squeezing or overlapping.
+    On a wide window it looks like an ordinary row: boxes that can grow (text fields) share the spare width."""
+
+    def __init__(self, hspacing=8, vspacing=6):
+        super().__init__()
+        self._items, self._h, self._v = [], hspacing, vspacing
+        self.setContentsMargins(0, 0, 0, 0)
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def addStretch(self, *_):                      # accepted so it can stand in for a QHBoxLayout; the row just ends there
+        pass
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, i):
+        return self._items[i] if 0 <= i < len(self._items) else None
+
+    def takeAt(self, i):
+        return self._items.pop(i) if 0 <= i < len(self._items) else None
+
+    def expandingDirections(self):
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self._arrange(QRect(0, 0, width, 0), True)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._arrange(rect, False)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        size = QSize()
+        for it in self._items:
+            size = size.expandedTo(it.minimumSize())
+        m = self.contentsMargins()
+        return size + QSize(m.left() + m.right(), m.top() + m.bottom())
+
+    def _arrange(self, rect, test):
+        m = self.contentsMargins()
+        eff = rect.adjusted(m.left(), m.top(), -m.right(), -m.bottom())
+        avail = max(1, eff.width())
+        lines, line, used = [], [], 0
+        for it in self._items:
+            if it.isEmpty():
+                continue
+            w = max(min(it.sizeHint().width(), avail), min(it.minimumSize().width(), avail))
+            need = w + (self._h if line else 0)
+            if line and used + need > avail:
+                lines.append(line)
+                line, used, need = [], 0, w
+            line.append([it, w])
+            used += need
+        if line:
+            lines.append(line)
+        y = eff.y()
+        for line in lines:
+            height = max(it.sizeHint().height() for it, _ in line)
+            extra = avail - sum(w for _, w in line) - self._h * (len(line) - 1)
+            grow = [e for e in line if e[0].expandingDirections() & Qt.Orientation.Horizontal]
+            if extra > 0 and grow:
+                share, rest = divmod(extra, len(grow))
+                for k, e in enumerate(grow):
+                    e[1] += share + (1 if k < rest else 0)
+            x = eff.x()
+            for it, w in line:
+                if not test:
+                    ih = it.sizeHint().height()
+                    it.setGeometry(QRect(x, y + (height - ih) // 2, w, ih))
+                x += w + self._h
+            y += height + self._v
+        return (y - self._v - eff.y() if lines else 0) + m.top() + m.bottom()
+
+
+def _pair(label, widget):
+    """A caption and its box kept together, so a wrap never separates them."""
+    box = QWidget()
+    h = QHBoxLayout(box)
+    h.setContentsMargins(0, 0, 0, 0)
+    h.setSpacing(6)
+    lab = label if isinstance(label, QLabel) else QLabel(label)
+    grows = bool(widget.sizePolicy().expandingDirections() & Qt.Orientation.Horizontal)
+    h.addWidget(lab)
+    h.addWidget(widget, 1 if grows else 0)
+    box.setSizePolicy(QSizePolicy.Policy.Expanding if grows else QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+    return box
+
+
+def flow(*items):
+    """A wrapping row. Text (or a QLabel) followed by a box is a caption for that box and stays with it; everything else
+    (buttons, tick boxes, a lone label) is its own item."""
+    row = FlowLayout()
+    items = list(items)
+    i = 0
+    while i < len(items):
+        it = items[i]
+        nxt = items[i + 1] if i + 1 < len(items) else None
+        is_caption = isinstance(it, str) or (isinstance(it, QLabel) and it.parent() is None)
+        if is_caption and nxt is not None and not isinstance(nxt, (str, QLabel)) and isinstance(nxt, QWidget):
+            row.addWidget(_pair(it, nxt))
+            i += 2
+        else:
+            row.addWidget(QLabel(it) if isinstance(it, str) else it)
+            i += 1
+    return row
 
 
 def filter_icon():

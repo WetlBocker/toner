@@ -173,9 +173,17 @@ print("== what is running")
 check("from source, it is not able to update itself", updates.installed_kind() == "source" and not updates.can_self_update() and updates.app_dir().endswith("netcheck"))
 fake_dir = os.path.join(SP, "prog%d" % int(time.time())); os.makedirs(fake_dir); open(os.path.join(fake_dir, "Toner.exe"), "wb").close()
 sys.frozen = True; saved_exe = sys.executable; sys.executable = os.path.join(fake_dir, "Toner.exe")
-check("a frozen copy without an uninstaller is 'portable'", updates.installed_kind() == "portable" and not updates.can_self_update())
+check("a frozen copy with neither an uninstaller nor the portable marker is 'unpacked', and cannot update itself", updates.installed_kind() == "unpacked" and not updates.can_self_update())
 open(os.path.join(fake_dir, "unins000.exe"), "wb").close()
 check("one with the uninstaller beside it is 'installed' and can update itself", updates.installed_kind() == "installed" and updates.can_self_update())
+portable_dir = os.path.join(SP, "port%d" % int(time.time())); os.makedirs(portable_dir); open(os.path.join(portable_dir, "Toner.exe"), "wb").close()
+open(os.path.join(portable_dir, "portable.flag"), "w").write("x"); sys.executable = os.path.join(portable_dir, "Toner.exe")
+check("with the portable marker next to it, it is 'portable' and can update itself", updates.installed_kind() == "portable" and updates.can_self_update())
+p, sha = updates.download(rel); launched.clear(); updates.launch_installer(p, relaunch=True); args = launched[0][0]
+check("a portable update runs the installer in portable mode, into the same folder", "/MODE=portable" in args and f"/DIR={portable_dir}" in args and "/relaunch=1" in args, args)
+sys.executable = os.path.join(fake_dir, "Toner.exe"); launched.clear(); updates.launch_installer(p, relaunch=True)
+check("an installed copy's update has neither", "/MODE=portable" not in launched[0][0] and not any(a.startswith("/DIR=") for a in launched[0][0]))
+updates.clear_pending()
 sys.executable = saved_exe; del sys.frozen
 
 # ================================================================ the About page

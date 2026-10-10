@@ -1,0 +1,5 @@
+Toner portable mode.
+While this file is next to Toner.exe, Toner keeps its database, settings, logs, session logs, saved host keys and downloaded
+updates in the "data" folder beside it, so the whole folder can be copied to a USB drive or another computer.
+Passwords stay in Windows Credential Manager on each computer and do not travel with the folder.
+Delete this file to make Toner use %APPDATA%\NetCheck again.

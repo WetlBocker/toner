@@ -209,8 +209,8 @@ class AboutTab(QWidget):
     # ---------------------------------------------------------------- what is shown
     def details(self):
         kind = updates.installed_kind()
-        what = {"installed": "Installed with the installer", "portable": "Portable copy (not installed)",
-                "source": "Running from source code"}[kind]
+        what = {"installed": "Installed with the installer", "portable": "Portable copy (its data is kept beside the program)",
+                "unpacked": "Unpacked copy (not installed)", "source": "Running from source code"}[kind]
         try:
             size = os.path.getsize(db.db_path())
             dbtext = f"{db.db_path()}  ({size / 1048576:.1f} MB)"

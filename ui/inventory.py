@@ -863,7 +863,7 @@ class InventoryTab(QWidget):
             if len(devs) == 1 and not folders:
                 menu.addAction("Details...", self.show_details)
                 menu.addAction("Edit...", self.edit)
-                menu.addAction("Open SSH console", self.open_in_ssh)
+                menu.addAction("Open SSH session", self.open_in_ssh)
             if devs:
                 menu.addAction("Edit selected..." if len(devs) > 1 else "Edit tags, folder, profile...", self.bulk_edit)
             if len(folders) == 1 and not devs:

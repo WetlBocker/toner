@@ -99,7 +99,9 @@ Ap.preset.setCurrentText("Default"); Ap.colors = dict(RP.DEFAULT_COLORS); Ap.pai
 
 print("== terminal settings")
 Tm = P["Terminal"]; Tm.scheme.setCurrentText("Light"); Tm.size.setValue(14); Tm.scrollback.setValue(777); Tm.paging.setText("terminal length 0"); S.save()
-term = w.tools.ssh.term
+from ui.sessions import SessionPane
+pane = SessionPane({"name": "t", "kind": "ssh", "host": "h", "port": 22, "username": "u", "password": "p", "dev": None, "options": {}})
+w.sessions.tabs.addTab(pane, "t"); term = pane.term
 check("terminal recoloured and resized live", term.bg.name() == "#ffffff" and term.font().pointSize() == 14 and term.scrollback == 777)
 term.reset(); check("new scrollback applies to the next session", term.main.history.top.maxlen == 777, term.main.history.top.maxlen)
 Tm.scheme.setCurrentText("Dark"); Tm.size.setValue(10); Tm.scrollback.setValue(5000); S.save()
@@ -207,8 +209,8 @@ check("large scan asks and honours 'No'", any(m[0] == "ask" and "256" in m[1] fo
 db.set_setting("scan_confirm_over", 0); msgs.clear(); sc.target.setText("127.0.0.1"); sc.ports.setText("1"); sc.start(); wait(lambda: sc.go.isEnabled(), 10)
 check("limit 0 never asks", not any(m[0] == "ask" for m in msgs)); answer["q"] = QMessageBox.StandardButton.Yes
 
-print("== SSH tab uses the settings")
-ssh = w.tools.ssh; db.set_setting("default_ssh_port", 2222); db.set_setting("paging_cmd", "terminal length 0"); db.set_setting("hostkey_mode", "Always trust"); db.set_setting("ssh_timeout", 33)
+print("== SSH sessions use the settings")
+db.set_setting("default_ssh_port", 2222); db.set_setting("paging_cmd", "terminal length 0"); db.set_setting("hostkey_mode", "Always trust"); db.set_setting("ssh_timeout", 33)
 cap = {}
 class Cap:
     def __init__(self, *a, **k): cap["a"], cap["k"] = a, k
@@ -218,8 +220,9 @@ class Cap:
     def start(self): pass
     def isRunning(self): return False
 TL.nettools.SshSession = Cap
-ssh.host.setText("127.0.0.1"); ssh.user.setText("u"); ssh.paging.setChecked(True); ssh.connect_session()
+pane2 = SessionPane({"name": "t2", "kind": "ssh", "host": "127.0.0.1", "port": 22, "username": "u", "password": "p", "dev": None, "options": {"paging": True}}); pane2.connect_now()
 check("paging command, host-key mode and timeout reach the session", cap["a"][4] == "terminal length 0" and cap["k"]["hostkey_mode"] == "Always trust" and cap["k"]["timeout"] == 33, cap)
+pane2.shutdown(); pane.shutdown()                 # finish the logs these two sessions opened
 
 print("== data & logs")
 D = P["Data and logs"]; D.refresh(); check("info panel shows paths and counts", "netcheck.db" in D.info.text() and "runs" in D.info.text())
@@ -241,7 +244,7 @@ sl = sessionlog.SessionLog("core", "127.0.0.1", 22, "u"); sl.write(b"x\n"); sl.c
 live = sessionlog.SessionLog("fw", "127.0.0.1", 22, "u")
 D.delete_logs(); rem = sessionlog.list_sessions()
 check("delete logs removes finished sessions, keeps open ones",
-      sorted(r["device"] for r in rem) == ["127.0.0.1", "fw"] and os.path.exists(live.path) and not os.path.exists(sl.path),
+      sorted(r["device"] for r in rem) == ["fw"] and os.path.exists(live.path) and not os.path.exists(sl.path),
       [r["device"] for r in rem]); live.close("done")
 
 print(f"\n{PASS} passed, {FAIL} failed")

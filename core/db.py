@@ -8,7 +8,7 @@ from pathlib import Path
 
 import keyring
 
-from core import display
+from core import display, paths
 
 SERVICE = "netcheck"
 DEFAULT_THRESHOLDS = {
@@ -69,6 +69,7 @@ DEFAULT_SETTINGS = {
     "fileserver": {}, "iperf_path": "",
     # proxy for every connection that can use one (see core/proxy.py; the proxy password is in Credential Manager)
     # updates (see core/updates.py)
+    "sessions_expanded": [],
     "update_check": True, "update_auto_install": False, "update_last_check": "", "update_skip": "", "update_pending": {},
     "proxy": {"mode": "system", "kind": "http", "host": "", "port": 8080, "username": "",
               "bypass": "localhost, 127.0.0.1"},
@@ -76,7 +77,7 @@ DEFAULT_SETTINGS = {
 # Per-machine state that must not travel in an exported settings file (channel secrets stay in
 # Credential Manager, so an imported channel would be broken).
 NOT_PORTABLE = {"notify_channels", "notify_snooze_until", "inventory_expanded", "snippets", "fileserver", "iperf_path",
-                "update_last_check", "update_skip", "update_pending"}
+                "update_last_check", "update_skip", "update_pending", "sessions_expanded"}
 
 DEVICE_FIELDS = ["name", "vendor", "host", "port", "platform", "username",
                  "site", "verify_ssl", "ha_expected", "enabled", "location", "details", "folder_id",
@@ -87,9 +88,7 @@ ALL_DEVICES = "All devices"
 def db_path() -> Path:
     if os.environ.get("NETCHECK_DB"):
         return Path(os.environ["NETCHECK_DB"])
-    base = Path(os.environ.get("APPDATA", Path.home())) / "NetCheck"
-    base.mkdir(parents=True, exist_ok=True)
-    return base / "netcheck.db"
+    return paths.data_dir() / "netcheck.db"
 
 
 def connect():
@@ -146,12 +145,26 @@ def init():
             scope TEXT DEFAULT '[]', enabled INTEGER DEFAULT 1, note TEXT DEFAULT '');
         CREATE TABLE IF NOT EXISTS diagnostics (
             id INTEGER PRIMARY KEY, device TEXT NOT NULL, check_name TEXT, at TEXT NOT NULL, body TEXT);
+        CREATE TABLE IF NOT EXISTS session_folders (
+            id INTEGER PRIMARY KEY, name TEXT NOT NULL, parent_id INTEGER);
+        CREATE TABLE IF NOT EXISTS sessions (
+            id INTEGER PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, group_name TEXT DEFAULT '',
+            host TEXT DEFAULT '', port INTEGER DEFAULT 0, username TEXT DEFAULT '', device TEXT DEFAULT '',
+            options TEXT DEFAULT '{}', created TEXT, last_used TEXT, folder_id INTEGER);
         CREATE TABLE IF NOT EXISTS audit (
             id INTEGER PRIMARY KEY, at TEXT NOT NULL, actor TEXT, action TEXT, detail TEXT);
         CREATE INDEX IF NOT EXISTS idx_backups_dev ON config_backups(device, id);
         CREATE INDEX IF NOT EXISTS idx_results_run ON results(run_id);
         CREATE INDEX IF NOT EXISTS idx_results_series ON results(device, check_name);
         """)
+        if "folder_id" not in {r[1] for r in c.execute("PRAGMA table_info(sessions)")}:
+            c.execute("ALTER TABLE sessions ADD COLUMN folder_id INTEGER")
+        for (grp,) in c.execute("SELECT DISTINCT group_name FROM sessions WHERE folder_id IS NULL AND IFNULL(group_name,'')<>''").fetchall():
+            row = c.execute("SELECT id FROM session_folders WHERE name=? COLLATE NOCASE AND parent_id IS NULL", (grp,)).fetchone()
+            fid = row[0] if row else c.execute("INSERT INTO session_folders(name, parent_id) VALUES(?,NULL)", (grp,)).lastrowid
+            c.execute("UPDATE sessions SET folder_id=?, group_name='' WHERE folder_id IS NULL AND group_name=?", (fid, grp))   # old 'Group' text -> a real folder
+        if "kind" not in {r[1] for r in c.execute("PRAGMA table_info(ssh_sessions)")}:
+            c.execute("ALTER TABLE ssh_sessions ADD COLUMN kind TEXT DEFAULT 'ssh'")
         if "options" not in {r[1] for r in c.execute("PRAGMA table_info(custom_checks)")}:
             c.execute("ALTER TABLE custom_checks ADD COLUMN options TEXT DEFAULT ''")
         cols = {r[1] for r in c.execute("PRAGMA table_info(devices)")}

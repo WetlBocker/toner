@@ -2,12 +2,12 @@ import math
 
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen
-from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QHBoxLayout, QLabel, QScrollArea, QSplitter,
+from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QHBoxLayout, QLabel, QScrollArea, QSizePolicy, QSplitter,
                                QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 from core import db, display
 from core.reports import COLORS, fg_for
 from ui import theme
-from ui.widgets import GroupPicker, StatusDelegate
+from ui.widgets import GroupPicker, StatusDelegate, flow
 
 PCT_CHECKS = ("cpu", "memory")
 
@@ -314,11 +314,9 @@ class HistoryTab(QWidget):
         left.addWidget(self.detail)
         right = QWidget()
         rl = QVBoxLayout(right)
-        sel = QHBoxLayout()
-        for lab, w in (("Group", self.group), ("Device", self.dev), ("Check", self.chk)):
-            sel.addWidget(QLabel(lab))
-            sel.addWidget(w, 1)
-        rl.addLayout(sel)
+        for w in (self.group, self.dev, self.chk):               # share the width, and wrap when the pane is narrow
+            w.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        rl.addLayout(flow("Group", self.group, "Device", self.dev, "Check", self.chk))
         rl.addWidget(self.chart, 1)
         split = QSplitter()
         split.addWidget(left)

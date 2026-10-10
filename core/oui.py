@@ -16,9 +16,8 @@ _cache = None
 
 
 def cache_path():
-    base = Path(os.environ.get("APPDATA", Path.home())) / "NetCheck"
-    base.mkdir(parents=True, exist_ok=True)
-    return base / "oui.txt"
+    from core import paths
+    return paths.data_dir() / "oui.txt"
 
 
 def normalize(mac):

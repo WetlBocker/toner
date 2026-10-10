@@ -15,6 +15,7 @@ PATHS = {
                '<path d="M9 13h6M9 17h6"/>',
     "tools": '<path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.6 2.6-2.4-.6-.6-2.4z"/>',
     "configs": '<path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/>',
+    "sessions": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/>',
     "about": '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
     "check": '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
     "chev-down": '<path d="M6 9l6 6 6-6"/>', "chev-up": '<path d="M6 15l6-6 6 6"/>',

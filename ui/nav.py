@@ -4,8 +4,8 @@ Offers the small part of QTabWidget's API that the rest of the app uses (addTab,
 currentWidget, indexOf, count, tabText), so sections can be switched from code.
 """
 from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtWidgets import (QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QStackedWidget, QVBoxLayout,
-                               QWidget)
+from PySide6.QtWidgets import (QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QScrollArea, QStackedWidget,
+                               QVBoxLayout, QWidget)
 from ui import icons, theme
 
 
@@ -117,7 +117,8 @@ class PageStack(QWidget):
         self.list.setFixedWidth(width)
         self.list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.stack = QStackedWidget()
-        self._rows = []                         # stack index -> list row
+        self._rows = []                         # page index -> list row
+        self._pages = []                        # the pages themselves (each is inside a scroll area in the stack)
         self._names = []
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -137,7 +138,14 @@ class PageStack(QWidget):
         self.list.addItem(item)
 
     def addTab(self, widget, label):
-        self.stack.addWidget(widget)
+        """Each page sits in a scroll area, so a window smaller than the page needs scrolls instead of squeezing the
+        controls on top of each other. A page that fits fills the area exactly as before."""
+        area = QScrollArea()
+        area.setWidgetResizable(True)
+        area.setFrameShape(QScrollArea.Shape.NoFrame)
+        area.setWidget(widget)
+        self.stack.addWidget(area)
+        self._pages.append(widget)
         item = QListWidgetItem(label)
         self.list.addItem(item)
         self._rows.append(self.list.count() - 1)
@@ -152,19 +160,20 @@ class PageStack(QWidget):
             self.currentChanged.emit(i)
 
     def count(self):
-        return self.stack.count()
+        return len(self._pages)
 
     def indexOf(self, widget):
-        return self.stack.indexOf(widget)
+        return self._pages.index(widget) if widget in self._pages else -1
 
     def tabText(self, i):
         return self._names[i]
 
     def currentWidget(self):
-        return self.stack.currentWidget()
+        i = self.stack.currentIndex()
+        return self._pages[i] if 0 <= i < len(self._pages) else None
 
     def setCurrentWidget(self, widget):
-        i = self.stack.indexOf(widget)
+        i = self.indexOf(widget)
         if i >= 0:
             self.list.setCurrentRow(self._rows[i])
 

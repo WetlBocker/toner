@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 
 import requests
 
-from core import db, proxy
+from core import db, paths, proxy
 from core.version import REPO, VERSION
 
 API = "https://api.github.com/repos/{repo}/releases/latest"
@@ -63,22 +63,26 @@ def is_newer(latest, current=VERSION):
 
 # ---------------------------------------------------------------- what is running
 def frozen():
-    return bool(getattr(sys, "frozen", False))
+    return paths.frozen()
 
 
 def app_dir():
-    return os.path.dirname(sys.executable) if frozen() else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return paths.app_dir()
 
 
 def installed_kind():
-    """'installed' (set up with the installer, so it can update itself), 'portable' or 'source'."""
+    """'installed' (set up with the installer), 'portable' (the installer's portable option: a copy that keeps its data
+    beside it), 'unpacked' (files copied from somewhere, which cannot update itself) or 'source' (running from the code)."""
     if not frozen():
         return "source"
-    return "installed" if any(f.lower().startswith("unins") and f.lower().endswith(".exe") for f in os.listdir(app_dir())) else "portable"
+    if paths.is_portable():
+        return "portable"
+    return "installed" if any(f.lower().startswith("unins") and f.lower().endswith(".exe") for f in os.listdir(app_dir())) else "unpacked"
 
 
 def can_self_update():
-    return installed_kind() == "installed"
+    """Installed and portable copies update themselves through the installer; the installer then keeps the same type."""
+    return installed_kind() in ("installed", "portable")
 
 
 def updates_dir():
@@ -254,6 +258,8 @@ def launch_installer(path, relaunch=True):
     with a file whose checksum was checked (pending() re-checks it)."""
     args = [path, "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", f"/relaunch={1 if relaunch else 0}",
             f"/LOG={updates_dir() / 'install.log'}"]
+    if installed_kind() == "portable":                          # update this folder in place, as a portable copy again
+        args += ["/MODE=portable", f"/DIR={app_dir()}"]
     flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     subprocess.Popen(args, close_fds=True, creationflags=flags, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                      stderr=subprocess.DEVNULL)

@@ -394,15 +394,13 @@ class IperfTab(QWidget):
         sl.addLayout(_row("Port", self.server_port, self.bind, self.one_off))
         sl.addWidget(_muted("Other computers connect to this one on this port. Windows may ask about the firewall; allow private "
                             "networks only for as long as you need it, and stop the server when you are done."))
-        self.pages = QStackedWidget()
-        self.pages.addWidget(self.client_box)
-        self.pages.addWidget(self.server_box)
 
         lay = QVBoxLayout(self)
         lay.addWidget(self.where)
         lay.addLayout(self._left(self.choose))
         lay.addWidget(self.mode)
-        lay.addWidget(self.pages)
+        lay.addWidget(self.client_box)
+        lay.addWidget(self.server_box)
         lay.addLayout(self._left(self.go, self.stop))
         lay.addWidget(self.result)
         lay.addWidget(self.graph)
@@ -432,7 +430,8 @@ class IperfTab(QWidget):
             "from iperf.fr, then choose iperf3.exe below, or put it in a folder on your PATH.")
 
     def _mode(self):
-        self.pages.setCurrentIndex(self.mode.currentIndex())
+        self.client_box.setVisible(self.mode.currentIndex() == 0)
+        self.server_box.setVisible(self.mode.currentIndex() == 1)
         self.go.setText("Start test" if self.mode.currentIndex() == 0 else "Start server")
 
     def pick_exe(self):
@@ -446,7 +445,8 @@ class IperfTab(QWidget):
         self.go.setEnabled(not on)
         self.stop.setEnabled(on)
         self.mode.setEnabled(not on)
-        self.pages.setEnabled(not on)
+        self.client_box.setEnabled(not on)
+        self.server_box.setEnabled(not on)
 
     _server_running = False
 

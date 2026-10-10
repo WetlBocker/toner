@@ -773,7 +773,7 @@ class SecurityPage(Page):
         super().__init__()
         self.mode = QComboBox()
         self.mode.addItems(nettools.HOSTKEY_MODES)
-        self.form.addRow("SSH console host keys", self.mode)
+        self.form.addRow("SSH session host keys", self.mode)
         self.form.addRow(note(
             "Trust on first use: remember each device's key the first time, and refuse the connection if it "
             "ever changes (protects against a swapped or spoofed device). Always trust: accept anything, "
@@ -887,7 +887,7 @@ class DataPage(Page):
         self.info.setText(
             f"<b>Database</b>: {path} ({size:.1f} MB)<br>"
             f"<b>Run history</b>: {runs:,} runs, {rows:,} results<br>"
-            f"<b>SSH session logs</b>: {sessions:,} sessions in {sessionlog.log_dir()}<br>"
+            f"<b>Session logs</b>: {sessions:,} sessions in {sessionlog.log_dir()}<br>"
             f"<b>Saved host keys</b>: {nettools.known_hosts_path()}")
 
     load = refresh

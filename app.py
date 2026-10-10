@@ -8,7 +8,7 @@ from pathlib import Path
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence, QPainter, QPixmap, QShortcut
 from PySide6.QtWidgets import QApplication, QMainWindow, QMenu, QMessageBox, QSystemTrayIcon
-from core import audit, db, notify, reports, sessionlog
+from core import audit, db, notify, paths, reports, sessionlog, sessions
 from ui import theme
 from ui.about import AboutTab
 from ui.configs import ConfigsTab
@@ -22,6 +22,7 @@ from ui.palette import CommandPalette
 from ui.reports_tab import ReportsTab
 from ui.results import ResultsTab
 from ui.scheduler import BackupScheduler, Scheduler
+from ui.sessions import SessionsTab
 from ui.settings import SettingsTab
 from ui.tools import ToolsTab
 
@@ -29,9 +30,7 @@ log = logging.getLogger("toner")
 
 
 def data_dir():
-    base = Path(os.environ.get("APPDATA", Path.home())) / "NetCheck"
-    base.mkdir(parents=True, exist_ok=True)
-    return base
+    return paths.data_dir()
 
 
 def setup_logging():
@@ -83,6 +82,7 @@ class Main(QMainWindow):
         self.results, self.inventory, self.history = ResultsTab(), InventoryTab(), HistoryTab()
         self.reports = ReportsTab(lambda: self.results.results)
         self.tools = ToolsTab()
+        self.sessions = SessionsTab()
         self.configs = ConfigsTab()
         self.settings = SettingsTab()
         self.about = AboutTab()
@@ -133,7 +133,8 @@ class Main(QMainWindow):
         for page, label, icon in ((self.dashboard, "Overview", "dashboard"), (self.results, "Results", "results"),
                                   (self.inventory, "Inventory", "inventory"), (self.configs, "Configs", "configs"),
                                   (self.history, "History", "history"), (self.reports, "Reports", "reports"),
-                                  (self.tools, "Tools", "tools"), (self.settings, "Settings", "settings"),
+                                  (self.tools, "Tools", "tools"), (self.sessions, "Sessions", "sessions"),
+                                  (self.settings, "Settings", "settings"),
                                   (self.about, "About", "about")):
             tabs.addTab(page, label, icon)
         self.setCentralWidget(tabs)
@@ -163,9 +164,9 @@ class Main(QMainWindow):
         self.inventory.changed.emit()
 
     def open_ssh_console(self, dev):
-        """Inventory > right-click > Open SSH console."""
-        self.tabs.setCurrentWidget(self.tools)
-        self.tools.show_ssh(dev)
+        """Inventory > right-click > Open SSH session, the device window and the palette: an SSH tab in Sessions."""
+        self.tabs.setCurrentWidget(self.sessions)
+        self.sessions.open_device(dev)
 
     def open_tool(self, name, dev):
         widget = {"ping": self.tools.liveping, "snmp": self.tools.snmp, "tls": self.tools.tls, "mtr": self.tools.mtr}[name]
@@ -206,11 +207,15 @@ class Main(QMainWindow):
         entries += [("Run checks", "all enabled devices", lambda: (self.go("Results"), self.results.start())),
                     ("Back up configurations", "all enabled devices", lambda: (self.go("Configs"), self.configs.start())),
                     ("Check for updates", "About", lambda: (self.go("About"), self.about.check(True))),
+                    ("New session", "Sessions", lambda: (self.go("Sessions"), self.sessions.new_session())),
                     ("Add a device", "", lambda: (self.go("Inventory"), self.inventory.add())),
                     ("Scan the network for devices", "discovery", lambda: (self.go("Tools"), self.tools.tabs.setCurrentWidget(self.tools.discovery)))]
         for i in range(self.tools.tabs.count()):
             entries.append((f"Tool: {self.tools.tabs.tabText(i)}", "",
                             lambda i=i: (self.go("Tools"), self.tools.tabs.setCurrentIndex(i))))
+        for s in sessions.list_sessions():
+            entries.append((f"Session: {s['name']}", " - ".join(x for x in (sessions.NAMES[s["kind"]], sessions.path_of(s)) if x),
+                            lambda s=s: (self.go("Sessions"), self.sessions.open_session(s["id"]))))
         for d in db.list_devices():
             entries.append((f"Device: {d['name']}", d["host"], lambda d=d: self.open_device_view(d)))
             if d["vendor"] in ("cisco", "juniper", "arista", "hpe", "mikrotik"):
@@ -268,7 +273,7 @@ class Main(QMainWindow):
         self.results.repopulate()
         self.reports.show_preview()
         self.history.show_run()
-        self.tools.apply_settings()
+        self.sessions.apply_settings()
         self.scheduler.apply()
         self.backup_scheduler.apply()
         self.results.refresh_groups()
@@ -286,7 +291,8 @@ class Main(QMainWindow):
             return
         for v in list(self.views.values()):
             v.close()
-        self.tools.shutdown()          # stop any running ping/scan/SSH session before exiting
+        self.tools.shutdown()          # stop any running ping/scan/transfer before exiting
+        self.sessions.shutdown()       # close every open terminal and finish its log
         self.configs.shutdown()
         self.about.apply_on_exit()     # a downloaded update installs as Toner closes, if automatic updating is on
         self.about.shutdown()

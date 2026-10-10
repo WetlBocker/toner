@@ -90,9 +90,7 @@ class DiscoveryTab(QWidget):
         self.tags.setPlaceholderText("tags, comma separated")
         self.add_btn = _primary("Add checked to inventory")
         self.all_btn, self.none_btn = QPushButton("Check all"), QPushButton("Check none")
-        top = QHBoxLayout()
-        for w in (QLabel("Scan"), self.target, QLabel("Communities"), self.communities, QLabel("Ports"), self.ports, self.go, self.stop):
-            top.addWidget(w, 1 if w is self.target else 0)
+        top = _row("Scan", self.target, "Communities", self.communities, "Ports", self.ports, self.go, self.stop)
         bottom = QHBoxLayout()
         for w in (QLabel("Folder"), self.folder, QLabel("Profile"), self.profile, self.location, self.tags):
             bottom.addWidget(w, 1 if isinstance(w, (QLineEdit, QComboBox)) else 0)
@@ -548,9 +546,7 @@ class LivePingTab(QWidget):
         self.stats = QLabel("")
         self.stats.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
         self.reset_stats()
-        top = QHBoxLayout()
-        for w in ("Device", self.picker, "Host", self.host, "Every", self.interval, "Timeout", self.timeout, self.go, self.stop, self.clear):
-            top.addWidget(QLabel(w) if isinstance(w, str) else w, 1 if w is self.host else 0)
+        top = _row("Device", self.picker, "Host", self.host, "Every", self.interval, "Timeout", self.timeout, self.go, self.stop, self.clear)
         lay = QVBoxLayout(self)
         lay.addLayout(top)
         lay.addWidget(self.graph, 1)
@@ -629,9 +625,7 @@ class MtrTab(QWidget):
         self.stop.setEnabled(False)
         self.status = _muted("")
         self.table = _table(self.COLS, stretch_last=False)
-        top = QHBoxLayout()
-        for w in ("Device", self.picker, "Target", self.host, self.go, self.stop):
-            top.addWidget(QLabel(w) if isinstance(w, str) else w, 1 if w is self.host else 0)
+        top = _row("Device", self.picker, "Target", self.host, self.go, self.stop)
         lay = QVBoxLayout(self)
         lay.addLayout(top)
         lay.addWidget(_muted("Finds the route with a traceroute, then pings every router on it once a second and shows loss "
@@ -977,9 +971,7 @@ class TlsTab(QWidget):
         self.details.setWordWrap(True)
         self.details.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         self.table = _table(["Device", "Address", "Subject", "Expires", "Days left", "Result"])
-        top = QHBoxLayout()
-        for w in ("Device", self.picker, "Host", self.host, "Port", self.port, self.sni, self.go):
-            top.addWidget(QLabel(w) if isinstance(w, str) else w, 1 if w is self.host else 0)
+        top = _row("Device", self.picker, "Host", self.host, "Port", self.port, self.sni, self.go)
         lay = QVBoxLayout(self)
         lay.addLayout(top)
         lay.addWidget(self.status)
@@ -1111,14 +1103,8 @@ class ListenersTab(QWidget):
             self.sev.addItem(f"{name} and worse", n)
         self.status = _muted("Not listening. Port 514 and 162 are the standard ones; point devices at this computer's address.")
         self.table = _table(["Time", "Type", "From", "Device", "Severity", "Message"])
-        top = QHBoxLayout()
-        for w in ("Syslog UDP", self.sys_port, self.sys_btn, "Traps UDP", self.trap_port, self.communities, self.trap_btn):
-            top.addWidget(QLabel(w) if isinstance(w, str) else w, 1 if w is self.communities else 0)
-        bar = QHBoxLayout()
-        for w in (self.kind, self.sev, self.filter):
-            bar.addWidget(w, 1 if w is self.filter else 0)
-        for w in (self.pause, self.clear, self.save):
-            bar.addWidget(w)
+        top = _row("Syslog UDP", self.sys_port, self.sys_btn, "Traps UDP", self.trap_port, self.communities, self.trap_btn)
+        bar = _row(self.kind, self.sev, self.filter, self.pause, self.clear, self.save)
         lay = QVBoxLayout(self)
         lay.addLayout(top)
         lay.addLayout(bar)

@@ -16,3 +16,7 @@ sftp_host_key
 *.pem
 toner-backup-*
 toner-settings.json
+
+# a portable build marker and its data
+/portable.flag
+/data/

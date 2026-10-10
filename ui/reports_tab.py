@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFileDialog, QHBoxL
                                QVBoxLayout, QWidget)
 from core import alerts, db, display, reports
 from drivers.base import SEVERITY, Result
-from ui.widgets import FilterButton, StatusDelegate
+from ui.widgets import FilterButton, StatusDelegate, flow
 
 NO_LOCATION = "(no location)"
 CURRENT = "Current results"
@@ -37,10 +37,7 @@ class ReportsTab(QWidget):
         self.table.setShowGrid(False)
         self.table.setItemDelegateForColumn(2, StatusDelegate(self.table))
 
-        top = QHBoxLayout()
-        top.addWidget(QLabel("Report from"))
-        top.addWidget(self.source)
-        top.addWidget(self.info, 1)
+        top = flow("Report from", self.source, self.info)
         buttons = QHBoxLayout()
         for text, fn in (("Export CSV", self.export_csv), ("HTML report", self.export_html),
                          ("PDF report", self.export_pdf)):

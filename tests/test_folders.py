@@ -167,7 +167,7 @@ INV.QMenu = FakeMenu
 vp = inv.table.viewport()
 pick(); inv.show_menu(QPoint(vp.width() - 5, vp.height() - 5)); check("empty space: New folder / Expand / Collapse", captured["actions"] == ["New folder...", "Expand all", "Collapse all"], captured["actions"])
 it = find_dev("loose"); inv.show_menu(inv.table.visualItemRect(it).center()); a = captured["actions"]
-check("a device: Edit, SSH, Move, Delete", a[:3] == ["Details...", "Edit...", "Open SSH console"] and "Move to folder" in a and a[-3] == "Delete..." and a[-2:] == ["Expand all", "Collapse all"], a)
+check("a device: Edit, SSH, Move, Delete", a[:3] == ["Details...", "Edit...", "Open SSH session"] and "Move to folder" in a and a[-3] == "Delete..." and a[-2:] == ["Expand all", "Collapse all"], a)
 move = next(x for x in captured["menu"].actions() if x.text() == "Move to folder").menu()
 check("'Move to folder' lists top level and every folder", move.actions()[0].text() == "(top level)" and "Denver DC/Chicago" in [x.text() for x in move.actions()])
 it = find_folder("Denver DC"); inv.show_menu(inv.table.visualItemRect(it).center()); a = captured["actions"]
@@ -195,12 +195,11 @@ print("== device dialog and SSH hand-off")
 fdlg = INV.DeviceDialog(None, None, folder_id=pf); check("new device starts in the chosen folder", fdlg.values()["folder_id"] == pf and fdlg.folder.currentText() == "Projects 2")
 d0 = db.list_devices()[0]; ed = INV.DeviceDialog(d0, None); check("editing shows the device's folder", ed.values()["folder_id"] == d0["folder_id"])
 fdlg.folder.setCurrentIndex(0); check("...and can be set to top level", fdlg.values()["folder_id"] is None)
-shown = []; w.tools.show_ssh = lambda d: shown.append(d["name"]) or True
+shown = []; w.sessions.open_device = lambda d: shown.append(d["name"]) or True
 dsel = db.list_devices()[0]; inv.refresh(); inv.select_device(dsel["id"]); inv.open_in_ssh()
-check("Open SSH console emits the device, and the app switches to Tools", shown == [dsel["name"]] and w.tabs.currentWidget() is w.tools)
-del w.tools.show_ssh
-w.tools.show_ssh(dsel); check("...the SSH tab is selected with that device in the form", w.tools.tabs.currentWidget() is w.tools.ssh and w.tools.ssh.host.text() == dsel["host"])
-check("device pickers show the folder", any("[" in w.tools.ssh.picker.itemText(i) for i in range(1, w.tools.ssh.picker.count())) or all(d.get("folder_id") is None for d in db.list_devices()))
+check("Open SSH session passes the device on, and the app switches to Sessions", shown == [dsel["name"]] and w.tabs.currentWidget() is w.sessions)
+del w.sessions.open_device
+check("device pickers show the folder", any("[" in w.tools.diag.picker.itemText(i) for i in range(1, w.tools.diag.picker.count())) or all(d.get("folder_id") is None for d in db.list_devices()))
 
 print("== import with folders")
 import ui.inventory as INV2

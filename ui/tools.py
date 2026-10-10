@@ -8,7 +8,6 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication as _QApp, QCheckB
                                QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QSpinBox, QSplitter,
                                QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
 from core import db, jump, nettools, profiles, sessionlog, snmp, vendors
-from ui.terminal import TerminalView
 
 
 class OutputBox(QPlainTextEdit):
@@ -92,206 +91,14 @@ class Runner(QObject):
 
 
 def _row(*widgets):
-    h = QHBoxLayout()
-    for w in widgets:
-        h.addWidget(QLabel(w) if isinstance(w, str) else w)
-    return h
-
-
-# ---------------------------------------------------------------- SSH console
-class SshTab(QWidget):
-    logs_changed = Signal()                      # a session log was started or finished
-
-    def __init__(self):
-        super().__init__()
-        self.session = self.log = None
-        self._override = None                    # reason to record if we end the session ourselves
-        self.picker = DevicePicker()
-        self.host, self.user, self.password = QLineEdit(), QLineEdit(), QLineEdit()
-        self.host.setMinimumWidth(170)
-        self.user.setMinimumWidth(120)
-        self.password.setMinimumWidth(120)
-        self.host.setPlaceholderText("host or IP")
-        self.password.setEchoMode(QLineEdit.EchoMode.Password)
-        self.port = QSpinBox()
-        self.port.setRange(1, 65535)
-        self.port.setValue(int(db.get_setting("default_ssh_port")))
-        self.paging = QCheckBox("Disable paging")
-        self.paging.setToolTip("Sends the paging command from Settings > Terminal after login")
-        self.connect_btn = QPushButton("Connect")
-        self.connect_btn.setProperty("primary", True)
-        self.disconnect_btn = QPushButton("Disconnect")
-        self.status = QLabel("Not connected.")
-        self.term = TerminalView()
-        self.apply_settings()
-        self._used = False                       # until the first connection the intro is redrawn to fit
-        self._intro()
-
-        top = QHBoxLayout()
-        for w in ("Device", self.picker, "Host", self.host, "Port", self.port, "User", self.user,
-                  "Password", self.password, self.connect_btn, self.disconnect_btn):
-            top.addWidget(QLabel(w) if isinstance(w, str) else w)
-        self.host.setMinimumWidth(110)
-        info = QHBoxLayout()
-        info.addWidget(self.paging)
-        info.addStretch()
-        info.addWidget(self.status)
-        lay = QVBoxLayout(self)
-        lay.addLayout(top)
-        lay.addLayout(info)
-        lay.addWidget(self.term, 1)
-
-        self.picker.currentIndexChanged.connect(self.picked)
-        self.connect_btn.clicked.connect(self.connect_session)
-        self.disconnect_btn.clicked.connect(self.disconnect_session)
-        self.password.returnPressed.connect(self.connect_session)
-        self.term.data_out.connect(self._to_session)
-        self.term.resized.connect(self._resize_session)
-        self.picked()
-        self.set_connected(False)
-
-    def _intro(self):
-        self.term.reset()
-        self.term.feed(b"Choose a device or enter a host, then click Connect.\r\n"
-                       b"Every session is logged (see the Session Logs tab).\r\n"
-                       b"Copy: select with the mouse, then Ctrl+Shift+C.  Paste: Ctrl+Shift+V or "
-                       b"right-click.  Scroll back: mouse wheel or Shift+PageUp.\r\n")
-
-    def select_device(self, name):
-        """Pre-fill the connection form from an inventory device (ignored while a session is open)."""
-        if self.connected():
-            return False
-        for i in range(self.picker.count()):
-            d = self.picker.itemData(i)
-            if d and d["name"] == name:
-                self.picker.setCurrentIndex(i)
-                self.password.clear()
-                self.password.setFocus()
-                return True
-        return False
-
-    def apply_settings(self):
-        """Pick up font, colours and scrollback from Settings > Terminal."""
-        self.term.configure(db.get_setting("term_font"), int(db.get_setting("term_font_size")),
-                            db.get_setting("term_scheme"), int(db.get_setting("term_scrollback")))
-
-    # ---------- state ----------
-    def connected(self):
-        return bool(self.session and self.session.isRunning())
-
-    def set_connected(self, on):
-        self.connect_btn.setEnabled(not on)
-        self.disconnect_btn.setEnabled(on)
-        for w in (self.picker, self.host, self.port, self.user, self.password, self.paging):
-            w.setEnabled(not on)
-
-    def _to_session(self, data):
-        if self.connected():
-            self.session.send(data)
-
-    def _resize_session(self, cols, rows):
-        if self.connected():
-            self.session.resize(cols, rows)
-        elif not self._used:
-            self._intro()                        # the window got its real size: lay the intro out again
-
-    def _say(self, text):
-        self.term.feed(text.replace("\n", "\r\n").encode())
-
-    def picked(self, *_):
-        d = self.picker.currentData()
-        if d:
-            self.host.setText(d["host"])
-            self.user.setText(profiles.username(d))
-            self.paging.setChecked(bool(vendors.paging_command(d["vendor"], "")))
-            self.password.setPlaceholderText(
-                "blank = use the stored password" if vendors.uses_ssh_login(d["vendor"]) else "")
-        else:
-            self.password.setPlaceholderText("")
-
-    def stored_password(self):
-        d = self.picker.currentData()
-        if d and vendors.uses_ssh_login(d["vendor"]):        # an API token or key is not an SSH password
-            return profiles.secret(d) or ""
-        return ""
-
-    # ---------- connect / disconnect ----------
-    def connect_session(self):
-        if self.connected():
-            return
-        user = self.user.text().strip()
-        try:
-            host = nettools.check_host(self.host.text())
-        except ValueError as e:
-            self._say(f"\n{e}\n")
-            return
-        if not user:
-            self._say("\nEnter a username first.\n")
-            return
-        port = self.port.value()
-        dev = self.picker.currentData()
-        try:                                                  # no log, no session
-            log = sessionlog.SessionLog(dev["name"] if dev else host, host, port, user)
-        except OSError as e:
-            self._say(f"\nNot connecting: the session log could not be created ({e}).\n")
-            return
-        self._used = True
-        self.term.reset()
-        self._say(f"Connecting to {host}:{port} as {user}...\n")
-        session = nettools.SshSession(host, port, user, self.password.text() or self.stored_password(),
-                                      (vendors.paging_command(dev["vendor"], db.get_setting("paging_cmd")) if dev
-                                       else db.get_setting("paging_cmd")) if self.paging.isChecked() else "",
-                                      self.term.cols, self.term.rows,
-                                      hostkey_mode=db.get_setting("hostkey_mode"),
-                                      timeout=int(db.get_setting("ssh_timeout")),
-                                      jump_dev=profiles.resolve(dev) if dev else None)
-        self.session, self.log, self._override = session, log, None
-        # bind to this session so a late signal from an old one can never touch a newer one
-        session.data.connect(lambda b, s=session, lg=log: self._on_data(b, s, lg))
-        session.closed.connect(lambda r, s=session, lg=log: self._ended(s, lg, r))
-        session.start()
-        self.set_connected(True)
-        self.status.setText(f"Connecting to {host}  \u2014  logging to {log.path.name}")
-        self.logs_changed.emit()
-        self.term.setFocus()
-
-    def disconnect_session(self):
-        if self.connected():
-            self.disconnect_btn.setEnabled(False)
-            self.status.setText("Disconnecting...")
-            self.session.stop()
-
-    def _on_data(self, data, session, log):
-        if not log.write(data) and session is self.session and not self._override:
-            self._override = "Disconnected: the session log could not be written."
-            self._say("\n[Logging failed, so the session is being closed.]\n")
-            session.stop()
-        if session is self.session:
-            self.term.feed(data)
-            if self.status.text().startswith("Connecting"):
-                self.status.setText(f"Connected to {session.host}  \u2014  logging to {log.path.name}")
-
-    def _ended(self, session, log, reason):
-        if session is self.session and self._override:
-            reason = self._override
-        log.close(reason)
-        if session is self.session:
-            self._say(f"\n[{reason}]\n")
-            self.set_connected(False)
-            self.status.setText(f"Not connected.  Last session logged to {log.path.name}")
-        self.logs_changed.emit()
-
-    def shutdown(self):
-        if self.connected():
-            self.session.stop()
-            self.session.wait(3000)
-        if self.log and not self.log.closed:                  # the closed signal may never be delivered
-            self.log.close("Application closed.")
+    """A row of captioned boxes and buttons that wraps onto a second line when the window is narrow."""
+    from ui.widgets import flow
+    return flow(*widgets)
 
 
 # ---------------------------------------------------------------- session logs
 class LogsTab(QWidget):
-    COLS = ["Started", "Ended", "Duration", "Device", "Host", "User", "Result"]
+    COLS = ["Started", "Ended", "Duration", "Type", "Device", "Host", "User", "Result"]
     MAX_VIEW = 2_000_000
 
     def __init__(self):
@@ -338,7 +145,7 @@ class LogsTab(QWidget):
         self.table.setRowCount(len(self.sessions))
         for i, s in enumerate(self.sessions):
             vals = [s["started_at"], s["ended_at"] or "(open, or not closed cleanly)", self._duration(s),
-                    s["device"], f"{s['host']}:{s['port']}", s["username"], s["reason"] or ""]
+                    (s.get("kind") or "ssh").upper(), s["device"], f"{s['host']}:{s['port']}", s["username"], s["reason"] or ""]
             for j, v in enumerate(vals):
                 self.table.setItem(i, j, QTableWidgetItem(str(v)))
             if s["id"] == keep:
@@ -776,8 +583,7 @@ class ToolsTab(QWidget):
         super().__init__()
         from ui import tools2, tools3
         from ui.nav import PageStack
-        self.ssh, self.diag, self.scan, self.subnet = SshTab(), DiagnosticsTab(), ScanTab(), SubnetTab()
-        self.logs = LogsTab()
+        self.diag, self.scan, self.subnet = DiagnosticsTab(), ScanTab(), SubnetTab()
         self.snmp = SnmpTab()
         self.runner = tools2.CommandRunnerTab()
         self.liveping, self.mtr = tools2.LivePingTab(), tools2.MtrTab()
@@ -789,9 +595,8 @@ class ToolsTab(QWidget):
         self.scp, self.xcopy = tools3.ScpTab(), tools3.XcopyTab()
         self.utilities = tools2.UtilitiesTab()
         self.discovery.inventory_changed = self.inventory_changed.emit
-        self.ssh.logs_changed.connect(self.logs.refresh)
         self.tabs = PageStack()
-        for title, pages in (("Connect", ((self.ssh, "SSH Console"), (self.logs, "Session Logs"), (self.runner, "Command Runner"))),
+        for title, pages in (("Connect", ((self.runner, "Command Runner"),)),
                              ("Diagnose", ((self.diag, "Ping / Traceroute / DNS"), (self.liveping, "Live Ping"),
                                            (self.mtr, "Path Monitor (MTR)"), (self.scan, "Port Scanner"),
                                            (self.tls, "TLS Certificates"), (self.iperf, "Throughput (iperf3)"), (self.wifi, "Wi-Fi Scanner"),
@@ -806,7 +611,7 @@ class ToolsTab(QWidget):
                 self.tabs.addTab(w, label)
         lay = QVBoxLayout(self)
         lay.addWidget(self.tabs)
-        self._pickers = (self.ssh, self.diag, self.scan, self.snmp, self.liveping, self.mtr, self.tls, self.iperf, self.scp)
+        self._pickers = (self.diag, self.scan, self.snmp, self.liveping, self.mtr, self.tls, self.iperf, self.scp)
         self._others = (self.runner, self.discovery, self.topology)
 
     def refresh(self):
@@ -814,15 +619,6 @@ class ToolsTab(QWidget):
             t.picker.refresh()
         for t in self._others:
             t.refresh()
-
-    def apply_settings(self):
-        self.ssh.apply_settings()
-
-    def show_ssh(self, dev):
-        """Switch to the SSH console with this device chosen."""
-        self.refresh()                                 # the picker may predate a new device or folder
-        self.tabs.setCurrentWidget(self.ssh)
-        return self.ssh.select_device(dev["name"])
 
     def show_tool(self, widget, dev=None):
         """Open another tool (live ping, SNMP, ...) with a device's address filled in."""
@@ -836,6 +632,6 @@ class ToolsTab(QWidget):
                     break
 
     def shutdown(self):
-        for t in (self.ssh, self.diag, self.scan, self.snmp, self.liveping, self.mtr, self.tls, self.runner,
+        for t in (self.diag, self.scan, self.snmp, self.liveping, self.mtr, self.tls, self.runner,
                   self.discovery, self.topology, self.listeners, self.utilities, self.tftp, self.sftp, self.iperf, self.wifi, self.scp, self.xcopy):
             t.shutdown()

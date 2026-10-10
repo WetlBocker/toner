@@ -270,9 +270,9 @@ except proxy.ProxyError as e: check("a proxy login failure stops the SSH connect
 ssh.stop()
 
 print("== the pieces that build SSH connections ask for the proxy")
-src = {n: open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), *p)).read() for n, p in (("cisco", ("drivers", "cisco.py")), ("sshbase", ("drivers", "sshbase.py")), ("tools", ("ui", "tools.py")))}
+src = {n: open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), *p)).read() for n, p in (("cisco", ("drivers", "cisco.py")), ("sshbase", ("drivers", "sshbase.py")), ("tools", ("ui", "sessions.py")))}
 check("both SSH drivers use open_channel, which now covers proxies", all("jump.open_channel" in src[k] for k in ("cisco", "sshbase")))
-check("the SSH console passes its device along, so a proxy applies there too", "jump_dev=profiles.resolve(dev) if dev else None" in src["tools"])
+check("SSH sessions pass their device along, so a proxy applies there too", "jump_dev=profiles.resolve(dev) if dev else None" in src["tools"] and "TelnetSession(" in src["tools"] and "profiles.resolve(dev) if dev else None)" in src["tools"])
 
 # ================================================================ notifications
 print("== notifications")

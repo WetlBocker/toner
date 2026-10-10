@@ -1,4 +1,4 @@
-"""Audit logging for SSH console sessions: a timestamped transcript file plus an index row in the DB.
+"""Audit logging for terminal sessions (SSH, Telnet, Serial): a timestamped transcript file plus an index row in the DB.
 
 Only what the device sends is recorded. The device echoes the commands you type, but it does not echo
 a password typed at a hidden prompt (e.g. 'enable'), so those never reach the log. The SSH login
@@ -39,7 +39,8 @@ def _now():
 class SessionLog:
     """One session's log. Raises OSError from the constructor if logging is not possible."""
 
-    def __init__(self, device, host, port, username):
+    def __init__(self, device, host, port, username, kind="ssh"):
+        self.kind = kind
         self.started = datetime.now()
         safe = re.sub(r"[^A-Za-z0-9._-]", "_", device or host)[:60]
         base = f"{self.started:%Y-%m-%d_%H%M%S}_{safe}"
@@ -57,7 +58,7 @@ class SessionLog:
         self.pending, self.bytes, self.closed, self.failed = "", 0, False, False
         operator = getpass.getuser()
         self.file.write(
-            "# Toner SSH session log\n"
+            f"# Toner {kind.upper()} session log\n"
             f"# Started:  {self.started:%Y-%m-%d %H:%M:%S}\n"
             f"# Device:   {device}\n# Host:     {host}:{port}\n# User:     {username}\n"
             f"# Operator: {operator}\n"
@@ -65,10 +66,10 @@ class SessionLog:
         self.file.flush()
         with db.connect() as c:
             self.id = c.execute(
-                "INSERT INTO ssh_sessions(started_at, device, host, port, username, operator, log_path) "
-                "VALUES(?,?,?,?,?,?,?)",
+                "INSERT INTO ssh_sessions(started_at, device, host, port, username, operator, log_path, kind) "
+                "VALUES(?,?,?,?,?,?,?,?)",
                 (self.started.strftime("%Y-%m-%d %H:%M:%S"), device, host, port, username, operator,
-                 str(self.path))).lastrowid
+                 str(self.path), kind)).lastrowid
 
     def write(self, data: bytes) -> bool:
         """Append device output. Returns False if the log could not be written."""

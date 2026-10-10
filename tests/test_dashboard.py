@@ -115,7 +115,7 @@ for n in ("core1", "edge-fw"): dev(n, "fortinet" if n == "edge-fw" else "cisco")
 db.save_run([Result("core1", "cpu", "WARN", "85%", numeric=85.0), Result("edge-fw", "wan links", "OK", "2/2")])
 w = A.Main(); w.show()
 w.inventory.edit_device = lambda d: None            # the real one opens a modal dialog
-check("sections, with the overview first", [w.tabs.tabText(i) for i in range(w.tabs.count())] == ["Overview", "Results", "Inventory", "Configs", "History", "Reports", "Tools", "Settings", "About"])
+check("sections, with the overview first", [w.tabs.tabText(i) for i in range(w.tabs.count())] == ["Overview", "Results", "Inventory", "Configs", "History", "Reports", "Tools", "Sessions", "Settings", "About"])
 check("the overview is filled from stored results at startup", w.dashboard.cards["warn"].value.text() == "1")
 w.go("Tools"); check("go() switches sections", w.tabs.currentWidget() is w.tools)
 w.open_palette(); names = [w.palette.list.item(i).text() for i in range(w.palette.list.count())]
@@ -139,6 +139,7 @@ check("configuration tab shows what changed in the newest version", "+vlan 20" i
 V.cfg_view.setCurrentIndex(1); check("or the full text", "vlan 20" in V.cfg.toPlainText() and V.cfg.toPlainText().startswith("hostname core1"))
 emitted = []
 V.ssh_requested.connect(lambda d: emitted.append(("ssh", d["name"]))); V.tool_requested.connect(lambda k, d: emitted.append((k, d["name"]))); V.edit_requested.connect(lambda d: emitted.append(("edit", d["name"])))
+w.sessions.open_device = lambda d: None                    # the real one opens a terminal tab and asks for a password
 for k in ("ssh", "ping", "edit"): V.buttons[k].click()
 check("quick actions emit what the window needs", emitted == [("ssh", "core1"), ("ping", "core1"), ("edit", "core1")], emitted)
 import ui.device_view as DV

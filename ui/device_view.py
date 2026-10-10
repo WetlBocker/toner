@@ -51,7 +51,7 @@ class DeviceView(QDialog):
         head.addWidget(self.sub)
         actions = QHBoxLayout()
         self.buttons = {}
-        for key, text in (("checks", "Run checks"), ("backup", "Back up config"), ("ssh", "SSH console"), ("ping", "Ping"),
+        for key, text in (("checks", "Run checks"), ("backup", "Back up config"), ("ssh", "SSH session"), ("ping", "Ping"),
                           ("snmp", "SNMP"), ("web", "Open web page"), ("edit", "Edit...")):
             b = QPushButton(text)
             b.setAutoDefault(False)                     # Enter must not trigger whichever button comes first

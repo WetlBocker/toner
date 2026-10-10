@@ -27,6 +27,8 @@ class Card(QFrame):
         self.title.setProperty("muted", True)
         self.sub = QLabel("")
         self.sub.setProperty("muted", True)
+        self.sub.setWordWrap(True)                      # a long caption wraps instead of making the card wider
+        self.title.setWordWrap(True)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(18, 14, 18, 14)
         lay.setSpacing(2)
