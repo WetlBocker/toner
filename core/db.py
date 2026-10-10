@@ -21,12 +21,14 @@ DEFAULT_THRESHOLDS = {
     "sessions":     {"warn": 70, "fail": 90},       # Palo Alto session table, % of maximum
     "disk":         {"warn": 80, "fail": 90},       # SNMP storage, % used
     "utilization":  {"warn": 70, "fail": 90},       # busiest SNMP interface, % of its speed
+    "wifi_signal":  {"warn": 50, "fail": 30},       # this PC's Wi-Fi signal, %; LOWER is worse
 }
 THRESHOLD_LABELS = {"cpu": "CPU %", "memory": "Memory %", "channel_util": "Channel utilization %",
                     "temperature": "Temperature C", "port_errors": "Port errors (count)",
                     "uptime": "Uptime below (hours)", "sessions": "Session table used %",
-                    "disk": "Disk used %", "utilization": "Interface utilization %"}
-LOWER_IS_WORSE = {"uptime"}
+                    "disk": "Disk used %", "utilization": "Interface utilization %",
+                    "wifi_signal": "Wi-Fi signal below %"}
+LOWER_IS_WORSE = {"uptime", "wifi_signal"}
 
 DEFAULT_SETTINGS = {
     # general
@@ -65,6 +67,9 @@ DEFAULT_SETTINGS = {
     "snippets": [],
     # file servers and throughput tests (per computer: folders and paths)
     "fileserver": {}, "iperf_path": "",
+    # proxy for every connection that can use one (see core/proxy.py; the proxy password is in Credential Manager)
+    "proxy": {"mode": "system", "kind": "http", "host": "", "port": 8080, "username": "",
+              "bypass": "localhost, 127.0.0.1"},
 }
 # Per-machine state that must not travel in an exported settings file (channel secrets stay in
 # Credential Manager, so an imported channel would be broken).
@@ -72,7 +77,7 @@ NOT_PORTABLE = {"notify_channels", "notify_snooze_until", "inventory_expanded", 
 
 DEVICE_FIELDS = ["name", "vendor", "host", "port", "platform", "username",
                  "site", "verify_ssl", "ha_expected", "enabled", "location", "details", "folder_id",
-                 "tags", "fields", "profile_id", "snmp", "jump"]
+                 "tags", "fields", "profile_id", "snmp", "jump", "proxy"]
 ALL_DEVICES = "All devices"
 
 
@@ -131,7 +136,11 @@ def init():
             id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL, kind TEXT NOT NULL, target TEXT DEFAULT '',
             parse TEXT DEFAULT '', mode TEXT DEFAULT 'number', warn REAL, fail REAL, higher_worse INTEGER DEFAULT 1,
             expect TEXT DEFAULT '', unit TEXT DEFAULT '', scope TEXT DEFAULT '[]', enabled INTEGER DEFAULT 1,
-            port INTEGER DEFAULT 0);
+            port INTEGER DEFAULT 0, options TEXT DEFAULT '');
+        CREATE TABLE IF NOT EXISTS maintenance (
+            id INTEGER PRIMARY KEY, name TEXT NOT NULL, kind TEXT DEFAULT 'once', start_at TEXT DEFAULT '',
+            end_at TEXT DEFAULT '', days TEXT DEFAULT '[]', start_time TEXT DEFAULT '', end_time TEXT DEFAULT '',
+            scope TEXT DEFAULT '[]', enabled INTEGER DEFAULT 1, note TEXT DEFAULT '');
         CREATE TABLE IF NOT EXISTS diagnostics (
             id INTEGER PRIMARY KEY, device TEXT NOT NULL, check_name TEXT, at TEXT NOT NULL, body TEXT);
         CREATE TABLE IF NOT EXISTS audit (
@@ -140,6 +149,8 @@ def init():
         CREATE INDEX IF NOT EXISTS idx_results_run ON results(run_id);
         CREATE INDEX IF NOT EXISTS idx_results_series ON results(device, check_name);
         """)
+        if "options" not in {r[1] for r in c.execute("PRAGMA table_info(custom_checks)")}:
+            c.execute("ALTER TABLE custom_checks ADD COLUMN options TEXT DEFAULT ''")
         cols = {r[1] for r in c.execute("PRAGMA table_info(devices)")}
         for col in ("location", "details"):   # upgrade databases created before these existed
             if col not in cols:
@@ -147,7 +158,7 @@ def init():
         if "folder_id" not in cols:
             c.execute("ALTER TABLE devices ADD COLUMN folder_id INTEGER")
         for col, decl in (("tags", "TEXT DEFAULT ''"), ("fields", "TEXT DEFAULT ''"), ("profile_id", "INTEGER"),
-                          ("snmp", "TEXT DEFAULT ''"), ("jump", "TEXT DEFAULT ''")):
+                          ("snmp", "TEXT DEFAULT ''"), ("jump", "TEXT DEFAULT ''"), ("proxy", "TEXT DEFAULT ''")):
             if col not in cols:
                 c.execute(f"ALTER TABLE devices ADD COLUMN {col} {decl}")
     _invalidate_folders()
@@ -170,7 +181,7 @@ def move_secret(old, new):
         delete_secret(old)
 
 # A device can hold up to four secrets: its password/token, and an SNMP community or v3 auth/privacy passwords.
-SECRET_KINDS = {"main": "", "snmp": ":snmp", "snmp_auth": ":snmp-auth", "snmp_priv": ":snmp-priv"}
+SECRET_KINDS = {"main": "", "snmp": ":snmp", "snmp_auth": ":snmp-auth", "snmp_priv": ":snmp-priv", "proxy": ":proxy"}
 
 def secret_name(owner, kind="main"):
     return owner + SECRET_KINDS[kind]
@@ -264,9 +275,12 @@ def save_device(dev: dict) -> int:
     jump = dev.get("jump") or ""
     if isinstance(jump, dict):
         jump = json.dumps(jump) if jump else ""
+    proxy = dev.get("proxy") or ""
+    if isinstance(proxy, dict):
+        proxy = json.dumps(proxy) if proxy else ""
     dev = {**dev, "location": (dev.get("location") or "").strip(),
            "details": (dev.get("details") or "").strip(),
-           "tags": ", ".join(split_tags(dev.get("tags"))), "fields": fields, "snmp": snmp, "jump": jump,
+           "tags": ", ".join(split_tags(dev.get("tags"))), "fields": fields, "snmp": snmp, "jump": jump, "proxy": proxy,
            "profile_id": dev.get("profile_id") or None}
     vals = [dev.get(f) for f in DEVICE_FIELDS]
     with connect() as c:

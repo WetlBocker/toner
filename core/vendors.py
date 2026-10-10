@@ -7,6 +7,7 @@ site      label for the Site field, or "" if the vendor has none
 ha        whether the "HA pair expected" box applies
 platforms [(netmiko device_type, shown name)]; the first is the default
 paging    command that switches off paging in an interactive SSH session ("" = none needed)
+login     False when the device needs no password, token or SNMP (a public status page, this computer's Wi-Fi)
 """
 
 VENDORS = {
@@ -33,6 +34,10 @@ VENDORS = {
                  platforms=[], paging=""),
     "meraki": dict(name="Meraki", kind="api", secret="API key", username=False, site="Organization", ha=False,
                    platforms=[], paging=""),
+    "cloud": dict(name="Cloud status page", kind="status", secret="", username=False, site="", ha=False,
+                  platforms=[], paging="", login=False),
+    "wifi": dict(name="This PC's Wi-Fi", kind="local", secret="", username=False, site="", ha=False,
+                 platforms=[], paging="", login=False),
 }
 
 DEFAULT_PAGING = "terminal length 0"      # the Settings > Terminal default
@@ -47,6 +52,10 @@ def paging_command(vendor, configured):
     if configured and configured != DEFAULT_PAGING:
         return configured
     return get(vendor).get("paging", "")
+
+
+def has_login(vendor):
+    return get(vendor).get("login", True)
 
 
 def is_snmp(vendor):

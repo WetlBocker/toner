@@ -1,14 +1,17 @@
 """File servers (TFTP, SFTP) and the iperf3 throughput test."""
 import os
+import re
 import subprocess
+import threading
 from datetime import datetime
 
-from PySide6.QtCore import QTimer, Qt, Signal
-from PySide6.QtGui import QColor, QDesktopServices
-from PySide6.QtCore import QUrl
+from PySide6.QtCore import QPointF, QRectF, QThread, QTimer, Qt, QUrl, Signal
+from PySide6.QtGui import QColor, QDesktopServices, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
-                               QPushButton, QSpinBox, QStackedWidget, QTableWidgetItem, QVBoxLayout, QWidget)
-from core import audit, db, fileserver, iperf
+                               QProgressBar, QPushButton, QSpinBox, QStackedWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+import paramiko
+from core import audit, db, fileserver, iperf, nettools, oui, profiles, proxy, scp, vendors, wifi, xcopy
+from ui import theme
 from ui.tools import DevicePicker, OutputBox, Runner, _row
 from ui.tools2 import _muted, _primary, _table
 
@@ -280,6 +283,65 @@ class FileServerTab(QWidget):
 
 
 # =============================================================================== iperf3
+class ThroughputGraph(QWidget):
+    """Speed over the course of a test: one point per interval, drawn as it arrives."""
+
+    def __init__(self):
+        super().__init__()
+        self.points = []                                    # [(seconds, Mbit/s)]
+        self.setMinimumHeight(150)
+
+    def set_points(self, points):
+        self.points = list(points)
+        self.update()
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        fg = self.palette().windowText().color()
+        faint = QColor(fg)
+        faint.setAlpha(60)
+        left, top, right, bottom = 56, 8, 12, 22
+        r = QRectF(left, top, self.width() - left - right, self.height() - top - bottom)
+        if not self.points:
+            p.setPen(faint)
+            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "The speed appears here during a test")
+            return
+        peak = max(v for _, v in self.points) or 1.0
+        top_v = peak * 1.15
+        t_max = max(t for t, _ in self.points) or 1.0
+        for i in range(5):                                  # grid and the speed scale
+            y = r.bottom() - r.height() * i / 4
+            p.setPen(QPen(faint, 1))
+            p.drawLine(QPointF(r.left(), y), QPointF(r.right(), y))
+            p.setPen(fg)
+            p.drawText(QRectF(0, y - 9, left - 6, 18), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                       f"{top_v * i / 4:.0f}")
+        p.setPen(fg)
+        p.drawText(QRectF(r.left(), r.bottom() + 3, r.width(), 18), Qt.AlignmentFlag.AlignRight, f"{t_max:.0f} s")
+        p.drawText(QRectF(r.left(), r.bottom() + 3, r.width(), 18), Qt.AlignmentFlag.AlignLeft, "Mbit/s")
+        pts = [QPointF(r.left() + r.width() * t / t_max, r.bottom() - r.height() * v / top_v) for t, v in self.points]
+        accent = QColor(theme.current().get("accent", "#2563eb"))
+        line = QPainterPath(pts[0])
+        for pt in pts[1:]:
+            line.lineTo(pt)
+        fill = QPainterPath(line)
+        fill.lineTo(QPointF(pts[-1].x(), r.bottom()))
+        fill.lineTo(QPointF(pts[0].x(), r.bottom()))
+        fill.closeSubpath()
+        shade = QColor(accent)
+        shade.setAlpha(45)
+        p.fillPath(fill, shade)
+        p.setPen(QPen(accent, 2))
+        p.drawPath(line)
+        p.setBrush(accent)
+        p.drawEllipse(pts[-1], 3.5, 3.5)
+        p.setPen(fg)
+        last = self.points[-1][1]
+        p.drawText(QRectF(r.left(), r.top(), r.width() - 4, 18), Qt.AlignmentFlag.AlignRight,
+                   f"now {last:.1f}   peak {peak:.1f}   average {sum(v for _, v in self.points) / len(self.points):.1f} Mbit/s")
+
+
 class IperfTab(QWidget):
     def __init__(self):
         super().__init__()
@@ -312,6 +374,7 @@ class IperfTab(QWidget):
         self.go = _primary("Start test")
         self.stop = QPushButton("Stop")
         self.stop.setEnabled(False)
+        self.graph = ThroughputGraph()
         self.result = QLabel("")
         f = self.result.font()
         f.setBold(True)
@@ -342,6 +405,7 @@ class IperfTab(QWidget):
         lay.addWidget(self.pages)
         lay.addLayout(self._left(self.go, self.stop))
         lay.addWidget(self.result)
+        lay.addWidget(self.graph)
         lay.addWidget(self.out, 1)
 
         self.mode.currentIndexChanged.connect(self._mode)
@@ -406,6 +470,7 @@ class IperfTab(QWidget):
             return
         self.buffer = ""
         self.result.setText("")
+        self.graph.set_points([])
         self.out.line(f"\n> iperf3 {' '.join(args)}")
         self._busy(True)
         self._server_running = server
@@ -420,10 +485,434 @@ class IperfTab(QWidget):
         self.out.add(text)
         self.buffer += text
         sm = iperf.Summary().feed(self.buffer)
+        self.graph.set_points((r["end"], r["mbps"]) for r in sm.intervals)
         if sm.sender or sm.receiver:
             self.result.setText(sm.text())
         elif sm.intervals:
             self.result.setText(f"{sm.intervals[-1]['mbps']:.1f} Mbit/s   (running...)")
+
+    def refresh(self):
+        pass
+
+    def shutdown(self):
+        self.runner.stop()
+
+
+# =============================================================================== Wi-Fi scanner
+class WifiWorker(QThread):
+    done = Signal(list, str, object)
+
+    def run(self):
+        nets, err = wifi.scan()
+        adapters, _ = wifi.interfaces()
+        self.done.emit(nets, err, wifi.current(adapters))
+
+
+class WifiTab(QWidget):
+    COLS = ["Network", "Signal", "Channel", "Band", "Radio", "Security", "BSSID", "Made by"]
+
+    def __init__(self):
+        super().__init__()
+        self.nets, self.worker = [], None
+        self.scan_btn = _primary("Scan now")
+        self.auto = QCheckBox("Rescan every 5 seconds")
+        self.band = QComboBox()
+        self.band.addItems(["All bands", "2.4 GHz", "5 GHz", "6 GHz"])
+        self.filter = QLineEdit()
+        self.filter.setPlaceholderText("filter by network name or maker")
+        self.me = _muted("")
+        self.summary = _muted("")
+        self.table = _table(self.COLS)
+        self.timer = QTimer(self)
+        self.timer.setInterval(5000)
+        bar = QHBoxLayout()
+        for w in (self.scan_btn, self.auto, self.band):
+            bar.addWidget(w)
+        bar.addWidget(self.filter, 1)
+        lay = QVBoxLayout(self)
+        lay.addWidget(_muted("The Wi-Fi networks this computer can hear, strongest first, with the channel each one uses. "
+                             "Use it to find a crowded channel, a weak spot, or an access point that is not yours. "
+                             "Windows needs Location access switched on to list networks."))
+        lay.addLayout(bar)
+        lay.addWidget(self.me)
+        lay.addWidget(self.summary)
+        lay.addWidget(self.table, 1)
+        self.scan_btn.clicked.connect(self.scan)
+        self.auto.toggled.connect(lambda on: (self.timer.start() if on else self.timer.stop(), on and self.scan()))
+        self.timer.timeout.connect(self.scan)
+        self.band.currentIndexChanged.connect(self.show_rows)
+        self.filter.textChanged.connect(self.show_rows)
+
+    def scan(self):
+        if self.worker and self.worker.isRunning():
+            return
+        self.scan_btn.setEnabled(False)
+        self.summary.setText("Scanning...")
+        self.worker = WifiWorker()
+        self.worker.done.connect(self.on_done)
+        self.worker.start()
+
+    def on_done(self, nets, err, mine):
+        self.scan_btn.setEnabled(True)
+        self.nets = sorted(nets, key=lambda n: -(n["signal"] or 0))
+        for n in self.nets:
+            n["maker"] = oui.lookup(n["bssid"]) if n["bssid"] else ""
+        if mine and mine.get("connected"):
+            self.me.setText(f"This computer is connected to {mine.get('ssid', '?')} ({mine.get('band_text', '')}, "
+                            f"channel {mine.get('channel_no') or '?'}, signal {mine.get('signal_pct', '?')}%).")
+        else:
+            self.me.setText("This computer is not connected to Wi-Fi." if mine else "")
+        self.summary.setText(err if err else self._summary())
+        self.show_rows()
+
+    def _summary(self):
+        ssids = {n["ssid"] for n in self.nets}
+        text = f"{len(self.nets)} access points in {len(ssids)} networks."
+        if any(n["band"] == "2.4 GHz" for n in self.nets):
+            best, load = wifi.best_channels(self.nets)
+            text += (f"  Quietest 2.4 GHz channel: {best}  (access points sharing channel 1: {load[1]}, 6: {load[6]}, "
+                     f"11: {load[11]}).")
+        return text
+
+    def show_rows(self, *_):
+        band = self.band.currentText()
+        want = self.filter.text().strip().lower()
+        rows = [n for n in self.nets if (band == "All bands" or n["band"] == band)
+                and (not want or want in (n["ssid"] + " " + n.get("maker", "")).lower())]
+        self.table.setRowCount(len(rows))
+        for i, n in enumerate(rows):
+            sig = n["signal"]
+            vals = [n["ssid"], "" if sig is None else f"{sig}%", n["channel"] or "", n["band"], n["radio"],
+                    f"{n['auth']} {n['encryption']}".strip(), n["bssid"], n.get("maker", "")]
+            for j, v in enumerate(vals):
+                it = QTableWidgetItem(str(v))
+                if j == 1 and sig is not None:
+                    it.setForeground(QColor("#2e9e44" if sig >= 65 else "#e6a100" if sig >= 40 else "#d32f2f"))
+                self.table.setItem(i, j, it)
+        self.table.resizeColumnsToContents()
+
+    def refresh(self):
+        pass
+
+    def shutdown(self):
+        self.timer.stop()
+        if self.worker:
+            self.worker.wait(5000)
+
+
+# =============================================================================== SCP (to and from a device)
+class ScpWorker(QThread):
+    line = Signal(str)
+    progress = Signal(int, int)
+    finished_ok = Signal(bool)
+
+    def __init__(self, job):
+        super().__init__()
+        self.job = job
+        self.cancel = threading.Event()
+
+    def _progress(self, kind, name, done, total):
+        if kind == "file":
+            self.line.emit(f"  {name}  ({_size(total)})")
+            self.progress.emit(0, total)
+        elif kind == "dir":
+            self.line.emit(f"  {name}/")
+        else:
+            self.progress.emit(done, total)
+
+    def run(self):
+        j, ok, client, extra = self.job, False, None, []
+        try:
+            self.line.emit(f"Connecting to {j['host']}:{j['port']} as {j['user']}...")
+            client, extra = scp.connect(j["host"], j["port"], j["user"], j["password"], j["dev"], j["hostkey_mode"], j["timeout"])
+            s = scp.Scp(client, progress=self._progress, cancel=self.cancel, timeout=j["timeout"])
+            if j["upload"]:
+                files, nbytes = s.upload(j["local"], j["remote"], j["recursive"], j["preserve"])
+            else:
+                files, nbytes = s.download(j["remote"], j["local"], j["recursive"], j["preserve"], j["overwrite"])
+            for path in s.skipped:
+                self.line.emit(f"  kept your existing file, not replaced: {path}")
+            self.line.emit(f"Done: {files} file(s), {_size(nbytes)}.")
+            ok = True
+            self.summary = (files, nbytes)
+        except scp.Cancelled:
+            self.line.emit("Stopped.")
+        except paramiko.BadHostKeyException:
+            self.line.emit(f"HOST KEY CHANGED for {j['host']}. It does not match the key saved earlier: the device may "
+                           "have been replaced or reset, or something is impersonating it. Nothing was copied. If the "
+                           "change is expected, forget the saved key under Settings > Security.")
+        except paramiko.AuthenticationException:
+            self.line.emit("Login failed: the device did not accept the user name and password.")
+        except Exception as e:
+            text = str(e)
+            if "not found in known_hosts" in text:
+                text = (f"{j['host']} is not a known host and the policy is 'Reject unknown hosts'. Connect once with "
+                        "'Trust on first use' to save its key.")
+            self.line.emit(f"Failed: {text if isinstance(e, (scp.ScpError, proxy.ProxyError)) or 'known host' in text else type(e).__name__ + ': ' + text}")
+        finally:
+            if client:
+                client.close()
+            for c in extra:
+                try:
+                    c.close()
+                except Exception:
+                    pass
+            self.finished_ok.emit(ok)
+
+
+class ScpTab(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.worker = None
+        self.picker = DevicePicker()
+        self.host, self.user, self.password = QLineEdit(), QLineEdit(), QLineEdit()
+        self.host.setPlaceholderText("host or IP")
+        self.password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.port = QSpinBox()
+        self.port.setRange(1, 65535)
+        self.port.setValue(int(db.get_setting("default_ssh_port")))
+        self.direction = QComboBox()
+        self.direction.addItem("Send to the device (upload)", True)
+        self.direction.addItem("Get from the device (download)", False)
+        self.local, self.remote = QLineEdit(), QLineEdit()
+        self.remote.setPlaceholderText("e.g. flash:/image.bin  or  /config/backup.cfg")
+        self.file_btn, self.folder_btn = QPushButton("File..."), QPushButton("Folder...")
+        self.recursive = QCheckBox("Include sub-folders")
+        self.preserve = QCheckBox("Keep file dates")
+        self.overwrite = QCheckBox("Replace files that already exist here")
+        self.go = _primary("Start")
+        self.stop = QPushButton("Stop")
+        self.stop.setEnabled(False)
+        self.bar = QProgressBar()
+        self.bar.setTextVisible(False)
+        self.bar.setMaximumHeight(8)
+        self.out = OutputBox()
+        self.local_label = QLabel("From (this computer)")
+        self.remote_label = QLabel("To (on the device)")
+
+        lay = QVBoxLayout(self)
+        lay.addWidget(_muted("Copy files to or from a device over SSH (SCP). Uses the device's saved login, jump host and "
+                             "proxy. The device must allow it: on Cisco IOS turn it on with 'ip scp server enable' and use a "
+                             "user with privilege 15; Juniper, Arista, MikroTik and most Linux systems have it ready."))
+        lay.addLayout(_row("Device", self.picker, "Host", self.host, "Port", self.port, "User", self.user, "Password", self.password))
+        lay.addLayout(_row("Direction", self.direction))
+        lay.addLayout(_row(self.local_label, self.local, self.file_btn, self.folder_btn))
+        lay.addLayout(_row(self.remote_label, self.remote))
+        lay.addLayout(_row(self.recursive, self.preserve, self.overwrite))
+        lay.addLayout(_row(self.go, self.stop))
+        lay.addWidget(self.bar)
+        lay.addWidget(self.out, 1)
+
+        self.picker.currentIndexChanged.connect(self.picked)
+        self.direction.currentIndexChanged.connect(self._direction)
+        self.file_btn.clicked.connect(self.pick_file)
+        self.folder_btn.clicked.connect(self.pick_folder)
+        self.go.clicked.connect(self.start)
+        self.stop.clicked.connect(self.halt)
+        self.password.returnPressed.connect(self.start)
+        self.picked()
+        self._direction()
+
+    def picked(self, *_):
+        d = self.picker.currentData()
+        if d:
+            self.host.setText(d["host"])
+            if d.get("port"):
+                self.port.setValue(int(d["port"]))
+            self.user.setText(profiles.username(d))
+            self.password.setPlaceholderText("blank = use the stored password" if vendors.uses_ssh_login(d["vendor"]) else "")
+        else:
+            self.password.setPlaceholderText("")
+
+    def stored_password(self):
+        d = self.picker.currentData()
+        return (profiles.secret(d) or "") if d and vendors.uses_ssh_login(d["vendor"]) else ""
+
+    def _direction(self, *_):
+        up = bool(self.direction.currentData())
+        self.local_label.setText("From (this computer)" if up else "To (this computer)")
+        self.remote_label.setText("To (on the device)" if up else "From (on the device)")
+        self.file_btn.setVisible(up)
+        self.overwrite.setVisible(not up)
+
+    def pick_file(self):
+        path, _ = QFileDialog.getOpenFileName(self, "File to send", self.local.text() or os.path.expanduser("~"))
+        if path:
+            self.local.setText(os.path.normpath(path))
+
+    def pick_folder(self):
+        path = QFileDialog.getExistingDirectory(self, "Folder", self.local.text() or os.path.expanduser("~"))
+        if path:
+            self.local.setText(os.path.normpath(path))
+            if self.direction.currentData():
+                self.recursive.setChecked(True)
+
+    def running(self):
+        return bool(self.worker and self.worker.isRunning())
+
+    def _busy(self, on):
+        self.go.setEnabled(not on)
+        self.stop.setEnabled(on)
+        for w in (self.picker, self.host, self.port, self.user, self.password, self.direction, self.local, self.remote,
+                  self.recursive, self.preserve, self.overwrite, self.file_btn, self.folder_btn):
+            w.setEnabled(not on)
+
+    def start(self):
+        if self.running():
+            return
+        try:
+            host = nettools.check_host(self.host.text())
+        except ValueError as e:
+            self.out.line(f"Error: {e}")
+            return
+        user, remote, local = self.user.text().strip(), self.remote.text().strip(), self.local.text().strip().strip('"')
+        up = bool(self.direction.currentData())
+        problem = ("Enter a user name." if not user else "Enter the path on the device (for example flash:/image.bin)." if not remote
+                   else "Choose the file or folder on this computer." if not local
+                   else f"{local} does not exist." if up and not os.path.exists(local) else "")
+        if problem:
+            self.out.line(f"Error: {problem}")
+            return
+        dev = self.picker.currentData()
+        job = {"host": host, "port": self.port.value(), "user": user, "password": self.password.text() or self.stored_password(),
+               "dev": profiles.resolve(dev) if dev else None, "upload": up, "local": local, "remote": remote,
+               "recursive": self.recursive.isChecked(), "preserve": self.preserve.isChecked(),
+               "overwrite": self.overwrite.isChecked(), "hostkey_mode": db.get_setting("hostkey_mode"),
+               "timeout": int(db.get_setting("ssh_timeout"))}
+        self.out.line(f"\n> {'send' if up else 'get'} {local} {'to' if up else 'from'} {user}@{host}:{remote}")
+        self.bar.setValue(0)
+        self._busy(True)
+        self.worker = ScpWorker(job)
+        self.worker.line.connect(self.out.line)
+        self.worker.progress.connect(lambda done, total: (self.bar.setMaximum(max(1, total)), self.bar.setValue(done)))
+        self.worker.finished_ok.connect(lambda ok, job=job: self._done(ok, job))
+        self.worker.start()
+
+    def _done(self, ok, job):
+        self._busy(False)
+        self.bar.setValue(self.bar.maximum() if ok else self.bar.value())
+        audit.log("scp " + ("upload" if job["upload"] else "download") + ("" if ok else " failed"),
+                  f"{(self.picker.currentData() or {}).get('name') or job['host']}: {job['local']} "
+                  f"{'->' if job['upload'] else '<-'} {job['remote']}")
+
+    def halt(self):
+        if self.running():
+            self.worker.cancel.set()
+
+    def refresh(self):
+        pass
+
+    def shutdown(self):
+        if self.running():
+            self.worker.cancel.set()
+            self.worker.wait(5000)
+
+
+# =============================================================================== xcopy (copy folders on this computer or a share)
+class XcopyTab(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.exe = xcopy.find_xcopy()
+        self.buffer = ""
+        self.source, self.dest = QLineEdit(), QLineEdit()
+        self.source.setPlaceholderText(r"C:\TFTP   or   \\fileserver\share\configs   or   C:\TFTP\*.cfg")
+        self.dest.setPlaceholderText(r"D:\Backups\network   or   \\fileserver\backup")
+        self.src_file, self.src_folder, self.dst_folder = QPushButton("File..."), QPushButton("Folder..."), QPushButton("Folder...")
+        self.subfolders = QCheckBox("Include sub-folders, even empty ones")
+        self.subfolders.setChecked(True)
+        self.existing = QComboBox()
+        self.existing.addItem("Replace files that already exist", xcopy.REPLACE)
+        self.existing.addItem("Replace only if the source is newer", xcopy.NEWER)
+        self.hidden = QCheckBox("Include hidden and system files")
+        self.readonly = QCheckBox("Keep the read-only attribute")
+        self.keep_going = QCheckBox("Keep going after an error")
+        self.keep_going.setChecked(True)
+        self.verify = QCheckBox("Verify each file after writing")
+        self.preview = QPushButton("Preview")
+        self.go = _primary("Copy")
+        self.stop = QPushButton("Stop")
+        self.stop.setEnabled(False)
+        self.result = QLabel("")
+        f = self.result.font()
+        f.setBold(True)
+        self.result.setFont(f)
+        self.out = OutputBox()
+        self.runner = Runner(self)
+        self.runner.output.connect(self.on_output)
+        self.runner.finished.connect(self._finished)
+        self._preview = False
+
+        lay = QVBoxLayout(self)
+        lay.addWidget(_muted(
+            "Copy a folder, or files matching a pattern, on this computer or to and from a network share, using Windows "
+            "xcopy. The contents of the source folder are copied into the destination folder. Use Preview first to see "
+            "what would be copied without copying anything." + ("" if self.exe else "  xcopy.exe was not found on this computer.")))
+        lay.addLayout(_row("Copy from", self.source, self.src_file, self.src_folder))
+        lay.addLayout(_row("Copy to", self.dest, self.dst_folder))
+        lay.addLayout(_row("If a file already exists", self.existing, self.subfolders))
+        lay.addLayout(_row(self.hidden, self.readonly, self.keep_going, self.verify))
+        lay.addLayout(_row(self.preview, self.go, self.stop))
+        lay.addWidget(self.result)
+        lay.addWidget(self.out, 1)
+        self.src_file.clicked.connect(lambda: self._pick(self.source, True))
+        self.src_folder.clicked.connect(lambda: self._pick(self.source, False))
+        self.dst_folder.clicked.connect(lambda: self._pick(self.dest, False))
+        self.preview.clicked.connect(lambda: self.start(True))
+        self.go.clicked.connect(lambda: self.start(False))
+        self.stop.clicked.connect(self.runner.stop)
+
+    def _pick(self, box, file):
+        if file:
+            path, _ = QFileDialog.getOpenFileName(self, "File to copy", box.text() or os.path.expanduser("~"))
+        else:
+            path = QFileDialog.getExistingDirectory(self, "Folder", box.text() or os.path.expanduser("~"))
+        if path:
+            box.setText(os.path.normpath(path))
+
+    def _busy(self, on):
+        for w in (self.go, self.preview):
+            w.setEnabled(not on)
+        self.stop.setEnabled(on)
+
+    def start(self, preview):
+        if self.runner.running():
+            return
+        if not self.exe:
+            self.out.line("Error: xcopy.exe was not found on this computer.")
+            return
+        try:
+            args = xcopy.build_args(self.source.text(), self.dest.text(), self.subfolders.isChecked(),
+                                    self.existing.currentData(), self.hidden.isChecked(), self.readonly.isChecked(),
+                                    self.keep_going.isChecked(), self.verify.isChecked(), preview)
+        except ValueError as e:
+            self.out.line(f"Error: {e}")
+            return
+        dest = args[1]
+        if (not preview and self.existing.currentData() == xcopy.REPLACE and os.path.isdir(dest) and os.listdir(dest)
+                and QMessageBox.question(self, "Replace files?", f"Files in {dest} with the same names as the ones being "
+                                         "copied will be replaced.\n\nCopy anyway? (Preview shows what would be copied.)")
+                != QMessageBox.StandardButton.Yes):
+            return
+        self._preview, self.buffer = preview, ""
+        self.result.setText("")
+        self.out.line(f"\n> xcopy {' '.join(args)}")
+        if not preview:
+            audit.log("xcopy", f"{args[0]} -> {args[1]} ({self.existing.currentText().lower()})")
+        self._busy(True)
+        self.runner.start(self.exe, args)
+
+    def on_output(self, text):
+        self.out.add(text)
+        self.buffer += text
+
+    def _finished(self):
+        self._busy(False)
+        m = re.findall(r"\[finished, exit code (-?\d+)\]", self.buffer)
+        code = int(m[-1]) if m else -1
+        text = xcopy.describe_exit(code, self.buffer)
+        if self._preview and code == 0 and xcopy.count_copied(self.buffer):
+            text = f"Preview: {xcopy.count_copied(self.buffer)} file(s) would be copied. Nothing was copied."
+        self.result.setText(text)
 
     def refresh(self):
         pass

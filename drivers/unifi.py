@@ -1,3 +1,4 @@
+from core import proxy
 import requests
 import urllib3
 from .base import Driver, OK, WARN, FAIL, grade, grade_low
@@ -18,6 +19,7 @@ class UnifiDriver(Driver):
         base = f"https://{d['host']}" + (f":{d['port']}" if d.get("port") else "")
         s = requests.Session()
         s.verify = verify
+        s.proxies.update(proxy.requests_kwargs(d).get("proxies", {}))
         timeout = self.opts["http_timeout"]
         r = s.post(f"{base}/api/auth/login", timeout=timeout,
                    json={"username": d["username"], "password": self.password})

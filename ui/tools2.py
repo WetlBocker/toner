@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComb
                                QListWidgetItem, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QSpinBox,
                                QSplitter, QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 from core import audit, cmdrun, custom, db, discovery, listeners, nettools, oui, pinger, profiles, reports, snmp
-from core import topology, vendors
+from core import proxy, topology, vendors
 from ui import theme
 from ui.tools import DevicePicker, OutputBox, _row
 from ui.widgets import GroupPicker
@@ -948,7 +948,7 @@ def read_certificate(host, port, sni=None, timeout=8):
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
-    with socket.create_connection((host, port), timeout=timeout) as raw:
+    with proxy.create_connection(None, (host, port), timeout) as raw:
         with ctx.wrap_socket(raw, server_hostname=sni or host) as s:
             der = s.getpeercert(binary_form=True)
             info = custom.cert_info(der)

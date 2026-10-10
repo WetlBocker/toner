@@ -56,7 +56,7 @@ class FakeResp:
     def json(self): return {"data": self._d}
 state = {"errors": 50, "uptime": 120, "upgradable": True}
 class FakeSession:
-    def __init__(self): self.headers, self.verify = {}, False
+    def __init__(self): self.headers, self.verify, self.proxies = {}, False, {}
     def post(self, url, **k): return FakeResp(headers={})
     def get(self, url, **k):
         if url.endswith("/self/sites"): return FakeResp([{"name": "default", "desc": "Default"}])

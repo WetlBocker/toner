@@ -8,3 +8,4 @@ pyte
 pysnmp>=7.1,<8
 pyinstaller
 cryptography
+PySocks

@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComb
                                QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSpinBox, QStyle, QTabWidget,
                                QToolButton, QTreeWidget,
                                QTreeWidgetItem, QVBoxLayout, QWidget, QWidgetAction)
-from core import audit, bulk, db, display, importer, nettools, profiles, vendors
+from core import audit, bulk, db, display, importer, nettools, profiles, proxy, vendors
 from ui import icons, theme
 from ui.snmpfields import SnmpFields
 from core.runner import run_one
@@ -47,6 +47,12 @@ class DeviceDialog(QDialog):
         self.folder.setCurrentIndex(max(0, self.folder.findData((dev or {}).get("folder_id", folder_id))))
         self.details = QLineEdit()
         self.details.setPlaceholderText("optional notes, e.g. rack 3, core switch")
+        self.preset = QComboBox()
+        self.preset.addItem("(choose to fill in the address)", "")
+        from drivers.cloud import PRESETS
+        for label, host in PRESETS:
+            self.preset.addItem(f"{label}  -  {host}", (label, host))
+        self.preset.currentIndexChanged.connect(self._preset)
         self.verify = QCheckBox("Verify SSL certificate")
         self.verify.setChecked(bool(db.get_setting("default_verify_ssl")) and not dev)   # default for new devices
         self.ha = QCheckBox("HA pair expected")
@@ -65,6 +71,21 @@ class DeviceDialog(QDialog):
                 self.jump.addItem(d["name"], d["name"])
         self.jump.setToolTip("Reach this device over SSH through another inventory device (SSH checks, "
                              "backups and the console).")
+        self.proxy_mode = QComboBox()
+        self.proxy_mode.addItem("Use the global setting (Settings > Proxy)", "default")
+        self.proxy_mode.addItem("Connect directly (no proxy)", "none")
+        self.proxy_mode.addItem("Use a proxy for this device", "custom")
+        self.proxy_kind = QComboBox()
+        for k, label in proxy.KINDS:
+            self.proxy_kind.addItem(label, k)
+        self.proxy_host, self.proxy_user, self.proxy_pw = QLineEdit(), QLineEdit(), QLineEdit()
+        self.proxy_host.setPlaceholderText("proxy.example.com")
+        self.proxy_user.setPlaceholderText("optional")
+        self.proxy_pw.setEchoMode(QLineEdit.EchoMode.Password)
+        self.proxy_port = QSpinBox()
+        self.proxy_port.setRange(1, 65535)
+        self.proxy_port.setValue(8080)
+        self.proxy_mode.currentIndexChanged.connect(lambda *_: self._proxy_rows())
         self.use_snmp = QCheckBox("This device also answers SNMP")
         self.snmp = SnmpFields()
         self.tags = QLineEdit()
@@ -80,12 +101,15 @@ class DeviceDialog(QDialog):
                 f.addRow(label, widget)
             return w, f
         self.page_general, self.form = page((("Name", self.name), ("Vendor", self.vendor), ("Folder", self.folder),
-                                             ("Location", self.location), ("Host / DNS name", self.host),
+                                             ("Location", self.location), ("Popular pages", self.preset), ("Host / DNS name", self.host),
                                              ("Port", self.port), ("Platform", self.platform),
                                              ("Details", self.details), ("", self.enabled)))
         self.page_access, self.access = page((("Credential profile", self.profile), ("Username", self.username),
                                               ("Password", self.secret), ("Site", self.site),
-                                              ("Jump host", self.jump), ("", self.verify), ("", self.ha)))
+                                              ("Jump host", self.jump), ("Proxy", self.proxy_mode), ("Proxy type", self.proxy_kind),
+                                              ("Proxy address", self.proxy_host), ("Proxy port", self.proxy_port),
+                                              ("Proxy user", self.proxy_user), ("Proxy password", self.proxy_pw),
+                                              ("", self.verify), ("", self.ha)))
         self.page_snmp = QWidget()
         sl = QVBoxLayout(self.page_snmp)
         sl.addWidget(self.use_snmp)
@@ -131,6 +155,14 @@ class DeviceDialog(QDialog):
             except ValueError:
                 jump = {}
             self.jump.setCurrentIndex(max(0, self.jump.findData(jump.get("device", ""))))
+            own_proxy = proxy.device_settings(dev)
+            self.proxy_mode.setCurrentIndex(max(0, self.proxy_mode.findData(own_proxy.get("mode", "default"))))
+            self.proxy_kind.setCurrentIndex(max(0, self.proxy_kind.findData(own_proxy.get("kind", "http"))))
+            self.proxy_host.setText(own_proxy.get("host", ""))
+            self.proxy_port.setValue(int(own_proxy.get("port") or 8080))
+            self.proxy_user.setText(own_proxy.get("username", ""))
+            if keyring.get_password(db.SERVICE, db.secret_name(dev["name"], "proxy")):
+                self.proxy_pw.setPlaceholderText("saved; leave blank to keep")
             try:
                 own = json.loads(dev.get("snmp") or "{}")
             except ValueError:
@@ -158,18 +190,57 @@ class DeviceDialog(QDialog):
         self.access.setRowVisible(self.ha, info["ha"])
         self.access.setRowVisible(self.verify, info["kind"] == "api")
         self.access.setRowVisible(self.jump, info["kind"] == "ssh")
-        self.access.setRowVisible(self.secret, not snmp_only)
+        login = vendors.has_login(vendor)
+        self.form.setRowVisible(self.preset, vendor == "cloud")
+        self.host.setPlaceholderText({"cloud": "the status page's address, e.g. www.githubstatus.com",
+                                      "wifi": "localhost (this computer)"}.get(vendor, ""))
+        if vendor == "wifi" and not self.host.text().strip():
+            self.host.setText("localhost")
+        self.access.setRowVisible(self.profile, login)
+        self.access.setRowVisible(self.secret, not snmp_only and login)
+        self.tabs.setTabVisible(2, login)
         if info["site"]:
             self.access.labelForField(self.site).setText(info["site"])
         self.access.labelForField(self.secret).setText(info["secret"])
-        self.use_snmp.setVisible(not snmp_only)
+        self.use_snmp.setVisible(not snmp_only and login)
+        self._proxy_rows()
         if snmp_only:
             self.use_snmp.setChecked(True)
         self.snmp.setEnabled(self.use_snmp.isChecked())
 
+    def _proxy_rows(self):
+        able = vendors.get(self.vendor.currentData()).get("kind") in ("ssh", "api", "status")     # not SNMP / UDP / local
+        self.access.setRowVisible(self.proxy_mode, able)
+        custom = able and self.proxy_mode.currentData() == "custom"
+        for w in (self.proxy_kind, self.proxy_host, self.proxy_port, self.proxy_user, self.proxy_pw):
+            self.access.setRowVisible(w, custom)
+
+    def _proxy_values(self):
+        if vendors.get(self.vendor.currentData()).get("kind") not in ("ssh", "api", "status"):
+            return ""
+        mode = self.proxy_mode.currentData()
+        if mode == "none":
+            return {"mode": "none"}
+        if mode == "custom":
+            return {"mode": "custom", "kind": self.proxy_kind.currentData(), "host": self.proxy_host.text().strip(),
+                    "port": self.proxy_port.value(), "username": self.proxy_user.text().strip()}
+        return ""
+
+    def proxy_secrets(self):
+        v = self._proxy_values()
+        return {"proxy": self.proxy_pw.text()} if v and v["mode"] == "custom" and self.proxy_pw.text() else {}
+
+    def _preset(self, *_):
+        picked = self.preset.currentData()
+        if picked:
+            label, host = picked
+            self.host.setText(host)
+            if not self.name.text().strip():
+                self.name.setText(label)
+
     def values(self):
         v = self.vendor.currentData()
-        snmp_on = self.use_snmp.isChecked() or vendors.is_snmp(v)
+        snmp_on = (self.use_snmp.isChecked() and vendors.has_login(v)) or vendors.is_snmp(v)
         return {"id": self.dev.get("id"), "name": self.name.text().strip(), "vendor": v,
                 "location": self.location.currentText().strip(),
                 "folder_id": self.folder.currentData(),
@@ -182,7 +253,8 @@ class DeviceDialog(QDialog):
                 "profile_id": self.profile.currentData(), "tags": self.tags.text().strip(),
                 "fields": text_to_fields(self.fields.toPlainText()),
                 "snmp": self.snmp.settings() if snmp_on else "",
-                "jump": {"device": self.jump.currentData()} if self.jump.currentData() else ""}
+                "jump": {"device": self.jump.currentData()} if self.jump.currentData() else "",
+                "proxy": self._proxy_values()}
 
     def snmp_secrets(self):
         return self.snmp.secrets() if self.use_snmp.isChecked() or vendors.is_snmp(self.vendor.currentData()) else {}
@@ -191,6 +263,9 @@ class DeviceDialog(QDialog):
         v = self.values()
         if not v["name"] or not v["host"]:
             QMessageBox.warning(self, "Missing data", "Name and host are required.")
+            return
+        if v["proxy"] and v["proxy"]["mode"] == "custom" and not v["proxy"]["host"]:
+            QMessageBox.warning(self, "Missing data", "Enter the proxy's address, or choose another proxy option.")
             return
         try:
             self.host.setText(nettools.check_host(v["host"]))
@@ -205,6 +280,9 @@ class DeviceDialog(QDialog):
             dev["password"] = self.secret.text()
         dev["snmp"] = json.dumps(dev["snmp"]) if dev["snmp"] else ""
         dev["jump"] = json.dumps(dev["jump"]) if dev["jump"] else ""
+        dev["proxy"] = json.dumps(dev["proxy"]) if dev["proxy"] else ""
+        if self.proxy_pw.text():
+            dev["_proxy_secret"] = self.proxy_pw.text()
         dev["_secrets"] = {k: s for k, s in self.snmp_secrets().items() if s}        # typed but not saved yet
         QApplication.setOverrideCursor(self.cursor())
         try:
@@ -409,17 +487,8 @@ class InventoryTab(QWidget):
 
     @staticmethod
     def _filter_icon():
-        pm = QPixmap(32, 32)
-        pm.fill(Qt.GlobalColor.transparent)
-        p = QPainter(pm)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        col = QApplication.palette().text().color()
-        p.setPen(QPen(col, 2.4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawPolygon(QPolygonF([QPointF(5, 7), QPointF(27, 7), QPointF(18, 17), QPointF(18, 26), QPointF(14, 24),
-                                 QPointF(14, 17)]))
-        p.end()
-        return QIcon(pm)
+        from ui.widgets import filter_icon
+        return filter_icon()
 
     def _build_filter_menu(self):
         """Vendor and Location only filter the folder tree; they never regroup it.
@@ -660,7 +729,7 @@ class InventoryTab(QWidget):
     def add(self):
         dlg = DeviceDialog(parent=self, folder_id=self.current_folder() if self.folders_mode() else None)
         if dlg.exec():
-            self._save(dlg.values(), dlg.secret.text(), extra_secrets=dlg.snmp_secrets())
+            self._save(dlg.values(), dlg.secret.text(), extra_secrets={**dlg.snmp_secrets(), **dlg.proxy_secrets()})
 
     def edit(self):
         d = self.selected()
@@ -670,7 +739,7 @@ class InventoryTab(QWidget):
     def edit_device(self, d):
         dlg = DeviceDialog(d, self)
         if dlg.exec():
-            self._save(dlg.values(), dlg.secret.text(), old_name=d["name"], extra_secrets=dlg.snmp_secrets())
+            self._save(dlg.values(), dlg.secret.text(), old_name=d["name"], extra_secrets={**dlg.snmp_secrets(), **dlg.proxy_secrets()})
 
     def show_details(self):
         d = self.selected()

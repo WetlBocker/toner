@@ -1,3 +1,4 @@
+from core import proxy
 import requests
 import urllib3
 from .base import Driver, OK, WARN, FAIL
@@ -10,7 +11,7 @@ class FortinetDriver(Driver):
         port = d.get("port") or 443
         r = requests.get(f"https://{d['host']}:{port}/api/v2/monitor/{path}",
                          headers={"Authorization": f"Bearer {self.password}"},
-                         verify=bool(d.get("verify_ssl")), timeout=self.opts["http_timeout"])
+                         verify=bool(d.get("verify_ssl")), timeout=self.opts["http_timeout"], **proxy.requests_kwargs(d))
         r.raise_for_status()
         return r.json()["results"]
 

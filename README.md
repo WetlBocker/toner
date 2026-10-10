@@ -42,9 +42,37 @@ in "Allowed clients" whenever uploads are on. SFTP needs a user name and passwor
 shell, shows its fingerprint, and locks an address out for five minutes after five wrong passwords. Whole drives and
 system folders are refused.
 
+**SCP and xcopy** (Tools > File transfer). SCP copies files and folders to or from a device over SSH, using the device's saved login, jump host and proxy; the device must allow it (Cisco IOS: `ip scp server enable` and a privilege-15 user). Names a device sends are checked, so nothing can be written outside the folder you chose, and Stop leaves no half-written files. xcopy runs Windows xcopy to copy folders on this computer or to and from a network share, for example to move what the TFTP and SFTP servers received to a file server. Preview shows what would be copied without copying anything, and copying over existing files asks first.
+
 **iperf3** is run, not bundled: download iperf3 for Windows (iperf.fr) and choose `iperf3.exe` on the page, or put it on
 your PATH. The page can run a test against another iperf3 server (TCP or UDP, upload or download, several streams) or act
-as the server, and shows the sent and received rates and retransmits.
+as the server, and shows the sent and received rates and retransmits, with a live graph of the speed during the test.
+
+**Scheduled throughput.** Settings > Custom checks > Throughput (iperf3) runs a test from this computer to an iperf3
+server (`iperf3 -s` on the device) on every scheduled run. The speed is kept for the History charts, and WARN / FAIL
+fire when it drops below the limits you set.
+
+**Proxy.** Settings > Proxy sends Toner's connections through an HTTP (CONNECT), SOCKS5 or SOCKS4 proxy, with an
+optional user name and password (kept in Credential Manager) and a "do not use it for" list (names, `*.corp.example.com`,
+addresses, networks such as `10.0.0.0/8`). The options are no proxy, the Windows proxy settings (web connections only,
+as a browser would), or a proxy you enter. Any device can override it in its Access tab: use the global setting, connect
+directly, or use its own proxy. SSH (checks, backups, the console and jump hosts), the Fortinet, Palo Alto, Meraki and
+UniFi APIs, status pages, web, port and certificate checks and notifications all use it. SNMP, ping, traceroute, the
+listeners and the file servers use UDP or ICMP or listen for connections, so they never go through a proxy. A **Test**
+button on the page tries a connection through the proxy you have entered.
+
+**Maintenance windows** (Settings > Maintenance) hold back alerts for planned work: a one-off window or a weekly one
+(Saturday 22:00-02:00), for all devices or chosen groups. Checks still run and are recorded and the Overview marks the
+devices; when the window ends, a problem that is still there is announced and a fixed one is reported as recovered.
+
+**Wi-Fi.** Tools > Wi-Fi Scanner lists the networks this computer can hear (signal, channel, band, security, who made the
+access point) and suggests the quietest 2.4 GHz channel; Windows needs Location access switched on for it. Add "This PC's
+Wi-Fi" as a device (host `localhost`) to check a laptop's connection, signal strength and link speed on every run.
+
+**Cloud status.** Add a "Cloud status page" device (GitHub, Cloudflare, Zoom, Meraki, Duo, Discord and any other status
+page built on Atlassian Statuspage) to get its overall status, affected components and open incidents in the same
+results, history and alerts as your own devices. Microsoft 365 is not included: its service health is only available
+through an authenticated Microsoft Graph app registration.
 
 **Settings**: thresholds (with per-vendor, folder, tag and device overrides), which checks run, custom checks, timeouts,
 automation, config backups, notifications (email, Teams, Slack, Discord, ntfy, webhook, desktop), credential profiles,
@@ -66,6 +94,8 @@ Press **Ctrl+K** anywhere to jump to a section, tool, device or action. Ctrl+1 t
 | Cisco Meraki | Dashboard API | device status, appliance uplinks, licenses |
 | UniFi OS | controller API | site health, per device state, uptime, CPU, memory, temperature, firmware, uplink, port errors, clients, channel utilisation |
 | Generic SNMP (anything else) | SNMP v1/v2c/v3 | reachability, CPU, memory, storage, uptime, temperature, interfaces, errors, utilisation |
+| Cloud status page | public Statuspage JSON, no login | overall status, components, open incidents |
+| This PC's Wi-Fi | `netsh wlan`, no login | connection, signal strength, link speed |
 
 Configuration backup: Cisco, Juniper, Arista, HPE, MikroTik (SSH), Fortinet and Palo Alto (API).
 

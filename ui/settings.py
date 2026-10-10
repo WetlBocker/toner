@@ -9,14 +9,14 @@ import sqlite3
 from datetime import datetime, timedelta
 
 import keyring
-from PySide6.QtCore import Qt, QUrl, Signal
+from PySide6.QtCore import QDateTime, QTime, Qt, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QFont
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QColorDialog, QComboBox, QDialog,
-                               QDialogButtonBox, QDoubleSpinBox, QFileDialog, QFontComboBox, QFormLayout,
+                               QDateTimeEdit, QDialogButtonBox, QDoubleSpinBox, QFileDialog, QFontComboBox, QFormLayout,
                                QHBoxLayout, QLabel, QLineEdit, QListWidget, QMenu, QMessageBox, QPushButton,
-                               QScrollArea, QSpinBox, QStackedWidget, QTableWidget, QTableWidgetItem,
+                               QScrollArea, QSpinBox, QStackedWidget, QTableWidget, QTableWidgetItem, QTimeEdit,
                                QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
-from core import alerts, audit, checks, custom, db, display, nettools, notify, profiles, reports, sessionlog
+from core import alerts, audit, checks, custom, db, display, maintenance, nettools, notify, profiles, proxy, reports, sessionlog
 from ui import terminal, theme
 from ui.snmpfields import SnmpFields
 from ui.widgets import GroupPicker
@@ -159,8 +159,8 @@ class ThresholdsPage(Page):
                 s.setDecimals(1 if key != "port_errors" else 0)
             self.spins[key] = (w, f)
             self.form.addRow(db.THRESHOLD_LABELS.get(key, key), row_of(w, f))
-        self.form.addRow(note("Uptime works the other way round: a device that restarted less than "
-                              "this many hours ago is flagged. 0 switches a level off."))
+        self.form.addRow(note("Uptime and Wi-Fi signal work the other way round: a device that restarted less than "
+                              "this many hours ago, or a signal weaker than the limit, is flagged. 0 switches a level off."))
         self.mode = QComboBox()
         self.mode.addItem("Total since the device last reset", "total")
         self.mode.addItem("Increase since the last run", "delta")
@@ -1101,7 +1101,7 @@ class CheckDialog(QDialog):
              "snmp": ("OID or name", "1.3.6.1.2.1.1.3.0  or  sysUpTime.0"),
              "http": ("URL", "https://{host}/health   ({host} = the device's address)"),
              "tcp": ("", ""), "tls": ("Server name (optional)", "leave blank to use the device's address"),
-             "ping": ("", "")}
+             "ping": ("", ""), "iperf": ("Server address (optional)", "blank = the device itself   ({host} = its address)")}
 
     def __init__(self, chk=None, parent=None):
         super().__init__(parent)
@@ -1118,6 +1118,11 @@ class CheckDialog(QDialog):
         self.direction.addItem("A lower value is worse (days left, free space)", 0)
         self.port = spin(0, 65535)
         self.port.setSpecialValueText("default")
+        self.seconds, self.streams = spin(1, 3600, " s"), spin(1, 128)
+        self.seconds.setValue(10)
+        self.reverse, self.udp = QCheckBox("Download (the server sends)"), QCheckBox("UDP instead of TCP")
+        self.bandwidth = QLineEdit()
+        self.bandwidth.setPlaceholderText("UDP rate, e.g. 100M")
         self.warn, self.fail = QLineEdit(), QLineEdit()
         self.warn.setPlaceholderText("off")
         self.fail.setPlaceholderText("off")
@@ -1128,7 +1133,8 @@ class CheckDialog(QDialog):
         self.form = QFormLayout()
         self.target_label = QLabel("Command")
         for label, w in (("Name", self.name), ("Kind", self.kind), (self.target_label, self.target), ("Port", self.port),
-                         ("Answer is", self.mode), ("Pattern", self.parse), ("Expected status", self.expect),
+                         ("Test length", self.seconds), ("Streams", self.streams), ("", self.reverse), ("", self.udp),
+                         ("UDP rate", self.bandwidth), ("Answer is", self.mode), ("Pattern", self.parse), ("Expected status", self.expect),
                          ("Direction", self.direction), ("WARN at", self.warn), ("FAIL at", self.fail),
                          ("Unit", self.unit), ("Applies to", self.scope), ("", self.enabled)):
             self.form.addRow(label, w)
@@ -1163,6 +1169,12 @@ class CheckDialog(QDialog):
             self.unit.setText(chk.get("unit") or "")
             self.scope.set_selected(chk.get("scope") or [])
             self.enabled.setChecked(bool(chk.get("enabled", 1)))
+            o = chk.get("options") or {}
+            self.seconds.setValue(int(o.get("seconds", 10)))
+            self.streams.setValue(int(o.get("streams", 1)))
+            self.reverse.setChecked(bool(o.get("reverse")))
+            self.udp.setChecked(bool(o.get("udp")))
+            self.bandwidth.setText(o.get("bandwidth", ""))
         self.kind.currentIndexChanged.connect(self.adapt)
         self.mode.currentIndexChanged.connect(self.adapt)
         self.adapt()
@@ -1173,18 +1185,26 @@ class CheckDialog(QDialog):
         self.target_label.setText(label or "Target")
         self.target.setPlaceholderText(placeholder)
         show = self.form.setRowVisible
-        show(self.target, kind in ("ssh", "snmp", "http", "tls"))
-        show(self.port, kind in ("tcp", "tls"))
+        show(self.target, kind in ("ssh", "snmp", "http", "tls", "iperf"))
+        show(self.port, kind in ("tcp", "tls", "iperf"))
+        for w in (self.seconds, self.streams, self.reverse, self.udp, self.bandwidth):
+            show(w, kind == "iperf")
         text_kind = kind in ("ssh", "snmp", "http")
         show(self.mode, kind in ("ssh", "snmp") or kind == "http")
         show(self.parse, text_kind and (mode in ("match", "nomatch") or kind in ("ssh", "snmp")))
         show(self.expect, kind == "http")
-        numeric = mode == "number" if kind in ("ssh", "snmp") else kind in ("http", "tcp", "tls", "ping")
+        numeric = mode == "number" if kind in ("ssh", "snmp") else kind in ("http", "tcp", "tls", "ping", "iperf")
         for w in (self.direction, self.warn, self.fail, self.unit):
             show(w, numeric or kind in ("http",))
         self.direction.setEnabled(kind in ("ssh", "snmp"))
-        if kind == "tls":
+        if kind in ("tls", "iperf"):
             self.direction.setCurrentIndex(1)
+        if kind == "iperf":
+            self.port.setSpecialValueText("5201")
+            if not self.unit.text():
+                self.unit.setPlaceholderText(" Mbit/s")
+        else:
+            self.port.setSpecialValueText("default")
         self.mode.setEnabled(kind in ("ssh", "snmp", "http"))
         if kind in ("http",):
             self.help.setText("Passes when the status code is as expected (and the pattern matches, if you choose "
@@ -1195,6 +1215,11 @@ class CheckDialog(QDialog):
         elif kind == "tls":
             self.help.setText("Counts the days left on the certificate the port serves. Defaults: WARN at 30 days, "
                               "FAIL at 7.")
+        elif kind == "iperf":
+            self.help.setText("Runs an iperf3 test from this computer to an iperf3 server (start one on the device with "
+                              "'iperf3 -s'). The result is the speed in Mbit/s, so a LOWER value is worse: set WARN and "
+                              "FAIL to the speeds below which you want to hear about it. The speed is kept for the "
+                              "History charts. It needs iperf3.exe (see Tools > Throughput).")
         elif kind == "ping":
             self.help.setText("Sends four pings from this computer. FAIL if none are answered, WARN on packet loss. "
                               "Limits apply to the average time in milliseconds.")
@@ -1217,7 +1242,10 @@ class CheckDialog(QDialog):
                 "parse": self.parse.text().strip(), "expect": self.expect.text().strip(),
                 "higher_worse": self.direction.currentData(), "warn": self._num(self.warn.text()),
                 "fail": self._num(self.fail.text()), "unit": self.unit.text(),
-                "scope": self.scope.selected(), "enabled": int(self.enabled.isChecked())}
+                "scope": self.scope.selected(), "enabled": int(self.enabled.isChecked()),
+                "options": {"seconds": self.seconds.value(), "streams": self.streams.value(),
+                            "reverse": self.reverse.isChecked(), "udp": self.udp.isChecked(),
+                            "bandwidth": self.bandwidth.text().strip()} if kind == "iperf" else {}}
 
     def _check(self):
         try:
@@ -1289,7 +1317,7 @@ class CustomChecksPage(Page):
         kinds = dict(custom.KINDS)
         self.table.setRowCount(len(self.rows))
         for i, c in enumerate(self.rows):
-            what = c["target"] if c["kind"] in ("ssh", "snmp", "http") else (f"port {c['port'] or 443}" if c["kind"] in ("tcp", "tls") else "")
+            what = c["target"] if c["kind"] in ("ssh", "snmp", "http") else (f"port {c['port'] or 443}" if c["kind"] in ("tcp", "tls") else (f"iperf3 port {c['port'] or 5201}" if c["kind"] == "iperf" else ""))
             for j, v in enumerate([c["name"], kinds.get(c["kind"], c["kind"]), what,
                                    ", ".join(c["scope"]) or "all devices", "yes" if c["enabled"] else "no"]):
                 self.table.setItem(i, j, QTableWidgetItem(v))
@@ -1439,13 +1467,310 @@ class AuditPage(Page):
                     w.writerow([r["at"], r["actor"], r["action"], r["detail"]])
 
 
+# ------------------------------------------------------------------ Proxy
+class ProxyPage(Page):
+    title = "Proxy"
+
+    def __init__(self):
+        super().__init__()
+        self.mode, self.kind = QComboBox(), QComboBox()
+        for k, label in proxy.MODES:
+            self.mode.addItem(label, k)
+        for k, label in proxy.KINDS:
+            self.kind.addItem(label, k)
+        self.host, self.user, self.bypass = QLineEdit(), QLineEdit(), QLineEdit()
+        self.host.setPlaceholderText("proxy.example.com")
+        self.user.setPlaceholderText("optional")
+        self.bypass.setPlaceholderText("localhost, 127.0.0.1, *.corp.example.com, 10.0.0.0/8")
+        self.port = spin(1, 65535)
+        self.port.setValue(8080)
+        self.password = QLineEdit()
+        self.password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.forget = QPushButton("Remove saved password")
+        self.pw_note = note("")
+        self.system = note("")
+        self.test_to = QLineEdit("www.githubstatus.com:443")
+        self.test_btn = QPushButton("Test")
+        self.test_out = QLabel("")
+        self.test_out.setWordWrap(True)
+        self._forget = False
+        self.manual = [self.kind, self.host, self.port, self.user, self.password, self.forget, self.bypass]
+        self.form.addRow("Connections go", self.mode)
+        self.form.addRow("", self.system)
+        self.form.addRow("Proxy type", self.kind)
+        self.form.addRow("Address", self.host)
+        self.form.addRow("Port", self.port)
+        self.form.addRow("User name", self.user)
+        self.form.addRow("Password", self.password)
+        self.form.addRow("", row_of(self.forget))
+        self.form.addRow("", self.pw_note)
+        self.form.addRow("Do not use it for", self.bypass)
+        self.form.addRow("Try a connection to", row_of(self.test_to, self.test_btn))
+        self.form.addRow("", self.test_out)
+        self.lay.insertWidget(0, note(
+            "Send Toner's connections through a proxy. This is the setting for every connection; a device can override it "
+            "in its own Access tab. It covers SSH (checks, backups, the console), the web APIs of Fortinet, Palo Alto, "
+            "Meraki and UniFi, status pages, web, port and certificate checks, and notifications. SNMP, ping, "
+            "traceroute and the listeners use UDP or ICMP, which a proxy does not carry, so they always connect directly. "
+            "'Windows proxy settings' covers web connections only, as a browser would; choose 'Use the proxy below' to "
+            "send SSH and port checks through a proxy as well."))
+        self.mode.currentIndexChanged.connect(self.adapt)
+        self.forget.clicked.connect(self._clear_password)
+        self.test_btn.clicked.connect(self.test)
+
+    def adapt(self, *_):
+        manual = self.mode.currentData() == "manual"
+        for w in self.manual:
+            w.setEnabled(manual)
+        self.form.setRowVisible(self.system, self.mode.currentData() == "system")
+
+    def _clear_password(self):
+        self._forget = True
+        self.password.clear()
+        self.pw_note.setText("The saved password will be removed when you save.")
+
+    def load(self):
+        s = proxy.settings()
+        self.mode.setCurrentIndex(max(0, self.mode.findData(s["mode"])))
+        self.kind.setCurrentIndex(max(0, self.kind.findData(s["kind"])))
+        self.host.setText(s["host"])
+        self.port.setValue(int(s["port"] or 8080))
+        self.user.setText(s["username"])
+        self.bypass.setText(s["bypass"])
+        self.password.clear()
+        self._forget = False
+        have = bool(keyring.get_password(db.SERVICE, proxy.GLOBAL_SECRET))
+        self.pw_note.setText("A password is saved in Credential Manager. Leave the box empty to keep it." if have else "")
+        self.forget.setVisible(have)
+        sys_text = proxy.system_text()
+        self.system.setText(f"Windows is set to use: {sys_text}" if sys_text else
+                            "Windows has no proxy configured, so connections go directly.")
+        self.test_out.setText("")
+        self.adapt()
+
+    def validate(self):
+        if self.mode.currentData() == "manual" and not self.host.text().strip():
+            return ["Proxy: enter the proxy's address, or choose another option."]
+        return []
+
+    def save(self):
+        db.set_setting("proxy", {"mode": self.mode.currentData(), "kind": self.kind.currentData(),
+                                 "host": self.host.text().strip(), "port": self.port.value(),
+                                 "username": self.user.text().strip(), "bypass": self.bypass.text().strip()})
+        if self.password.text():
+            db.set_secret(proxy.GLOBAL_SECRET, self.password.text())
+        elif self._forget:
+            db.delete_secret(proxy.GLOBAL_SECRET)
+        audit.log("proxy settings changed", f"{self.mode.currentData()} {self.host.text().strip()}:{self.port.value()}"
+                  if self.mode.currentData() == "manual" else self.mode.currentData())
+        self.load()
+
+    def test(self):
+        target = self.test_to.text().strip() or "www.githubstatus.com:443"
+        host, _, port = target.rpartition(":") if target.count(":") == 1 else (target, "", "443")
+        if not host or not port.isdigit():
+            self.test_out.setText("Enter an address such as www.githubstatus.com:443.")
+            return
+        mode = self.mode.currentData()
+        QApplication.setOverrideCursor(self.cursor())
+        try:
+            if mode == "manual":
+                cfg = proxy._config({"kind": self.kind.currentData(), "host": self.host.text(), "port": self.port.value(),
+                                     "username": self.user.text()},
+                                    self.password.text() or ("" if self._forget else
+                                                             keyring.get_password(db.SERVICE, proxy.GLOBAL_SECRET) or ""))
+                ok, msg = (False, "Enter the proxy's address first.") if cfg is None else proxy.test_tunnel(cfg, host, int(port))
+            else:
+                ok, msg = proxy.test_web(host, int(port), direct=(mode == "none"))
+        finally:
+            QApplication.restoreOverrideCursor()
+        self.test_out.setText(("OK: " if ok else "Failed: ") + msg)
+
+
+# ------------------------------------------------------------------ Maintenance windows
+class MaintenanceDialog(QDialog):
+    def __init__(self, win=None, parent=None):
+        super().__init__(parent)
+        self.win = win or {}
+        self.setWindowTitle("Edit maintenance window" if win else "New maintenance window")
+        self.setMinimumWidth(480)
+        now = QDateTime.currentDateTime()
+        self.name, self.note = QLineEdit(), QLineEdit()
+        self.name.setPlaceholderText("e.g. Saturday patching, Chicago switch upgrade")
+        self.note.setPlaceholderText("optional")
+        self.kind = QComboBox()
+        self.kind.addItem("One time", "once")
+        self.kind.addItem("Repeats every week", "weekly")
+        self.start, self.end = QDateTimeEdit(now), QDateTimeEdit(now.addSecs(2 * 3600))
+        for w in (self.start, self.end):
+            w.setCalendarPopup(True)
+            w.setDisplayFormat("yyyy-MM-dd HH:mm")
+        self.days = [QCheckBox(d) for d in maintenance.DAYS]
+        self.t_start, self.t_end = QTimeEdit(QTime(22, 0)), QTimeEdit(QTime(2, 0))
+        for w in (self.t_start, self.t_end):
+            w.setDisplayFormat("HH:mm")
+        self.scope = GroupPicker(all_text="All devices", noun="groups")
+        self.scope.set_labels(db.group_labels()[1:])
+        self.enabled = QCheckBox("Enabled")
+        self.enabled.setChecked(True)
+        self.form = QFormLayout()
+        daybox = QWidget()
+        dl = QHBoxLayout(daybox)
+        dl.setContentsMargins(0, 0, 0, 0)
+        for c in self.days:
+            dl.addWidget(c)
+        timebox = row_of(QLabel("from"), self.t_start, QLabel("to"), self.t_end)
+        self.rows = {"start": self.start, "end": self.end, "days": daybox, "times": timebox}
+        for label, w in (("Name", self.name), ("Type", self.kind), ("Starts", self.start), ("Ends", self.end),
+                         ("Days", daybox), ("Time of day", timebox), ("Applies to", self.scope), ("Note", self.note),
+                         ("", self.enabled)):
+            self.form.addRow(label, w)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        lay = QVBoxLayout(self)
+        lay.addLayout(self.form)
+        lay.addWidget(note("While a window is active, alerts for the devices it covers are held back. Checks still run "
+                           "and are recorded. When it ends, a problem that is still there is announced, and one that "
+                           "was fixed is reported as recovered. A time that runs past midnight (22:00 to 02:00) is "
+                           "counted from the day it starts."))
+        lay.addWidget(buttons)
+        w = self.win
+        if w:
+            self.name.setText(w["name"])
+            self.kind.setCurrentIndex(max(0, self.kind.findData(w["kind"])))
+            self.note.setText(w.get("note") or "")
+            self.enabled.setChecked(bool(w.get("enabled", 1)))
+            self.scope.set_selected(w.get("scope") or [])
+            if w["kind"] == "once":
+                self.start.setDateTime(QDateTime.fromString(w["start_at"], "yyyy-MM-dd HH:mm"))
+                self.end.setDateTime(QDateTime.fromString(w["end_at"], "yyyy-MM-dd HH:mm"))
+            else:
+                for i, c in enumerate(self.days):
+                    c.setChecked(i in (w.get("days") or []))
+                self.t_start.setTime(QTime.fromString(w["start_time"], "HH:mm"))
+                self.t_end.setTime(QTime.fromString(w["end_time"], "HH:mm"))
+        else:
+            for c in self.days[5:]:
+                c.setChecked(True)
+        self.kind.currentIndexChanged.connect(self.adapt)
+        self.adapt()
+
+    def adapt(self, *_):
+        once = self.kind.currentData() == "once"
+        for key, w in self.rows.items():
+            self.form.setRowVisible(w, once if key in ("start", "end") else not once)
+
+    def values(self):
+        return {"id": self.win.get("id"), "name": self.name.text().strip(), "kind": self.kind.currentData(),
+                "start_at": self.start.dateTime().toString("yyyy-MM-dd HH:mm"),
+                "end_at": self.end.dateTime().toString("yyyy-MM-dd HH:mm"),
+                "days": [i for i, c in enumerate(self.days) if c.isChecked()],
+                "start_time": self.t_start.time().toString("HH:mm"), "end_time": self.t_end.time().toString("HH:mm"),
+                "scope": self.scope.selected(), "enabled": int(self.enabled.isChecked()), "note": self.note.text().strip()}
+
+    def accept(self):
+        try:
+            maintenance.validate(self.values())
+        except ValueError as e:
+            QMessageBox.warning(self, "Maintenance window", str(e))
+            return
+        super().accept()
+
+
+class MaintenancePage(Page):
+    title = "Maintenance"
+
+    def __init__(self):
+        super().__init__()
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(["Name", "When", "Applies to", "State", "Note"])
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setShowGrid(False)
+        self.table.setMinimumHeight(240)
+        self.table.doubleClicked.connect(lambda *_: self.edit())
+        self.info = note("")
+        bar = QHBoxLayout()
+        for text, fn in (("New...", self.add), ("Edit...", self.edit), ("Delete", self.delete)):
+            b = QPushButton(text)
+            b.clicked.connect(lambda _=False, fn=fn: fn())
+            bar.addWidget(b)
+        bar.addStretch()
+        self.form.addRow(self.table)
+        self.form.addRow(bar)
+        self.form.addRow(self.info)
+        self.lay.insertWidget(0, note(
+            "Planned work (patching, an upgrade, a power test) should not page anyone. During a maintenance window the "
+            "devices it covers keep being checked and recorded, but their alerts are held back. Changes here apply "
+            "immediately."))
+        self.rows = []
+
+    def refresh(self):
+        self.rows = maintenance.list_windows()
+        now = datetime.now()
+        self.table.setRowCount(len(self.rows))
+        active = 0
+        for i, w in enumerate(self.rows):
+            on = maintenance.is_active(w, now)
+            active += on
+            state = "ACTIVE" if on else ("off" if not w["enabled"] else "scheduled")
+            for j, v in enumerate([w["name"], maintenance.describe(w), ", ".join(w["scope"]) or "all devices", state,
+                                   w.get("note") or ""]):
+                it = QTableWidgetItem(v)
+                if on and j == 3:
+                    it.setForeground(QColor("#e6a100"))
+                self.table.setItem(i, j, it)
+        self.table.resizeColumnsToContents()
+        held = maintenance.devices_in_maintenance(now)
+        self.info.setText(f"{len(held)} device(s) in maintenance right now." if held else "No device is in maintenance right now.")
+
+    def load(self):
+        self.refresh()
+
+    def current(self):
+        r = self.table.currentRow()
+        return self.rows[r] if 0 <= r < len(self.rows) else None
+
+    def _save(self, dlg):
+        try:
+            maintenance.save_window(dlg.values())
+        except ValueError as e:
+            QMessageBox.warning(self, "Maintenance window", str(e))
+            return
+        audit.log("maintenance window saved", f"{dlg.values()['name']} ({maintenance.describe(dlg.values())})")
+        self.refresh()
+
+    def add(self):
+        dlg = MaintenanceDialog(parent=self)
+        if dlg.exec():
+            self._save(dlg)
+
+    def edit(self):
+        w = self.current()
+        if w:
+            dlg = MaintenanceDialog(w, self)
+            if dlg.exec():
+                self._save(dlg)
+
+    def delete(self):
+        w = self.current()
+        if w and QMessageBox.question(self, "Delete window", f"Delete '{w['name']}'?") == QMessageBox.StandardButton.Yes:
+            maintenance.delete_window(w["id"])
+            audit.log("maintenance window deleted", w["name"])
+            self.refresh()
+
+
 class SettingsTab(QWidget):
     changed = Signal()                    # emitted after a successful save (or an import)
 
     def __init__(self):
         super().__init__()
-        self.pages = [GeneralPage(), ThresholdsPage(), ChecksPage(), CustomChecksPage(), ConnectionsPage(), AutomationPage(),
-                      BackupsPage(), NotificationsPage(), ProfilesPage(), AppearancePage(), TerminalPage(), ReportsPage(), SecurityPage(),
+        self.pages = [GeneralPage(), ThresholdsPage(), ChecksPage(), CustomChecksPage(), ConnectionsPage(), ProxyPage(), AutomationPage(),
+                      BackupsPage(), MaintenancePage(), NotificationsPage(), ProfilesPage(), AppearancePage(), TerminalPage(), ReportsPage(), SecurityPage(),
                       AuditPage(), DataPage(self.reload)]
         self.nav = QListWidget()
         self.nav.setObjectName("settingsNav")

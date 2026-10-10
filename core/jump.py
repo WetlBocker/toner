@@ -3,7 +3,7 @@ import json
 
 import paramiko
 
-from core import db, nettools, profiles
+from core import db, nettools, profiles, proxy
 
 
 def spec(dev):
@@ -27,23 +27,34 @@ def jump_device(dev):
 
 
 def open_channel(dev, timeout=15):
-    """(socket-like channel to the device through its jump host, [objects to close afterwards]),
-    or (None, []) when the device is reached directly."""
+    """(socket-like object to reach the device, [objects to close afterwards]): a channel through its jump host, or a
+    tunnel through its proxy. (None, []) when the device is reached directly."""
     jd = jump_device(dev)
     if jd is None:
-        return None, []
+        cfg = proxy.for_device(dev)
+        if cfg is None:
+            return None, []
+        sock = proxy.connect(cfg, dev["host"], int(dev.get("port") or 22), timeout)
+        return sock, [sock]
     client = paramiko.SSHClient()
     nettools.configure_hostkeys(client, db.get_setting("hostkey_mode"))
+    via, extra = None, []
     try:
+        cfg = proxy.for_device(jd)                       # the jump host itself may be behind a proxy
+        if cfg is not None:
+            via = proxy.connect(cfg, jd["host"], int(jd.get("port") or 22), timeout)
+            extra.append(via)
         client.connect(jd["host"], port=jd.get("port") or 22, username=jd.get("username") or "",
                        password=profiles.secret(jd) or "", timeout=timeout, banner_timeout=timeout,
-                       auth_timeout=timeout, allow_agent=False, look_for_keys=False)
+                       auth_timeout=timeout, allow_agent=False, look_for_keys=False, sock=via)
         chan = client.get_transport().open_channel(
             "direct-tcpip", (dev["host"], int(dev.get("port") or 22)), ("127.0.0.1", 0), timeout=timeout)
     except Exception as e:
         client.close()
+        for s in extra:
+            s.close()
         raise ConnectionError(f"via jump host {jd['name']}: {type(e).__name__}: {e}") from None
-    return chan, [chan, client]
+    return chan, [chan, client] + extra
 
 
 class Managed:

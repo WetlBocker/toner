@@ -244,7 +244,7 @@ class SshTab(QWidget):
                                       self.term.cols, self.term.rows,
                                       hostkey_mode=db.get_setting("hostkey_mode"),
                                       timeout=int(db.get_setting("ssh_timeout")),
-                                      jump_dev=profiles.resolve(dev) if dev and jump.spec(dev) else None)
+                                      jump_dev=profiles.resolve(dev) if dev else None)
         self.session, self.log, self._override = session, log, None
         # bind to this session so a late signal from an old one can never touch a newer one
         session.data.connect(lambda b, s=session, lg=log: self._on_data(b, s, lg))
@@ -785,6 +785,8 @@ class ToolsTab(QWidget):
         self.discovery, self.topology = tools2.DiscoveryTab(), tools2.TopologyTab()
         self.listeners = tools2.ListenersTab()
         self.tftp, self.sftp, self.iperf = tools3.FileServerTab("tftp"), tools3.FileServerTab("sftp"), tools3.IperfTab()
+        self.wifi = tools3.WifiTab()
+        self.scp, self.xcopy = tools3.ScpTab(), tools3.XcopyTab()
         self.utilities = tools2.UtilitiesTab()
         self.discovery.inventory_changed = self.inventory_changed.emit
         self.ssh.logs_changed.connect(self.logs.refresh)
@@ -792,18 +794,19 @@ class ToolsTab(QWidget):
         for title, pages in (("Connect", ((self.ssh, "SSH Console"), (self.logs, "Session Logs"), (self.runner, "Command Runner"))),
                              ("Diagnose", ((self.diag, "Ping / Traceroute / DNS"), (self.liveping, "Live Ping"),
                                            (self.mtr, "Path Monitor (MTR)"), (self.scan, "Port Scanner"),
-                                           (self.tls, "TLS Certificates"), (self.iperf, "Throughput (iperf3)"),
+                                           (self.tls, "TLS Certificates"), (self.iperf, "Throughput (iperf3)"), (self.wifi, "Wi-Fi Scanner"),
                                            (self.subnet, "Subnet Calculator"))),
                              ("Discover", ((self.discovery, "Find Devices"), (self.topology, "Topology"))),
                              ("SNMP and logs", ((self.snmp, "SNMP"), (self.listeners, "Syslog and Traps"))),
-                             ("File transfer", ((self.tftp, "TFTP Server"), (self.sftp, "SFTP Server"))),
+                             ("File transfer", ((self.tftp, "TFTP Server"), (self.sftp, "SFTP Server"), (self.scp, "SCP"),
+                                               (self.xcopy, "Copy Files (xcopy)"))),
                              ("Utilities", ((self.utilities, "MAC and Wake-on-LAN"),))):
             self.tabs.addSection(title)
             for w, label in pages:
                 self.tabs.addTab(w, label)
         lay = QVBoxLayout(self)
         lay.addWidget(self.tabs)
-        self._pickers = (self.ssh, self.diag, self.scan, self.snmp, self.liveping, self.mtr, self.tls, self.iperf)
+        self._pickers = (self.ssh, self.diag, self.scan, self.snmp, self.liveping, self.mtr, self.tls, self.iperf, self.scp)
         self._others = (self.runner, self.discovery, self.topology)
 
     def refresh(self):
@@ -834,5 +837,5 @@ class ToolsTab(QWidget):
 
     def shutdown(self):
         for t in (self.ssh, self.diag, self.scan, self.snmp, self.liveping, self.mtr, self.tls, self.runner,
-                  self.discovery, self.topology, self.listeners, self.utilities, self.tftp, self.sftp, self.iperf):
+                  self.discovery, self.topology, self.listeners, self.utilities, self.tftp, self.sftp, self.iperf, self.wifi, self.scp, self.xcopy):
             t.shutdown()

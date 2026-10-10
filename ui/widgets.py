@@ -1,8 +1,101 @@
-from PySide6.QtCore import QEvent, QRect, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QPainter
+from PySide6.QtCore import QEvent, QPointF, QRect, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (QApplication, QCheckBox, QHBoxLayout, QLabel, QMenu, QStyle, QStyledItemDelegate,
                                QStyleOptionViewItem, QToolButton, QVBoxLayout, QWidget, QWidgetAction)
 from core import reports
+
+
+def filter_icon():
+    """The funnel used by every filter button."""
+    pm = QPixmap(32, 32)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setPen(QPen(QApplication.palette().text().color(), 2.4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
+                  Qt.PenJoinStyle.RoundJoin))
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    p.drawPolygon(QPolygonF([QPointF(5, 7), QPointF(27, 7), QPointF(18, 17), QPointF(18, 26), QPointF(14, 24),
+                             QPointF(14, 17)]))
+    p.end()
+    return QIcon(pm)
+
+
+class FilterButton(QToolButton):
+    """A funnel button that opens a menu with one submenu of tick boxes per kind of filter (Status, Location, ...).
+    Ticking several values in one submenu means 'any of these'; different submenus must all match. The button shows
+    how many values are ticked. It looks and behaves like the filter button on the Inventory tab."""
+    changed = Signal()
+
+    def __init__(self, tip="Filter"):
+        super().__init__()
+        self.tip = tip
+        self.sections = {}                        # title -> [(shown text, value)]
+        self.picked = {}                          # title -> set of ticked values
+        self.setIcon(filter_icon())
+        self.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.setStyleSheet("QToolButton::menu-indicator { image: none; }")
+        self.menu = QMenu(self)
+        self.menu.aboutToShow.connect(self._build)
+        self.setMenu(self.menu)
+        self._update()
+
+    def set_sections(self, sections):
+        """sections: {title: [(shown text, value), ...]}. Ticks for values that no longer exist are dropped.
+        Does not emit."""
+        self.sections = {k: list(v) for k, v in sections.items()}
+        for title in list(self.picked):
+            have = {val for _, val in self.sections.get(title, [])}
+            self.picked[title] = self.picked[title] & have
+        self._update()
+
+    def selected(self, title):
+        return set(self.picked.get(title, ()))
+
+    def filtering(self):
+        return any(self.picked.values())
+
+    def clear(self):
+        self.picked = {}
+        self._update()
+        self.changed.emit()
+
+    def describe(self):
+        """'Status: FAIL; Location: Chicago, Denver' for the ticked values, in menu order."""
+        parts = []
+        for title, opts in self.sections.items():
+            names = [text for text, val in opts if val in self.picked.get(title, ())]
+            if names:
+                parts.append(f"{title}: {', '.join(names)}")
+        return "; ".join(parts)
+
+    def _build(self):
+        self.menu.clear()
+        for title, opts in self.sections.items():
+            sub = self.menu.addMenu(title)
+            if not opts:
+                sub.setEnabled(False)
+            for text, val in opts:
+                box = QCheckBox(text)                 # a widget action keeps the menu open while ticking
+                box.setChecked(val in self.picked.get(title, ()))
+                box.toggled.connect(lambda on, title=title, val=val: self._toggle(title, val, on))
+                act = QWidgetAction(sub)
+                act.setDefaultWidget(box)
+                sub.addAction(act)
+        self.menu.addSeparator()
+        self.menu.addAction("Clear filter", self.clear).setEnabled(self.filtering())
+
+    def _toggle(self, title, val, on):
+        s = self.picked.setdefault(title, set())
+        (s.add if on else s.discard)(val)
+        self._update()
+        self.changed.emit()
+
+    def _update(self):
+        n = sum(len(v) for v in self.picked.values())
+        text = self.describe()
+        self.setToolTip(f"Filter: {text}" if text else self.tip)
+        self.setText(f" {n}" if n else "")
+        self.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon if n else Qt.ToolButtonStyle.ToolButtonIconOnly)
 
 
 class StatusDelegate(QStyledItemDelegate):

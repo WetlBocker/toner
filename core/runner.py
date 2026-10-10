@@ -43,7 +43,7 @@ def run_one(dev, thresholds, opts=None):
             rows = [Result(dev["name"], "connection", ERROR, "", f"{type(e).__name__}: {e}{tail}")]
             try:                                   # web, port, certificate and ping checks do not need the login
                 rows += custom.run_network(dev, [c for c in custom.for_device(dev, opts.get("custom"))
-                                                 if c["kind"] in ("http", "tcp", "tls", "ping")])
+                                                 if c["kind"] in ("http", "tcp", "tls", "ping", "iperf")])
             except Exception:
                 pass
             return rows

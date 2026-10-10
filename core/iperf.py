@@ -2,6 +2,7 @@
 import os
 import re
 import shutil
+import subprocess
 
 from core import nettools
 
@@ -120,3 +121,20 @@ class Summary:
         if self.receiver:
             parts.append(f"Received {self.receiver['mbps']:.1f} Mbit/s")
         return "   ".join(parts)
+
+
+def run_test(exe, args, seconds=10):
+    """Run iperf3 to the end. Returns (Summary, raw output). Raises OSError if the program cannot be started
+    and subprocess.TimeoutExpired if it hangs."""
+    r = subprocess.run([exe] + list(args), capture_output=True, text=True, timeout=seconds + 30,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0), errors="replace")
+    out = (r.stdout or "") + (r.stderr or "")
+    return Summary().feed(out), out
+
+
+def failure_reason(output):
+    """The useful line from a failed iperf3 run ('iperf3: error - unable to connect to server: ...')."""
+    for line in (output or "").splitlines():
+        if "error" in line.lower():
+            return line.strip().replace("iperf3: ", "")[:140]
+    return " ".join((output or "").split())[:140] or "no answer from the iperf3 server"

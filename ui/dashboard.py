@@ -5,7 +5,7 @@ from PySide6.QtCore import QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
                                QScrollArea, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
-from core import backup, db, display, reports
+from core import backup, db, display, maintenance, reports
 from ui import theme
 from ui.widgets import EmptyHint, StatusDelegate
 
@@ -214,7 +214,9 @@ class DashboardTab(QWidget):
         self.cards["fail"].set(bad, "failing or unreachable")
         self.cards["changes"].set(len(changes), "in the last 24 hours", active=False)
         last = db.last_run()
-        self.when.setText(f"   Last run {last['started_at']}" if last else "   No checks run yet")
+        held = maintenance.devices_in_maintenance()
+        self.when.setText((f"   Last run {last['started_at']}" if last else "   No checks run yet")
+                          + (f"   |   {len(held)} device(s) in maintenance: alerts held" if held else ""))
 
         problems = sorted(((n, v) for n, v in health.items() if v["status"] != "OK"),
                           key=lambda kv: (-{"OK": 0, "WARN": 1, "FAIL": 2, "ERROR": 3}[kv[1]["status"]], kv[0].lower()))
@@ -224,6 +226,8 @@ class DashboardTab(QWidget):
             what = "; ".join(f"{display.check_name(c)}: {m}" if m else display.check_name(c) for c, _, m in v["problems"][:2])
             if len(v["problems"]) > 2:
                 what += f"  (+{len(v['problems']) - 2} more)"
+            if name in held:
+                what = "(maintenance) " + what
             for j, text in enumerate([name, v["status"], what, v["at"]]):
                 self.attention.setItem(i, j, QTableWidgetItem(text))
         self.attention.resizeColumnsToContents()

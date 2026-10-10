@@ -1,3 +1,4 @@
+from core import proxy
 import time
 from datetime import datetime, timezone
 
@@ -17,7 +18,8 @@ class MerakiDriver(Driver):
         for _ in range(20):                                      # follow pagination, bounded
             for attempt in range(2):                             # one polite retry on the rate limit
                 r = requests.get(url, params=params, headers={"Authorization": f"Bearer {self.password}"},
-                                 timeout=self.opts["http_timeout"], verify=True)
+                                 timeout=self.opts["http_timeout"], verify=True,
+                                 **proxy.requests_kwargs(self.dev))
                 if r.status_code == 429 and attempt == 0:
                     time.sleep(min(10, float(r.headers.get("Retry-After", 1))))
                     continue

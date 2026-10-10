@@ -7,6 +7,7 @@ kind    ssh    run `target` on the device (SSH-managed vendors) and read the out
         tcp    connect to `port` on the device
         tls    read the certificate served on `port` and count the days left
         ping   ping the device
+        iperf  an iperf3 throughput test to the device (it must run `iperf3 -s`); the result is Mbit/s, lower is worse
 mode    number   the first number in the answer (or capture group 1 of `parse`) is compared with warn / fail
         match    `parse` (a regular expression) must match the answer, else FAIL
         nomatch  `parse` must NOT match the answer, else FAIL
@@ -20,15 +21,16 @@ import subprocess
 import time
 from datetime import datetime, timezone
 
-from core import db
+from core import db, proxy
 from drivers.base import Result, OK, WARN, FAIL, ERROR
 
 KINDS = [("ssh", "SSH command"), ("snmp", "SNMP object"), ("http", "Web page (HTTP/HTTPS)"),
-         ("tcp", "TCP port"), ("tls", "TLS certificate"), ("ping", "Ping")]
+         ("tcp", "TCP port"), ("tls", "TLS certificate"), ("ping", "Ping"),
+         ("iperf", "Throughput (iperf3)")]
 MODES = [("number", "A number, compared with the limits"), ("match", "Output must match"),
          ("nomatch", "Output must not match")]
 FIELDS = ["name", "kind", "target", "parse", "mode", "warn", "fail", "higher_worse", "expect", "unit", "scope",
-          "enabled", "port"]
+          "enabled", "port", "options"]
 
 
 def list_checks():
@@ -39,6 +41,10 @@ def list_checks():
             r["scope"] = json.loads(r["scope"] or "[]")
         except ValueError:
             r["scope"] = []
+        try:
+            r["options"] = json.loads(r.get("options") or "{}")
+        except ValueError:
+            r["options"] = {}
     return out
 
 
@@ -54,6 +60,11 @@ def validate(chk):
                           "http": "Enter the URL."}[kind])
     if kind in ("tcp",) and not int(chk.get("port") or 0):
         raise ValueError("Enter the TCP port.")
+    if kind == "iperf":
+        from core import iperf
+        o = chk.get("options") or {}
+        iperf.client_args("x", chk.get("port") or 5201, o.get("seconds", 10), o.get("streams", 1), False,
+                          bool(o.get("udp")), o.get("bandwidth", ""))
     if kind == "snmp":
         from core import snmp
         snmp.parse_oid(chk["target"])
@@ -65,10 +76,11 @@ def validate(chk):
         if chk.get("mode") in ("match", "nomatch") and not chk.get("parse"):
             raise ValueError("Enter the pattern to look for.")
     w, f = chk.get("warn"), chk.get("fail")
+    higher = 0 if kind == "iperf" else chk.get("higher_worse", 1)           # a slow link is the problem
     if w is not None and f is not None:
-        bad = (w > f) if chk.get("higher_worse", 1) else (w < f)
+        bad = (w > f) if higher else (w < f)
         if bad:
-            raise ValueError("WARN must be reached before FAIL: " + ("WARN <= FAIL." if chk.get("higher_worse", 1)
+            raise ValueError("WARN must be reached before FAIL: " + ("WARN <= FAIL." if higher
                                                                   else "WARN >= FAIL for 'lower is worse'."))
     return name
 
@@ -81,6 +93,9 @@ def save_check(chk):
     row["higher_worse"] = int(bool(chk.get("higher_worse", 1)))
     row["enabled"] = int(bool(chk.get("enabled", 1)))
     row["port"] = int(chk.get("port") or 0)
+    row["options"] = json.dumps(chk.get("options") or {})
+    if row["kind"] == "iperf":
+        row["higher_worse"] = 0                            # a slow link is the problem
     with db.connect() as c:
         clash = c.execute("SELECT id FROM custom_checks WHERE name=? COLLATE NOCASE AND id IS NOT ?",
                           (name, chk.get("id"))).fetchone()
@@ -150,7 +165,7 @@ def run_tcp(chk, dev, timeout=5):
     port = int(chk.get("port") or 0)
     t0 = time.time()
     try:
-        with socket.create_connection((dev["host"], port), timeout=timeout):
+        with proxy.create_connection(dev, (dev["host"], port), timeout):
             pass
     except OSError as e:
         return Result(dev["name"], chk["name"], FAIL, "closed", f"port {port}: {e.strerror or e}")
@@ -171,7 +186,9 @@ def run_http(chk, dev, timeout=10):
         urllib3.disable_warnings()
     t0 = time.time()
     try:
-        r = requests.get(url, timeout=timeout, verify=verify, allow_redirects=True)
+        from urllib.parse import urlparse
+        r = requests.get(url, timeout=timeout, verify=verify, allow_redirects=True,
+                         **proxy.requests_kwargs(dev, urlparse(url).hostname))
     except requests.exceptions.SSLError as e:
         return Result(dev["name"], chk["name"], FAIL, "TLS error", str(e)[:120])
     except requests.RequestException as e:
@@ -198,7 +215,7 @@ def run_tls(chk, dev, timeout=8):
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE                    # we read the certificate, whoever signed it
     try:
-        with socket.create_connection((dev["host"], port), timeout=timeout) as raw:
+        with proxy.create_connection(dev, (dev["host"], port), timeout) as raw:
             with ctx.wrap_socket(raw, server_hostname=chk.get("target") or dev["host"]) as s:
                 der = s.getpeercert(binary_form=True)
     except OSError as e:
@@ -249,6 +266,32 @@ def run_ping(chk, dev, timeout=8):
     return res
 
 
+def run_iperf(chk, dev, timeout=0):
+    """Throughput from this computer to an iperf3 server on the device (or the address in `target`)."""
+    from core import iperf
+    exe = iperf.find_iperf3(db.get_setting("iperf_path"))
+    if not exe:
+        return Result(dev["name"], chk["name"], ERROR, "", "iperf3 was not found (see Tools > Throughput)")
+    o = chk.get("options") or {}
+    host = (chk.get("target") or "").replace("{host}", dev["host"]).strip() or dev["host"]
+    seconds = int(o.get("seconds", 10))
+    args = iperf.client_args(host, chk.get("port") or 5201, seconds, o.get("streams", 1), bool(o.get("reverse")),
+                             bool(o.get("udp")), o.get("bandwidth", ""))
+    try:
+        sm, out = iperf.run_test(exe, args, seconds)
+    except subprocess.TimeoutExpired:
+        return Result(dev["name"], chk["name"], FAIL, "timed out", "iperf3 did not finish")
+    got = sm.receiver or sm.sender
+    if not got:
+        return Result(dev["name"], chk["name"], FAIL, "no result", iperf.failure_reason(out))
+    mbps = got["mbps"]
+    status = _threshold_status({**chk, "higher_worse": 0}, mbps)
+    res = Result(dev["name"], chk["name"], status, _fmt(mbps, chk.get("unit") or " Mbit/s"), sm.text(), numeric=mbps)
+    if sm.sender and sm.sender.get("retransmits"):
+        res.message = f"{sm.sender['retransmits']} retransmits"
+    return res
+
+
 def run_snmp(chk, dev, opts=None):
     from core import profiles, snmp
     if not (profiles.snmp_configured(dev) or dev.get("vendor") == "snmp"):
@@ -289,7 +332,8 @@ def run_network(dev, checks):
     out = []
     for chk in checks:
         try:
-            fn = {"tcp": run_tcp, "http": run_http, "tls": run_tls, "ping": run_ping, "snmp": run_snmp}.get(chk["kind"])
+            fn = {"tcp": run_tcp, "http": run_http, "tls": run_tls, "ping": run_ping, "snmp": run_snmp,
+                  "iperf": run_iperf}.get(chk["kind"])
             if not fn:
                 continue
             r = fn(chk, dev)

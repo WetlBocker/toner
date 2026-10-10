@@ -40,7 +40,7 @@ QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.StandardButton.Y
 tools = T.ToolsTab(); tools.resize(1300, 800); tools.show()
 print("== Tools navigation")
 names = [tools.tabs.tabText(i) for i in range(tools.tabs.count())]
-check("every tool is listed, grouped under headings", len(names) == 17 and "TFTP Server" in names and "SFTP Server" in names and "Throughput (iperf3)" in names and "Command Runner" in names and "Find Devices" in names and "SNMP" in names)
+check("every tool is listed, grouped under headings", len(names) == 20 and "SCP" in names and "Copy Files (xcopy)" in names and "Wi-Fi Scanner" in names and "TFTP Server" in names and "SFTP Server" in names and "Throughput (iperf3)" in names and "Command Runner" in names and "Find Devices" in names and "SNMP" in names)
 check("headings are not selectable", sum(1 for r in range(tools.tabs.list.count()) if not (tools.tabs.list.item(r).flags() & Qt.ItemFlag.ItemIsSelectable)) == 6)
 tools.tabs.setCurrentWidget(tools.mtr); check("switching tools", tools.tabs.currentWidget() is tools.mtr)
 dev("sw1", host="127.0.0.1")

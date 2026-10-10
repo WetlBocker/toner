@@ -6,9 +6,9 @@ from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFileDialog, QHBoxLayout, QLabel,
                                QMessageBox, QPushButton, QTableWidget, QTableWidgetItem,
                                QVBoxLayout, QWidget)
-from core import db, reports
+from core import alerts, db, display, reports
 from drivers.base import SEVERITY, Result
-from ui.widgets import GroupPicker, StatusDelegate
+from ui.widgets import FilterButton, StatusDelegate
 
 NO_LOCATION = "(no location)"
 CURRENT = "Current results"
@@ -26,8 +26,7 @@ class ReportsTab(QWidget):
         self.source = QComboBox()
         self.source.setMinimumWidth(320)
         self.source.setToolTip("This session's results, or any past run from history")
-        self.locations = GroupPicker(all_text="All locations")
-        self.locations.setToolTip("Limit the report to these locations (none ticked = all)")
+        self.filter = FilterButton("Filter by status, location, vendor or tag")
         self.info = QLabel("")
 
         self.table = QTableWidget(0, len(reports.COLS))
@@ -41,8 +40,6 @@ class ReportsTab(QWidget):
         top = QHBoxLayout()
         top.addWidget(QLabel("Report from"))
         top.addWidget(self.source)
-        top.addWidget(QLabel("Locations"))
-        top.addWidget(self.locations)
         top.addWidget(self.info, 1)
         buttons = QHBoxLayout()
         for text, fn in (("Export CSV", self.export_csv), ("HTML report", self.export_html),
@@ -51,13 +48,14 @@ class ReportsTab(QWidget):
             b.clicked.connect(fn)
             buttons.addWidget(b)
         buttons.addStretch()
+        buttons.addWidget(self.filter)
         lay = QVBoxLayout(self)
         lay.addLayout(top)
         lay.addLayout(buttons)
         lay.addWidget(self.table)
 
         self.source.currentIndexChanged.connect(lambda _: self.load_source())
-        self.locations.changed.connect(self.show_preview)
+        self.filter.changed.connect(self.show_preview)
         self.refresh()
 
     # ---------- data ----------
@@ -86,18 +84,36 @@ class ReportsTab(QWidget):
             self.base = [Result(r["device"], r["check_name"], r["status"], r["value"] or "",
                                 r["message"] or "") for r in db.run_results(data)]
         self.base.sort(key=lambda r: (-SEVERITY[r.status], r.device, r.check))
-        self._loc = {id(r): db.location_of(r.device) or NO_LOCATION for r in self.base}
-        found = sorted(set(self._loc.values()), key=lambda s: (s == NO_LOCATION, s.lower()))
-        self.locations.set_labels(found)                 # keeps ticks that still apply
+        devices = {d["name"]: d for d in db.list_devices()}
+        self._meta = {}
+        for r in self.base:
+            d = devices.get(alerts.base(r.device), {})
+            self._meta[id(r)] = {"Status": r.status, "Location": d.get("location") or NO_LOCATION,
+                                 "Vendor": d.get("vendor") or "", "Tag": {x.lower() for x in db.split_tags(d.get("tags"))}}
+        self.filter.set_sections(self._sections())          # keeps ticks that still apply
         self.show_preview()
 
+    def _sections(self):
+        m = self._meta.values()
+        statuses = sorted({x["Status"] for x in m}, key=lambda s: -SEVERITY[s])        # worst first
+        places = sorted({x["Location"] for x in m}, key=lambda s: (s == NO_LOCATION, s.lower()))
+        vendors_ = sorted({x["Vendor"] for x in m if x["Vendor"]}, key=lambda v: display.vendor_name(v).lower())
+        tags = sorted({t for x in m for t in x["Tag"]})
+        return {"Status": [(s, s) for s in statuses], "Location": [(p, p) for p in places],
+                "Vendor": [(display.vendor_name(v), v) for v in vendors_], "Tag": [(t, t) for t in tags]}
+
     def selected_results(self):
-        picked = set(self.locations.selected())
-        return [r for r in self.base if not picked or self._loc[id(r)] in picked]
+        """Any of the ticked values in a submenu, and all the submenus that have something ticked."""
+        want = {t: self.filter.selected(t) for t in ("Status", "Location", "Vendor", "Tag")}
+
+        def keep(r):
+            m = self._meta[id(r)]
+            return all(not want[t] or m[t] in want[t] for t in ("Status", "Location", "Vendor")) and \
+                (not want["Tag"] or bool(want["Tag"] & m["Tag"]))
+        return [r for r in self.base if keep(r)]
 
     def scope_text(self):
-        picked = self.locations.selected()
-        return "Locations: " + ", ".join(picked) if picked else ""
+        return self.filter.describe()
 
     def report_date(self):
         return self.run_times.get(self.source.currentData())    # None = now

@@ -25,6 +25,8 @@ CATALOG = {
              ("storage", "Disk and storage"), ("uptime", "Uptime and recent reboots"),
              ("temperature", "Temperature sensors"), ("interfaces", "Interface status"),
              ("interface errors", "Interface errors"), ("bandwidth", "Interface utilization")],
+    "cloud": [("status", "Overall status"), ("components", "Components"), ("incidents", "Open incidents")],
+    "wifi": [("connection", "Connection"), ("signal", "Signal strength"), ("link speed", "Link speed")],
     "unifi": [("site health", "Site health"), ("uptime", "Uptime and recent reboots"), ("cpu", "CPU"),
               ("memory", "Memory"), ("temperature", "Temperature"), ("firmware", "Firmware updates"),
               ("uplink", "Uplink state"), ("port errors", "Port errors"), ("clients", "AP client counts"),

@@ -3,6 +3,7 @@
 Stored text is cleaned first: volatile lines (timestamps, byte counts) are dropped so only real changes count, and
 (by default) passwords, keys and SNMP communities are masked, because the database file is not encrypted.
 """
+from core import proxy
 import difflib
 import hashlib
 import re
@@ -113,7 +114,7 @@ def fetch(dev, opts=None):
             urllib3.disable_warnings()
         r = requests.get(f"https://{dev['host']}:{dev.get('port') or 443}/api/v2/monitor/system/config/backup",
                          params={"scope": "global"}, headers={"Authorization": f"Bearer {profiles.secret(dev) or ''}"},
-                         verify=bool(dev.get("verify_ssl")), timeout=max(opts["http_timeout"], 60))
+                         verify=bool(dev.get("verify_ssl")), timeout=max(opts["http_timeout"], 60), **proxy.requests_kwargs(dev))
         r.raise_for_status()
         return r.text
     if vendor == "paloalto":
@@ -122,7 +123,7 @@ def fetch(dev, opts=None):
             urllib3.disable_warnings()
         r = requests.get(f"https://{dev['host']}:{dev.get('port') or 443}/api/", params={"type": "export", "category": "configuration"},
                          headers={"X-PAN-KEY": profiles.secret(dev) or ""}, verify=bool(dev.get("verify_ssl")),
-                         timeout=max(opts["http_timeout"], 60))
+                         timeout=max(opts["http_timeout"], 60), **proxy.requests_kwargs(dev))
         r.raise_for_status()
         return r.text
     from drivers import DRIVERS

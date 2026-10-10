@@ -67,7 +67,9 @@ def lookup(mac):
 def update_from_ieee(timeout=30):
     """Download the IEEE OUI list (about 6 MB) into the cache. Returns the number of entries."""
     import requests
-    r = requests.get("https://standards-oui.ieee.org/oui/oui.txt", timeout=timeout)
+    from core import proxy
+    r = requests.get("https://standards-oui.ieee.org/oui/oui.txt", timeout=timeout,
+                     **proxy.requests_kwargs(None, "standards-oui.ieee.org"))
     r.raise_for_status()
     cache_path().write_text(r.text, encoding="utf-8")
     reload()

@@ -1,3 +1,4 @@
+from core import proxy
 import re
 import xml.etree.ElementTree as ET
 
@@ -17,7 +18,7 @@ class PaloAltoDriver(Driver):
             urllib3.disable_warnings()
         r = requests.get(f"https://{d['host']}:{d.get('port') or 443}/api/",
                          params={"type": "op", "cmd": cmd}, headers={"X-PAN-KEY": self.password or ""},
-                         verify=bool(d.get("verify_ssl")), timeout=self.opts["http_timeout"])
+                         verify=bool(d.get("verify_ssl")), timeout=self.opts["http_timeout"], **proxy.requests_kwargs(d))
         r.raise_for_status()
         root = ET.fromstring(r.content)
         if root.get("status") != "success":

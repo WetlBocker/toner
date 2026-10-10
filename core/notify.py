@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 import keyring
 import requests
 
-from core import alerts, db, display
+from core import alerts, db, display, maintenance, proxy
 from drivers.base import SEVERITY
 
 MAX_LINES = 40
@@ -196,8 +196,24 @@ def _scrub(text, secrets):
     return text
 
 
+class _SMTP(smtplib.SMTP):
+    """SMTP that goes through the global proxy when one applies to the mail server."""
+    def _get_socket(self, host, port, timeout):
+        cfg = proxy.for_device(None, host)
+        return proxy.connect(cfg, host, port, timeout) if cfg else super()._get_socket(host, port, timeout)
+
+
+class _SMTP_SSL(smtplib.SMTP_SSL):
+    def _get_socket(self, host, port, timeout):
+        cfg = proxy.for_device(None, host)
+        if not cfg:
+            return super()._get_socket(host, port, timeout)
+        return self.context.wrap_socket(proxy.connect(cfg, host, port, timeout), server_hostname=host)
+
+
 def _post(url, secrets, json_body=None, data=None, headers=None):
-    r = requests.post(url, json=json_body, data=data, headers=headers or {}, timeout=10, allow_redirects=False)
+    r = requests.post(url, json=json_body, data=data, headers=headers or {}, timeout=10, allow_redirects=False,
+                      **proxy.requests_kwargs(None, urlparse(url).hostname))
     if r.status_code >= 300:
         where = f" to {urlparse(r.headers.get('Location', '')).netloc}" if 300 <= r.status_code < 400 else ""
         raise RuntimeError(f"the service answered HTTP {r.status_code}{where}: {r.text[:120].strip()}")
@@ -229,9 +245,9 @@ def _send_email(ch, secrets, msg):
     port, mode = int(ch.get("smtp_port") or 587), ch.get("security", "STARTTLS")
     ctx = ssl.create_default_context()
     if mode == "SSL/TLS":
-        smtp = smtplib.SMTP_SSL(ch["smtp_host"].strip(), port, timeout=15, context=ctx)
+        smtp = _SMTP_SSL(ch["smtp_host"].strip(), port, timeout=15, context=ctx)
     else:
-        smtp = smtplib.SMTP(ch["smtp_host"].strip(), port, timeout=15)
+        smtp = _SMTP(ch["smtp_host"].strip(), port, timeout=15)
     with smtp:
         smtp.ehlo()
         if mode == "STARTTLS":
@@ -320,6 +336,10 @@ def process_run(results, ran, scheduled, desktop=None, retry_delay=2):
         return "no channels"
     if not scheduled and not db.get_setting("notify_on_manual"):
         return "manual runs are not notified"
+    held = maintenance.devices_in_maintenance()
+    if held:                                       # planned work: say nothing, and leave the alert state as it was
+        results = [r for r in results if alerts.base(r.device) not in held]
+        ran = [d for d in ran if alerts.base(d) not in held]
     events = alerts.evaluate(results, ran, consecutive=int(db.get_setting("notify_consecutive")),
                              remind_hours=int(db.get_setting("notify_remind_hours")))
     if not events:

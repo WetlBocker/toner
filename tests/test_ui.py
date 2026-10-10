@@ -114,7 +114,7 @@ check("missing report folder is refused", msgs and "does not exist" in msgs[-1][
 captured = {}
 import ui.reports_tab as RT
 RT.QFileDialog.getSaveFileName = staticmethod(lambda parent, title, start, pattern: (captured.update(start=start), ("", ""))[1])
-w.reports.base = [Result("d", "cpu", "OK", "1%")]; w.reports.locations.set_labels([]); w.reports._loc = {id(w.reports.base[0]): ""}; w.reports.show_preview()
+w.reports.base = [Result("d", "cpu", "OK", "1%")]; w.reports.filter.set_sections({}); w.reports._meta = {id(w.reports.base[0]): {"Status": "OK", "Location": "", "Vendor": "", "Tag": set()}}; w.reports.show_preview()
 w.reports.export_html(); check("save dialog opens in the default folder with a dated name", captured["start"].startswith(SP) and captured["start"].endswith(".html"), captured)
 
 print("== automation / scheduler")

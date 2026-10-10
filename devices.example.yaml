@@ -2,7 +2,7 @@
 # never in the database. Leave them out here to enter them in the device dialog instead.
 #
 # Vendors: cisco, juniper, arista, hpe, mikrotik (SSH) / fortinet, paloalto, meraki, unifi (web API) /
-#          snmp (any device that answers SNMP)
+#          snmp (any device that answers SNMP) / cloud (a public status page, no login) / wifi (this PC's Wi-Fi)
 # Optional columns for any device:  folder, tags, profile (a credential profile name), jump (another device's name),
 #                                   location, details, enabled, port
 devices:
@@ -49,3 +49,11 @@ devices:
     host: 10.0.5.9
     community: public          # kept in Credential Manager; SNMP v3 is set up in the device dialog
     tags: power
+
+  - name: github-status
+    vendor: cloud              # any Atlassian Statuspage address; no credentials
+    host: www.githubstatus.com
+
+  - name: my-laptop-wifi
+    vendor: wifi               # checks the Wi-Fi of the computer running Toner
+    host: localhost

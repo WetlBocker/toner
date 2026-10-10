@@ -40,7 +40,7 @@ def ssh_run(vendor, table, platform="", **dev):
     return {r.check: r for r in res}
 
 print("== registry / importer")
-check("ten vendors", len(vendors.VENDORS) == 10 and set(DRIVERS) == set(vendors.VENDORS))
+check("twelve vendors, none without a driver", len(vendors.VENDORS) == 12 and set(DRIVERS) == set(vendors.VENDORS))
 check("display names", display.vendor_name("paloalto") == "Palo Alto" and display.platform_name("aruba_aoscx") == "AOS-CX")
 for v, info in vendors.VENDORS.items():
     check(f"checks catalog has {v}", v in __import__("core.checks", fromlist=["x"]).CATALOG)
