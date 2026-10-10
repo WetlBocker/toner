@@ -287,7 +287,10 @@ def main():
     app.setQuitOnLastWindowClosed(True)
     apply_look(app)
     win = Main()
-    win.show()
+    if "--minimized" in sys.argv and win.background_mode():
+        win.update_tray()                          # started with Windows: wait in the tray
+    else:
+        win.show()
     log.info("Toner started")
     code = app.exec()
     log.info("Toner stopped")

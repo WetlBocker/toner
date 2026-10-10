@@ -96,6 +96,11 @@ window is closed.
 The tests use fakes (simulated devices and APIs, a local SNMP agent, local TLS and SSH servers) and a throw-away
 database; they never touch your inventory or credentials.
 
-## Build the .exe
+## Build the installer
 
-    pyinstaller --onefile --windowed --collect-all netmiko --collect-all ntc_templates --collect-all pysnmp app.py
+    powershell -File packaging\build.ps1 -Version 1.0.0
+
+This builds the program folder with PyInstaller, then `build\installer\Toner-Setup-1.0.0.exe` with
+[Inno Setup 6](https://jrsoftware.org/isinfo.php) (`winget install JRSoftware.InnoSetup`). The installer needs no
+administrator rights, offers desktop and start-with-Windows shortcuts, and leaves your data and saved passwords alone
+when you uninstall or upgrade. `Toner.exe --minimized` starts in the tray when background running is on.
