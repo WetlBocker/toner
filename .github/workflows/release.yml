@@ -1,0 +1,65 @@
+name: Release
+# Push a tag like v1.3.0 (the number must match core/version.py) to build the installer and publish it as a GitHub release.
+on:
+  push:
+    tags: ["v*"]
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    steps:
+      - name: Skip if this release was already published by hand
+        id: have
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" *> $null
+          if ($LASTEXITCODE -eq 0) { "skip=true" >> $env:GITHUB_OUTPUT; "This release already exists, nothing to build." } else { "skip=false" >> $env:GITHUB_OUTPUT; $global:LASTEXITCODE = 0 }
+      - uses: actions/checkout@v4
+        if: steps.have.outputs.skip != 'true'
+      - uses: actions/setup-python@v5
+        if: steps.have.outputs.skip != 'true'
+        with:
+          python-version: "3.13"
+      - run: python -m pip install -r requirements.lock
+        if: steps.have.outputs.skip != 'true'
+      - name: Check the tag matches the version in the code
+        if: steps.have.outputs.skip != 'true'
+        shell: pwsh
+        run: |
+          $v = (python -c "from core.version import VERSION; print(VERSION)").Trim()
+          if ("v$v" -ne "${{ github.ref_name }}") { throw "Tag ${{ github.ref_name }} does not match core/version.py ($v)" }
+      - name: Run the tests
+        if: steps.have.outputs.skip != 'true'
+        env:
+          QT_QPA_PLATFORM: offscreen
+          PYTHONUTF8: "1"
+        run: python tests/run_all.py
+      - name: Install Inno Setup if the runner lacks it
+        if: steps.have.outputs.skip != 'true'
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe") -and -not (Test-Path "$env:ProgramFiles\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+      - name: Build the installer (signed when the SIGN_PFX_BASE64 and SIGN_PASSWORD secrets exist)
+        if: steps.have.outputs.skip != 'true'
+        shell: pwsh
+        env:
+          SIGN_PFX_BASE64: ${{ secrets.SIGN_PFX_BASE64 }}
+          SIGN_PASSWORD: ${{ secrets.SIGN_PASSWORD }}
+        run: |
+          if ($env:SIGN_PFX_BASE64) {
+            [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\sign.pfx", [Convert]::FromBase64String($env:SIGN_PFX_BASE64))
+            $env:SIGN_PFX = "$env:RUNNER_TEMP\sign.pfx"
+          }
+          powershell -File packaging\build.ps1
+      - name: Publish the release
+        if: steps.have.outputs.skip != 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $v = (python -c "from core.version import VERSION; print(VERSION)").Trim()
+          gh release create "${{ github.ref_name }}" "build\installer\Toner-Setup-$v.exe" --title "Toner $v" --generate-notes

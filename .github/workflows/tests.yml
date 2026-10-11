@@ -1,0 +1,28 @@
+name: Tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements.lock
+      - run: python -m pip install -r requirements.lock
+      - name: Look for undefined names and other real mistakes
+        shell: pwsh
+        run: |
+          $out = python -m pyflakes core drivers ui app.py cli.py
+          $bad = $out | Where-Object { $_ -match 'undefined name|redefinition of unused|syntax' }
+          if ($bad) { $bad; exit 1 }
+      - name: Run the test suite
+        env:
+          QT_QPA_PLATFORM: offscreen
+          PYTHONUTF8: "1"
+        run: python tests/run_all.py
