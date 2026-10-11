@@ -6,7 +6,7 @@ from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFileDialog, QHBoxLayout, QLabel,
                                QMessageBox, QPushButton, QTableWidget, QTableWidgetItem,
                                QVBoxLayout, QWidget)
-from core import alerts, db, display, reports
+from core import alerts, db, display, reports, trends
 from drivers.base import SEVERITY, Result
 from ui.widgets import FilterButton, StatusDelegate, flow
 
@@ -45,6 +45,15 @@ class ReportsTab(QWidget):
             b.clicked.connect(fn)
             buttons.addWidget(b)
         buttons.addStretch()
+        self.trend_period = QComboBox()
+        for label, days in trends.PERIODS:
+            self.trend_period.addItem(label, days)
+        self.trend_btn = QPushButton("Trend report")
+        self.trend_btn.setToolTip("How the whole period went compared with the one before: availability, worst offenders, what keeps failing, "
+                                  "what is still wrong, changes, and the Windows computers. Not affected by the results shown here.")
+        self.trend_btn.clicked.connect(self.export_trend)
+        buttons.addWidget(self.trend_period)
+        buttons.addWidget(self.trend_btn)
         buttons.addWidget(self.filter)
         lay = QVBoxLayout(self)
         lay.addLayout(top)
@@ -143,6 +152,21 @@ class ReportsTab(QWidget):
             fn(rows, path, scope=self.scope_text(), when=self.report_date())
             if open_after:
                 QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+
+    def export_trend(self):
+        data = trends.compute(self.trend_period.currentData())
+        if not data["runs"]:
+            QMessageBox.information(self, "Trend report", "There are no runs in that period yet. Run the checks first.")
+            return
+        folder = db.get_setting("report_folder")
+        start = os.path.join(folder, f"Toner-trend-{datetime.now():%Y-%m-%d}") if folder and os.path.isdir(folder) else ""
+        path, chosen = QFileDialog.getSaveFileName(self, "Trend report", start, "PDF (*.pdf);;HTML (*.html);;CSV (*.csv)")
+        if not path:
+            return
+        low = path.lower()
+        (trends.to_csv if low.endswith(".csv") else trends.save_html if low.endswith(".html") else trends.save_pdf)(data, path)
+        if not low.endswith(".csv"):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
     def export_csv(self):
         self._export("Export CSV", "CSV (*.csv)", reports.to_csv)

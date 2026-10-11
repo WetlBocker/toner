@@ -14,7 +14,7 @@ BANNERS = [("cisco", "cisco"), ("rosssh", "mikrotik"), ("mikrotik", "mikrotik"),
            ("netscreen", "juniper"), ("fortigate", "fortinet"), ("forti", "fortinet"), ("comware", "hpe"),
            ("huawei", "huawei"), ("arista", "arista"), ("aruba", "hpe"), ("procurve", "hpe"), ("palo alto", "paloalto"),
            ("paloalto", "paloalto"), ("pan-os", "paloalto"), ("unifi", "unifi"), ("ubiquiti", "unifi"),
-           ("meraki", "meraki"), ("dropbear", "(embedded Linux)"), ("openssh", "(Linux/BSD server or appliance)"),
+           ("meraki", "meraki"), ("software: windows", "windows"), ("dropbear", "(embedded Linux)"), ("openssh", "(Linux/BSD server or appliance)"),
            ("ubnt", "unifi"), ("netgear", "netgear"), ("dell", "dell"), ("extreme", "extreme"), ("mellanox", "nvidia")]
 
 
@@ -113,6 +113,8 @@ def guess_platform(vendor, descr):
         if "ios-xe" in d or "ios xe" in d or "iosxe" in d:
             return "cisco_xe"
         return "cisco_ios"
+    if vendor == "windows":
+        return "winrm"
     if vendor == "hpe":
         return "aruba_aoscx" if "aos-cx" in d or "arubaos-cx" in d else "aruba_osswitch"
     return vendors.default_platform(vendor)
@@ -157,6 +159,8 @@ def probe(ip, communities=(), ports=(22, 443), timeout=1.0, snmp_port=161, ssh_p
         host = socket.gethostbyaddr(ip)[0]
     except OSError:
         host = ""
+    if not hint and any(p in open_ports for p in (5985, 5986)):
+        hint = "windows"                                 # WinRM answers: a Windows computer
     vendor = netcheck_vendor(hint, bool(ident))
     name = (ident.get("sysname") or host.split(".")[0] or cert.get("subject", "").split(".")[0] or ip).strip()
     return {"ip": ip, "hostname": host, "name": re.sub(r"[^A-Za-z0-9_.\-]+", "-", name) or ip, "vendor": vendor,
@@ -214,11 +218,32 @@ def unique_name(base, taken):
     return name
 
 
-def add_to_inventory(rows, folder_id=None, profile_id=None, location="", tags=""):
+GROUPINGS = [("", "Put them all in the folder"), ("subnet", "Subfolders by network (/24)"), ("type", "Subfolders by type of device"),
+             ("both", "By network, then by type")]
+
+
+def subfolder_for(row, group_by):
+    """The subfolder path under the chosen folder for a discovered device: '10.1.2.0-24', 'Cisco', or '10.1.2.0-24/Cisco'."""
+    parts = []
+    if group_by in ("subnet", "both"):
+        try:
+            net = ipaddress.ip_network(f"{row['ip']}/24", strict=False)
+            parts.append(f"{net.network_address}-24" if net.version == 4 else "IPv6")
+        except ValueError:
+            parts.append("Other")
+    if group_by in ("type", "both"):
+        parts.append(vendors.get(row.get("vendor")).get("name", "Other"))
+    return "/".join(parts)
+
+
+def add_to_inventory(rows, folder_id=None, profile_id=None, location="", tags="", group_by=""):
     """Create inventory devices from discovery rows. Each row needs 'ip', 'name', 'vendor'; rows with no vendor
-    are skipped. Returns (added names, skipped messages)."""
+    are skipped. group_by ('subnet', 'type', 'both') files each device in a subfolder of folder_id, made when needed. The
+    credential profile is given only to devices that sign in (not SNMP-only ones, status pages or this computer's Wi-Fi).
+    Returns (added names, skipped messages)."""
     taken = {d["name"].lower() for d in db.list_devices()}
     added, skipped = [], []
+    base_path = db.folder_paths().get(folder_id, "") if folder_id else ""
     for r in rows:
         vendor = r.get("vendor")
         if vendor not in vendors.VENDORS:
@@ -227,10 +252,15 @@ def add_to_inventory(rows, folder_id=None, profile_id=None, location="", tags=""
         name = unique_name(r.get("name") or r["ip"], taken)
         taken.add(name.lower())
         snmp_cfg = {"version": "2c", "port": 161} if r.get("snmp") else ""
+        where = folder_id
+        sub = subfolder_for(r, group_by) if group_by else ""
+        if sub:
+            where = db.ensure_folder_path(f"{base_path}/{sub}" if base_path else sub)
+        logs_in = vendors.has_login(vendor) and not vendors.is_snmp(vendor)
         db.save_device({"name": name, "vendor": vendor, "host": r["ip"], "port": 0,
                         "platform": r.get("platform") or vendors.default_platform(vendor), "username": "",
                         "site": "default", "verify_ssl": 0, "ha_expected": 0, "enabled": 1, "location": location,
-                        "details": (r.get("descr") or "")[:120], "folder_id": folder_id, "profile_id": profile_id,
+                        "details": (r.get("descr") or "")[:120], "folder_id": where, "profile_id": profile_id if logs_in else None,
                         "tags": tags, "snmp": snmp_cfg if (vendor == "snmp" or r.get("snmp")) else ""})
         if r.get("snmp") and r.get("community"):
             db.set_secret(db.secret_name(name, "snmp"), r["community"])

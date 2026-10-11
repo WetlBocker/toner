@@ -594,17 +594,20 @@ class ToolsTab(QWidget):
         self.wifi = tools3.WifiTab()
         self.scp, self.xcopy = tools3.ScpTab(), tools3.XcopyTab()
         self.utilities = tools2.UtilitiesTab()
+        from ui import opensslui
+        self.openssl = opensslui.OpensslTab()
         self.discovery.inventory_changed = self.inventory_changed.emit
         self.tabs = PageStack()
         for title, pages in (("Connect", ((self.runner, "Command Runner"),)),
                              ("Diagnose", ((self.diag, "Ping / Traceroute / DNS"), (self.liveping, "Live Ping"),
                                            (self.mtr, "Path Monitor (MTR)"), (self.scan, "Port Scanner"),
-                                           (self.tls, "TLS Certificates"), (self.iperf, "Throughput (iperf3)"), (self.wifi, "Wi-Fi Scanner"),
+                                           (self.iperf, "Throughput (iperf3)"), (self.wifi, "Wi-Fi Scanner"),
                                            (self.subnet, "Subnet Calculator"))),
                              ("Discover", ((self.discovery, "Find Devices"), (self.topology, "Topology"))),
                              ("SNMP and logs", ((self.snmp, "SNMP"), (self.listeners, "Syslog and Traps"))),
                              ("File transfer", ((self.tftp, "TFTP Server"), (self.sftp, "SFTP Server"), (self.scp, "SCP"),
                                                (self.xcopy, "Copy Files (xcopy)"))),
+                             ("Certificates", ((self.tls, "TLS Certificates"), (self.openssl, "OpenSSL"))),
                              ("Utilities", ((self.utilities, "MAC and Wake-on-LAN"),))):
             self.tabs.addSection(title)
             for w, label in pages:
@@ -633,5 +636,5 @@ class ToolsTab(QWidget):
 
     def shutdown(self):
         for t in (self.diag, self.scan, self.snmp, self.liveping, self.mtr, self.tls, self.runner,
-                  self.discovery, self.topology, self.listeners, self.utilities, self.tftp, self.sftp, self.iperf, self.wifi, self.scp, self.xcopy):
+                  self.discovery, self.topology, self.listeners, self.utilities, self.tftp, self.sftp, self.iperf, self.wifi, self.scp, self.xcopy, self.openssl):
             t.shutdown()

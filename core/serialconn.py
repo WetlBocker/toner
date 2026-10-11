@@ -3,6 +3,7 @@ resize, stop) for a COM port, or a serial server reached over the network (socke
 import threading
 
 from PySide6.QtCore import QThread, Signal
+from core import quiet
 
 try:
     import serial
@@ -96,5 +97,5 @@ class SerialSession(QThread):
             try:
                 self.ser.close()
             except Exception:
-                pass
+                quiet.ignored()
             self.closed.emit(reason)

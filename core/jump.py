@@ -4,6 +4,7 @@ import json
 import paramiko
 
 from core import db, nettools, profiles, proxy
+from core import quiet
 
 
 def spec(dev):
@@ -74,4 +75,4 @@ class Managed:
                 try:
                     c.close()
                 except Exception:
-                    pass
+                    quiet.ignored()

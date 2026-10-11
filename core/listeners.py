@@ -7,6 +7,7 @@ import time
 from datetime import datetime
 
 from core import db
+from core import quiet
 
 FACILITIES = ["kern", "user", "mail", "daemon", "auth", "syslog", "lpr", "news", "uucp", "cron", "authpriv", "ftp",
               "ntp", "audit", "alert", "clock", "local0", "local1", "local2", "local3", "local4", "local5", "local6",
@@ -152,7 +153,7 @@ class TrapListener:
         try:
             eng.close_dispatcher()
         except Exception:
-            pass
+            quiet.ignored()
 
     def stop(self):
         self.stop_event.set()

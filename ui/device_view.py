@@ -3,9 +3,9 @@ import json
 
 from PySide6.QtCore import QThread, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QFontDatabase
-from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QFormLayout, QHBoxLayout, QLabel, QPlainTextEdit,
+from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QFormLayout, QHBoxLayout, QLabel, QMessageBox, QPlainTextEdit,
                                QPushButton, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
-from core import backup, db, display, profiles, snmp, vendors
+from core import backup, db, display, profiles, sessions, snmp, vendors
 from core.runner import run_one
 from ui.configs import DiffHighlighter
 from ui.history import ChartStack
@@ -51,7 +51,7 @@ class DeviceView(QDialog):
         head.addWidget(self.sub)
         actions = QHBoxLayout()
         self.buttons = {}
-        for key, text in (("checks", "Run checks"), ("backup", "Back up config"), ("ssh", "SSH session"), ("ping", "Ping"),
+        for key, text in (("checks", "Run checks"), ("backup", "Back up config"), ("ssh", "SSH session"), ("rdp", "Remote Desktop"), ("ping", "Ping"),
                           ("snmp", "SNMP"), ("web", "Open web page"), ("edit", "Edit...")):
             b = QPushButton(text)
             b.setAutoDefault(False)                     # Enter must not trigger whichever button comes first
@@ -140,6 +140,8 @@ class DeviceView(QDialog):
         self.title.setText(d["name"])
         self.sub.setText(f"{display.vendor_name(d['vendor'])} {plat}  -  {d['host']}" + (f":{d['port']}" if d.get("port") else ""))
         self.buttons["ssh"].setEnabled(info.get("kind") == "ssh")
+        self.buttons["ssh"].setVisible(d["vendor"] != "windows")
+        self.buttons["rdp"].setVisible(d["vendor"] == "windows")
         self.buttons["backup"].setEnabled(backup.supported(d))
         self.buttons["snmp"].setEnabled(profiles.snmp_configured(d) or vendors.is_snmp(d["vendor"]))
         self.buttons["web"].setEnabled(True)
@@ -248,6 +250,11 @@ class DeviceView(QDialog):
             self._run(lambda: backup.backup_device(d), self._backup_done, "Backing up...")
         elif key == "ssh":
             self.ssh_requested.emit(d)
+        elif key == "rdp":
+            try:
+                sessions.launch_rdp(sessions.rdp_for_device(d))
+            except OSError as e:
+                QMessageBox.warning(self, "Remote Desktop", str(e))
         elif key == "ping":
             self.tool_requested.emit("ping", d)
         elif key == "snmp":

@@ -15,6 +15,7 @@ import struct
 import threading
 import time
 from datetime import datetime
+from core import quiet
 
 PART = ".netcheck-part"                  # in-progress TFTP uploads; never served and never accepted as a name
 _WINDOWS_DEVICES = {"con", "prn", "aux", "nul", "clock$"} | {f"com{i}" for i in range(1, 10)} | {f"lpt{i}" for i in range(1, 10)}
@@ -116,7 +117,7 @@ class _Base:
                 self.on_event({"time": _stamp(), "proto": self.proto, "client": client, "op": op, "path": path,
                                "bytes": int(nbytes), "status": status, "note": note})
             except Exception:
-                pass
+                quiet.ignored()
 
     def stop(self):
         self.stop_event.set()
@@ -724,7 +725,7 @@ class SftpServer(_Base):
                     transport.close()
                 conn.close()
             except Exception:
-                pass
+                quiet.ignored()
             with self.lock:
                 self.active -= 1
 

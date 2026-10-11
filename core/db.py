@@ -3,12 +3,15 @@ import json
 import os
 import re
 import sqlite3
+import threading
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import keyring
 
 from core import display, paths
+from core import quiet
 
 SERVICE = "netcheck"
 DEFAULT_THRESHOLDS = {
@@ -22,13 +25,19 @@ DEFAULT_THRESHOLDS = {
     "disk":         {"warn": 80, "fail": 90},       # SNMP storage, % used
     "utilization":  {"warn": 70, "fail": 90},       # busiest SNMP interface, % of its speed
     "wifi_signal":  {"warn": 50, "fail": 30},       # this PC's Wi-Fi signal, %; LOWER is worse
+    "win_events":   {"warn": 25, "fail": 250},      # Windows: Critical and Error events in the last 24 hours
+    "patch_days":   {"warn": 45, "fail": 90},       # Windows: days since an update was last installed
+    "cert_days":    {"warn": 30, "fail": 7},        # Windows: days until a certificate expires; LOWER is worse
+    "agent_silent": {"warn": 15, "fail": 60},       # Windows agent: minutes without a report
 }
 THRESHOLD_LABELS = {"cpu": "CPU %", "memory": "Memory %", "channel_util": "Channel utilization %",
                     "temperature": "Temperature C", "port_errors": "Port errors (count)",
                     "uptime": "Uptime below (hours)", "sessions": "Session table used %",
                     "disk": "Disk used %", "utilization": "Interface utilization %",
-                    "wifi_signal": "Wi-Fi signal below %"}
-LOWER_IS_WORSE = {"uptime", "wifi_signal"}
+                    "wifi_signal": "Wi-Fi signal below %", "win_events": "Windows error events (24 h)",
+                    "patch_days": "Windows days since last update", "cert_days": "Windows certificate days left",
+                    "agent_silent": "Windows agent silent (minutes)"}
+LOWER_IS_WORSE = {"uptime", "wifi_signal", "cert_days"}
 
 DEFAULT_SETTINGS = {
     # general
@@ -62,26 +71,29 @@ DEFAULT_SETTINGS = {
     # background running
     "run_in_background": False, "metrics_port": 0,
     # discovery
-    "discover_communities": "public", "discover_ports": "22,443,161",
+    "discover_communities": "public", "discover_ports": "22,443,161,5985",
     # commands
     "snippets": [],
     # file servers and throughput tests (per computer: folders and paths)
-    "fileserver": {}, "iperf_path": "",
+    "fileserver": {}, "iperf_path": "", "openssl_path": "",
     # proxy for every connection that can use one (see core/proxy.py; the proxy password is in Credential Manager)
     # updates (see core/updates.py)
     "sessions_expanded": [],
     "update_check": True, "update_auto_install": False, "update_last_check": "", "update_skip": "", "update_pending": {},
     "proxy": {"mode": "system", "kind": "http", "host": "", "port": 8080, "username": "",
               "bypass": "localhost, 127.0.0.1"},
+    # Windows agents (see core/agents.py): Toner listens for their reports while this is on
+    "agent_cert_warned": "", "trend_schedule": "", "trend_last": "", "tls_sweep": False, "tls_sweep_ports": "443", "agent_enabled": False, "agent_enroll": False, "agent_token_days": 0, "agent_port": 8750, "agent_bind": "0.0.0.0", "agent_address": "",
 }
 # Per-machine state that must not travel in an exported settings file (channel secrets stay in
 # Credential Manager, so an imported channel would be broken).
-NOT_PORTABLE = {"notify_channels", "notify_snooze_until", "inventory_expanded", "snippets", "fileserver", "iperf_path",
-                "update_last_check", "update_skip", "update_pending", "sessions_expanded"}
+NOT_PORTABLE = {"notify_channels", "notify_snooze_until", "inventory_expanded", "snippets", "fileserver", "iperf_path", "openssl_path",
+                "update_last_check", "update_skip", "update_pending", "sessions_expanded", "agent_enabled", "agent_enroll", "agent_bind",
+                "agent_address"}
 
 DEVICE_FIELDS = ["name", "vendor", "host", "port", "platform", "username",
                  "site", "verify_ssl", "ha_expected", "enabled", "location", "details", "folder_id",
-                 "tags", "fields", "profile_id", "snmp", "jump", "proxy"]
+                 "tags", "fields", "profile_id", "snmp", "jump", "proxy", "winopts"]
 ALL_DEVICES = "All devices"
 
 
@@ -91,10 +103,24 @@ def db_path() -> Path:
     return paths.data_dir() / "netcheck.db"
 
 
+_wal_set = set()
+
+
 def connect():
+    """A connection to the database. WAL mode lets the window, the scheduler and the agent receiver read while one of them
+    writes; a long busy timeout makes a competing write wait its turn instead of failing with 'database is locked'."""
     c = sqlite3.connect(db_path(), timeout=15)
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA foreign_keys = ON")
+    c.execute("PRAGMA busy_timeout = 15000")
+    key = str(db_path())
+    if key not in _wal_set:
+        try:
+            c.execute("PRAGMA journal_mode = WAL")
+        except sqlite3.DatabaseError:
+            pass                                          # a read-only or network location: the default mode still works
+        _wal_set.add(key)
+    c.execute("PRAGMA synchronous = NORMAL")
     return c
 
 
@@ -151,33 +177,81 @@ def init():
             id INTEGER PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, group_name TEXT DEFAULT '',
             host TEXT DEFAULT '', port INTEGER DEFAULT 0, username TEXT DEFAULT '', device TEXT DEFAULT '',
             options TEXT DEFAULT '{}', created TEXT, last_used TEXT, folder_id INTEGER);
+        CREATE TABLE IF NOT EXISTS agent_reports (
+            device TEXT PRIMARY KEY, token_hash TEXT DEFAULT '', received_at TEXT DEFAULT '', source TEXT DEFAULT '',
+            report TEXT DEFAULT '');
         CREATE TABLE IF NOT EXISTS audit (
             id INTEGER PRIMARY KEY, at TEXT NOT NULL, actor TEXT, action TEXT, detail TEXT);
         CREATE INDEX IF NOT EXISTS idx_backups_dev ON config_backups(device, id);
         CREATE INDEX IF NOT EXISTS idx_results_run ON results(run_id);
         CREATE INDEX IF NOT EXISTS idx_results_series ON results(device, check_name);
         """)
-        if "folder_id" not in {r[1] for r in c.execute("PRAGMA table_info(sessions)")}:
-            c.execute("ALTER TABLE sessions ADD COLUMN folder_id INTEGER")
-        for (grp,) in c.execute("SELECT DISTINCT group_name FROM sessions WHERE folder_id IS NULL AND IFNULL(group_name,'')<>''").fetchall():
-            row = c.execute("SELECT id FROM session_folders WHERE name=? COLLATE NOCASE AND parent_id IS NULL", (grp,)).fetchone()
-            fid = row[0] if row else c.execute("INSERT INTO session_folders(name, parent_id) VALUES(?,NULL)", (grp,)).lastrowid
-            c.execute("UPDATE sessions SET folder_id=?, group_name='' WHERE folder_id IS NULL AND group_name=?", (fid, grp))   # old 'Group' text -> a real folder
-        if "kind" not in {r[1] for r in c.execute("PRAGMA table_info(ssh_sessions)")}:
-            c.execute("ALTER TABLE ssh_sessions ADD COLUMN kind TEXT DEFAULT 'ssh'")
-        if "options" not in {r[1] for r in c.execute("PRAGMA table_info(custom_checks)")}:
-            c.execute("ALTER TABLE custom_checks ADD COLUMN options TEXT DEFAULT ''")
-        cols = {r[1] for r in c.execute("PRAGMA table_info(devices)")}
-        for col in ("location", "details"):   # upgrade databases created before these existed
-            if col not in cols:
-                c.execute(f"ALTER TABLE devices ADD COLUMN {col} TEXT DEFAULT ''")
-        if "folder_id" not in cols:
-            c.execute("ALTER TABLE devices ADD COLUMN folder_id INTEGER")
-        for col, decl in (("tags", "TEXT DEFAULT ''"), ("fields", "TEXT DEFAULT ''"), ("profile_id", "INTEGER"),
-                          ("snmp", "TEXT DEFAULT ''"), ("jump", "TEXT DEFAULT ''"), ("proxy", "TEXT DEFAULT ''")):
-            if col not in cols:
-                c.execute(f"ALTER TABLE devices ADD COLUMN {col} {decl}")
+        _migrate(c)
     _invalidate_folders()
+    _settings["key"] = None
+
+
+def _m1_legacy_columns(c):
+    """Databases made before folders, tags, profiles, jump hosts, proxies and Windows options existed."""
+    if "folder_id" not in {r[1] for r in c.execute("PRAGMA table_info(sessions)")}:
+        c.execute("ALTER TABLE sessions ADD COLUMN folder_id INTEGER")
+    for (grp,) in c.execute("SELECT DISTINCT group_name FROM sessions WHERE folder_id IS NULL AND IFNULL(group_name,'')<>''").fetchall():
+        row = c.execute("SELECT id FROM session_folders WHERE name=? COLLATE NOCASE AND parent_id IS NULL", (grp,)).fetchone()
+        fid = row[0] if row else c.execute("INSERT INTO session_folders(name, parent_id) VALUES(?,NULL)", (grp,)).lastrowid
+        c.execute("UPDATE sessions SET folder_id=?, group_name='' WHERE folder_id IS NULL AND group_name=?", (fid, grp))   # old 'Group' text -> a real folder
+    if "kind" not in {r[1] for r in c.execute("PRAGMA table_info(ssh_sessions)")}:
+        c.execute("ALTER TABLE ssh_sessions ADD COLUMN kind TEXT DEFAULT 'ssh'")
+    if "options" not in {r[1] for r in c.execute("PRAGMA table_info(custom_checks)")}:
+        c.execute("ALTER TABLE custom_checks ADD COLUMN options TEXT DEFAULT ''")
+    cols = {r[1] for r in c.execute("PRAGMA table_info(devices)")}
+    for col in ("location", "details"):   # upgrade databases created before these existed
+        if col not in cols:
+            c.execute(f"ALTER TABLE devices ADD COLUMN {col} TEXT DEFAULT ''")
+    if "folder_id" not in cols:
+        c.execute("ALTER TABLE devices ADD COLUMN folder_id INTEGER")
+    for col, decl in (("tags", "TEXT DEFAULT ''"), ("fields", "TEXT DEFAULT ''"), ("profile_id", "INTEGER"),
+                      ("snmp", "TEXT DEFAULT ''"), ("jump", "TEXT DEFAULT ''"), ("proxy", "TEXT DEFAULT ''"),
+                      ("winopts", "TEXT DEFAULT ''")):
+        if col not in cols:
+            c.execute(f"ALTER TABLE devices ADD COLUMN {col} {decl}")
+
+
+def _m2_agent_history(c):
+    """Numbers from each agent report, so a Windows computer has real charts and not one point per scheduled run."""
+    c.executescript("""
+    CREATE TABLE IF NOT EXISTS agent_metrics (
+        id INTEGER PRIMARY KEY, device TEXT NOT NULL, at TEXT NOT NULL, cpu REAL, memory REAL, disk REAL, uptime_h REAL);
+    CREATE INDEX IF NOT EXISTS idx_agent_metrics ON agent_metrics(device, at);
+    CREATE TABLE IF NOT EXISTS agent_seen (
+        device TEXT PRIMARY KEY, first_seen TEXT NOT NULL, last_ip TEXT DEFAULT '', facts TEXT DEFAULT '');
+    """)
+
+
+def _m3_agent_tokens(c):
+    """Tokens can be replaced on a schedule; the previous one keeps working for a while so no agent is locked out."""
+    cols = {r[1] for r in c.execute("PRAGMA table_info(agent_reports)")}
+    for col in ("issued_at", "prev_hash", "prev_until", "version"):
+        if col not in cols:
+            c.execute(f"ALTER TABLE agent_reports ADD COLUMN {col} TEXT DEFAULT ''")
+
+
+MIGRATIONS = [(1, _m1_legacy_columns), (2, _m2_agent_history), (3, _m3_agent_tokens)]
+SCHEMA_VERSION = MIGRATIONS[-1][0]
+
+
+def _migrate(c):
+    """Bring the database up to SCHEMA_VERSION, one numbered step at a time (PRAGMA user_version remembers where it is).
+    Steps are written to be safe to repeat, because databases from before numbering start at 0."""
+    have = c.execute("PRAGMA user_version").fetchone()[0]
+    for number, step in MIGRATIONS:
+        if have < number:
+            step(c)
+            c.execute(f"PRAGMA user_version = {number}")
+
+
+def schema_version():
+    with connect() as c:
+        return c.execute("PRAGMA user_version").fetchone()[0]
 
 
 # ---------- secrets (Windows Credential Manager) ----------
@@ -188,7 +262,7 @@ def delete_secret(name):
     try:
         keyring.delete_password(SERVICE, name)
     except Exception:
-        pass
+        quiet.ignored()
 
 def move_secret(old, new):
     s = keyring.get_password(SERVICE, old)
@@ -197,7 +271,8 @@ def move_secret(old, new):
         delete_secret(old)
 
 # A device can hold up to four secrets: its password/token, and an SNMP community or v3 auth/privacy passwords.
-SECRET_KINDS = {"main": "", "snmp": ":snmp", "snmp_auth": ":snmp-auth", "snmp_priv": ":snmp-priv", "proxy": ":proxy"}
+SECRET_KINDS = {"main": "", "snmp": ":snmp", "snmp_auth": ":snmp-auth", "snmp_priv": ":snmp-priv", "proxy": ":proxy",
+                "agent": ":agent"}
 
 def secret_name(owner, kind="main"):
     return owner + SECRET_KINDS[kind]
@@ -294,10 +369,13 @@ def save_device(dev: dict) -> int:
     proxy = dev.get("proxy") or ""
     if isinstance(proxy, dict):
         proxy = json.dumps(proxy) if proxy else ""
+    winopts = dev.get("winopts") or ""
+    if isinstance(winopts, dict):
+        winopts = json.dumps(winopts) if winopts else ""
     dev = {**dev, "location": (dev.get("location") or "").strip(),
            "details": (dev.get("details") or "").strip(),
            "tags": ", ".join(split_tags(dev.get("tags"))), "fields": fields, "snmp": snmp, "jump": jump, "proxy": proxy,
-           "profile_id": dev.get("profile_id") or None}
+           "winopts": winopts, "profile_id": dev.get("profile_id") or None}
     vals = [dev.get(f) for f in DEVICE_FIELDS]
     with connect() as c:
         if dev.get("id"):
@@ -436,11 +514,25 @@ def get_thresholds():
 def set_thresholds(th):
     set_setting("thresholds", th)
 
+_settings = {"key": None, "at": 0.0, "data": {}}
+_settings_lock = threading.Lock()
+SETTINGS_TTL = 2.0                  # seconds; another process (the service, the window) is noticed within this long
+
+
+def _all_settings():
+    key, now = str(db_path()), time.monotonic()
+    with _settings_lock:
+        if _settings["key"] != key or now - _settings["at"] > SETTINGS_TTL:
+            with connect() as c:
+                data = {r["key"]: r["value"] for r in c.execute("SELECT key, value FROM settings")}
+            _settings.update(key=key, at=now, data=data)
+        return _settings["data"]
+
+
 def get_setting(key):
-    with connect() as c:
-        row = c.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+    raw = _all_settings().get(key)
     # defaults are copied so callers can never modify the shared default list/dict
-    return json.loads(row["value"]) if row else json.loads(json.dumps(DEFAULT_SETTINGS[key]))
+    return json.loads(raw) if raw is not None else json.loads(json.dumps(DEFAULT_SETTINGS[key]))
 
 
 # ---------- per-device thresholds and runtime options ----------
@@ -472,7 +564,8 @@ def runtime_options():
     return {"custom": custom_checks(), "ssh_timeout": int(get_setting("ssh_timeout")), "http_timeout": int(get_setting("http_timeout")),
             "retries": int(get_setting("retries")), "retry_delay": int(get_setting("retry_delay")),
             "disabled": set(get_setting("disabled_checks")), "counter_mode": get_setting("counter_mode"),
-            "firmware_severity": get_setting("firmware_severity")}
+            "firmware_severity": get_setting("firmware_severity"),
+            "tls_sweep": bool(get_setting("tls_sweep")), "tls_sweep_ports": get_setting("tls_sweep_ports")}
 
 def custom_checks():
     from core import custom
@@ -528,6 +621,8 @@ def set_setting(key, value):
     with connect() as c:
         c.execute("INSERT INTO settings(key,value) VALUES(?,?) "
                   "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, json.dumps(value)))
+    with _settings_lock:
+        _settings["key"] = None                           # the next read sees it
 
 
 # ---------- history ----------
@@ -566,14 +661,26 @@ def device_checks():
             out.setdefault(r["device"], []).append(r["check_name"])
     return out
 
+AGENT_COLUMNS = {"cpu": "cpu", "memory": "memory", "disks": "disk", "uptime": "uptime_h"}     # check name -> agent_metrics column
+
+
 def series(device, check, limit=200):
+    """(time, value) points for one check, oldest first. A Windows agent reports far more often than checks run, so its
+    own reports are added in and the chart has a point per report."""
     with connect() as c:
         rows = c.execute(
             "SELECT runs.started_at AS t, results.numeric AS v FROM results "
             "JOIN runs ON runs.id = results.run_id "
             "WHERE results.device=? AND results.check_name=? AND results.numeric IS NOT NULL "
             "ORDER BY runs.id DESC LIMIT ?", (device, check, limit)).fetchall()
-    return [(r["t"], r["v"]) for r in reversed(rows)]
+        pts = [(r["t"], r["v"]) for r in reversed(rows)]
+        col = AGENT_COLUMNS.get(check)
+        if col:
+            extra = c.execute(f"SELECT at AS t, {col} AS v FROM agent_metrics WHERE device=? AND {col} IS NOT NULL "
+                              "ORDER BY id DESC LIMIT ?", (device, limit)).fetchall()
+            if extra:
+                pts = sorted(set(pts) | {(r["t"], r["v"]) for r in extra})[-limit:]
+    return pts
 
 
 # ---------- dashboard data ----------
@@ -617,15 +724,17 @@ def device_health(exclude=("config backup",)):
     return out
 
 
-def availability(days=7):
-    """{device: {'runs', 'reachable', 'healthy'}} over the last `days` days. A run counts as 'reachable' when the
-    device produced results without a 'connection' error, and 'healthy' when none of its checks was worse than WARN."""
-    cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+def availability(days=7, start=None, end=None):
+    """{device: {'runs', 'reachable', 'healthy'}} over the last `days` days (or between two times). A run counts as 'reachable'
+    when the device produced results without a 'connection' error, and 'healthy' when none of its checks was worse than WARN."""
+    cutoff = start or (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+    until = end or "9999-12-31 00:00:00"
     stats = {}
     with connect() as c:
         seen = {}
         for r in c.execute("SELECT results.run_id AS rid, device, check_name, status FROM results JOIN runs ON "
-                           "runs.id = results.run_id WHERE runs.started_at >= ? AND check_name != 'config backup'", (cutoff,)):
+                           "runs.id = results.run_id WHERE runs.started_at >= ? AND runs.started_at < ? AND check_name != 'config backup'",
+                           (cutoff, until)):
             key = (r["rid"], _base(r["device"]))
             s = seen.setdefault(key, {"conn": False, "bad": False})
             if r["check_name"] == "connection" and r["status"] == "ERROR":

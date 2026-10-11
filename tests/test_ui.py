@@ -38,7 +38,7 @@ P = {p.title: p for p in S.pages}
 
 print("== tab and save/revert")
 check("settings is a tab, no corner button", w.centralWidget().tabText(w.centralWidget().count() - 2) == "Settings" and w.centralWidget().tabText(w.centralWidget().count() - 1) == "About")
-check("11 categories listed", S.nav.count() >= 11 and "Notifications" in [S.nav.item(i).text() for i in range(S.nav.count())] and [S.nav.item(i).text() for i in range(3)] == ["General", "Thresholds", "Checks"])
+check("11 categories listed", S.nav.count() >= 11 and "Notifications" in [S.nav.item(i).text() for i in range(S.nav.count())] and S.page_titles()[:3] == ["General", "Thresholds", "Checks"])
 g = P["General"]; g.workers.setValue(4); g.retention.setValue(30); g.scan_over.setValue(0); g.verify.setChecked(True)
 check("nothing is stored until Save", db.get_setting("workers") == 10)
 S.save(); check("Save writes settings", db.get_setting("workers") == 4 and db.get_setting("retention_days") == 30 and db.get_setting("default_verify_ssl") is True)
@@ -46,7 +46,7 @@ g.workers.setValue(9); S.reload(); check("Revert discards edits", g.workers.valu
 
 print("== threshold validation")
 T = P["Thresholds"]; T.spins["cpu"][0].setValue(95); T.spins["cpu"][1].setValue(80); msgs.clear(); S.save()
-check("WARN above FAIL is refused, nothing saved", msgs and "contradict" in msgs[-1][1] and db.get_thresholds()["cpu"]["warn"] == 70 and S.nav.currentRow() == 1, msgs)
+check("WARN above FAIL is refused, nothing saved", msgs and "contradict" in msgs[-1][1] and db.get_thresholds()["cpu"]["warn"] == 70 and S.current_title() == "Thresholds", msgs)
 T.spins["cpu"][0].setValue(60); T.spins["cpu"][1].setValue(85)
 T.spins["uptime"][0].setValue(2); T.spins["uptime"][1].setValue(5); msgs.clear(); S.save()
 check("uptime needs FAIL <= WARN", msgs and "Uptime" in msgs[-1][1], msgs)

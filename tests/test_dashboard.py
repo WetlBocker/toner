@@ -85,7 +85,7 @@ check("the attention list shows only unhealthy devices, worst first", [dash.atte
 check("it says what is wrong", "WAN Links: down: wan2" in dash.attention.item(1, 2).text() and "Temperature" in dash.attention.item(2, 2).text(), dash.attention.item(1, 2).text())
 check("last run shown", "Last run" in dash.when.text() and dash.hint.isHidden())
 check("availability bars: worst first", dash.bars.rows[0][0] == "dead" and dash.bars.rows[0][1] == 0.0 and dash.bars.rows[-1][1] == 100.0, dash.bars.rows)
-check("recent runs listed", "Recent runs" in dash.recent.text() and "OK 1" in dash.recent.text())
+check("recent runs listed (without a second heading repeating the panel title)", "Recent runs" not in dash.recent.text() and "OK 1" in dash.recent.text())
 got = []
 dash.open_device.connect(got.append); dash.goto.connect(got.append)
 dash.attention.selectRow(1); dash._open(); dash.cards["fail"].clicked.emit(); dash.cards["changes"].clicked.emit()

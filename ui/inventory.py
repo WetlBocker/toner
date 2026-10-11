@@ -7,10 +7,11 @@ from PySide6.QtGui import QFont, QIcon, QKeySequence, QPainter, QPen, QPixmap, Q
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog,
                                QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout, QInputDialog, QLabel,
                                QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSpinBox, QStyle, QTabWidget,
-                               QToolButton, QTreeWidget,
+                               QStackedWidget, QToolButton, QTreeWidget,
                                QTreeWidgetItem, QVBoxLayout, QWidget, QWidgetAction)
-from core import audit, bulk, db, display, importer, nettools, profiles, proxy, vendors
+from core import agents, audit, bulk, db, display, importer, nettools, profiles, proxy, sessions, vendors, winmon
 from ui import icons, theme
+from ui.agentfleet import AgentFleet
 from ui.snmpfields import SnmpFields
 from core.runner import run_one
 
@@ -86,6 +87,21 @@ class DeviceDialog(QDialog):
         self.proxy_port.setRange(1, 65535)
         self.proxy_port.setValue(8080)
         self.proxy_mode.currentIndexChanged.connect(lambda *_: self._proxy_rows())
+        self.win_auth = QComboBox()
+        for k, label in winmon.AUTHS:
+            self.win_auth.addItem(label, k)
+        self.win_auth.setToolTip("How Toner signs in over WinRM. Leave the user name empty to use the Windows account Toner runs as.")
+        self.win_https = QCheckBox("Use HTTPS (port 5986) instead of HTTP (port 5985)")
+        self.win_watch = QLineEdit()
+        self.win_watch.setPlaceholderText("services that must be running, e.g. DNS, NTDS, MSSQLSERVER")
+        self.win_ignore = QLineEdit()
+        self.win_ignore.setPlaceholderText("automatic services to leave out of the stopped-services check (* works at the end)")
+        self.win_script = QPushButton("Get agent script...")
+        self.win_script.setAutoDefault(False)
+        self.win_script.clicked.connect(self._agent_script)
+        self.win_note = QLabel("")
+        self.win_note.setWordWrap(True)
+        self.win_note.setProperty("muted", True)
         self.use_snmp = QCheckBox("This device also answers SNMP")
         self.snmp = SnmpFields()
         self.tags = QLineEdit()
@@ -116,6 +132,9 @@ class DeviceDialog(QDialog):
         sl.addWidget(self.snmp)
         sl.addStretch()
         self.page_more, self.more = page((("Tags", self.tags), ("Custom fields", self.fields)))
+        self.page_windows, self.win = page((("", self.win_note), ("WinRM sign-in", self.win_auth), ("", self.win_https),
+                                            ("Services to require", self.win_watch), ("Services to ignore", self.win_ignore),
+                                            ("Agent", self.win_script)))
         self.secret_label = "Password"
         self.secret_field = self.secret
         self.tabs = QTabWidget()
@@ -123,6 +142,7 @@ class DeviceDialog(QDialog):
         self.tabs.addTab(self.page_access, "Access")
         self.tabs.addTab(self.page_snmp, "SNMP")
         self.tabs.addTab(self.page_more, "Tags and fields")
+        self.tabs.addTab(self.page_windows, "Windows")
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save |
                                    QDialogButtonBox.StandardButton.Cancel)
@@ -161,6 +181,11 @@ class DeviceDialog(QDialog):
             self.proxy_host.setText(own_proxy.get("host", ""))
             self.proxy_port.setValue(int(own_proxy.get("port") or 8080))
             self.proxy_user.setText(own_proxy.get("username", ""))
+            wo = winmon.options(dev)
+            self.win_auth.setCurrentIndex(max(0, self.win_auth.findData(wo["auth"])))
+            self.win_https.setChecked(wo["https"])
+            self.win_watch.setText(winmon.names_text(wo["watch"]))
+            self.win_ignore.setText(winmon.names_text(wo["ignore"]))
             if keyring.get_password(db.SERVICE, db.secret_name(dev["name"], "proxy")):
                 self.proxy_pw.setPlaceholderText("saved; leave blank to keep")
             try:
@@ -174,6 +199,7 @@ class DeviceDialog(QDialog):
         self.snmp.set_stored(snmp_have)
         self.use_snmp.toggled.connect(lambda on: self.snmp.setEnabled(on))
         self.vendor.currentIndexChanged.connect(lambda _: self.adapt(self.vendor.currentData()))
+        self.platform.currentIndexChanged.connect(lambda _: self._windows_rows())
         self.adapt(self.vendor.currentData())
 
     def adapt(self, vendor):
@@ -185,6 +211,7 @@ class DeviceDialog(QDialog):
             self.platform.addItem(label, key)
         self.platform.setCurrentIndex(max(0, self.platform.findData(keep)))
         self.form.setRowVisible(self.platform, len(info["platforms"]) > 1)
+        self.form.labelForField(self.platform).setText("How to monitor" if vendor == "windows" else "Platform")
         self.access.setRowVisible(self.username, info["username"])
         self.access.setRowVisible(self.site, bool(info["site"]))
         self.access.setRowVisible(self.ha, info["ha"])
@@ -204,9 +231,42 @@ class DeviceDialog(QDialog):
         self.access.labelForField(self.secret).setText(info["secret"])
         self.use_snmp.setVisible(not snmp_only and login)
         self._proxy_rows()
+        self._windows_rows()
         if snmp_only:
             self.use_snmp.setChecked(True)
         self.snmp.setEnabled(self.use_snmp.isChecked())
+
+    def _windows_rows(self):
+        """Windows devices: which settings apply depends on how the computer is monitored."""
+        win = self.vendor.currentData() == "windows"
+        how = self.platform.currentData() or "agent"
+        self.tabs.setTabVisible(4, win)
+        if not win:
+            return
+        winrm = how == "winrm"
+        self.access.setRowVisible(self.username, winrm)
+        self.access.setRowVisible(self.secret, winrm)
+        self.access.setRowVisible(self.profile, winrm)
+        self.access.setRowVisible(self.verify, winrm)
+        self.win.setRowVisible(self.win_auth, winrm)
+        self.win.setRowVisible(self.win_https, winrm)
+        self.win.setRowVisible(self.win_script, how == "agent")
+        if how == "local" and not self.host.text().strip():
+            self.host.setText("localhost")
+        self.win_script.setEnabled(bool(self.dev.get("id")))
+        self.win_script.setToolTip("" if self.dev.get("id") else "Save the device first; the script is made for a saved device.")
+        self.win_note.setText({
+            "agent": "A small script on the Windows computer reports to Toner on a schedule. Nothing connects to the computer, so it works for "
+                     "laptops, computers that are not in the domain and computers behind a firewall. Turn on Settings > Agents so "
+                     "Toner can receive the reports, then create this computer's script below.",
+            "winrm": "Toner connects to the computer over WinRM (PowerShell remoting) and reads its state. Nothing is installed on it. "
+                     "Leave the user name empty on a domain to sign in as the Windows account Toner runs as; otherwise use DOMAIN\\user, "
+                     "user@domain or .\\user and a password. The account needs to be in Remote Management Users and Event Log Readers.",
+            "local": "Reads this computer directly. Nothing to set up."}[how])
+
+    def _agent_script(self):
+        from ui.winagent import AgentScriptDialog
+        AgentScriptDialog(self.dev["name"], self).exec()
 
     def _proxy_rows(self):
         able = vendors.get(self.vendor.currentData()).get("kind") in ("ssh", "api", "status")     # not SNMP / UDP / local
@@ -254,7 +314,13 @@ class DeviceDialog(QDialog):
                 "fields": text_to_fields(self.fields.toPlainText()),
                 "snmp": self.snmp.settings() if snmp_on else "",
                 "jump": {"device": self.jump.currentData()} if self.jump.currentData() else "",
-                "proxy": self._proxy_values()}
+                "proxy": self._proxy_values(), "winopts": self._win_values()}
+
+    def _win_values(self):
+        if self.vendor.currentData() != "windows":
+            return ""
+        return {"auth": self.win_auth.currentData(), "https": self.win_https.isChecked(),
+                "watch": winmon._names(self.win_watch.text()), "ignore": winmon._names(self.win_ignore.text())}
 
     def snmp_secrets(self):
         return self.snmp.secrets() if self.use_snmp.isChecked() or vendors.is_snmp(self.vendor.currentData()) else {}
@@ -281,13 +347,14 @@ class DeviceDialog(QDialog):
         dev["snmp"] = json.dumps(dev["snmp"]) if dev["snmp"] else ""
         dev["jump"] = json.dumps(dev["jump"]) if dev["jump"] else ""
         dev["proxy"] = json.dumps(dev["proxy"]) if dev["proxy"] else ""
+        dev["winopts"] = json.dumps(dev["winopts"]) if dev["winopts"] else ""
         if self.proxy_pw.text():
             dev["_proxy_secret"] = self.proxy_pw.text()
         dev["_secrets"] = {k: s for k, s in self.snmp_secrets().items() if s}        # typed but not saved yet
         QApplication.setOverrideCursor(self.cursor())
         try:
             # a test must not move the error-counter baselines that real runs compare against
-            res = run_one(dev, db.thresholds_for(dev), {**db.runtime_options(), "counter_mode": "total"})
+            res = run_one(dev, db.thresholds_for(dev), {**db.runtime_options(), "counter_mode": "total", "dry_run": True})
         finally:
             QApplication.restoreOverrideCursor()
         errs = [r for r in res if r.status == "ERROR"]
@@ -416,6 +483,7 @@ class DeviceTree(QTreeWidget):
 
 class InventoryTab(QWidget):
     changed = Signal()
+    open_agent_settings = Signal()
     open_ssh = Signal(dict)
     open_details = Signal(dict)
     COLS = ["Name", "Vendor", "Platform", "Location", "Host", "Site", "Details", "Tags", "Enabled"]
@@ -469,10 +537,65 @@ class InventoryTab(QWidget):
             self.buttons[text] = b
         bar.addStretch()
         bar.addWidget(self.filter_btn)
+        self.fleet = AgentFleet()
+        self.fleet.changed.connect(self._fleet_changed)
+        self.fleet.open_device.connect(self._open_named)
+        self.fleet.open_settings.connect(self.open_agent_settings)
+        self.stack = QStackedWidget()
+        self.stack.addWidget(self.table)
+        self.stack.addWidget(self.fleet)
+        self.view_devices, self.view_agents = QPushButton("Devices"), QPushButton("Agents")
+        for b in (self.view_devices, self.view_agents):
+            b.setCheckable(True)
+            b.setAutoExclusive(True)
+        self.view_devices.setChecked(True)
+        self.view_devices.clicked.connect(lambda: self.show_view("devices"))
+        self.view_agents.clicked.connect(lambda: self.show_view("agents"))
+        views = QHBoxLayout()
+        views.setSpacing(0)
+        views.addWidget(self.view_devices)
+        views.addWidget(self.view_agents)
+        views.addStretch()
+        self.views_w = QWidget()
+        self.views_w.setLayout(views)
+        views.setContentsMargins(0, 0, 0, 0)
+        self.bar_w = QWidget()
+        self.bar_w.setLayout(bar)
+        bar.setContentsMargins(0, 0, 0, 0)
         lay = QVBoxLayout(self)
-        lay.addLayout(bar)
-        lay.addWidget(self.table)
+        lay.addWidget(self.views_w)
+        lay.addWidget(self.bar_w)
+        lay.addWidget(self.stack)
         self.refresh()
+
+    # ---------- Devices | Agents ----------
+    def show_view(self, which):
+        """The device tree, or the computers that report through an agent. The Agents button only appears once there are some."""
+        agents_view = which == "agents" and self.view_agents.isVisibleTo(self)
+        self.stack.setCurrentWidget(self.fleet if agents_view else self.table)
+        self.view_agents.setChecked(agents_view)
+        self.view_devices.setChecked(not agents_view)
+        self.bar_w.setVisible(not agents_view)
+        if agents_view:
+            self.fleet.refresh()
+
+    def _update_views(self):
+        n = self.fleet.count()
+        silent = self.fleet.silent_count()
+        show = bool(n) or bool(db.get_setting("agent_enabled"))
+        self.view_agents.setText(f"Agents ({n})" + (f"  -  {silent} silent" if silent else "") if n else "Agents")
+        self.views_w.setVisible(show)
+        if not show and self.stack.currentWidget() is self.fleet:
+            self.show_view("devices")
+
+    def _fleet_changed(self):
+        self.refresh()
+        self.changed.emit()
+
+    def _open_named(self, name):
+        d = next((x for x in db.list_devices() if x["name"] == name), None)
+        if d:
+            self.open_details.emit(d)
 
     # ---------- building the tree ----------
     def _icon(self, name, accent=False):
@@ -598,6 +721,10 @@ class InventoryTab(QWidget):
         self.table.setCurrentItem(None)
         self.table.blockSignals(False)
         self.update_buttons()
+        if hasattr(self, "fleet"):
+            self._update_views()
+            if self.stack.currentWidget() is self.fleet:
+                self.fleet.refresh()
 
     def _build_folders(self, devs, bold):
         folders = db.list_folders()
@@ -715,6 +842,7 @@ class InventoryTab(QWidget):
             return
         if old_name and old_name != dev["name"]:
             db.move_device_secrets(old_name, dev["name"])          # password, token and SNMP secrets follow the name
+            agents.rename(old_name, dev["name"])
         if secret:
             db.set_secret(dev["name"], secret)
         for kind, value in (extra_secrets or {}).items():
@@ -756,6 +884,7 @@ class InventoryTab(QWidget):
             for d in devs:
                 db.delete_device(d["id"])
                 db.delete_device_secrets(d["name"])
+                agents.forget(d["name"])
                 audit.log("device deleted", d["name"])
             self.refresh()
             self.changed.emit()
@@ -766,6 +895,14 @@ class InventoryTab(QWidget):
         d = self.selected()
         if d:
             self.open_ssh.emit(d)
+
+    def open_rdp(self):
+        d = self.selected()
+        if d:
+            try:
+                sessions.launch_rdp(sessions.rdp_for_device(d))
+            except OSError as e:
+                QMessageBox.warning(self, "Remote Desktop", str(e))
 
     # ---------- folders ----------
     def _ask_name(self, title, label, text=""):
@@ -863,7 +1000,10 @@ class InventoryTab(QWidget):
             if len(devs) == 1 and not folders:
                 menu.addAction("Details...", self.show_details)
                 menu.addAction("Edit...", self.edit)
-                menu.addAction("Open SSH session", self.open_in_ssh)
+                if devs[0]["vendor"] == "windows":
+                    menu.addAction("Open Remote Desktop", self.open_rdp)
+                else:
+                    menu.addAction("Open SSH session", self.open_in_ssh)
             if devs:
                 menu.addAction("Edit selected..." if len(devs) > 1 else "Edit tags, folder, profile...", self.bulk_edit)
             if len(folders) == 1 and not devs:

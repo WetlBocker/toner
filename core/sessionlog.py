@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 from core import db
+from core import quiet
 
 _ESC = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b[()][A-Z0-9]|\x1b[=>78MDEHc]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
 _CTRL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
@@ -106,7 +107,7 @@ class SessionLog:
                 c.execute("UPDATE ssh_sessions SET ended_at=?, reason=?, bytes=? WHERE id=?",
                           (_now(), reason, self.bytes, self.id))
         except Exception:
-            pass
+            quiet.ignored()
 
 
 def list_sessions(limit=500):

@@ -196,6 +196,13 @@ def rdp_file_text(s):
     return "\r\n".join(lines) + "\r\n"
 
 
+def rdp_for_device(dev):
+    """A Remote Desktop session for an inventory device (a Windows computer)."""
+    from core import winmon
+    return {"name": dev["name"], "host": dev["host"], "port": 3389,
+            "username": dev.get("username") if winmon.transport(dev) == "winrm" else "", "options": {}}
+
+
 def find_mstsc():
     return shutil.which("mstsc")
 

@@ -10,7 +10,8 @@ from .paloalto import PaloAltoDriver
 from .snmpdev import SnmpDriver
 from .unifi import UnifiDriver
 from .wifi import WifiDriver
+from .windows import WindowsDriver
 
 DRIVERS = {"cisco": CiscoDriver, "fortinet": FortinetDriver, "unifi": UnifiDriver, "juniper": JuniperDriver,
            "arista": AristaDriver, "hpe": HpeDriver, "mikrotik": MikrotikDriver, "paloalto": PaloAltoDriver,
-           "meraki": MerakiDriver, "snmp": SnmpDriver, "cloud": CloudDriver, "wifi": WifiDriver}
+           "meraki": MerakiDriver, "snmp": SnmpDriver, "cloud": CloudDriver, "wifi": WifiDriver, "windows": WindowsDriver}

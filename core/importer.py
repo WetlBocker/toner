@@ -30,6 +30,11 @@ ALIASES = {
     "profile": "profile", "credential_profile": "profile", "credentials": "profile",
     "jump": "jump", "jump_host": "jump", "bastion": "jump", "proxy": "jump",
     "community": "snmp_community", "snmp_community": "snmp_community", "snmp": "snmp_community",
+    "windows_services": "win_watch", "services": "win_watch", "required_services": "win_watch",
+    "windows_ignore": "win_ignore", "ignored_services": "win_ignore", "windows_https": "win_https",
+    "windows_auth": "win_auth", "winrm_auth": "win_auth",
+    "proxy_mode": "proxy_mode", "proxy_type": "proxy_kind", "proxy_kind": "proxy_kind", "proxy_host": "proxy_host",
+    "proxy_address": "proxy_host", "proxy_port": "proxy_port", "proxy_user": "proxy_user", "proxy_username": "proxy_user",
 }
 TRUE = {"1", "true", "yes", "y", "on", "x"}
 FALSE = {"0", "false", "no", "n", "off", ""}
@@ -118,6 +123,8 @@ def normalize(raw):
     except ValueError:
         raise ValueError(f"invalid port '{text('port')}'") from None
 
+    winopts = _winopts(vendor, row, text)
+    proxy_cfg = _proxy(vendor, row, text)
     dev = {"name": name, "vendor": vendor, "host": host, "port": port, "platform": platform,
            "username": text("username"), "site": text("site") or "default",
            "location": text("location"), "details": text("details"),
@@ -125,8 +132,48 @@ def normalize(raw):
            "tags": ", ".join(db_split_tags(text("tags"))), "profile": text("profile"), "jump": text("jump"),
            "snmp_community": text("snmp_community"),
            "verify_ssl": _flag(row.get("verify_ssl"), 0), "ha_expected": _flag(row.get("ha_expected"), 0),
-           "enabled": _flag(row.get("enabled"), 1)}
+           "enabled": _flag(row.get("enabled"), 1), "winopts": winopts, "proxy": proxy_cfg}
     return dev, text("secret") or None
+
+
+def _winopts(vendor, row, text):
+    """The Windows settings of a row (services to require and ignore, HTTPS, sign-in method), or '' when there are none."""
+    from core import winmon
+    if not any(text(k) for k in ("win_watch", "win_ignore", "win_https", "win_auth")):
+        return ""
+    if vendor != "windows":
+        raise ValueError("the Windows columns (services, https, auth) only apply to vendor 'windows'")
+    auth = text("win_auth").lower() or "negotiate"
+    if auth not in dict(winmon.AUTHS):
+        raise ValueError(f"windows_auth must be one of {', '.join(dict(winmon.AUTHS))} (got '{text('win_auth')}')")
+    return {"auth": auth, "https": bool(_flag(row.get("win_https"), 0)), "watch": winmon._names(text("win_watch")),
+            "ignore": winmon._names(text("win_ignore"))}
+
+
+def _proxy(vendor, row, text):
+    """A device's own proxy (never its password, which stays in Credential Manager), or '' to use the global setting."""
+    from core import proxy as proxy_mod, vendors as vend
+    mode = text("proxy_mode").lower()
+    if not mode or mode == "default":
+        return ""
+    if mode not in ("none", "custom"):
+        raise ValueError(f"proxy_mode must be default, none or custom (got '{text('proxy_mode')}')")
+    if vend.get(vendor).get("kind") not in ("ssh", "api", "status"):
+        raise ValueError(f"{display.vendor_name(vendor)} devices do not use a proxy")
+    if mode == "none":
+        return {"mode": "none"}
+    kind = text("proxy_kind").lower() or "http"
+    if kind not in dict(proxy_mod.KINDS):
+        raise ValueError(f"proxy_type must be one of {', '.join(dict(proxy_mod.KINDS))} (got '{text('proxy_kind')}')")
+    if not text("proxy_host"):
+        raise ValueError("a custom proxy needs proxy_host")
+    try:
+        port = int(text("proxy_port") or 8080)
+        if not 1 <= port <= 65535:
+            raise ValueError
+    except ValueError:
+        raise ValueError(f"invalid proxy_port '{text('proxy_port')}'") from None
+    return {"mode": "custom", "kind": kind, "host": text("proxy_host"), "port": port, "username": text("proxy_user")}
 
 
 def finalize(dev):
@@ -151,12 +198,15 @@ def finalize(dev):
 
 
 EXPORT_COLUMNS = ["name", "vendor", "host", "platform", "port", "username", "site", "location", "details", "folder",
-                  "tags", "profile", "jump", "enabled", "verify_ssl", "ha_expected"]
+                  "tags", "profile", "jump", "enabled", "verify_ssl", "ha_expected",
+                  "windows_services", "windows_ignore", "windows_https", "windows_auth",
+                  "proxy_mode", "proxy_type", "proxy_host", "proxy_port", "proxy_user"]
 
 
 def export_rows(devices):
     """Inventory records as plain dicts for writing to a file. Secrets are never included."""
-    from core import db, profiles
+    from core import db, profiles, winmon
+    from core import proxy as proxy_mod
     paths = db.folder_paths()
     out = []
     for d in devices:
@@ -165,7 +215,15 @@ def export_rows(devices):
         except ValueError:
             jump = ""
         prof = (profiles.get(d.get("profile_id")) or {}).get("name", "")
-        out.append({"name": d["name"], "vendor": d["vendor"], "host": d["host"], "platform": d.get("platform") or "",
+        wo = winmon.options(d) if d["vendor"] == "windows" and d.get("winopts") else None
+        px = proxy_mod.device_settings(d) if d.get("proxy") else {}
+        custom_px = px.get("mode") == "custom"
+        extra = {"windows_services": ", ".join(wo["watch"]) if wo else "", "windows_ignore": ", ".join(wo["ignore"]) if wo else "",
+                 "windows_https": ("yes" if wo["https"] else "no") if wo else "", "windows_auth": wo["auth"] if wo else "",
+                 "proxy_mode": px.get("mode", "") if px.get("mode") in ("none", "custom") else "",
+                 "proxy_type": px.get("kind", "") if custom_px else "", "proxy_host": px.get("host", "") if custom_px else "",
+                 "proxy_port": px.get("port", "") if custom_px else "", "proxy_user": px.get("username", "") if custom_px else ""}
+        out.append({**extra, "name": d["name"], "vendor": d["vendor"], "host": d["host"], "platform": d.get("platform") or "",
                     "port": d.get("port") or "", "username": d.get("username") or "", "site": d.get("site") or "",
                     "location": d.get("location") or "", "details": d.get("details") or "",
                     "folder": paths.get(d.get("folder_id"), ""), "tags": d.get("tags") or "", "profile": prof,

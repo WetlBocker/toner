@@ -107,6 +107,7 @@ real_db = os.environ["NETCHECK_DB"]; os.environ["NETCHECK_DB"] = SP + r"\old%d.d
 with db.connect() as con:
     for n, g in (("one", "Lab"), ("two", "Lab"), ("three", "Rack 9"), ("four", "")):
         con.execute("INSERT INTO sessions(name, kind, group_name, host, port, options) VALUES(?,?,?,?,?,?)", (n, "ssh", g, "h", 22, "{}"))
+    con.execute("PRAGMA user_version = 0")                      # this is what a database from before numbered upgrades looks like
 db.init()
 migrated = {s["name"]: sessions.folder_paths().get(s["folder_id"], "") for s in sessions.list_sessions()}
 check("each group name became a folder, shared by its sessions; ungrouped ones stay at the top", migrated == {"one": "Lab", "two": "Lab", "three": "Rack 9", "four": ""} and len(sessions.list_folders()) == 2, migrated)

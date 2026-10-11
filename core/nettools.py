@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import paramiko
 from PySide6.QtCore import QThread, Signal
+from core import quiet
 
 # ---------- input validation ----------
 # Targets must start with a letter or digit so they can never be read as a command-line option
@@ -286,7 +287,7 @@ class SshSession(QThread):
             if self.chan:
                 self.chan.close()
         except Exception:
-            pass
+            quiet.ignored()
 
     def run(self):
         client = paramiko.SSHClient()
@@ -339,5 +340,5 @@ class SshSession(QThread):
                 try:
                     c.close()
                 except Exception:
-                    pass
+                    quiet.ignored()
             self.closed.emit(reason)

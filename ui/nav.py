@@ -9,6 +9,10 @@ from PySide6.QtWidgets import (QHBoxLayout, QLabel, QListWidget, QListWidgetItem
 from ui import icons, theme
 
 
+ITEM_HEIGHT = 36            # a row in a page list; Qt does not take the style sheet's padding into account by itself
+HEADING_HEIGHT = 44         # a group heading: the room is above it, so the heading sits close to its own items
+
+
 class NavStack(QWidget):
     currentChanged = Signal(int)
     PAGE_MARGINS = (24, 20, 24, 20)
@@ -134,7 +138,8 @@ class PageStack(QWidget):
         f.setBold(True)
         f.setPointSizeF(max(7.0, f.pointSizeF() - 2))
         item.setFont(f)
-        item.setSizeHint(QSize(0, 30))
+        item.setSizeHint(QSize(0, HEADING_HEIGHT if self.list.count() else HEADING_HEIGHT - 10))    # air above each group, none above the first
+        item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom)
         self.list.addItem(item)
 
     def addTab(self, widget, label):
@@ -147,6 +152,7 @@ class PageStack(QWidget):
         self.stack.addWidget(area)
         self._pages.append(widget)
         item = QListWidgetItem(label)
+        item.setSizeHint(QSize(0, ITEM_HEIGHT))
         self.list.addItem(item)
         self._rows.append(self.list.count() - 1)
         self._names.append(label)

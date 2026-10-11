@@ -88,11 +88,15 @@ class DiscoveryTab(QWidget):
         self.location, self.tags = QLineEdit(), QLineEdit()
         self.location.setPlaceholderText("location")
         self.tags.setPlaceholderText("tags, comma separated")
+        self.group = QComboBox()
+        for key, label in discovery.GROUPINGS:
+            self.group.addItem(label, key)
+        self.group.setToolTip("File the devices in subfolders of the folder chosen, made as needed, so a scan of a whole site comes out tidy.")
         self.add_btn = _primary("Add checked to inventory")
         self.all_btn, self.none_btn = QPushButton("Check all"), QPushButton("Check none")
         top = _row("Scan", self.target, "Communities", self.communities, "Ports", self.ports, self.go, self.stop)
         bottom = QHBoxLayout()
-        for w in (QLabel("Folder"), self.folder, QLabel("Profile"), self.profile, self.location, self.tags):
+        for w in (QLabel("Folder"), self.folder, self.group, QLabel("Profile"), self.profile, self.location, self.tags):
             bottom.addWidget(w, 1 if isinstance(w, (QLineEdit, QComboBox)) else 0)
         bottom.addWidget(self.all_btn)
         bottom.addWidget(self.none_btn)
@@ -215,7 +219,7 @@ class DiscoveryTab(QWidget):
             QMessageBox.information(self, "Discovery", "Tick the devices to add first.")
             return
         added, skipped = discovery.add_to_inventory(rows, self.folder.currentData(), self.profile.currentData(),
-                                                    self.location.text().strip(), self.tags.text().strip())
+                                                    self.location.text().strip(), self.tags.text().strip(), self.group.currentData())
         audit.log("devices added by discovery", ", ".join(added))
         msg = f"Added {len(added)} device(s)."
         if skipped:
@@ -713,7 +717,7 @@ class CommandRunnerTab(QWidget):
         self.commands.setFixedHeight(110)
         self.commands.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
         self.snippets = QComboBox()
-        self.snippets.setMinimumWidth(180)
+        self.snippets.setMinimumWidth(140)
         self.snip_save, self.snip_del = QPushButton("Save snippet..."), QPushButton("Delete snippet")
         self.safe = QCheckBox("Read-only mode")
         self.safe.setChecked(True)
@@ -735,14 +739,8 @@ class CommandRunnerTab(QWidget):
         lb.addWidget(self.all_btn)
         lb.addWidget(self.none_btn)
         left.addLayout(lb)
-        sn = QHBoxLayout()
-        for w in (QLabel("Snippets"), self.snippets, self.snip_save, self.snip_del, self.safe):
-            sn.addWidget(w)
-        sn.addStretch()
-        sn.addWidget(self.go)
-        sn.addWidget(self.stop)
         right = QVBoxLayout()
-        right.addLayout(sn)
+        right.addLayout(_row("Snippets", self.snippets, self.snip_save, self.snip_del, self.safe, self.go, self.stop))   # wraps in a narrow window
         right.addWidget(self.commands)
         right.addWidget(self.status)
         split = QSplitter(Qt.Orientation.Vertical)

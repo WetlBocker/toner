@@ -1,6 +1,6 @@
 """Everything the app knows about each supported vendor, in one place.
 
-kind      "ssh" (netmiko login) or "api" (web API)
+kind      "ssh" (netmiko login), "api" (web API), "windows" (agent, WinRM or this computer), ...
 secret    what the stored secret is called in the device dialog
 username  whether the device needs a username
 site      label for the Site field, or "" if the vendor has none
@@ -36,6 +36,9 @@ VENDORS = {
                    platforms=[], paging=""),
     "cloud": dict(name="Cloud status page", kind="status", secret="", username=False, site="", ha=False,
                   platforms=[], paging="", login=False),
+    "windows": dict(name="Windows", kind="windows", secret="Password", username=True, site="", ha=False,
+                    platforms=[("agent", "Agent (reports to Toner)"), ("winrm", "WinRM (Toner connects)"),
+                               ("local", "This computer")], paging=""),
     "wifi": dict(name="This PC's Wi-Fi", kind="local", secret="", username=False, site="", ha=False,
                  platforms=[], paging="", login=False),
 }

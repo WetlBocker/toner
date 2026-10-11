@@ -11,7 +11,7 @@ from core import db
 from drivers.base import SEVERITY
 
 _FMT = "%Y-%m-%d %H:%M:%S"
-NO_RECOVERY = {"config backup"}          # a changed configuration is news, not a fault that gets fixed
+NO_RECOVERY = {"config backup", "changes"}          # a changed configuration is news, not a fault that gets fixed
 
 
 @dataclass

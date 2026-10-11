@@ -4,10 +4,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 
-from core import custom, db, profiles
+from core import custom, db, profiles, vendors, winmon
 from core.nettools import resolve_host
 from drivers import DRIVERS
 from drivers.base import Result, ERROR
+from core import quiet
 
 
 def _transient(e):
@@ -22,17 +23,26 @@ def _transient(e):
                           requests.exceptions.Timeout) + netmiko_timeout)
 
 
+def sweepable(dev):
+    """Devices whose address answers from here: not this computer's Wi-Fi, a status page, or a Windows agent that reports by itself."""
+    kind = vendors.get(dev["vendor"]).get("kind")
+    return kind in ("ssh", "api", "snmp") or (kind == "windows" and winmon.transport(dev) == "winrm")
+
+
 def run_one(dev, thresholds, opts=None):
     opts = opts or db.runtime_options()
     attempts = 1 + max(0, int(opts.get("retries", 0)))
     for attempt in range(1, attempts + 1):
         try:
             dev = profiles.resolve(dev)      # username from the device's credential profile, if it has one
-            resolve_host(dev["host"])        # a clear DNS error beats a cryptic socket one
+            if vendors.get(dev["vendor"]).get("kind") != "windows" or winmon.needs_dns(dev):
+                resolve_host(dev["host"])    # a clear DNS error beats a cryptic socket one (an agent reports by itself)
             drv = DRIVERS[dev["vendor"]](dev, thresholds, opts)
             drv.custom = custom.for_device(dev, opts.get("custom"))        # user-defined checks that apply here
             res = drv.run()
             res += custom.run_network(dev, drv.custom)                       # web, port, certificate, ping, SNMP
+            if opts.get("tls_sweep") and sweepable(dev):
+                res += custom.sweep(dev, thresholds, opts.get("tls_sweep_ports", "443"))
             drv.flush_baselines()            # only after a complete run
             return res
         except Exception as e:
@@ -45,7 +55,7 @@ def run_one(dev, thresholds, opts=None):
                 rows += custom.run_network(dev, [c for c in custom.for_device(dev, opts.get("custom"))
                                                  if c["kind"] in ("http", "tcp", "tls", "ping", "iperf")])
             except Exception:
-                pass
+                quiet.ignored()
             return rows
 
 

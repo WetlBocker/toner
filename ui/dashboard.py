@@ -5,7 +5,9 @@ from PySide6.QtCore import QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
                                QScrollArea, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
-from core import backup, db, display, maintenance, reports
+import html
+
+from core import backup, db, display, fleet, maintenance, reports
 from ui import theme
 from ui.widgets import EmptyHint, StatusDelegate
 
@@ -138,7 +140,12 @@ class DashboardTab(QWidget):
         self.attention.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.attention.verticalHeader().setVisible(False)
         self.attention.setShowGrid(False)
-        self.attention.horizontalHeader().setStretchLastSection(True)
+        hh = self.attention.horizontalHeader()                      # the explanation takes what the others leave
+        hh.setStretchLastSection(False)
+        for col, mode in ((0, hh.ResizeMode.ResizeToContents), (1, hh.ResizeMode.ResizeToContents), (2, hh.ResizeMode.Stretch),
+                          (3, hh.ResizeMode.ResizeToContents)):
+            hh.setSectionResizeMode(col, mode)
+        self.attention.setTextElideMode(Qt.TextElideMode.ElideRight)
         self.attention.setItemDelegateForColumn(1, StatusDelegate(self.attention))
         self.attention.setMinimumHeight(230)
         self.attention.doubleClicked.connect(self._open)
@@ -171,10 +178,16 @@ class DashboardTab(QWidget):
             lay.addLayout(row)
             lay.addWidget(widget, 1)
             return f
+        self.fleet_label = QLabel("")
+        self.fleet_label.setTextFormat(Qt.TextFormat.RichText)
+        self.fleet_label.setWordWrap(True)
+        self.fleet_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self.fleet_panel = panel("Windows computers and certificates", self.fleet_label)
         left = panel("Needs attention", self.attention)
         right = QVBoxLayout()
         right.setSpacing(12)
         right.addWidget(panel("Availability", self.bars, self.period))
+        right.addWidget(self.fleet_panel)
         right.addWidget(panel("Recent activity", self.recent), 1)
         cols = QHBoxLayout()
         cols.setSpacing(12)
@@ -196,6 +209,27 @@ class DashboardTab(QWidget):
         lay.addWidget(scroll, 1)
         self.refresh()
 
+    def _fleet(self):
+        """The Windows panel: only there when there are Windows computers (or certificates running out)."""
+        s = fleet.summary()
+        self.fleet_panel.setVisible(bool(s))
+        if not s:
+            return
+        esc = html.escape
+        words = {"agent": "by agent", "winrm": "by WinRM", "local": "on this PC"}
+        how = ", ".join(f"{n} {words.get(k, k)}" for k, n in sorted(s["by"].items()))
+        lines = [f"<b>{s['computers']}</b> computer" + ("" if s["computers"] == 1 else "s") + (f" ({esc(how)})" if how else "")] if s["computers"] else []
+        found = False
+        for key, heading in fleet.SECTIONS:
+            rows = s["sections"][key]
+            if rows:
+                found = True
+                shown = "; ".join(f"{esc(d)} ({esc(t)})" if t else esc(d) for d, t in rows[:5]) + (f"; and {len(rows) - 5} more" if len(rows) > 5 else "")
+                lines.append(f"<b>{heading}</b> ({len(rows)}): {shown}")
+        if not found:
+            lines.append("Nothing needs attention.")
+        self.fleet_label.setText("<br>".join(lines))
+
     def _open(self, *_):
         r = self.attention.currentRow()
         if 0 <= r < len(self.names):
@@ -215,6 +249,7 @@ class DashboardTab(QWidget):
         self.cards["warn"].set(count("WARN"), "devices with warnings")
         self.cards["fail"].set(bad, "failing or unreachable")
         self.cards["changes"].set(len(changes), "in the last 24 hours", active=False)
+        self._fleet()
         last = db.last_run()
         held = maintenance.devices_in_maintenance()
         self.when.setText((f"   Last run {last['started_at']}" if last else "   No checks run yet")
@@ -231,8 +266,9 @@ class DashboardTab(QWidget):
             if name in held:
                 what = "(maintenance) " + what
             for j, text in enumerate([name, v["status"], what, v["at"]]):
-                self.attention.setItem(i, j, QTableWidgetItem(text))
-        self.attention.resizeColumnsToContents()
+                item = QTableWidgetItem(text)
+                item.setToolTip(text)
+                self.attention.setItem(i, j, item)
         self.hint.setVisible(not problems)
         self.hint.findChildren(QLabel)[0].setText("Nothing needs attention" if health else "No results yet")
         self.hint.findChildren(QLabel)[1].setText("Every device's latest checks are OK" if health
@@ -250,7 +286,7 @@ class DashboardTab(QWidget):
                 for c in changes[:6]))
         runs = db.list_runs(5)
         if runs:
-            parts.append("<b>Recent runs</b><br>" + "<br>".join(
+            parts.append(("<b>Runs</b><br>" if changes else "") + "<br>".join(
                 f"<span style='color:gray'>{r['started_at']}</span> &nbsp; OK {r['ok']} &nbsp; WARN {r['warn']} &nbsp; "
                 f"FAIL {r['fail']} &nbsp; ERROR {r['error']}" for r in runs))
         self.recent.setText("<br><br>".join(parts) or "Nothing has happened yet.")

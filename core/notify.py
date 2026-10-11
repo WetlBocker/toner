@@ -19,6 +19,7 @@ import requests
 
 from core import alerts, db, display, maintenance, proxy
 from drivers.base import SEVERITY
+from core import quiet
 
 MAX_LINES = 40
 MIN_LEVELS = {"WARN and worse": 1, "FAIL and ERROR only": 2, "ERROR only": 3}
@@ -102,7 +103,7 @@ def delete_secrets(ch):
             try:
                 keyring.delete_password(db.SERVICE, _secret_name(ch["id"], key))
             except Exception:
-                pass
+                quiet.ignored()
 
 
 def validate(ch, secrets):
@@ -357,6 +358,23 @@ def process_run(results, ran, scheduled, desktop=None, retry_delay=2):
     if attempted and not delivered:                # nobody got it: announce again next run
         alerts.unmark(events)
     return f"{delivered}/{attempted} channels"
+
+
+def announce(device, check, value, message, status="WARN", desktop=None):
+    """Tell the notification channels about something that is not a failing check (a computer signed itself up, a
+    certificate is running out). Honours Settings > Notifications (on, snoozed, each channel's level) and leaves the alert
+    state alone. Returns how many channels got it."""
+    if not db.get_setting("notify_enabled") or snoozed():
+        return 0
+    e = alerts.Event("new", device, check, status, "OK", value, message)
+    org = db.get_setting("report_org").strip()
+    sent = 0
+    for ch in channels():
+        if ch.get("enabled", True) and wants(ch, e):
+            ok, detail = deliver(ch, build_message([e], org), desktop)
+            alerts.log_delivery(ch["name"], ok, 1, detail)
+            sent += ok
+    return sent
 
 
 def send_test(ch, secrets=None, desktop=None):

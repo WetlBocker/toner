@@ -11,6 +11,7 @@ import time
 from dataclasses import dataclass
 
 from core import nettools
+from core import quiet
 
 VERSIONS = [("SNMP v2c", "2c"), ("SNMP v1", "1"), ("SNMP v3", "3")]
 LEVELS = ["noAuthNoPriv", "authNoPriv", "authPriv"]
@@ -286,7 +287,7 @@ async def _query(host, port, creds, op, oids, timeout, retries, max_rows, cancel
         try:
             engine.close_dispatcher()
         except Exception:
-            pass
+            quiet.ignored()
     return out
 
 
@@ -439,11 +440,11 @@ class Client:
         try:
             self.engine.close_dispatcher()
         except Exception:
-            pass
+            quiet.ignored()
         try:
             self.loop.close()
         except Exception:
-            pass
+            quiet.ignored()
 
     def __enter__(self):
         return self

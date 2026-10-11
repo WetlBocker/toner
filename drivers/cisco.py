@@ -2,6 +2,7 @@ import re
 from netmiko import ConnectHandler
 from .base import Driver, OK, WARN, FAIL, grade_low
 from .sshbase import Recorder
+from core import quiet
 
 _UPTIME_UNITS = {"year": 8760, "week": 168, "day": 24, "hour": 1, "minute": 1 / 60}
 
@@ -19,7 +20,7 @@ class CiscoDriver(Driver):
             try:
                 c.enable()
             except Exception:
-                pass
+                quiet.ignored()
             for name, fn in (("cpu", self.cpu), ("memory", self.memory), ("uptime", self.uptime),
                              ("interfaces", self.interfaces), ("bgp", self.bgp), ("ospf", self.ospf)):
                 if self.enabled(name):

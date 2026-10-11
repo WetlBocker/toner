@@ -43,6 +43,14 @@ inventory), subnet calculator, device discovery, topology map from LLDP / CDP, S
 interface table and rates, neighbours), syslog and trap receivers, MAC lookup and Wake-on-LAN, a TFTP server and an SFTP
 server (see below), and an iperf3 throughput test.
 
+**OpenSSL** (Tools > Certificates) works without installing anything, using the same OpenSSL code as the command line.
+*Create* makes a private key (RSA 2048/3072/4096, ECDSA P-256/P-384, Ed25519), a certificate request (CSR) with alternative
+names, or a self-signed or CA certificate, and can reuse a key you already have. *Read* describes any certificate, request,
+key, DER file or .pfx (names, dates, key, fingerprints), tells you whether a key belongs to a certificate, and can fetch what a
+server presents. *Convert* goes between PEM, DER and .pfx and adds or removes a key's passphrase. *Hash and random* does
+digests, base64 and random bytes. *openssl.exe* runs the real command-line program for anything else, if the computer has one
+(Git for Windows includes it). Toner stores none of the keys or results: copy or save them.
+
 **File servers.** TFTP and SFTP serve one folder you choose, nothing outside it, and are off until you start them.
 They are read-only until you tick "Allow uploads", replacing or deleting files needs a second tick, you can limit them to
 the devices you name, and they stop themselves after a time you set. Every transfer is listed on screen, and starts,
@@ -83,8 +91,56 @@ page built on Atlassian Statuspage) to get its overall status, affected componen
 results, history and alerts as your own devices. Microsoft 365 is not included: its service health is only available
 through an authenticated Microsoft Graph app registration.
 
+**Windows monitoring.** Add a device with Vendor **Windows** and choose how to monitor it:
+
+- **Agent**: a small program on the Windows computer reports to Toner over HTTPS every few minutes. Nothing connects to the
+  computer, so it suits laptops, computers outside the domain and anything behind a firewall. In Settings > **Agents** turn on
+  "Receive reports" (Toner listens on port 8750 while it is running, in the tray is fine) and "Let computers sign themselves up",
+  save, then **Download agent package**. Copy the zip to the Windows computer, unzip it and double-click
+  **Install-TonerAgent.cmd** (it asks for administrator permission). The computer signs itself up and appears in the Inventory
+  under its own name. The same package works for every computer. It installs as a scheduled task running as SYSTEM in
+  `C:\ProgramData\Toner Agent`, and only sends: it opens no port and takes no commands. Toner is identified by its certificate's
+  fingerprint, built into the package (no certificate authority to set up), and each computer gets its own token. The package
+  holds a sign-up key, so keep it private and turn sign-up off when you are done (a new key makes old packages useless).
+  To set up one computer by hand instead: add a Windows device with How to monitor: Agent, then its Windows tab > Get agent
+  script. A computer that stops reporting turns into a warning, then a failure ("last report 3.0 h ago").
+  Inventory > **Agents** (a Devices | Agents switch above the device list) lists every computer that reports through an
+  agent (system, last report, age, agent version, notes such as "silent" or "reboot pending"), and can **Revoke** an agent or
+  **Remove** the computer. The receiver, package, sign-up key and certificate stay in Settings > Agents. A package agent **updates itself** when Toner has a
+  newer script, and can be given a **new token every N days** (the old one keeps working for a week, so nothing is locked
+  out). Toner tells your notification channels when a computer signs itself up that you did not add, and warns when the
+  agent certificate is within 90 days of expiring. Each report is also stored as a point for the History charts.
+- **WinRM**: Toner connects to the computer over PowerShell remoting and nothing is installed on it. Leave the user name empty
+  to sign in as the Windows account Toner runs as (domain single sign-on), or give `DOMAIN\user`, `user@domain` or `.\user`
+  and a password (saved in Credential Manager). HTTP (5985) is encrypted by the sign-in; HTTPS (5986) is also available. The
+  server needs `Enable-PSRemoting`, the firewall open, and an account in Remote Management Users and Event Log Readers.
+- **This computer**: reads the computer Toner is running on.
+
+All three produce the same checks (plus **Changes**: what was installed or removed, who became or stopped being a local
+administrator, and which ports started or stopped listening since the previous check, reported once each): CPU, memory, disk space (fullest volume, every volume in the details), uptime and recent
+reboots, pending reboot, services (automatic services that are stopped, ignoring trigger-start and per-user services;
+plus a list of services that must be running, which fail), Critical and Error events in the last 24 hours, certificates in
+the machine store about to expire, and days since an update was installed. Limits are in Settings > Thresholds, and each check
+can be switched off in Settings > Checks. Remote Desktop is one click from the device's menu and window. Proxies and jump
+hosts do not apply to Windows devices. The 5985 and 5986 ports are in the default scan list, so discovery suggests Windows
+computers.
+
+**Certificates.** Settings > Automation > "Also check the HTTPS certificate of every device" adds a certificate row (days left)
+to every run for each device that answers TLS on the ports you list; it warns at 30 days and fails at 7 (Settings >
+Thresholds). Devices with nothing listening there are skipped. The Overview has a panel for Windows computers and any
+certificate running out: computers not reporting, waiting for a reboot, with filling disks, behind on updates, or changed.
+
+**Trend report.** Reports > Trend report (7, 30 or 90 days) compares the period with the one before: availability, worst
+offenders, what keeps failing, what is still wrong, configuration changes, and the Windows computers' busiest CPUs and
+growing disks. Save it as PDF, HTML or CSV. Settings > Reports can make one every week or month into the default folder
+(a PDF from the window, HTML from the background service).
+
+**Saved passwords.** Passwords live in Windows Credential Manager, which belongs to one computer. Settings > Data and logs >
+Export saved passwords writes them all to one file encrypted with a password you choose (scrypt and AES-256-GCM);
+Import saved passwords restores them on another computer, so a portable copy can have its passwords too.
+
 **Settings**: thresholds (with per-vendor, folder, tag and device overrides), which checks run, custom checks, timeouts,
-automation, config backups, notifications (email, Teams, Slack, Discord, ntfy, webhook, desktop), credential profiles,
+automation, config backups, notifications (email, Teams, Slack, Discord, ntfy, webhook, desktop; each with its service's mark in the list), credential profiles,
 appearance, terminal, reports, security (host keys), audit log, data and logs.
 
 Press **Ctrl+K** anywhere to jump to a section, tool, device or action. Ctrl+1 to Ctrl+8 switch sections.
@@ -105,6 +161,7 @@ Press **Ctrl+K** anywhere to jump to a section, tool, device or action. Ctrl+1 t
 | Generic SNMP (anything else) | SNMP v1/v2c/v3 | reachability, CPU, memory, storage, uptime, temperature, interfaces, errors, utilisation |
 | Cloud status page | public Statuspage JSON, no login | overall status, components, open incidents |
 | This PC's Wi-Fi | `netsh wlan`, no login | connection, signal strength, link speed |
+| Windows | agent, WinRM (PowerShell remoting) or this computer | CPU, memory, disks, uptime, pending reboot, services, event errors, certificate expiry, update age |
 
 Configuration backup: Cisco, Juniper, Arista, HPE, MikroTik (SSH), Fortinet and Palo Alto (API).
 
@@ -126,6 +183,21 @@ be fixed from a real sample.
 `service` uses the schedules from Settings > Automation and Config backups, so it can run from Task Scheduler or any
 service wrapper. In the desktop app, **Settings > General > Keep running in the system tray** does the same while the
 window is closed.
+
+The installed program does the same without Python: `Toner.exe cli service`, `Toner.exe cli run --json`, and so on (output
+goes to the console that started it, or to `toner-service.log` in the data folder when there is none, as under Task
+Scheduler). The service also runs the **agent receiver** when it is turned on in Settings > Agents, makes the scheduled
+trend report, and watches the agent certificate, so a server can collect Windows reports with nobody logged in. It uses the
+data folder and Credential Manager of the account it runs as, so run it as the same account you set Toner up with.
+
+## Development
+
+`requirements.lock` pins every package Toner was tested and built with (`pip install -r requirements.lock`);
+`requirements.txt` lists the direct dependencies. GitHub Actions (`.github/workflows`) runs the tests on every push and pull
+request, and builds and publishes the installer when you push a tag such as `v1.3.0` (it must match `core/version.py`).
+To sign the installer, give the build `SIGN_PFX` (a code-signing certificate) and `SIGN_PASSWORD`; in CI add the
+`SIGN_PFX_BASE64` and `SIGN_PASSWORD` secrets. `docs/validation-checklist.md` is a ten-minute check to run against your own
+equipment. Set the `TONER_DEBUG` environment variable to see harmless, normally hidden errors in `toner.log`.
 
 ## Tests
 

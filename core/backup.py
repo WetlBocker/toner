@@ -13,6 +13,7 @@ from datetime import datetime
 
 from core import db
 from drivers.base import Result, OK, WARN, ERROR
+from core import quiet
 
 CHECK_NAME = "config backup"
 
@@ -134,7 +135,7 @@ def fetch(dev, opts=None):
         try:
             c.enable()
         except Exception:
-            pass
+            quiet.ignored()
         return c.send_command(cmd, read_timeout=max(120, opts["ssh_timeout"] * 4))
 
 

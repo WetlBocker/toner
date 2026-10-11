@@ -3,6 +3,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from core import db, profiles, vendors
+from core import quiet
 
 # first words of commands that only read; everything else needs the operator's explicit say-so
 READ_ONLY = ("show", "display", "get", "ping", "traceroute", "tracert", "dir", "more", "list", "monitor", "diagnose",
@@ -40,7 +41,7 @@ def run_on_device(dev, commands, opts=None, read_timeout=60):
             try:
                 c.enable()
             except Exception:
-                pass
+                quiet.ignored()
             for cmd in commands:
                 out["outputs"].append((cmd, c.send_command(cmd, read_timeout=read_timeout)))
         out["ok"] = True

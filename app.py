@@ -8,7 +8,7 @@ from pathlib import Path
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence, QPainter, QPixmap, QShortcut
 from PySide6.QtWidgets import QApplication, QMainWindow, QMenu, QMessageBox, QSystemTrayIcon
-from core import audit, db, notify, paths, reports, sessionlog, sessions
+from core import agents, audit, db, notify, paths, reports, sessionlog, sessions, trends
 from ui import theme
 from ui.about import AboutTab
 from ui.configs import ConfigsTab
@@ -38,7 +38,7 @@ def setup_logging():
     handler = RotatingFileHandler(data_dir() / "toner.log", maxBytes=1_000_000, backupCount=3, encoding="utf-8")
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
     log.addHandler(handler)
-    log.setLevel(logging.INFO)
+    log.setLevel(logging.DEBUG if os.environ.get("TONER_DEBUG") else logging.INFO)
 
     def hook(kind, value, tb):
         text = "".join(traceback.format_exception(kind, value, tb))
@@ -119,6 +119,7 @@ class Main(QMainWindow):
         self.inventory.changed.connect(self.settings.refresh_dynamic)
         self.inventory.open_ssh.connect(self.open_ssh_console)
         self.inventory.open_details.connect(self.open_device_view)
+        self.inventory.open_agent_settings.connect(self.open_agent_settings)
         self.results.open_device.connect(self.open_device_by_name)
         self.dashboard.open_device.connect(self.open_device_by_name)
         self.dashboard.goto.connect(self.go)
@@ -145,6 +146,12 @@ class Main(QMainWindow):
         self.scheduler.apply(first=True)
         self.backup_scheduler.apply(first=True)
         self.update_tray()
+        agents.apply()                                  # the Windows agent receiver, if it is turned on
+        self.housekeeping = QTimer(self)                # things that happen now and then: a scheduled trend report, the agent certificate
+        self.housekeeping.setInterval(30 * 60 * 1000)
+        self.housekeeping.timeout.connect(self.do_housekeeping)
+        self.housekeeping.start()
+        QTimer.singleShot(5000, self.do_housekeeping)
 
     # ---------- navigation
     def go(self, section):
@@ -172,6 +179,10 @@ class Main(QMainWindow):
         widget = {"ping": self.tools.liveping, "snmp": self.tools.snmp, "tls": self.tools.tls, "mtr": self.tools.mtr}[name]
         self.tabs.setCurrentWidget(self.tools)
         self.tools.show_tool(widget, dev)
+
+    def open_agent_settings(self):
+        self.go("Settings")
+        self.settings.select_page("Agents")
 
     def open_device_by_name(self, name):
         dev = next((d for d in db.list_devices() if d["name"] == name), None)
@@ -264,6 +275,18 @@ class Main(QMainWindow):
         self.dashboard.refresh()
         self.notifier.handle_run(results, ran, scheduled)
 
+    def do_housekeeping(self):
+        try:
+            if trends.due():
+                path = trends.generate_scheduled()
+                if path:
+                    log.info("Trend report saved to %s", path)
+                    audit.log("trend report made", path)
+            if agents.running():
+                agents.check_cert()
+        except Exception:
+            log.exception("housekeeping failed")
+
     def settings_applied(self):
         """Make a saved (or imported) settings change take effect everywhere, without a restart."""
         apply_look(QApplication.instance())
@@ -276,6 +299,7 @@ class Main(QMainWindow):
         self.sessions.apply_settings()
         self.scheduler.apply()
         self.backup_scheduler.apply()
+        agents.apply()
         self.results.refresh_groups()
         self.dashboard.refresh()
 
@@ -294,12 +318,43 @@ class Main(QMainWindow):
         self.tools.shutdown()          # stop any running ping/scan/transfer before exiting
         self.sessions.shutdown()       # close every open terminal and finish its log
         self.configs.shutdown()
+        agents.stop()
         self.about.apply_on_exit()     # a downloaded update installs as Toner closes, if automatic updating is on
         self.about.shutdown()
         super().closeEvent(event)
 
 
+def console_streams():
+    """Toner.exe has no console of its own (it is a window program). When it runs `cli ...` it borrows the one it was started from;
+    with none (Task Scheduler, a service wrapper) its output goes to toner-service.log in the data folder instead."""
+    if sys.stdout is not None and sys.stderr is not None:
+        return None
+    try:
+        import ctypes
+        import msvcrt
+        handle = ctypes.windll.kernel32.GetStdHandle(-11)             # output that was redirected to a file or pipe (> file, a service wrapper)
+        if handle not in (None, 0, ctypes.c_void_p(-1).value):
+            sys.stdout = sys.stderr = os.fdopen(msvcrt.open_osfhandle(handle, os.O_WRONLY), "w", encoding="utf-8", errors="replace", buffering=1)
+            return "redirected"
+        if ctypes.windll.kernel32.AttachConsole(-1):                 # the console of the program that started us
+            sys.stdout = sys.stderr = open("CONOUT$", "w", encoding="utf-8", errors="replace", buffering=1)
+            return "console"
+    except Exception:
+        pass
+    sys.stdout = sys.stderr = open(data_dir() / "toner-service.log", "a", encoding="utf-8", errors="replace", buffering=1)
+    return "log"
+
+
+def run_cli(args):
+    """`Toner.exe cli service` and friends: Toner without a window (see cli.py), including the agent receiver."""
+    console_streams()
+    import cli
+    return cli.main(args)
+
+
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "cli":
+        sys.exit(run_cli(sys.argv[2:]))
     setup_logging()
     db.init()
     sessionlog.purge(int(db.get_setting("ssh_log_days")))

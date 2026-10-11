@@ -3,6 +3,7 @@ import getpass
 from datetime import datetime, timedelta
 
 from core import db
+from core import quiet
 
 
 def actor():
@@ -19,7 +20,7 @@ def log(action, detail="", who=None):
             c.execute("INSERT INTO audit(at, actor, action, detail) VALUES(?,?,?,?)",
                       (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), who or actor(), action, str(detail)[:2000]))
     except Exception:
-        pass
+        quiet.ignored()
 
 
 def recent(limit=500, text=""):

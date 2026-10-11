@@ -74,7 +74,8 @@ class AutoDialog(ST.ChannelDialog):
         if "name" in self.fill_meta: self.name.setText(self.fill_meta["name"])
         self.accept(); return 1 if self.result_ch else 0
     fill_meta = {}
-ST.ChannelDialog = AutoDialog
+import ui.settings_pages.notifications as _NT                 # the page looks the dialog up where it is defined
+_NT.ChannelDialog = ST.ChannelDialog = AutoDialog
 AutoDialog.fill, AutoDialog.fill_meta = {"url": base + "/hook-one"}, {"name": "Ops webhook"}
 N.add_channel("webhook"); chs = notify.channels()
 check("add: channel listed and stored", len(chs) == 1 and chs[0]["name"] == "Ops webhook" and N.table.rowCount() == 1 and N.table.item(0, 1).text() == "Ops webhook")

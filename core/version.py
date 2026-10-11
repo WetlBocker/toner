@@ -1,7 +1,7 @@
 """The one place the version lives. packaging\\build.ps1 reads it, so the installer, the About page and the update
 check always agree. Raise it before building a release."""
 APP_NAME = "Toner"
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 REPO = "WetlBocker/toner"                       # GitHub owner/name that releases are published to
 URL = f"https://github.com/{REPO}"
 LICENSE = "GNU General Public License v3.0"

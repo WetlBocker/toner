@@ -150,6 +150,15 @@ class Daemon:
         """Run whatever is due. Returns a list of what it did (for tests and the log)."""
         now = now or datetime.now()
         did = []
+        try:
+            from core import trends
+            if trends.due(now):
+                path = trends.generate_scheduled(now)
+                if path:
+                    did.append(("trend report", path))
+                    self.log(f"{now:%Y-%m-%d %H:%M:%S} trend report: {path}")
+        except Exception as e:
+            self.log(f"trend report failed: {type(e).__name__}: {e}")
         if self.next_checks and now >= self.next_checks:
             groups = _groups_alive(db.get_setting("schedule_groups"))
             if groups is not None:
@@ -172,6 +181,15 @@ class Daemon:
             self.next_checks = datetime.now()
         if db.get_setting("backup_enabled") and db.get_setting("backup_on_start"):
             self.next_backup = datetime.now()
+        from core import agents
+        err = agents.apply()
+        if db.get_setting("agent_enabled"):
+            self.log(f"Agent receiver: {'could not start: ' + err if err else 'listening on port ' + str(agents.status()['port'])}")
+            if not err:
+                try:
+                    agents.check_cert()
+                except Exception as e:
+                    self.log(f"agent certificate check failed: {e}")
         self.log("Toner service started. "
                  + ("Checks every %s min. " % db.get_setting("schedule_minutes") if self.next_checks else "Scheduled checks are off (Settings > Automation). ")
                  + ("Backups every %s h." % db.get_setting("backup_hours") if self.next_backup else "Scheduled backups are off."))
@@ -184,3 +202,5 @@ class Daemon:
 
     def stop(self):
         self.stop_event.set()
+        from core import agents
+        agents.stop()

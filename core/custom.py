@@ -232,6 +232,28 @@ def run_tls(chk, dev, timeout=8):
     return Result(dev["name"], chk["name"], status, f"{days} days", msg, numeric=float(days))
 
 
+def sweep_ports(text):
+    """'443, 8443' -> [443, 8443] (bad entries are dropped)."""
+    out = []
+    for part in re.split(r"[,\s;]+", text or ""):
+        if part.isdigit() and 0 < int(part) < 65536 and int(part) not in out:
+            out.append(int(part))
+    return out or [443]
+
+
+def sweep(dev, thresholds, ports="443", timeout=3):
+    """The certificate sweep: for each port, if the device answers TLS there, how long its certificate has left. A port that does
+    not answer is not a problem (not every device has a web page), so it adds no row."""
+    t = thresholds.get("cert_days", {"warn": 30, "fail": 7})
+    out = []
+    for port in sweep_ports(ports):
+        name = "certificate" if port == 443 else f"certificate :{port}"
+        r = run_tls({"name": name, "port": port, "warn": t["warn"], "fail": t["fail"]}, dev, timeout=timeout)
+        if r.value != "no certificate":
+            out.append(r)
+    return out
+
+
 def cert_info(der):
     """Subject, issuer, validity, SANs and days left for a DER certificate."""
     from cryptography import x509

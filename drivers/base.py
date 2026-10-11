@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Optional
 from core import checks, db, profiles
+from core import quiet
 
 OK, WARN, FAIL, ERROR = "OK", "WARN", "FAIL", "ERROR"
 SEVERITY = {OK: 0, WARN: 1, FAIL: 2, ERROR: 3}
@@ -109,7 +110,7 @@ class Driver:
             body = "\n\n".join(f"$ {cmd}\n{out}" for cmd, out in self.transcript.items())
             db.save_diagnostic(self.name, check, backup.clean(body, mask=True))
         except Exception:
-            pass
+            quiet.ignored()
 
     def run(self) -> list:
         raise NotImplementedError
