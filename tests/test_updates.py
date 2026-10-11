@@ -170,7 +170,7 @@ check("the build reads the version from the one place", "core.version" in open(o
 
 # ================================================================ what is running
 print("== what is running")
-check("from source, it is not able to update itself", updates.installed_kind() == "source" and not updates.can_self_update() and updates.app_dir().endswith("netcheck"))
+check("from source, it is not able to update itself", updates.installed_kind() == "source" and not updates.can_self_update() and os.path.normcase(updates.app_dir()) == os.path.normcase(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))      # whatever the project folder is called
 fake_dir = os.path.join(SP, "prog%d" % int(time.time())); os.makedirs(fake_dir); open(os.path.join(fake_dir, "Toner.exe"), "wb").close()
 sys.frozen = True; saved_exe = sys.executable; sys.executable = os.path.join(fake_dir, "Toner.exe")
 check("a frozen copy with neither an uninstaller nor the portable marker is 'unpacked', and cannot update itself", updates.installed_kind() == "unpacked" and not updates.can_self_update())
