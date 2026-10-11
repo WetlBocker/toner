@@ -21,6 +21,7 @@ jobs:
           $out = python -m pyflakes core drivers ui app.py cli.py
           $bad = $out | Where-Object { $_ -match 'undefined name|redefinition of unused|syntax' }
           if ($bad) { $bad; exit 1 }
+          exit 0                                  # pyflakes exits 1 for harmless unused imports; only the patterns above fail the build
       - name: Run the test suite
         env:
           QT_QPA_PLATFORM: offscreen
