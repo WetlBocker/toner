@@ -106,8 +106,8 @@ through an authenticated Microsoft Graph app registration.
   script. A computer that stops reporting turns into a warning, then a failure ("last report 3.0 h ago").
   Inventory > **Agents** (a Devices | Agents switch above the device list) lists every computer that reports through an
   agent (system, last report, age, agent version, notes such as "silent" or "reboot pending"), and can **Revoke** an agent or
-  **Remove** the computer. The receiver, package, sign-up key and certificate stay in Settings > Agents. A package agent **updates itself** when Toner has a
-  newer script, and can be given a **new token every N days** (the old one keeps working for a week, so nothing is locked
+  **Remove** the computer. The receiver, package, sign-up key and certificate stay in Settings > Agents. A package agent **updates itself** when Toner is newer than it: the
+  agent always has Toner's version number (Toner 1.3.4 means agent 1.3.4), and can be given a **new token every N days** (the old one keeps working for a week, so nothing is locked
   out). Toner tells your notification channels when a computer signs itself up that you did not add, and warns when the
   agent certificate is within 90 days of expiring. Each report is also stored as a point for the History charts.
 - **WinRM**: Toner connects to the computer over PowerShell remoting and nothing is installed on it. Leave the user name empty
@@ -138,6 +138,11 @@ growing disks. Save it as PDF, HTML or CSV. Settings > Reports can make one ever
 **Saved passwords.** Passwords live in Windows Credential Manager, which belongs to one computer. Settings > Data and logs >
 Export saved passwords writes them all to one file encrypted with a password you choose (scrypt and AES-256-GCM);
 Import saved passwords restores them on another computer, so a portable copy can have its passwords too.
+
+**Per-device checks and thresholds**: Edit device > Checks lets one device run its own list of checks and use its own WARN/FAIL limits. A device with
+nothing set there follows Settings > Checks and Settings > Thresholds, and its own limits beat the overrides in Settings. On a Windows device, **Choose...**
+beside the service fields lists the computer's services (asked live over WinRM or on this PC; from the last report for an agent) so you tick the ones
+that must be running or that may be stopped, instead of typing names.
 
 **Settings**: thresholds (with per-vendor, folder, tag and device overrides), which checks run, custom checks, timeouts,
 automation, config backups, notifications (email, Teams, Slack, Discord, ntfy, webhook, desktop; each with its service's mark in the list), credential profiles,

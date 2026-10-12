@@ -1,4 +1,5 @@
 import math
+from datetime import datetime, timedelta
 
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen
@@ -32,10 +33,49 @@ def fmt_value(check, v):
     return plain(v, 2)
 
 
+def is_uptime(check):
+    return check.split(" (")[0] == "uptime"
+
+
+def uptime_axis(peak_hours):
+    """Grid lines for an uptime chart at round numbers of hours or days: [(hours, label)], the last one at or above the peak."""
+    steps = (1, 2, 3, 6, 12, 24, 48, 72, 168, 336, 720, 1440, 2160, 4320, 8760)      # an hour up to a year
+    want = max(float(peak_hours) * 1.05, 1.0)
+    step = next((s for s in steps if want / s <= 5), math.ceil(want / 5 / 8760) * 8760)
+    top = math.ceil(want / step) * step
+    label = (lambda h: f"{h:g} h") if step < 24 else (lambda h: f"{h / 24:g} d")
+    return float(top), [(k * step, label(k * step)) for k in range(int(round(top / step)) + 1)]
+
+
+def restarts(points):
+    """The times a device restarted: where its uptime fell from one run to the next. [(time, uptime before, uptime after)]."""
+    out = []
+    for (_, before), (stamp, after) in zip(points, points[1:]):
+        if after < before - 0.02:                         # more than a minute less than last time
+            out.append((stamp, before, after))
+    return out
+
+
+def uptime_caption(points):
+    """'Up for 27:12:03:45, since 2026-09-14 08:12. Restarted 2 times in this period.' for one device's uptime."""
+    if not points:
+        return ""
+    stamp, hours = points[-1]
+    text = f"Up for {display.uptime(hours)}"
+    try:
+        text += ", since " + (datetime.strptime(stamp, "%Y-%m-%d %H:%M:%S") - timedelta(hours=hours, seconds=-30)).strftime("%Y-%m-%d %H:%M")
+    except ValueError:
+        pass
+    n = len(restarts(points))
+    return text + (f".  Restarted {n} time{'s' if n != 1 else ''} in this period." if n else ".  No restarts in this period.")
+
+
 def scale_key(check, points):
     """Checks that can share one vertical axis: all the percentages, then plain numbers by order of magnitude."""
     if is_percent(check):
         return (0, 0)
+    if is_uptime(check):
+        return (2, 0)                                      # uptime is a time, not a count: its own chart, in days
     peak = max((abs(v) for _, v in points), default=0)
     return (1, int(math.floor(math.log10(peak))) if peak >= 1 else 0)
 
@@ -43,6 +83,8 @@ def scale_key(check, points):
 def scale_title(key):
     if key[0] == 0:
         return "Percent"
+    if key[0] == 2:
+        return "Uptime (days:hours:minutes:seconds)"
     lo = 10 ** key[1]
     return "Values up to 10" if key[1] == 0 else f"Values {lo:,} to {lo * 10:,}"
 
@@ -130,7 +172,12 @@ class TrendChart(QWidget):
 
         allpct = all(is_percent(c) for c, _, _ in self.series)
         peak = max(v for _, pts, _ in self.series for _, v in pts)
-        hi = 100.0 if allpct else (peak * 1.1 or 1.0)
+        only_uptime = all(is_uptime(c) for c, _, _ in self.series)
+        if only_uptime:
+            hi, grid = uptime_axis(peak)                         # round days, so the lines read as 7 d, 14 d, 21 d
+        else:
+            hi = 100.0 if allpct else (peak * 1.1 or 1.0)
+            grid = [(hi * f, f"{hi * f:.0f}" if hi >= 10 else f"{hi * f:.1f}") for f in (0, 0.25, 0.5, 0.75, 1)]
         y = lambda v: r.bottom() - (min(max(v, 0), hi) / hi) * r.height()
         stamps = sorted({s for _, pts, _ in self.series for s, _ in pts})     # runs, evenly spaced in time order
         pos = {s: i for i, s in enumerate(stamps)}
@@ -138,13 +185,21 @@ class TrendChart(QWidget):
         x = lambda s: r.left() + (pos[s] / (n - 1) if n > 1 else 0.5) * r.width()
         self._geom = {"rect": r, "stamps": stamps, "x": x}
 
-        for frac in (0, 0.25, 0.5, 0.75, 1):                      # light horizontal grid with labels
+        for value, label in grid:                                 # light horizontal grid with labels
             p.setPen(QPen(border, 1))
-            p.drawLine(QPointF(r.left(), y(hi * frac)), QPointF(r.right(), y(hi * frac)))
+            p.drawLine(QPointF(r.left(), y(value)), QPointF(r.right(), y(value)))
             p.setPen(muted)
-            p.drawText(QRectF(0, y(hi * frac) - 9, 46, 18),
-                       Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                       f"{hi * frac:.0f}" if hi >= 10 else f"{hi * frac:.1f}")
+            p.drawText(QRectF(0, y(value) - 9, 46, 18), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, label)
+        if only_uptime:                                           # a drop in uptime is a restart: mark where, behind the lines
+            red = QColor("#ef4444")
+            for _c, points, color in self.series:
+                for stamp, _before, _after in restarts(points):
+                    red.setAlpha(150)
+                    p.setPen(QPen(red, 1.4, Qt.PenStyle.DashLine))
+                    p.drawLine(QPointF(x(stamp), r.top()), QPointF(x(stamp), r.bottom()))
+                    if not many:
+                        p.setPen(red)
+                        p.drawText(QPointF(min(x(stamp) + 5, r.right() - fm.horizontalAdvance("restart") - 2), r.top() + 13), "restart")
         if self.th and allpct:
             for key, c in (("warn", "#e6b800"), ("fail", "#d32f2f")):
                 p.setPen(QPen(QColor(c), 1.2, Qt.PenStyle.DashLine))
@@ -195,8 +250,12 @@ class TrendChart(QWidget):
         if self.hover is None or not self._geom:
             return []
         stamp = self._geom["stamps"][self.hover]
-        return [(display.check_name(c), fmt_value(c, dict(pts)[stamp]), color)
+        rows = [(display.check_name(c), fmt_value(c, dict(pts)[stamp]), color)
                 for c, pts, color in self.series if stamp in dict(pts)]
+        for c, pts, _color in self.series:                         # say so when the device restarted since the previous run
+            if is_uptime(c) and any(s == stamp for s, _b, _a in restarts(pts)):
+                rows.append(("Restarted", "since the run before", QColor("#ef4444")))
+        return rows
 
     def _tooltip(self, p, stamp, rows, fm):
         """A small card next to the mouse: the time of the run and each measured value."""
@@ -270,8 +329,10 @@ class ChartStack(QScrollArea):
         for key in sorted(groups) or [None]:
             ch = TrendChart()
             members = groups.get(key, [])
-            ch.set_series(members, th if len(have) == 1 else None,
-                          title=scale_title(key) if key is not None and len(groups) > 1 else "")
+            title = scale_title(key) if key is not None and len(groups) > 1 else ""
+            if key == (2, 0) and len(members) == 1:                # one device's uptime: say how long, since when, and how often it restarted
+                title = uptime_caption(members[0][1])
+            ch.set_series(members, th if len(have) == 1 else None, title=title)
             self.lay.addWidget(ch, 1)
             self.charts.append(ch)
         self.th = self.charts[0].th if self.charts else None

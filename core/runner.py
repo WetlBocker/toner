@@ -31,6 +31,7 @@ def sweepable(dev):
 
 def run_one(dev, thresholds, opts=None):
     opts = opts or db.runtime_options()
+    opts = {**opts, "disabled": db.disabled_for(dev, opts.get("disabled", ()))}      # the device's own list of checks, if it has one
     attempts = 1 + max(0, int(opts.get("retries", 0)))
     for attempt in range(1, attempts + 1):
         try:

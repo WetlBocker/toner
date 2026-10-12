@@ -120,13 +120,22 @@ code, body = call("POST", "/report", report(), t3, {"X-Toner-Agent": "1"})
 check("an agent that does not send its version is never told to update", "update" not in json.loads(body))
 code, body = call("POST", "/report", report(), t3, {"X-Toner-Agent": str(agents.AGENT_VERSION)})
 check("one on the current version is not either", "update" not in json.loads(body))
-agents.AGENT_VERSION += 1
-code, body = call("POST", "/report", report(), t3, {"X-Toner-Agent": str(agents.AGENT_VERSION - 1)})
+REAL_VERSION = agents.AGENT_VERSION
+check("the agent's version is Toner's version", agents.AGENT_VERSION == __import__("core.version", fromlist=["x"]).VERSION and "'" + agents.AGENT_VERSION + "'" in agents.package_script())
+agents.AGENT_VERSION = "99.0.0"
+code, body = call("POST", "/report", report(), t3, {"X-Toner-Agent": REAL_VERSION})
 check("one on an older version is told to update", json.loads(body).get("update") is True)
+code, body = call("POST", "/report", report(), t3, {"X-Toner-Agent": "3"})
+check("so is one from before the versions matched Toner's (a plain number)", json.loads(body).get("update") is True)
+code, body = call("POST", "/report", report(), t3, {"X-Toner-Agent": "99.0.1"})
+check("one that is newer than this Toner is left alone", "update" not in json.loads(body))
+check("what an agent reports is kept as it sent it", agents.latest("pc-3")[0] is not None and [r["version"] for r in agents.overview() if r["device"] == "pc-3"] == ["99.0.1"])
+check("outdated or not, by version", agents.agent_outdated("1.3.3") and agents.agent_outdated("98.9") and not agents.agent_outdated("99.0.0") and not agents.agent_outdated("99.0.0.0")
+      and agents.agent_outdated("2") and not agents.agent_outdated("") and not agents.agent_outdated("1") and not agents.agent_outdated("junk") and not agents.agent_outdated("99.0"))
 check("the new script needs a known token", call("GET", "/agent.ps1")[0] == 401 and call("GET", "/agent.ps1", token="nope")[0] == 401)
 code, script = call("GET", "/agent.ps1", token=t3)
 text = script.decode("utf-8-sig")
-check("with one it is served, as the same text every time, with no computer's settings in it", code == 200 and "Toner agent" in text and t3 not in text and f"AgentVersion = {agents.AGENT_VERSION}" in text and "@@" not in text)
+check("with one it is served, as the same text every time, with no computer's settings in it", code == 200 and "Toner agent" in text and t3 not in text and f"AgentVersion = '{agents.AGENT_VERSION}'" in text and "@@" not in text)
 work = tempfile.mkdtemp(prefix="agent_up_")
 open(os.path.join(work, "served.ps1"), "w", encoding="utf-8-sig").write(text)
 chk = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
@@ -136,7 +145,7 @@ check("the served script is valid PowerShell", chk.stdout.strip() == "0", chk.st
 print("== a real installed agent updates itself and takes a new token")
 # the script thinks it is installed when it runs from <ProgramData>\Toner Agent, so point ProgramData at a scratch folder
 pd = os.path.join(work, "pd"); inst = os.path.join(pd, "Toner Agent"); os.makedirs(inst)
-old_script = agents.package_script().replace(f"AgentVersion = {agents.AGENT_VERSION}", f"AgentVersion = {agents.AGENT_VERSION - 1}")
+old_script = agents.package_script().replace(f"AgentVersion = '{agents.AGENT_VERSION}'", "AgentVersion = '1.0.0'")
 open(os.path.join(inst, "toner-agent.ps1"), "w", encoding="utf-8-sig").write(old_script)
 cfg = {"server": f"https://127.0.0.1:{port}/report", "enroll": f"https://127.0.0.1:{port}/enroll", "pin": agents.fingerprint(), "key": "", "minutes": 5, "token": t3}
 json.dump(cfg, open(os.path.join(inst, "agent.json"), "w"))
@@ -148,10 +157,10 @@ now_cfg = json.loads(open(os.path.join(inst, "agent.json"), encoding="utf-8-sig"
 now_script = open(os.path.join(inst, "toner-agent.ps1"), encoding="utf-8-sig").read()
 check("the run succeeds and says what it did", r.returncode == 0 and "Toner answered: 200" in r.stdout and "new token" in r.stdout and "updated itself" in r.stdout, (r.stdout[-300:], r.stderr[-400:]))
 check("it saved the new token", now_cfg["token"] != t3 and agents.device_for_token(now_cfg["token"]) == "pc-3" and STORE[("netcheck", "pc-3:agent")] == now_cfg["token"])
-check("and replaced its own script with the newer one (settings untouched)", f"AgentVersion = {agents.AGENT_VERSION}" in now_script and now_cfg["server"] == cfg["server"] and not os.path.exists(os.path.join(inst, "toner-agent.ps1.new")))
+check("and replaced its own script with the newer one (settings untouched)", f"AgentVersion = '{agents.AGENT_VERSION}'" in now_script and now_cfg["server"] == cfg["server"] and not os.path.exists(os.path.join(inst, "toner-agent.ps1.new")))
 r = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", os.path.join(inst, "toner-agent.ps1")], capture_output=True, text=True, timeout=180, env=env)
 check("the updated script runs, and is current (no further update)", r.returncode == 0 and "Toner answered: 200" in r.stdout and "updated itself" not in r.stdout, (r.stdout[-200:], r.stderr[-300:]))
-agents.AGENT_VERSION -= 1; db.set_setting("agent_token_days", 0)
+agents.AGENT_VERSION = REAL_VERSION; db.set_setting("agent_token_days", 0)
 shutil.rmtree(work, ignore_errors=True)
 
 print("== telling you about a new computer and an ageing certificate")

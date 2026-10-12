@@ -61,14 +61,14 @@ from PySide6.QtGui import QMouseEvent, QPointingDevice
 w.resize(1100, 900); w.show()
 w.chk.set_selected(["CPU", "Memory", "Uptime", "BGP"]); w.chk._toggled(); QApplication.processEvents()
 titles = [c.title for c in w.chart.charts]
-check("percentages share a chart; other scales get their own", titles == ["Percent", "Values up to 10", "Values 100 to 1,000"], titles)
+check("percentages share a chart; other scales get their own", titles[:2] == ["Percent", "Values up to 10"] and len(titles) == 3 and titles[2].startswith("Up for"), titles)       # uptime: its own chart, captioned
 check("each check is in the chart that fits it", sorted(sorted(s[0] for s in c.series) for c in w.chart.charts) == [["bgp"], ["cpu", "memory"], ["uptime"]], [[s[0] for s in c.series] for c in w.chart.charts])
 col = {s[0]: s[2].name() for c in w.chart.charts for s in c.series}
 check("every check has its own colour", len(set(col.values())) == 4, col)
 w.chk.set_selected(["CPU", "Memory"]); w.chk._toggled()
 check("only percentages -> one chart, no scale title", len(w.chart.charts) == 1 and w.chart.charts[0].title == "")
 w.chk.set_selected(["Uptime"]); w.chk._toggled()
-check("a single check -> one chart", len(w.chart.charts) == 1 and w.chart.charts[0].title == "")
+check("a single check -> one chart (uptime says how long it has been up)", len(w.chart.charts) == 1 and w.chart.charts[0].title.startswith("Up for"))
 w.chk.set_selected([]); w.chk._toggled()
 check("nothing ticked -> one empty chart with the prompt", len(w.chart.charts) == 1 and w.chart.charts[0].series == [] and w.chart.requested == 0)
 

@@ -76,11 +76,7 @@ class ConnectionsPage(Page):
 
 
 # ------------------------------------------------------------------ Thresholds
-def _bad_pair(key, warn, fail):
-    """True if a WARN/FAIL pair contradicts itself."""
-    if key in db.LOWER_IS_WORSE:                  # e.g. uptime: FAIL must be the smaller number
-        return warn > 0 and fail > warn
-    return warn > fail
+_bad_pair = db.bad_pair
 
 
 
@@ -123,8 +119,11 @@ class ThresholdsPage(Page):
         reset.clicked.connect(self.reset)
         self.lay.insertWidget(1, reset, 0, Qt.AlignmentFlag.AlignLeft)
 
-        self.lay.insertWidget(2, QLabel("<b>Overrides</b>  (a vendor, location, folder or device can use different limits; "
-                                        "device beats folder beats location beats vendor)"))
+        ov = QLabel("<b>Overrides</b>  (a vendor, location, folder or device can use different limits; "
+                                        "device beats folder beats location beats vendor). A device can also carry its own limits "
+                                        "(Inventory > Edit device > Checks); they beat everything here.")
+        ov.setWordWrap(True)
+        self.lay.insertWidget(2, ov)
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["Applies to", "Check", "WARN", "FAIL"])
         self.table.horizontalHeader().setStretchLastSection(True)
@@ -222,7 +221,8 @@ class ChecksPage(Page):
     def __init__(self):
         super().__init__()
         self.lay.insertWidget(0, note("Untick a check to stop running it. This saves time on devices that "
-                                      "do not have the feature (for example BGP on a switch)."))
+                                      "do not have the feature (for example BGP on a switch). A single device can have its own list: "
+                                      "Inventory > Edit device > Checks. Devices without one use this list."))
         self.tree = QTreeWidget()
         self.tree.setHeaderHidden(True)
         self.lay.insertWidget(1, self.tree, 1)

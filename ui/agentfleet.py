@@ -115,7 +115,7 @@ class AgentFleet(QWidget):
                 silent += 1
             if r["pending_reboot"]:
                 notes.append("reboot pending")
-            if r["version"] and str(r["version"]).isdigit() and int(r["version"]) < agents.AGENT_VERSION:
+            if r["version"] and agents.agent_outdated(r["version"]):
                 notes.append("agent will update")
             vals = (r["device"], r["computer"], r["os"].replace("Microsoft ", "") + (f"  ({r['domain']})" if r["domain"] else ""),
                     self._when(r["received_at"]), self._age(age), r["source"], f"v{r['version']}" if r["version"] else "", ", ".join(notes))

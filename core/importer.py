@@ -132,8 +132,22 @@ def normalize(raw):
            "tags": ", ".join(db_split_tags(text("tags"))), "profile": text("profile"), "jump": text("jump"),
            "snmp_community": text("snmp_community"),
            "verify_ssl": _flag(row.get("verify_ssl"), 0), "ha_expected": _flag(row.get("ha_expected"), 0),
-           "enabled": _flag(row.get("enabled"), 1), "winopts": winopts, "proxy": proxy_cfg}
+           "enabled": _flag(row.get("enabled"), 1), "winopts": winopts, "proxy": proxy_cfg, "checkopts": _checkopts(row)}
     return dev, text("secret") or None
+
+
+def _checkopts(row):
+    """A device's own checks and thresholds, as the JSON text the export writes ('' = follow the global settings)."""
+    from core import db
+    raw = row.get("checkopts")
+    if raw in (None, ""):
+        return ""
+    if isinstance(raw, str):
+        try:
+            json.loads(raw)
+        except ValueError:
+            raise ValueError("checkopts is not valid JSON") from None
+    return db.normalize_checkopts(raw)
 
 
 def _winopts(vendor, row, text):
@@ -200,7 +214,7 @@ def finalize(dev):
 EXPORT_COLUMNS = ["name", "vendor", "host", "platform", "port", "username", "site", "location", "details", "folder",
                   "tags", "profile", "jump", "enabled", "verify_ssl", "ha_expected",
                   "windows_services", "windows_ignore", "windows_https", "windows_auth",
-                  "proxy_mode", "proxy_type", "proxy_host", "proxy_port", "proxy_user"]
+                  "proxy_mode", "proxy_type", "proxy_host", "proxy_port", "proxy_user", "checkopts"]
 
 
 def export_rows(devices):
@@ -223,6 +237,8 @@ def export_rows(devices):
                  "proxy_mode": px.get("mode", "") if px.get("mode") in ("none", "custom") else "",
                  "proxy_type": px.get("kind", "") if custom_px else "", "proxy_host": px.get("host", "") if custom_px else "",
                  "proxy_port": px.get("port", "") if custom_px else "", "proxy_user": px.get("username", "") if custom_px else ""}
+        own = db.normalize_checkopts(d.get("checkopts"))
+        extra["checkopts"] = json.dumps(own) if own else ""
         out.append({**extra, "name": d["name"], "vendor": d["vendor"], "host": d["host"], "platform": d.get("platform") or "",
                     "port": d.get("port") or "", "username": d.get("username") or "", "site": d.get("site") or "",
                     "location": d.get("location") or "", "details": d.get("details") or "",

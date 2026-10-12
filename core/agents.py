@@ -23,11 +23,12 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from core import audit, db, paths, winmon
+from core.version import VERSION
 from core import quiet
 
 MAX_BODY = 1_000_000
 DEFAULT_PORT = 8750
-AGENT_VERSION = 3                       # raise it when the package script changes: agents on an older one update themselves
+AGENT_VERSION = VERSION                 # the agent is always the same version as Toner; an agent on an older one updates itself
 TOKEN_GRACE_DAYS = 7                    # an old token still works this long after it was replaced
 
 
@@ -244,6 +245,33 @@ def device_for_token(token):
 _last_purge = [0.0]
 
 
+def _numbers(text):
+    return tuple(int(x) for x in str(text).split("."))
+
+
+def agent_kind(text):
+    """What an agent's version header says: ('none', ...) it did not say (a script from before updates, or something else),
+    ('legacy', n) the plain whole numbers early package agents sent (they update), or ('current', version) a Toner version like 1.3.4."""
+    text = str(text or "").strip()
+    if re.fullmatch(r"\d+", text):
+        return ("legacy", int(text)) if int(text) >= 2 else ("none", 0)
+    if re.fullmatch(r"\d+(\.\d+){1,3}", text):
+        return "current", text
+    return "none", 0
+
+
+def agent_outdated(text):
+    """True if an agent on this version should be updated: it is older than this Toner (or from before versions matched Toner's)."""
+    kind, value = agent_kind(text)
+    if kind == "legacy":
+        return True
+    if kind != "current":
+        return False
+    a, b = _numbers(AGENT_VERSION), _numbers(value)
+    n = max(len(a), len(b))
+    return a + (0,) * (n - len(a)) > b + (0,) * (n - len(b))
+
+
 def store(device, report, source="", version=0):
     """Keep the newest report, and a row of numbers for the charts."""
     with db.connect() as c:
@@ -432,15 +460,13 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         except (ValueError, OSError):
             owner.rejected += 1
             return self._send(400, b'{"ok":false,"error":"not a report"}')
-        try:
-            version = int(self.headers.get("X-Toner-Agent") or 0)
-        except ValueError:
-            version = 0
-        store(device, report, self.client_address[0], version)
+        version = (self.headers.get("X-Toner-Agent") or "").strip()[:20]
+        kind, _ = agent_kind(version)
+        store(device, report, self.client_address[0], version if kind != "none" else "")
         owner.accepted += 1
         answer = {"ok": True}
-        if version >= 2:                                    # only the package agent knows how to take these
-            if version < AGENT_VERSION:
+        if kind != "none":                                  # only the package agent knows how to take these
+            if agent_outdated(version):
                 answer["update"] = True
             if token_due(device):
                 answer["token"] = replace_token(device)
@@ -663,7 +689,7 @@ Or from PowerShell:  toner-agent.ps1 -Install | -Uninstall | (no switch: send on
 #>
 param([switch]$Install, [switch]$Uninstall, [switch]$Pause)
 $ErrorActionPreference = 'Stop'
-$AgentVersion = @@VERSION@@
+$AgentVersion = '@@VERSION@@'
 $Dir  = Join-Path $env:ProgramData 'Toner Agent'
 $Task = 'Toner Agent'
 $Here = Split-Path -Parent $PSCommandPath

@@ -12,6 +12,8 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComb
 from core import agents, audit, bulk, db, display, importer, nettools, profiles, proxy, sessions, vendors, winmon
 from ui import icons, theme
 from ui.agentfleet import AgentFleet
+from ui.devicechecks import DeviceChecks
+from ui.servicepicker import ServicePicker
 from ui.snmpfields import SnmpFields
 from core.runner import run_one
 from ui.toast import toast
@@ -97,6 +99,17 @@ class DeviceDialog(QDialog):
         self.win_watch.setPlaceholderText("services that must be running, e.g. DNS, NTDS, MSSQLSERVER")
         self.win_ignore = QLineEdit()
         self.win_ignore.setPlaceholderText("automatic services to leave out of the stopped-services check (* works at the end)")
+        self.win_pick_watch = QPushButton("Choose...")
+        self.win_pick_watch.setToolTip("List the services on this computer and tick the ones that must be running")
+        self.win_pick_ignore = QPushButton("Choose...")
+        self.win_pick_ignore.setToolTip("List the services on this computer and tick the ones to leave out of the stopped-services check")
+        for b, field, title, hint in (
+                (self.win_pick_watch, self.win_watch, "Services that must be running",
+                 "Tick the services that must be running. A tick here makes the Services check FAIL when that service is not running."),
+                (self.win_pick_ignore, self.win_ignore, "Services to ignore",
+                 "Tick the automatic services that are allowed to be stopped. They are left out of the stopped-services warning.")):
+            b.setAutoDefault(False)
+            b.clicked.connect(lambda _=False, f=field, t=title, h=hint: self._pick_services(f, t, h))
         self.win_script = QPushButton("Get agent script...")
         self.win_script.setAutoDefault(False)
         self.win_script.clicked.connect(self._agent_script)
@@ -134,16 +147,19 @@ class DeviceDialog(QDialog):
         sl.addStretch()
         self.page_more, self.more = page((("Tags", self.tags), ("Custom fields", self.fields)))
         self.page_windows, self.win = page((("", self.win_note), ("WinRM sign-in", self.win_auth), ("", self.win_https),
-                                            ("Services to require", self.win_watch), ("Services to ignore", self.win_ignore),
+                                            ("Services to require", self._with_button(self.win_watch, self.win_pick_watch)),
+                                            ("Services to ignore", self._with_button(self.win_ignore, self.win_pick_ignore)),
                                             ("Agent", self.win_script)))
         self.secret_label = "Password"
         self.secret_field = self.secret
+        self.checks_tab = DeviceChecks()
         self.tabs = QTabWidget()
         self.tabs.addTab(self.page_general, "General")
         self.tabs.addTab(self.page_access, "Access")
         self.tabs.addTab(self.page_snmp, "SNMP")
         self.tabs.addTab(self.page_more, "Tags and fields")
         self.tabs.addTab(self.page_windows, "Windows")
+        self.tabs.addTab(self.checks_tab, "Checks")
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save |
                                    QDialogButtonBox.StandardButton.Cancel)
@@ -182,6 +198,7 @@ class DeviceDialog(QDialog):
             self.proxy_host.setText(own_proxy.get("host", ""))
             self.proxy_port.setValue(int(own_proxy.get("port") or 8080))
             self.proxy_user.setText(own_proxy.get("username", ""))
+            self.checks_tab.load(dev.get("checkopts"))
             wo = winmon.options(dev)
             self.win_auth.setCurrentIndex(max(0, self.win_auth.findData(wo["auth"])))
             self.win_https.setChecked(wo["https"])
@@ -204,6 +221,7 @@ class DeviceDialog(QDialog):
         self.adapt(self.vendor.currentData())
 
     def adapt(self, vendor):
+        self.checks_tab.set_vendor(vendor)
         info = vendors.get(vendor)
         snmp_only = vendors.is_snmp(vendor)
         self.platform.clear()                                    # the platforms belong to the vendor
@@ -315,7 +333,37 @@ class DeviceDialog(QDialog):
                 "fields": text_to_fields(self.fields.toPlainText()),
                 "snmp": self.snmp.settings() if snmp_on else "",
                 "jump": {"device": self.jump.currentData()} if self.jump.currentData() else "",
-                "proxy": self._proxy_values(), "winopts": self._win_values()}
+                "proxy": self._proxy_values(), "winopts": self._win_values(),
+                "checkopts": self.checks_tab.values()}
+
+    @staticmethod
+    def _with_button(field, button):
+        w = QWidget()
+        h = QHBoxLayout(w)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.addWidget(field, 1)
+        h.addWidget(button)
+        return w
+
+    def _pick_services(self, field, title, hint):
+        """Ask the computer (or its agent's last report) for its services, and put the ticked names in `field`."""
+        dev = self.values()
+        dev["name"] = dev["name"] or self.dev.get("name", "")
+        dev["winopts"] = json.dumps(dev["winopts"]) if dev["winopts"] else ""
+        if self.secret.text():
+            dev["password"] = self.secret.text()
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            dev = profiles.resolve(dev)
+            services, source = winmon.list_services(dev, dev.get("password") or profiles.secret(dev, "main"))
+        except Exception as e:
+            QApplication.restoreOverrideCursor()
+            QMessageBox.warning(self, title, f"Could not get the list of services:\n\n{e}")
+            return
+        QApplication.restoreOverrideCursor()
+        dlg = ServicePicker(services, winmon._names(field.text()), title, hint, source, self)
+        if dlg.exec():
+            field.setText(winmon.names_text(dlg.selected()))
 
     def _win_values(self):
         if self.vendor.currentData() != "windows":
@@ -330,6 +378,11 @@ class DeviceDialog(QDialog):
         v = self.values()
         if not v["name"] or not v["host"]:
             QMessageBox.warning(self, "Missing data", "Name and host are required.")
+            return
+        bad = self.checks_tab.problems()
+        if bad:
+            self.tabs.setCurrentWidget(self.checks_tab)
+            QMessageBox.warning(self, "Checks", "\n".join(bad))
             return
         if v["proxy"] and v["proxy"]["mode"] == "custom" and not v["proxy"]["host"]:
             QMessageBox.warning(self, "Missing data", "Enter the proxy's address, or choose another proxy option.")
@@ -349,6 +402,7 @@ class DeviceDialog(QDialog):
         dev["jump"] = json.dumps(dev["jump"]) if dev["jump"] else ""
         dev["proxy"] = json.dumps(dev["proxy"]) if dev["proxy"] else ""
         dev["winopts"] = json.dumps(dev["winopts"]) if dev["winopts"] else ""
+        dev["checkopts"] = json.dumps(dev["checkopts"]) if dev["checkopts"] else ""
         if self.proxy_pw.text():
             dev["_proxy_secret"] = self.proxy_pw.text()
         dev["_secrets"] = {k: s for k, s in self.snmp_secrets().items() if s}        # typed but not saved yet
@@ -752,6 +806,8 @@ class InventoryTab(QWidget):
             it.setToolTip(0, "\n".join(lines))
         elif not d["enabled"]:
             it.setToolTip(0, "Disabled: left out of runs")
+        if db.normalize_checkopts(d.get("checkopts")):
+            it.setToolTip(0, (it.toolTip(0) + "\n" if it.toolTip(0) else "") + "Has its own checks or thresholds (Edit > Checks)")
         it.setFlags((it.flags() | Qt.ItemFlag.ItemIsDragEnabled) & ~Qt.ItemFlag.ItemIsDropEnabled)
         return it
 

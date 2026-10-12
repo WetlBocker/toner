@@ -93,7 +93,7 @@ NOT_PORTABLE = {"window_geometry", "onboarding_done", "notify_channels", "notify
 
 DEVICE_FIELDS = ["name", "vendor", "host", "port", "platform", "username",
                  "site", "verify_ssl", "ha_expected", "enabled", "location", "details", "folder_id",
-                 "tags", "fields", "profile_id", "snmp", "jump", "proxy", "winopts"]
+                 "tags", "fields", "profile_id", "snmp", "jump", "proxy", "winopts", "checkopts"]
 ALL_DEVICES = "All devices"
 
 
@@ -235,7 +235,14 @@ def _m3_agent_tokens(c):
             c.execute(f"ALTER TABLE agent_reports ADD COLUMN {col} TEXT DEFAULT ''")
 
 
-MIGRATIONS = [(1, _m1_legacy_columns), (2, _m2_agent_history), (3, _m3_agent_tokens)]
+def _m4_device_checks(c):
+    """A device can have its own list of checks and its own thresholds; one without falls back to the global settings."""
+    cols = {r[1] for r in c.execute("PRAGMA table_info(devices)")}
+    if "checkopts" not in cols:
+        c.execute("ALTER TABLE devices ADD COLUMN checkopts TEXT DEFAULT ''")
+
+
+MIGRATIONS = [(1, _m1_legacy_columns), (2, _m2_agent_history), (3, _m3_agent_tokens), (4, _m4_device_checks)]
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 
 
@@ -372,10 +379,12 @@ def save_device(dev: dict) -> int:
     winopts = dev.get("winopts") or ""
     if isinstance(winopts, dict):
         winopts = json.dumps(winopts) if winopts else ""
+    own = normalize_checkopts(dev.get("checkopts"))
+    checkopts = json.dumps(own) if own else ""
     dev = {**dev, "location": (dev.get("location") or "").strip(),
            "details": (dev.get("details") or "").strip(),
            "tags": ", ".join(split_tags(dev.get("tags"))), "fields": fields, "snmp": snmp, "jump": jump, "proxy": proxy,
-           "winopts": winopts, "profile_id": dev.get("profile_id") or None}
+           "winopts": winopts, "checkopts": checkopts, "profile_id": dev.get("profile_id") or None}
     vals = [dev.get(f) for f in DEVICE_FIELDS]
     with connect() as c:
         if dev.get("id"):
@@ -543,8 +552,53 @@ def override_scopes():
     labels = [l for l in group_labels()[1:]]
     return labels + [f"Device: {d['name']}" for d in list_devices()]
 
+def bad_pair(key, warn, fail):
+    """True if a WARN/FAIL pair contradicts itself (for 'lower is worse' checks FAIL must be the smaller number)."""
+    if key in LOWER_IS_WORSE:
+        return warn > 0 and fail > warn
+    return warn > fail
+
+
+def normalize_checkopts(raw):
+    """A device's own check settings, cleaned: {'checks': [keys that run] (only when it picks its own list),
+    'thresholds': {key: {'warn', 'fail'}} (only the ones it overrides)}. Empty when it has none: it then follows the global settings."""
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw) if raw.strip() else {}
+        except ValueError:
+            raw = {}
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    if isinstance(raw.get("checks"), list):
+        out["checks"] = [c for c in dict.fromkeys(str(x) for x in raw["checks"])]
+    th = {}
+    for key, pair in (raw.get("thresholds") or {}).items() if isinstance(raw.get("thresholds"), dict) else ():
+        if key in DEFAULT_THRESHOLDS and isinstance(pair, dict):
+            try:
+                th[key] = {"warn": float(pair["warn"]), "fail": float(pair["fail"])}
+            except (KeyError, TypeError, ValueError):
+                continue
+    if th:
+        out["thresholds"] = th
+    return out
+
+
+def disabled_for(dev, disabled):
+    """Which checks are switched off for this device: the global list, unless the device picked its own list of checks."""
+    from core import checks
+    own = normalize_checkopts((dev or {}).get("checkopts")).get("checks")
+    if own is None:
+        return set(disabled)
+    vendor = (dev or {}).get("vendor", "")
+    keys = {checks.key(vendor, k) for k, _label in checks.CATALOG.get(vendor, [])}
+    on = {checks.key(vendor, k) for k in own}
+    return (set(disabled) - keys) | (keys - on)
+
+
 def thresholds_for(dev, base=None, overrides=None):
-    """Global thresholds with any matching overrides applied: vendor, then location, then device."""
+    """Global thresholds with any matching overrides applied: vendor, then location, then folder, then device (the table in
+    Settings), and finally the limits set on the device itself, which beat everything."""
     th = json.loads(json.dumps(base or get_thresholds()))
     rules = get_setting("threshold_overrides") if overrides is None else overrides
     def applies(scope):
@@ -557,6 +611,9 @@ def thresholds_for(dev, base=None, overrides=None):
                        key=lambda r: (OVERRIDE_RANK.get(str(r["scope"]).split(":")[0], 0), str(r["scope"]).count("/"))):
         if rule["check"] in th:
             th[rule["check"]] = {"warn": rule["warn"], "fail": rule["fail"]}
+    for key, pair in normalize_checkopts(dev.get("checkopts")).get("thresholds", {}).items():
+        if key in th:
+            th[key] = dict(pair)
     return th
 
 def runtime_options():

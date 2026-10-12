@@ -45,7 +45,7 @@ Do each way you plan to use.
 3. In Task Scheduler there is a task named **Toner Agent** (SYSTEM, every N minutes). `C:\ProgramData\Toner Agent` is readable only by
    SYSTEM and Administrators.
 4. Disconnect the PC from the network for longer than the "agent silent" limits (Settings > Thresholds). Results show the late then silent states.
-5. Bump `AGENT_VERSION` in a test build, or wait for a release: the agent should update itself on its next report.
+5. Install a build with a higher version in `core/version.py` (the agent's version is Toner's), or wait for a release: the agent should update itself on its next report.
 6. Settings > Agents > **Revoke**: the agent is turned away. **Uninstall-TonerAgent.cmd** removes the task and folder.
 
 **WinRM**

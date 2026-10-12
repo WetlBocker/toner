@@ -136,14 +136,60 @@ def parse_report(text):
     return _parse(text)
 
 
-def collect_local(timeout=90):
+LIST_SERVICES = r"""
+$ErrorActionPreference = 'Stop'
+$list = @(Get-CimInstance Win32_Service | ForEach-Object {
+    [ordered]@{ name = [string]$_.Name; display = [string]$_.DisplayName; state = [string]$_.State; start = [string]$_.StartMode } })
+[ordered]@{ services = $list } | ConvertTo-Json -Depth 4 -Compress
+"""
+
+
+def parse_services(text):
+    """The services a computer has, [{'name', 'display', 'state', 'start'}], by display name."""
+    text = text or ""
+    start = text.find("{")
+    if start < 0:
+        raise ValueError("the computer returned no list of services" + (f": {text.strip()[:200]}" if text.strip() else ""))
+    data = json.loads(text[start:text.rfind("}") + 1])
+    rows = data.get("services") if isinstance(data, dict) else None
+    if isinstance(rows, dict):
+        rows = [rows]                                   # PowerShell 5.1 turns a list of one into the item itself
+    if not isinstance(rows, list):
+        raise ValueError("the list of services was not understood")
+    out = [{"name": str(r.get("name") or ""), "display": str(r.get("display") or ""), "state": str(r.get("state") or ""),
+            "start": str(r.get("start") or "")} for r in rows if isinstance(r, dict) and r.get("name")]
+    return sorted(out, key=lambda r: (r["display"] or r["name"]).lower())
+
+
+def list_services(dev, password=None, timeout=30):
+    """(services, note): what to choose from when naming services to watch. A computer that reports by agent is not asked anything;
+    the last report it sent is used, which has each service's name and whether it was running."""
+    how = transport(dev)
+    if how == "agent":
+        from core import agents
+        report, age = agents.latest(dev.get("name", ""))
+        if report is None:
+            raise RuntimeError("this computer's agent has not reported yet, so there is no list to choose from. Install the agent, "
+                               "wait for its first report, and open this again. (You can also type service names.)")
+        states = report.get("service_states") or {}
+        shown = {s.get("name"): s.get("display", "") for s in report.get("auto_stopped") or []}
+        rows = [{"name": n, "display": shown.get(n, ""), "state": "Running" if v == "R" else "Stopped", "start": ""}
+                for n, v in states.items()]
+        when = "" if age is None else f" ({age:.0f} min ago)" if age < 120 else f" ({age / 60:.1f} h ago)"
+        return sorted(rows, key=lambda r: r["name"].lower()), f"From the agent's last report{when}."
+    if how == "local":
+        return collect_local(timeout=timeout, script=LIST_SERVICES, parser=parse_services), "From this computer."
+    return collect_winrm(dev, password, timeout=timeout, script=LIST_SERVICES, parser=parse_services), "From the computer, just now."
+
+
+def collect_local(timeout=90, script=None, parser=None):
     """Run the collector on this computer."""
     exe = shutil.which("powershell.exe") or "powershell.exe"
     folder = tempfile.mkdtemp(prefix="toner_ps_")
     try:
         path = os.path.join(folder, "collect.ps1")
         with open(path, "w", encoding="utf-8-sig") as f:
-            f.write("[Console]::OutputEncoding = [Text.Encoding]::UTF8\n" + COLLECTOR)
+            f.write("[Console]::OutputEncoding = [Text.Encoding]::UTF8\n" + (script or COLLECTOR))
         r = subprocess.run([exe, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path],
                            capture_output=True, timeout=timeout, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     finally:
@@ -151,10 +197,10 @@ def collect_local(timeout=90):
     out = r.stdout.decode("utf-8", "replace")
     if r.returncode and "{" not in out:
         raise RuntimeError(f"PowerShell failed: {r.stderr.decode('utf-8', 'replace').strip()[:300] or r.returncode}")
-    return _parse(out)
+    return (parser or _parse)(out)
 
 
-def collect_winrm(dev, password, timeout=30, factory=None):
+def collect_winrm(dev, password, timeout=30, factory=None, script=None, parser=None):
     """Run the collector on a remote computer through PowerShell remoting."""
     opts = options(dev)
     port = int(dev.get("port") or 0) or (5986 if opts["https"] else 5985)
@@ -166,13 +212,13 @@ def collect_winrm(dev, password, timeout=30, factory=None):
         client = factory(dev["host"], username=user, password=(password or None) if user else None, ssl=https, port=port,
                          auth=opts["auth"], cert_validation=bool(dev.get("verify_ssl")), connection_timeout=timeout,
                          operation_timeout=max(10, timeout - 5), read_timeout=timeout + 60)
-        out, streams, failed = client.execute_ps(COLLECTOR)
+        out, streams, failed = client.execute_ps(script or COLLECTOR)
     except Exception as e:
         raise RuntimeError(explain(e, https, port)) from None
     if not str(out or "").strip():
         errs = "; ".join(str(x) for x in getattr(streams, "error", [])[:2])
         raise RuntimeError(f"the remote computer returned nothing{': ' + errs if errs else ''}")
-    return _parse(str(out))
+    return (parser or _parse)(str(out))
 
 
 def explain(e, https, port):
