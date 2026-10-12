@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFileDialog, QInput
                                QPushButton, QTableWidget, QTableWidgetItem, QWidget)
 from core import audit, db, display, nettools, sessionlog, vault
 from ui.settings_base import Page, note, row_of
+from ui.toast import toast
 
 
 # ------------------------------------------------------------------ Security
@@ -205,14 +206,14 @@ class DataPage(Page):
         with open(path, "rb") as f:
             stored, skipped = vault.import_bytes(f.read(), word, replace)
         audit.log("saved passwords imported", f"{stored} stored, {skipped} kept")
-        QMessageBox.information(self, "Import saved passwords", f"{stored} password(s) stored" + (f", {skipped} already here were kept." if skipped else "."))
+        toast(self, f"{stored} password(s) stored" + (f", {skipped} already here were kept." if skipped else "."))
 
     def export_settings(self):
         path, _ = QFileDialog.getSaveFileName(self, "Export settings", "toner-settings.json", "JSON (*.json)")
         if path:
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(db.export_settings(), f, indent=2)
-            QMessageBox.information(self, "Export", "Settings exported. Devices and passwords are not included.")
+            toast(self, "Settings exported. Devices and passwords are not included.")
 
     def import_settings(self):
         path, _ = QFileDialog.getOpenFileName(self, "Import settings", "", "JSON (*.json)")
@@ -250,4 +251,4 @@ class DataPage(Page):
             return
         n = sessionlog.delete_closed()
         self.refresh()
-        QMessageBox.information(self, "Session logs", f"Deleted {n} session log(s).")
+        toast(self, f"Deleted {n} session log(s).")

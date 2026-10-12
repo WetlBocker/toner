@@ -1,6 +1,6 @@
 """Small line icons drawn from SVG paths, tinted to the current theme (no image files to ship)."""
 from PySide6.QtCore import QByteArray, QRectF, Qt
-from PySide6.QtGui import QIcon, QImage, QPainter, QPixmap
+from PySide6.QtGui import QColor, QIcon, QImage, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 
 # 24x24 viewBox, stroke-only, in the style of common open icon sets.
@@ -44,6 +44,24 @@ def icon(name, normal, selected=None, size=40):
     ic.addPixmap(_render(name, normal, size), QIcon.Mode.Normal, QIcon.State.Off)
     ic.addPixmap(_render(name, selected or normal, size), QIcon.Mode.Selected, QIcon.State.Off)
     ic.addPixmap(_render(name, selected or normal, size), QIcon.Mode.Active, QIcon.State.Off)
+    return ic
+
+
+def icon_with_dot(name, normal, dot, size=40):
+    """An icon with a small status dot in its bottom-right corner (the health of a device)."""
+    pm = _render(name, normal, size)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    r = size * 0.26
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor("#ffffff"))              # a pale ring so the dot reads on light and dark rows alike
+    p.drawEllipse(QRectF(size - r * 1.9, size - r * 1.9, r * 1.9, r * 1.9))
+    p.setBrush(QColor(dot))
+    p.drawEllipse(QRectF(size - r * 1.75, size - r * 1.75, r * 1.5, r * 1.5))
+    p.end()
+    ic = QIcon()
+    ic.addPixmap(pm, QIcon.Mode.Normal, QIcon.State.Off)
+    ic.addPixmap(pm, QIcon.Mode.Selected, QIcon.State.Off)
     return ic
 
 

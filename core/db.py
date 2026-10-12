@@ -64,7 +64,7 @@ DEFAULT_SETTINGS = {
     "notify_enabled": False, "notify_channels": [], "notify_snooze_until": "",
     "notify_consecutive": 1, "notify_remind_hours": 0, "notify_on_manual": True,
     # inventory view
-    "inventory_view": "Folders", "inventory_expanded": [],
+    "inventory_view": "Folders", "inventory_expanded": [], "window_geometry": "", "onboarding_done": False,
     # configuration backups
     "backup_enabled": False, "backup_hours": 24, "backup_groups": [], "backup_keep": 50, "backup_mask": True,
     "backup_on_start": False,
@@ -87,7 +87,7 @@ DEFAULT_SETTINGS = {
 }
 # Per-machine state that must not travel in an exported settings file (channel secrets stay in
 # Credential Manager, so an imported channel would be broken).
-NOT_PORTABLE = {"notify_channels", "notify_snooze_until", "inventory_expanded", "snippets", "fileserver", "iperf_path", "openssl_path",
+NOT_PORTABLE = {"window_geometry", "onboarding_done", "notify_channels", "notify_snooze_until", "inventory_expanded", "snippets", "fileserver", "iperf_path", "openssl_path",
                 "update_last_check", "update_skip", "update_pending", "sessions_expanded", "agent_enabled", "agent_enroll", "agent_bind",
                 "agent_address"}
 

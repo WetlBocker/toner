@@ -123,6 +123,7 @@ class Main(QMainWindow):
         self.results.open_device.connect(self.open_device_by_name)
         self.dashboard.open_device.connect(self.open_device_by_name)
         self.dashboard.goto.connect(self.go)
+        self.dashboard.action.connect(self.dashboard_action)
         self.dashboard.run_requested.connect(lambda: (self.go("Results"), self.results.start()))
         self.dashboard.backup_requested.connect(lambda: (self.go("Configs"), self.configs.start()))
         self.tools.inventory_changed.connect(self.inventory_reloaded)
@@ -143,6 +144,8 @@ class Main(QMainWindow):
         QShortcut(QKeySequence("Ctrl+K"), self, activated=self.open_palette)
         for i in range(min(9, tabs.count())):
             QShortcut(QKeySequence(f"Ctrl+{i + 1}"), self, activated=lambda i=i: tabs.setCurrentIndex(i))
+        tabs.search_requested.connect(self.open_palette)
+        self.restore_layout()
         self.scheduler.apply(first=True)
         self.backup_scheduler.apply(first=True)
         self.update_tray()
@@ -152,6 +155,23 @@ class Main(QMainWindow):
         self.housekeeping.timeout.connect(self.do_housekeeping)
         self.housekeeping.start()
         QTimer.singleShot(5000, self.do_housekeeping)
+
+    # ---------- window size and place, remembered between runs
+    def restore_layout(self):
+        try:
+            import base64
+            raw = db.get_setting("window_geometry")
+            if raw:
+                self.restoreGeometry(base64.b64decode(raw))
+        except Exception:
+            log.exception("could not restore the window layout")
+
+    def remember_layout(self):
+        try:
+            import base64
+            db.set_setting("window_geometry", base64.b64encode(bytes(self.saveGeometry())).decode("ascii"))
+        except Exception:
+            log.exception("could not save the window layout")
 
     # ---------- navigation
     def go(self, section):
@@ -179,6 +199,18 @@ class Main(QMainWindow):
         widget = {"ping": self.tools.liveping, "snmp": self.tools.snmp, "tls": self.tools.tls, "mtr": self.tools.mtr}[name]
         self.tabs.setCurrentWidget(self.tools)
         self.tools.show_tool(widget, dev)
+
+    def dashboard_action(self, name):
+        """The steps of the Overview's getting-started card."""
+        if name == "add":
+            self.go("Inventory")
+            self.inventory.add()
+        elif name == "scan":
+            self.go("Tools")
+            self.tools.tabs.setCurrentWidget(self.tools.discovery)
+        elif name == "notify":
+            self.go("Settings")
+            self.settings.select_page("Notifications")
 
     def open_agent_settings(self):
         self.go("Settings")
@@ -304,6 +336,7 @@ class Main(QMainWindow):
         self.dashboard.refresh()
 
     def closeEvent(self, event):
+        self.remember_layout()
         if not self._quitting and self.background_mode():
             event.ignore()                         # keep scheduled checks and backups running from the tray
             self.hide()

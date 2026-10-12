@@ -9,12 +9,12 @@ import sqlite3
 from datetime import datetime, timedelta
 
 import keyring
-from PySide6.QtCore import QDateTime, QSize, QTime, Qt, QUrl, Signal
-from PySide6.QtGui import QColor, QDesktopServices, QFont
-from PySide6.QtWidgets import (QAbstractButton, QAbstractItemView, QApplication, QCheckBox, QColorDialog, QComboBox, QDialog,
+from PySide6.QtCore import QDateTime, QRectF, QSize, QTime, QTimer, Qt, QUrl, Signal
+from PySide6.QtGui import QColor, QDesktopServices, QFont, QPainter
+from PySide6.QtWidgets import (QAbstractButton, QAbstractItemView, QAbstractSpinBox, QApplication, QCheckBox, QColorDialog, QComboBox, QDialog,
                                QDateTimeEdit, QDialogButtonBox, QDoubleSpinBox, QFileDialog, QFontComboBox, QFormLayout,
                                QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton,
-                               QScrollArea, QSpinBox, QStackedWidget, QTableWidget, QTableWidgetItem, QTimeEdit,
+                               QPlainTextEdit, QScrollArea, QSpinBox, QStackedWidget, QStyledItemDelegate, QTableWidget, QTextEdit, QTableWidgetItem, QTimeEdit,
                                QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 import ipaddress
 from core import agents, alerts, audit, checks, custom, db, display, maintenance, nettools, notify, profiles, proxy, reports, sessionlog, trends, vault
@@ -41,6 +41,42 @@ GROUPS = [("Monitoring", ["General", "Thresholds", "Checks", "Custom checks", "A
           ("Security and data", ["Security", "Audit log", "Data and logs"])]
 
 
+DIRTY = Qt.ItemDataRole.UserRole + 1          # on a list entry: the page has edits that are not saved yet
+
+
+class _NavDelegate(QStyledItemDelegate):
+    """The list entries, plus a small dot at the right edge of a page with unsaved edits."""
+
+    def paint(self, painter, option, index):
+        super().paint(painter, option, index)
+        if index.data(DIRTY):
+            r = option.rect
+            painter.save()
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor((theme.current() or {}).get("accent", "#2f6fed")))
+            painter.drawEllipse(QRectF(r.right() - 18, r.center().y() - 4, 8, 8))
+            painter.restore()
+
+
+def signature(page):
+    """What the person can type or tick on a page, as one comparable value (lists kept in memory are not part of it)."""
+    out = []
+    for w in page.findChildren(QWidget):
+        if isinstance(w, QLineEdit):
+            out.append(w.text())
+        elif isinstance(w, QAbstractButton):
+            if w.isCheckable():
+                out.append(w.isChecked())
+        elif isinstance(w, QComboBox):
+            out.append((w.currentIndex(), w.currentText()))
+        elif isinstance(w, QAbstractSpinBox):
+            out.append(w.text())
+        elif isinstance(w, (QPlainTextEdit, QTextEdit)) and not w.isReadOnly():
+            out.append(w.toPlainText())
+    return tuple(out)
+
+
 class SettingsTab(QWidget):
     changed = Signal()                    # emitted after a successful save (or an import)
 
@@ -56,6 +92,9 @@ class SettingsTab(QWidget):
         self.nav = QListWidget()
         self.nav.setObjectName("settingsNav")
         self.nav.setSpacing(0)
+        self.nav.setItemDelegate(_NavDelegate(self.nav))
+        self.baseline = {}                                   # page index -> signature when last loaded or saved
+        self._dirty = {}                                     # page index -> it differs from that
         self.stack = QStackedWidget()
         for p in self.pages:
             area = QScrollArea()
@@ -75,6 +114,8 @@ class SettingsTab(QWidget):
         self.search.returnPressed.connect(self._first_match)
 
         self.status = QLabel("")
+        self.unsaved = QLabel("")                                       # "Unsaved changes on 2 pages", next to the buttons
+        self.unsaved.setStyleSheet("font-weight:600;")
         save, revert = QPushButton("Save changes"), QPushButton("Revert")
         save.setProperty("primary", True)
         save.setDefault(True)
@@ -82,6 +123,7 @@ class SettingsTab(QWidget):
         revert.clicked.connect(self.reload)
         bar = QHBoxLayout()
         bar.addWidget(self.status, 1)
+        bar.addWidget(self.unsaved)
         bar.addWidget(revert)
         bar.addWidget(save)
         right = QVBoxLayout()
@@ -92,6 +134,42 @@ class SettingsTab(QWidget):
         lay.addLayout(right, 1)
         self.select_page(self.pages[0].title)
         self.reload()
+        self.watch = QTimer(self)                             # edits are noticed by looking, a few times a second, at the page in view
+        self.watch.setInterval(500)
+        self.watch.timeout.connect(self.check_dirty)
+        self.watch.start()
+
+    # ---------- unsaved edits
+    def rebase(self, only=None):
+        for i, p in enumerate(self.pages):
+            if only is None or i in only:
+                self.baseline[i] = signature(p)
+        self._mark()
+
+    def dirty_pages(self):
+        return [i for i, v in self._dirty.items() if v]
+
+    def check_dirty(self):
+        """Compare the page in view with how it was when loaded or saved; its list entry gets a dot if it differs."""
+        if not self.isVisible():
+            return
+        i = self.stack.currentIndex()
+        if i in self.baseline:
+            self._dirty[i] = signature(self.pages[i]) != self.baseline[i]
+            self._mark()
+
+    def _mark(self):
+        flags = self._dirty
+        for i in self.baseline:
+            flags.setdefault(i, False)
+        by_page = {self._index_of(r): r for r in range(self.nav.count()) if self._index_of(r) is not None}
+        for i, r in by_page.items():
+            self.nav.item(r).setData(DIRTY, bool(flags.get(i)))
+        self.nav.viewport().update()
+        n = sum(1 for v in flags.values() if v)
+        self.unsaved.setText(f"Unsaved changes on {n} page{'s' if n != 1 else ''}" if n else "")
+        if n:
+            self.status.setText("")
 
     # ---------- the list on the left
     def _fill_nav(self):
@@ -193,11 +271,15 @@ class SettingsTab(QWidget):
         for p in self.pages:
             p.load()
         self.status.setText("")
+        self._dirty = {}
+        self.rebase()
         self.changed.emit()
 
     def refresh_dynamic(self):
+        clean = [i for i in range(len(self.pages)) if i in self.baseline and signature(self.pages[i]) == self.baseline[i]]
         for p in self.pages:
             p.refresh()
+        self.rebase(only=set(clean))              # a list that refilled itself is not an edit
 
     def showEvent(self, e):
         self.refresh_dynamic()
@@ -219,5 +301,7 @@ class SettingsTab(QWidget):
         for p in self.pages:
             p.save()
         audit.log("settings saved")
+        self._dirty = {}
+        self.rebase()
         self.status.setText(f"Saved at {datetime.now():%H:%M:%S}")
         self.changed.emit()

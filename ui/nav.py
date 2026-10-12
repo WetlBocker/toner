@@ -4,7 +4,7 @@ Offers the small part of QTabWidget's API that the rest of the app uses (addTab,
 currentWidget, indexOf, count, tabText), so sections can be switched from code.
 """
 from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtWidgets import (QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QScrollArea, QStackedWidget,
+from PySide6.QtWidgets import (QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QScrollArea, QStackedWidget,
                                QVBoxLayout, QWidget)
 from ui import icons, theme
 
@@ -15,6 +15,7 @@ HEADING_HEIGHT = 44         # a group heading: the room is above it, so the head
 
 class NavStack(QWidget):
     currentChanged = Signal(int)
+    search_requested = Signal()
     PAGE_MARGINS = (24, 20, 24, 20)
 
     def __init__(self, title="Toner"):
@@ -43,6 +44,12 @@ class NavStack(QWidget):
         side.setContentsMargins(12, 16, 12, 12)
         side.addLayout(head)
         side.addWidget(self.list, 1)
+        self.quick = QPushButton("Search      Ctrl+K")                   # the command palette is easy to miss otherwise
+        self.quick.setProperty("ghost", True)
+        self.quick.setToolTip("Jump to a section, tool, device or action")
+        self.quick.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.quick.clicked.connect(self.search_requested)
+        side.addWidget(self.quick)
         self.stack = QStackedWidget()
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -63,6 +70,8 @@ class NavStack(QWidget):
         self.stack.addWidget(widget)
         item = QListWidgetItem(label)
         item.setSizeHint(QSize(0, 42))
+        if self.list.count() < 9:
+            item.setToolTip(f"{label}   (Ctrl+{self.list.count() + 1})")
         self.list.addItem(item)
         self._names.append(label)
         self._icon_names.append(icon_name)

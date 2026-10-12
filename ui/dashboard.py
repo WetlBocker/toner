@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFrame, QGridLayout
                                QScrollArea, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 import html
 
-from core import backup, db, display, fleet, maintenance, reports
+from core import backup, db, display, fleet, maintenance, notify, reports
 from ui import theme
 from ui.widgets import EmptyHint, StatusDelegate
 
@@ -103,6 +103,7 @@ class DashboardTab(QWidget):
     backup_requested = Signal()
     open_device = Signal(str)
     goto = Signal(str)
+    action = Signal(str)                  # a step of the getting-started card: add, scan, notify
 
     PERIODS = [("Last 24 hours", 1), ("Last 7 days", 7), ("Last 30 days", 30)]
 
@@ -194,10 +195,12 @@ class DashboardTab(QWidget):
         cols.addWidget(left, 3)
         cols.addLayout(right, 2)
 
+        self.start = self._build_start()
         body = QWidget()
         bl = QVBoxLayout(body)
         bl.setContentsMargins(0, 0, 0, 0)
         bl.setSpacing(14)
+        bl.addWidget(self.start)
         bl.addLayout(grid)
         bl.addLayout(cols, 1)
         scroll = QScrollArea()
@@ -208,6 +211,57 @@ class DashboardTab(QWidget):
         lay.addLayout(head)
         lay.addWidget(scroll, 1)
         self.refresh()
+
+    def _build_start(self):
+        """A short list for a new installation: add devices, run the checks, set up alerts. Each step ticks itself off."""
+        f = QFrame()
+        f.setProperty("card", True)
+        lay = QVBoxLayout(f)
+        lay.setContentsMargins(16, 12, 16, 12)
+        top = QHBoxLayout()
+        head = QLabel("Getting started")
+        head.setStyleSheet("font-weight: 600;")
+        top.addWidget(head)
+        top.addStretch()
+        hide = QPushButton("Hide")
+        hide.setProperty("ghost", True)
+        hide.setToolTip("Do not show this again")
+        hide.clicked.connect(self._hide_start)
+        top.addWidget(hide)
+        lay.addLayout(top)
+        self.steps = {}
+        for key, text, buttons in (("devices", "Add the devices to watch", (("Add a device", "add"), ("Scan the network", "scan"))),
+                                   ("run", "Run the checks once to see how they are doing", (("Run checks", "run"),)),
+                                   ("alerts", "Choose how to be told when something breaks", (("Set up notifications", "notify"),))):
+            row = QHBoxLayout()
+            mark = QLabel("")
+            mark.setFixedWidth(22)
+            label = QLabel(text)
+            row.addWidget(mark)
+            row.addWidget(label, 1)
+            for caption, action in buttons:
+                b = QPushButton(caption)
+                b.clicked.connect(lambda _=False, a=action: self.run_requested.emit() if a == "run" else self.action.emit(a))
+                row.addWidget(b)
+            lay.addLayout(row)
+            self.steps[key] = (mark, label)
+        return f
+
+    def _hide_start(self):
+        db.set_setting("onboarding_done", True)
+        self.start.setVisible(False)
+
+    def _update_start(self, devices, ran):
+        done = {"devices": bool(devices), "run": bool(ran), "alerts": any(c.get("enabled", True) for c in notify.channels())}
+        for key, (mark, label) in self.steps.items():
+            mark.setText("✓" if done[key] else "•")
+            f = label.font()
+            f.setStrikeOut(done[key])
+            label.setFont(f)
+            label.setProperty("muted", done[key])
+            label.style().unpolish(label)
+            label.style().polish(label)
+        self.start.setVisible(not db.get_setting("onboarding_done") and not all(done.values()))
 
     def _fleet(self):
         """The Windows panel: only there when there are Windows computers (or certificates running out)."""
@@ -251,6 +305,7 @@ class DashboardTab(QWidget):
         self.cards["changes"].set(len(changes), "in the last 24 hours", active=False)
         self._fleet()
         last = db.last_run()
+        self._update_start(devs, last)
         held = maintenance.devices_in_maintenance()
         self.when.setText((f"   Last run {last['started_at']}" if last else "   No checks run yet")
                           + (f"   |   {len(held)} device(s) in maintenance: alerts held" if held else ""))

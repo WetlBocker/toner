@@ -86,7 +86,7 @@ QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.StandardButton.Y
 answers[:] = ["wrong wrong wrong"]; page.import_passwords()
 check("a wrong password is explained and nothing is stored", "wrong password" in warns[-1] and not STORE)
 answers[:] = ["a long enough password"]; page.import_passwords()
-check("the right one restores them", vault.collect() == got and f"{len(got)} password(s) stored" in infos[-1])
+check("the right one restores them", vault.collect() == got and f"{len(got)} password(s) stored" in __import__("ui.toast", fromlist=["x"]).history[-1])
 
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

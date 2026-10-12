@@ -7,9 +7,11 @@ from core.alerts import base as device_of
 from core.runner import run_all
 from drivers.base import SEVERITY
 from ui.widgets import EmptyHint, GroupPicker, StatChips, StatusDelegate
+from ui.toast import toast
 
 
 ROLE = Qt.ItemDataRole.UserRole
+AUTO_OPEN = 12                       # failing devices opened by themselves when a run ends
 
 
 class Worker(QThread):
@@ -211,9 +213,7 @@ class ResultsTab(QWidget):
         devices = [d for d in db.list_devices(enabled_only=True) if db.in_groups(d, picked)]
         if not devices:
             if not scheduled:
-                QMessageBox.information(self, "No devices",
-                                        "No enabled devices in this group. Add or enable devices "
-                                        "on the Inventory tab.")
+                toast(self, "No enabled devices in this group. Add or enable devices on the Inventory tab.")
             return
         self.last_ran, self.last_scheduled = [d["name"] for d in devices], scheduled   # for notifications
         # Read settings here, in the GUI thread, and hand the worker plain values.
@@ -240,6 +240,8 @@ class ResultsTab(QWidget):
     def done(self):
         self._active = False
         self.results.sort(key=lambda r: (-SEVERITY[r.status], r.device, r.check))
+        worst_first = list(dict.fromkeys(device_of(r.device) for r in self.results if r.status != "OK"))
+        self.expanded |= set(worst_first[:AUTO_OPEN])      # what needs a look is already open (not hundreds of rows at once)
         self.repopulate()
         db.save_run(self.results)
         counts = {}

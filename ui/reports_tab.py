@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFileDialog, QHBoxL
 from core import alerts, db, display, reports, trends
 from drivers.base import SEVERITY, Result
 from ui.widgets import FilterButton, StatusDelegate, flow
+from ui.toast import toast
 
 NO_LOCATION = "(no location)"
 CURRENT = "Current results"
@@ -140,8 +141,7 @@ class ReportsTab(QWidget):
     def _export(self, title, pattern, fn, open_after=False):
         rows = self.selected_results()
         if not rows:
-            QMessageBox.information(self, "Nothing to export",
-                                    "No results to export. Run the checks, or pick a past run.")
+            toast(self, "No results to export. Run the checks, or pick a past run.")
             return
         ext = pattern.split("*")[-1].rstrip(")")
         folder = db.get_setting("report_folder")
@@ -156,7 +156,7 @@ class ReportsTab(QWidget):
     def export_trend(self):
         data = trends.compute(self.trend_period.currentData())
         if not data["runs"]:
-            QMessageBox.information(self, "Trend report", "There are no runs in that period yet. Run the checks first.")
+            toast(self, "There are no runs in that period yet. Run the checks first.")
             return
         folder = db.get_setting("report_folder")
         start = os.path.join(folder, f"Toner-trend-{datetime.now():%Y-%m-%d}") if folder and os.path.isdir(folder) else ""

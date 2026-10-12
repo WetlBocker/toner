@@ -49,7 +49,7 @@ for _ in range(50):
 names = [t.text(0) for t in tops()]
 check("one row per device (UniFi sub-devices folded into the controller)", sorted(names) == ["core-sw1", "dead", "edge-fw", "quiet", "udm"], names)
 check("worst problems first", names[0] == "dead" and names[1] == "edge-fw" and names[-1] == "quiet", names)
-check("collapsed by default", not any(t.isExpanded() for t in tops()))
+check("what needs a look opens by itself, healthy devices stay collapsed", all(t.isExpanded() == (t.text(0) != "quiet") for t in tops()), [(t.text(0), t.isExpanded()) for t in tops()])
 d = {t.text(0): t for t in tops()}
 check("device row shows worst status and counts", d["core-sw1"].text(2) == "WARN" and d["core-sw1"].text(1) == "3 checks" and d["core-sw1"].text(4) == "1 WARN", [d["core-sw1"].text(i) for i in range(5)])
 check("all-OK device says so", d["quiet"].text(2) == "OK" and d["quiet"].text(4) == "all OK")
@@ -60,11 +60,11 @@ check("results still stored flat for reports/notifications", len(w.results) == l
 check("chips count checks, summary counts devices", w.chips.counts == {"OK": 7, "WARN": 2, "FAIL": 1, "ERROR": 1} and w.summary.text() == "5 devices, 11 checks", (w.chips.counts, w.summary.text()))
 check("history saved", db.get_setting("retention_days") is not None)
 
-d["core-sw1"].setExpanded(True)
-check("expanding is remembered", "core-sw1" in w.expanded)
+d["quiet"].setExpanded(True)
+check("expanding is remembered", "quiet" in w.expanded)
 w.repopulate()
 d = {t.text(0): t for t in tops()}
-check("open device stays open across a rebuild", d["core-sw1"].isExpanded() and not d["edge-fw"].isExpanded())
+check("open device stays open across a rebuild", d["quiet"].isExpanded() and d["edge-fw"].isExpanded())
 w.table.expandAll(); check("expand all", all(t.isExpanded() for t in tops()))
 w.table.collapseAll(); check("collapse all", not any(t.isExpanded() for t in tops()) and not w.expanded)
 

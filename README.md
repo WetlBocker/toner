@@ -143,7 +143,11 @@ Import saved passwords restores them on another computer, so a portable copy can
 automation, config backups, notifications (email, Teams, Slack, Discord, ntfy, webhook, desktop; each with its service's mark in the list), credential profiles,
 appearance, terminal, reports, security (host keys), audit log, data and logs.
 
-Press **Ctrl+K** anywhere to jump to a section, tool, device or action. Ctrl+1 to Ctrl+8 switch sections.
+Press **Ctrl+K** (or the Search button under the sections) anywhere to jump to a section, tool, device or action. Ctrl+1 to Ctrl+9 switch sections.
+
+A few things that make the day-to-day quicker: the Inventory has a search box (Ctrl+F) and a dot beside each device for how its latest checks went; a finished run opens the
+devices that need a look; Settings marks the pages with unsaved edits; small confirmations appear as a short note that fades instead of a box to click away; a new
+installation shows a getting-started list on the Overview; and the window opens at the size and place you left it.
 
 ## Supported devices and checks
 
@@ -189,15 +193,6 @@ goes to the console that started it, or to `toner-service.log` in the data folde
 Scheduler). The service also runs the **agent receiver** when it is turned on in Settings > Agents, makes the scheduled
 trend report, and watches the agent certificate, so a server can collect Windows reports with nobody logged in. It uses the
 data folder and Credential Manager of the account it runs as, so run it as the same account you set Toner up with.
-
-## Development
-
-`requirements.lock` pins every package Toner was tested and built with (`pip install -r requirements.lock`);
-`requirements.txt` lists the direct dependencies. GitHub Actions (`.github/workflows`) runs the tests on every push and pull
-request, and builds and publishes the installer when you push a tag such as `v1.3.0` (it must match `core/version.py`).
-To sign the installer, give the build `SIGN_PFX` (a code-signing certificate) and `SIGN_PASSWORD`; in CI add the
-`SIGN_PFX_BASE64` and `SIGN_PASSWORD` secrets. `docs/validation-checklist.md` is a ten-minute check to run against your own
-equipment. Set the `TONER_DEBUG` environment variable to see harmless, normally hidden errors in `toner.log`.
 
 ## Tests
 

@@ -115,7 +115,8 @@ out2 = os.path.join(SP, "ui-trend.csv"); QFileDialog.getSaveFileName = staticmet
 check("or CSV", "Healthy %" in open(out2, encoding="utf-8").read())
 with db.connect() as c: c.execute("DELETE FROM runs"); c.execute("DELETE FROM results")
 tab.export_trend()
-check("with no runs yet it says so and writes nothing new", infos and "no runs" in infos[-1])
+from ui import toast as _T
+check("with no runs yet it says so and writes nothing new", _T.history and "no runs" in _T.history[-1])
 page = S.ReportsPage(); page.load()
 check("Settings > Reports offers Off, every week, every month", [page.trend.itemData(i) for i in range(page.trend.count())] == ["", "weekly", "monthly"] and page.trend.currentData() == "weekly")
 page.folder.setText(""); page.trend.setCurrentIndex(page.trend.findData("monthly"))

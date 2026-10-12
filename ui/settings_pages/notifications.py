@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComb
 from core import alerts, db, notify
 from ui.brandicons import channel_icon
 from ui.settings_base import Page, note, spin
+from ui.toast import toast
 
 
 # ------------------------------------------------------------------ Notifications
@@ -253,7 +254,7 @@ class NotificationsPage(Page):
     def test(self):
         ch = self.selected_channel()
         if not ch:
-            QMessageBox.information(self, "Send test", "Select a channel first.")
+            toast(self, "Select a channel first.")
             return
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
@@ -261,8 +262,10 @@ class NotificationsPage(Page):
         finally:
             QApplication.restoreOverrideCursor()
         self.refresh_log()
-        (QMessageBox.information if ok else QMessageBox.warning)(
-            self, "Test", f"Sent: {detail}" if ok else f"The test failed:\n\n{detail}")
+        if ok:
+            toast(self, f"Sent: {detail}")
+        else:
+            QMessageBox.warning(self, "Test", f"The test failed:\n\n{detail}")
 
     # ---------- snooze / log ----------
     def snooze(self, hours):

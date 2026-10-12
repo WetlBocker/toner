@@ -2,7 +2,7 @@ import json
 import sqlite3
 
 import keyring
-from PySide6.QtCore import QPointF, Qt, Signal
+from PySide6.QtCore import QPointF, QTimer, Qt, Signal
 from PySide6.QtGui import QFont, QIcon, QKeySequence, QPainter, QPen, QPixmap, QPolygonF, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog,
                                QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout, QInputDialog, QLabel,
@@ -14,6 +14,7 @@ from ui import icons, theme
 from ui.agentfleet import AgentFleet
 from ui.snmpfields import SnmpFields
 from core.runner import run_one
+from ui.toast import toast
 
 
 
@@ -494,6 +495,11 @@ class InventoryTab(QWidget):
         self._building = False
         self.expanded = set(db.get_setting("inventory_expanded"))
         self.vendor_sel, self.location_sel, self.tag_sel = set(), set(), set()    # empty = all; location "" = none
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Search devices  (Ctrl+F)")
+        self.search.setClearButtonEnabled(True)
+        self.search.setToolTip("Type part of a name, address, vendor, location, tag or detail. Several words must all match.")
+        self.health = {}                        # device name -> latest state, for the dot beside it
         self.filter_btn = QToolButton()
         self.filter_btn.setIcon(self._filter_icon())
         self.filter_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -524,19 +530,33 @@ class InventoryTab(QWidget):
         bar = QHBoxLayout()
         self.buttons = {}
         for text, fn in (("Add", self.add), ("Edit", self.edit), ("Details", self.show_details), ("Delete", self.delete),
-                         ("New folder", self.new_folder), ("Import...", self.import_file),
-                         ("Export...", self.export_file)):
+                         ("New folder", self.new_folder)):
             b = QPushButton(text)
             b.clicked.connect(lambda _=False, fn=fn: fn())
             bar.addWidget(b)
             self.buttons[text] = b
-        for text, fn in (("Expand all", self.expand_all), ("Collapse all", self.collapse_all)):
-            b = QPushButton(text)
-            b.clicked.connect(lambda _=False, fn=fn: fn())
-            bar.addWidget(b)
-            self.buttons[text] = b
+        self.more = QPushButton("More")                  # what is used now and then, so the row never outgrows a narrow window
+        more_menu = QMenu(self.more)
+        self.more_actions = {}
+        for text, fn in (("Import...", self.import_file), ("Export...", self.export_file), (None, None),
+                         ("Expand all", self.expand_all), ("Collapse all", self.collapse_all)):
+            if text is None:
+                more_menu.addSeparator()
+            else:
+                self.more_actions[text] = more_menu.addAction(text, fn)
+        self.more.setMenu(more_menu)
+        bar.addWidget(self.more)
         bar.addStretch()
+        self.search.setMinimumWidth(120)
+        self.search.setMaximumWidth(280)
+        bar.addWidget(self.search, 1)
         bar.addWidget(self.filter_btn)
+        self.search.textChanged.connect(lambda _: self._search_timer.start())
+        self._search_timer = QTimer(self)               # wait for a pause in typing, then rebuild once
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(180)
+        self._search_timer.timeout.connect(self.refresh)
+        QShortcut(QKeySequence("Ctrl+F"), self, activated=self._focus_search)
         self.fleet = AgentFleet()
         self.fleet.changed.connect(self._fleet_changed)
         self.fleet.open_device.connect(self._open_named)
@@ -608,6 +628,19 @@ class InventoryTab(QWidget):
             cache[key] = icons.icon(name, key[1])
         return cache[key]
 
+    DOTS = {"OK": "#2e9e5b", "WARN": "#e0a100", "FAIL": "#d32f2f", "ERROR": "#8e44ad"}
+
+    def _device_icon(self, status):
+        """The device icon with a dot for how its latest checks went (the words are in the tooltip, not only the colour)."""
+        t = theme.current()
+        if not t:
+            return QIcon()
+        key = ("dot", status, t["muted"])
+        cache = self.__dict__.setdefault("_icons", {})
+        if key not in cache:
+            cache[key] = icons.icon_with_dot("device", t["muted"], self.DOTS.get(status, "#9e9e9e"))
+        return cache[key]
+
     @staticmethod
     def _filter_icon():
         from ui.widgets import filter_icon
@@ -667,10 +700,26 @@ class InventoryTab(QWidget):
     def collapse_all(self):
         self.table.collapseAll()
 
+    def _focus_search(self):
+        if self.bar_w.isVisibleTo(self):
+            self.search.setFocus()
+            self.search.selectAll()
+
+    def _words(self):
+        return self.search.text().lower().split()
+
+    @staticmethod
+    def _haystack(d):
+        return " ".join(str(x) for x in (d["name"], d["host"], display.vendor_name(d["vendor"]), d.get("location"), d.get("details"),
+                                         d.get("tags"), d.get("site"), d.get("platform"))
+                        if x).lower()
+
     def _visible(self, devs):
         v, loc, tg = self.vendor_sel, self.location_sel, {x.lower() for x in self.tag_sel}
+        words = self._words()
         return [d for d in devs if (not v or d["vendor"] in v) and (not loc or (d.get("location") or "") in loc)
-                and (not tg or tg & {x.lower() for x in db.split_tags(d.get("tags"))})]
+                and (not tg or tg & {x.lower() for x in db.split_tags(d.get("tags"))})
+                and (not words or all(w in self._haystack(d) for w in words))]
 
     def kind_of(self, item):
         key = item.data(0, ROLE) or ""
@@ -693,7 +742,16 @@ class InventoryTab(QWidget):
         key = f"device:{d['id']}"
         it.setData(0, ROLE, key)
         self.payload[key] = d
-        it.setIcon(0, self._icon("device"))
+        state = self.health.get(d["name"])
+        it.setIcon(0, self._device_icon(state["status"]) if state and d["enabled"] else self._icon("device"))
+        if state and d["enabled"]:
+            bad = state["problems"]
+            lines = [f"{state['status']} as of {state['at']}"] + [f"  {c}: {m}" if m else f"  {c}" for c, _s, m in bad[:6]]
+            if len(bad) > 6:
+                lines.append(f"  ... and {len(bad) - 6} more")
+            it.setToolTip(0, "\n".join(lines))
+        elif not d["enabled"]:
+            it.setToolTip(0, "Disabled: left out of runs")
         it.setFlags((it.flags() | Qt.ItemFlag.ItemIsDragEnabled) & ~Qt.ItemFlag.ItemIsDropEnabled)
         return it
 
@@ -701,10 +759,14 @@ class InventoryTab(QWidget):
         return True
 
     def filtering(self):
-        return bool(self.vendor_sel or self.location_sel or self.tag_sel)
+        return bool(self.vendor_sel or self.location_sel or self.tag_sel or self._words())
 
     def refresh(self):
         devs = self._visible(db.list_devices())
+        try:
+            self.health = db.device_health()
+        except Exception:
+            self.health = {}
         self._building = True
         self.table.blockSignals(True)            # clearing announces 'selection changed' for rows being deleted
         self.table.clear()
@@ -1057,7 +1119,7 @@ class InventoryTab(QWidget):
                 return
             self.refresh()
             self.changed.emit()
-            QMessageBox.information(self, "Edit devices", f"Changed {n} of {len(devs)} device(s).")
+            toast(self, f"Changed {n} of {len(devs)} device(s).")
 
     # ---------- import ----------
     def import_file(self):

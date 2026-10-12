@@ -10,6 +10,7 @@ from core import audit, backup, db, display
 from drivers.base import SEVERITY
 from ui import theme
 from ui.widgets import EmptyHint, GroupPicker
+from ui.toast import toast
 
 
 class DiffHighlighter(QSyntaxHighlighter):
@@ -327,7 +328,7 @@ class ConfigsTab(QWidget):
         devices = [d for d in db.list_devices(enabled_only=True) if db.in_groups(d, labels) and (only is None or d["name"] == only)]
         if not devices:
             if not scheduled:
-                QMessageBox.information(self, "Back up", "No enabled devices in this group.")
+                toast(self, "No enabled devices in this group.")
             return
         self.scheduled = scheduled
         self.run_btn.setEnabled(False)

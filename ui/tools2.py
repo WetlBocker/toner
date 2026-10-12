@@ -18,6 +18,7 @@ from core import proxy, topology, vendors
 from ui import theme
 from ui.tools import DevicePicker, OutputBox, _row
 from ui.widgets import GroupPicker
+from ui.toast import toast
 
 
 def _table(cols, stretch_last=True):
@@ -216,7 +217,7 @@ class DiscoveryTab(QWidget):
     def add(self):
         rows = self.checked_rows()
         if not rows:
-            QMessageBox.information(self, "Discovery", "Tick the devices to add first.")
+            toast(self, "Tick the devices to add first.")
             return
         added, skipped = discovery.add_to_inventory(rows, self.folder.currentData(), self.profile.currentData(),
                                                     self.location.text().strip(), self.tags.text().strip(), self.group.currentData())

@@ -89,13 +89,13 @@ AutoDialog.fill, AutoDialog.fill_meta = {"url": base + "/hook-two"}, {"name": "S
 N.add_channel("slack") if False else N.add_channel("webhook")
 check("several channels at once", len(notify.channels()) == 2 and N.table.rowCount() == 2)
 captured.clear(); N.table.selectRow(0); msgs.clear(); N.test()
-check("Send test posts a sample and reports success", captured and captured[-1]["path"] == "/hook-one" and msgs[-1][0] == "info" and "Test device" in captured[-1]["body"].decode(), (msgs, captured))
+check("Send test posts a sample and reports success", captured and captured[-1]["path"] == "/hook-one" and __import__("ui.toast", fromlist=["x"]).history[-1].startswith("Sent") and "Test device" in captured[-1]["body"].decode(), (msgs, captured))
 check("the test is in the delivery log", N.log.rowCount() >= 1 and "(test)" in N.log.item(0, 1).text() and N.log.item(0, 2).text() == "sent")
 N.table.selectRow(1); cid2 = notify.channels()[1]["id"]; answer["q"] = QMessageBox.StandardButton.No; N.remove()
 check("remove asks first (No keeps it)", len(notify.channels()) == 2)
 answer["q"] = QMessageBox.StandardButton.Yes; N.remove()
 check("remove deletes the channel and its secret", len(notify.channels()) == 1 and FakeKeyring.get_password(db.SERVICE, f"notify:{cid2}:url") is None and N.table.rowCount() == 1)
-N.table.clearSelection(); msgs.clear(); N.test(); check("test with nothing selected asks you to pick one", msgs and "Select a channel" in msgs[-1][1])
+N.table.clearSelection(); N.test(); check("test with nothing selected asks you to pick one", "Select a channel" in __import__("ui.toast", fromlist=["x"]).history[-1])
 
 print("== a failing channel is explained, not hidden")
 d = ST.ChannelDialog(notify.channels()[0], None); d.inputs["url"][1].setText("http://127.0.0.1:9/dead"); msgs.clear(); orig_deliver = notify.deliver
