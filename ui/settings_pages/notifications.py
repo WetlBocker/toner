@@ -11,6 +11,7 @@ from core import alerts, db, notify
 from ui.brandicons import channel_icon
 from ui.settings_base import Page, note, spin
 from ui.toast import toast
+from ui.widgets import EmptyHint
 
 
 # ------------------------------------------------------------------ Notifications
@@ -193,6 +194,7 @@ class NotificationsPage(Page):
         self.log.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.log.setMinimumHeight(130)
         self.log.verticalHeader().setVisible(False)
+        self.log_hint = EmptyHint(self.log, "No messages sent yet", "Each alert, and each test, is listed here")
         refresh = QPushButton("Refresh")
         refresh.clicked.connect(self.refresh_log)
 
@@ -222,7 +224,7 @@ class NotificationsPage(Page):
                                    notify.CHANNEL_TYPES[c["type"]]["label"], sends)):
                 item = QTableWidgetItem(v)
                 item.setToolTip(v)
-                if j in (1, 2):                                   # the service's mark beside its name and its type
+                if j == 1:                                        # the service's mark beside the channel's name (the type is plain text)
                     item.setIcon(channel_icon(c["type"]))
                 self.table.setItem(i, j, item)
 
@@ -281,6 +283,7 @@ class NotificationsPage(Page):
     def refresh_log(self):
         rows = alerts.recent_deliveries()
         self.log.setRowCount(len(rows))
+        self.log_hint.setVisible(not rows)
         for i, r in enumerate(rows):
             for j, v in enumerate((r["at"], r["channel"], "sent" if r["ok"] else "FAILED", r["detail"] or "")):
                 it = QTableWidgetItem(v)

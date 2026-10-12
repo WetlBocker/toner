@@ -3,7 +3,7 @@ import sqlite3
 
 import keyring
 from PySide6.QtCore import QPointF, QTimer, Qt, Signal
-from PySide6.QtGui import QFont, QIcon, QKeySequence, QPainter, QPen, QPixmap, QPolygonF, QShortcut
+from PySide6.QtGui import QColor, QFont, QIcon, QKeySequence, QPainter, QPen, QPixmap, QPolygonF, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog,
                                QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout, QInputDialog, QLabel,
                                QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSpinBox, QStyle, QTabWidget,
@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComb
 from core import agents, audit, bulk, db, display, importer, nettools, profiles, proxy, sessions, vendors, winmon
 from ui import icons, theme
 from ui.agentfleet import AgentFleet
+from ui.columns import ColumnChooser
 from ui.devicechecks import DeviceChecks
 from ui.servicepicker import ServicePicker
 from ui.snmpfields import SnmpFields
@@ -32,7 +33,7 @@ class DeviceDialog(QDialog):
         self.secret.setEchoMode(QLineEdit.EchoMode.Password)
         self.secret.setPlaceholderText("leave blank to keep the stored value")
         self.vendor = QComboBox()
-        for v in vendors.VENDORS:
+        for v in vendors.listed():
             self.vendor.addItem(display.vendor_name(v), v)       # shown text, stored value
         self.platform = QComboBox()
         self.port = QSpinBox()
@@ -160,6 +161,9 @@ class DeviceDialog(QDialog):
         self.tabs.addTab(self.page_more, "Tags and fields")
         self.tabs.addTab(self.page_windows, "Windows")
         self.tabs.addTab(self.checks_tab, "Checks")
+        self.tabs.setUsesScrollButtons(False)                    # every tab stays in view; the window is made wide enough for all six
+        self.tabs.setElideMode(Qt.TextElideMode.ElideNone)
+        self.setMinimumWidth(max(460, self.tabs.tabBar().sizeHint().width() + 56))
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save |
                                    QDialogButtonBox.StandardButton.Cancel)
@@ -174,7 +178,7 @@ class DeviceDialog(QDialog):
         snmp_have = {}
         if dev:
             self.name.setText(dev["name"])
-            self.vendor.setCurrentIndex(max(0, self.vendor.findData(dev["vendor"])))
+            self.vendor.setCurrentIndex(max(0, self.vendor.findData(vendors.family(dev["vendor"]))))
             self.host.setText(dev["host"])
             self.location.setCurrentText(dev.get("location") or "")
             self.details.setText(dev.get("details") or "")
@@ -217,20 +221,35 @@ class DeviceDialog(QDialog):
         self.snmp.set_stored(snmp_have)
         self.use_snmp.toggled.connect(lambda on: self.snmp.setEnabled(on))
         self.vendor.currentIndexChanged.connect(lambda _: self.adapt(self.vendor.currentData()))
-        self.platform.currentIndexChanged.connect(lambda _: self._windows_rows())
+        self.platform.currentIndexChanged.connect(lambda _: self._apply_type() if vendors.modes(self.vendor.currentData()) else self._windows_rows())
         self.adapt(self.vendor.currentData())
+        self._start = self._snapshot()                           # how it was when it opened, to notice unsaved edits
+
+    def _vendor(self):
+        """The type of device the dialog is describing: the vendor, or for a vendor with several ways to monitor it (UniFi) the way chosen."""
+        v = self.vendor.currentData()
+        return (self.platform.currentData() or v) if vendors.modes(v) else v
 
     def adapt(self, vendor):
+        modes = vendors.modes(vendor)
+        info = vendors.get(vendor)
+        keep = self.platform.currentData() or (self.dev.get("vendor") if modes else self.dev.get("platform"))
+        self.platform.blockSignals(True)
+        self.platform.clear()                                    # the platforms belong to the vendor
+        for key, label in (modes or info["platforms"]):
+            self.platform.addItem(label, key)
+        self.platform.setCurrentIndex(max(0, self.platform.findData(keep)))
+        self.platform.blockSignals(False)
+        self.form.setRowVisible(self.platform, len(modes or info["platforms"]) > 1)
+        self.form.labelForField(self.platform).setText("How to monitor" if vendor == "windows" or modes else "Platform")
+        self._apply_type()
+
+    def _apply_type(self):
+        """Show what the chosen kind of device needs: its labels, which boxes apply, its checks."""
+        vendor = self._vendor()
         self.checks_tab.set_vendor(vendor)
         info = vendors.get(vendor)
         snmp_only = vendors.is_snmp(vendor)
-        self.platform.clear()                                    # the platforms belong to the vendor
-        keep = self.platform.currentData() or self.dev.get("platform")
-        for key, label in info["platforms"]:
-            self.platform.addItem(label, key)
-        self.platform.setCurrentIndex(max(0, self.platform.findData(keep)))
-        self.form.setRowVisible(self.platform, len(info["platforms"]) > 1)
-        self.form.labelForField(self.platform).setText("How to monitor" if vendor == "windows" else "Platform")
         self.access.setRowVisible(self.username, info["username"])
         self.access.setRowVisible(self.site, bool(info["site"]))
         self.access.setRowVisible(self.ha, info["ha"])
@@ -239,9 +258,16 @@ class DeviceDialog(QDialog):
         login = vendors.has_login(vendor)
         self.form.setRowVisible(self.preset, vendor == "cloud")
         self.host.setPlaceholderText({"cloud": "the status page's address, e.g. www.githubstatus.com",
-                                      "wifi": "localhost (this computer)"}.get(vendor, ""))
+                                      "wifi": "localhost (this computer)",
+                                      "unifi_network": "the console's address, e.g. 192.168.1.1 or unifi.corp.example.com",
+                                      "unifi_protect": "the console's address, e.g. 192.168.1.1 or unifi.corp.example.com",
+                                      "unifi_cloud": "api.ui.com"}.get(vendor, ""))
         if vendor == "wifi" and not self.host.text().strip():
             self.host.setText("localhost")
+        if vendor == "unifi_cloud" and not self.host.text().strip():
+            self.host.setText("api.ui.com")                       # Site Manager is always this address
+        elif vendor != "unifi_cloud" and self.host.text().strip() == "api.ui.com":
+            self.host.clear()                                     # that was filled in for Site Manager; another kind needs its own address
         self.access.setRowVisible(self.profile, login)
         self.access.setRowVisible(self.secret, not snmp_only and login)
         self.tabs.setTabVisible(2, login)
@@ -288,14 +314,14 @@ class DeviceDialog(QDialog):
         AgentScriptDialog(self.dev["name"], self).exec()
 
     def _proxy_rows(self):
-        able = vendors.get(self.vendor.currentData()).get("kind") in ("ssh", "api", "status")     # not SNMP / UDP / local
+        able = vendors.get(self._vendor()).get("kind") in ("ssh", "api", "status")     # not SNMP / UDP / local
         self.access.setRowVisible(self.proxy_mode, able)
         custom = able and self.proxy_mode.currentData() == "custom"
         for w in (self.proxy_kind, self.proxy_host, self.proxy_port, self.proxy_user, self.proxy_pw):
             self.access.setRowVisible(w, custom)
 
     def _proxy_values(self):
-        if vendors.get(self.vendor.currentData()).get("kind") not in ("ssh", "api", "status"):
+        if vendors.get(self._vendor()).get("kind") not in ("ssh", "api", "status"):
             return ""
         mode = self.proxy_mode.currentData()
         if mode == "none":
@@ -318,14 +344,14 @@ class DeviceDialog(QDialog):
                 self.name.setText(label)
 
     def values(self):
-        v = self.vendor.currentData()
+        v = self._vendor()
         snmp_on = (self.use_snmp.isChecked() and vendors.has_login(v)) or vendors.is_snmp(v)
         return {"id": self.dev.get("id"), "name": self.name.text().strip(), "vendor": v,
                 "location": self.location.currentText().strip(),
                 "folder_id": self.folder.currentData(),
                 "details": self.details.text().strip(),
                 "host": self.host.text().strip(), "port": self.port.value(),
-                "platform": self.platform.currentData() or "",
+                "platform": "" if vendors.modes(v) else (self.platform.currentData() or ""),
                 "username": self.username.text().strip(), "site": self.site.text().strip() or "default",
                 "verify_ssl": int(self.verify.isChecked()), "ha_expected": int(self.ha.isChecked()),
                 "enabled": int(self.enabled.isChecked()),
@@ -335,6 +361,19 @@ class DeviceDialog(QDialog):
                 "jump": {"device": self.jump.currentData()} if self.jump.currentData() else "",
                 "proxy": self._proxy_values(), "winopts": self._win_values(),
                 "checkopts": self.checks_tab.values()}
+
+    def _snapshot(self):
+        try:
+            return json.dumps([self.values(), self.secret.text(), self.proxy_pw.text(), self.snmp_secrets()], sort_keys=True, default=str)
+        except Exception:
+            return ""
+
+    def reject(self):
+        """Cancel, Esc or the close button: ask first if anything was changed."""
+        if self._snapshot() != self._start and QMessageBox.question(
+                self, "Discard changes", "Close without saving your changes to this device?") != QMessageBox.StandardButton.Yes:
+            return
+        super().reject()
 
     @staticmethod
     def _with_button(field, button):
@@ -372,7 +411,7 @@ class DeviceDialog(QDialog):
                 "watch": winmon._names(self.win_watch.text()), "ignore": winmon._names(self.win_ignore.text())}
 
     def snmp_secrets(self):
-        return self.snmp.secrets() if self.use_snmp.isChecked() or vendors.is_snmp(self.vendor.currentData()) else {}
+        return self.snmp.secrets() if self.use_snmp.isChecked() or vendors.is_snmp(self._vendor()) else {}
 
     def accept(self):
         v = self.values()
@@ -420,7 +459,7 @@ class DeviceDialog(QDialog):
         else:
             ip = nettools.resolve_host(dev["host"])
             shown = dev["host"] if ip == dev["host"] else f"{dev['host']} ({ip})"
-            QMessageBox.information(self, "Test", f"Connected to {shown}. {len(res)} check results returned.")
+            toast(self, f"Connected to {shown}. {len(res)} check results returned.")
 
 
 def fields_to_text(raw):
@@ -541,7 +580,8 @@ class InventoryTab(QWidget):
     open_agent_settings = Signal()
     open_ssh = Signal(dict)
     open_details = Signal(dict)
-    COLS = ["Name", "Vendor", "Platform", "Location", "Host", "Site", "Details", "Tags", "Enabled"]
+    COLS = ["Name", "Vendor", "Platform", "Location", "Host", "Site", "Details", "Tags", "Status"]
+    STATUS = 8
 
     def __init__(self):
         super().__init__()
@@ -575,9 +615,12 @@ class InventoryTab(QWidget):
         self.table.customContextMenuRequested.connect(self.show_menu)
         self.table.itemSelectionChanged.connect(self.update_buttons)
         self.table.itemDoubleClicked.connect(self.double_clicked)
+        self.columns = ColumnChooser(self.table, self.table.header(), "inventory_columns", self.COLS, locked=(0,), auto=self._empty_columns)
         self.table.itemExpanded.connect(lambda it: (self.remember(it, True), self._autosize()))
         self.table.itemCollapsed.connect(lambda it: (self.remember(it, False), self._autosize()))
         self.table.moved.connect(self.handle_moves)
+        for key in ("Return", "Enter"):                          # Enter opens the selected device, as a double-click does
+            QShortcut(QKeySequence(key), self.table, activated=self._enter)
         QShortcut(QKeySequence("F2"), self.table, activated=self.rename_folder)
         QShortcut(QKeySequence("Delete"), self.table, activated=self.delete)
 
@@ -683,6 +726,7 @@ class InventoryTab(QWidget):
         return cache[key]
 
     DOTS = {"OK": "#2e9e5b", "WARN": "#e0a100", "FAIL": "#d32f2f", "ERROR": "#8e44ad"}
+    SHAPES = {"OK": "circle", "WARN": "triangle", "FAIL": "square", "ERROR": "diamond"}
 
     def _device_icon(self, status):
         """The device icon with a dot for how its latest checks went (the words are in the tooltip, not only the colour)."""
@@ -692,7 +736,7 @@ class InventoryTab(QWidget):
         key = ("dot", status, t["muted"])
         cache = self.__dict__.setdefault("_icons", {})
         if key not in cache:
-            cache[key] = icons.icon_with_dot("device", t["muted"], self.DOTS.get(status, "#9e9e9e"))
+            cache[key] = icons.icon_with_dot("device", t["muted"], self.DOTS.get(status, "#9e9e9e"), shape=self.SHAPES.get(status, "circle"))
         return cache[key]
 
     @staticmethod
@@ -707,7 +751,7 @@ class InventoryTab(QWidget):
         m.clear()
         devs = db.list_devices()
         for title, attr, values, shown in (
-                ("Vendor", "vendor_sel", {d["vendor"] for d in devs}, display.vendor_name),
+                ("Vendor", "vendor_sel", {vendors.family(d["vendor"]) for d in devs}, display.vendor_name),
                 ("Location", "location_sel", {d["location"] for d in devs if d.get("location")}, str),
                 ("Tag", "tag_sel", {t for d in devs for t in db.split_tags(d.get("tags"))}, str)):
             sub = m.addMenu(title)
@@ -771,7 +815,7 @@ class InventoryTab(QWidget):
     def _visible(self, devs):
         v, loc, tg = self.vendor_sel, self.location_sel, {x.lower() for x in self.tag_sel}
         words = self._words()
-        return [d for d in devs if (not v or d["vendor"] in v) and (not loc or (d.get("location") or "") in loc)
+        return [d for d in devs if (not v or vendors.family(d["vendor"]) in v) and (not loc or (d.get("location") or "") in loc)
                 and (not tg or tg & {x.lower() for x in db.split_tags(d.get("tags"))})
                 and (not words or all(w in self._haystack(d) for w in words))]
 
@@ -786,10 +830,25 @@ class InventoryTab(QWidget):
 
     def _device_values(self, d):
         site = d["site"] if vendors.get(d["vendor"]).get("site") else "N/A"
-        platform = display.platform_name(d.get("platform") or vendors.default_platform(d["vendor"])) \
-            if vendors.platform_keys(d["vendor"]) else "N/A"
+        platform = vendors.mode_label(d["vendor"]) or (display.platform_name(d.get("platform") or vendors.default_platform(d["vendor"]))
+                                                       if vendors.platform_keys(d["vendor"]) else "N/A")
         return [d["name"], display.vendor_name(d["vendor"]), platform, d.get("location") or "", d["host"], site,
-                d.get("details") or "", d.get("tags") or "", "yes" if d["enabled"] else "no"]
+                d.get("details") or "", d.get("tags") or "", self._status_word(d)]
+
+    def _status_word(self, d):
+        """What the Status column says, in words as well as colour: OK, WARN, FAIL, ERROR, Not checked, or Disabled."""
+        if not d["enabled"]:
+            return "Disabled"
+        state = self.health.get(d["name"])
+        return state["status"] if state else "Not checked"
+
+    def _empty_columns(self):
+        """Columns that say nothing for the devices shown: Site that is N/A everywhere, and Details and Tags that are blank everywhere."""
+        devs = [d for k, d in self.payload.items() if k.startswith("device:")]
+        if not devs:
+            return set()
+        vals = [self._device_values(d) for d in devs]
+        return {i for i in (5, 6, 7) if all(v[i] in ("", "N/A") for v in vals)}
 
     def _device_item(self, d):
         it = QTreeWidgetItem(self._device_values(d))
@@ -809,7 +868,21 @@ class InventoryTab(QWidget):
         if db.normalize_checkopts(d.get("checkopts")):
             it.setToolTip(0, (it.toolTip(0) + "\n" if it.toolTip(0) else "") + "Has its own checks or thresholds (Edit > Checks)")
         it.setFlags((it.flags() | Qt.ItemFlag.ItemIsDragEnabled) & ~Qt.ItemFlag.ItemIsDropEnabled)
+        word = it.text(self.STATUS)
+        if not d["enabled"]:                                      # left out of runs: the whole row is dimmed
+            muted = QColor((theme.current() or {}).get("muted", "#888888"))
+            for col in range(len(self.COLS)):
+                it.setForeground(col, muted)
+        elif word in self.DOTS:
+            f = it.font(self.STATUS)
+            f.setBold(True)
+            it.setFont(self.STATUS, f)
+            it.setForeground(self.STATUS, QColor(self.DOTS[word]))
         return it
+
+    def _enter(self):
+        if self.selected() is not None:
+            self.show_details()
 
     def folders_mode(self):
         return True
@@ -834,6 +907,7 @@ class InventoryTab(QWidget):
         self._build_folders(devs, bold)
         for i in range(len(self.COLS)):
             self.table.resizeColumnToContents(i)
+        self.columns.apply()
         self._building = False
         self.table.clearSelection()
         self.table.setCurrentItem(None)

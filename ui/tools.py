@@ -583,6 +583,7 @@ class ToolsTab(QWidget):
         super().__init__()
         from ui import tools2, tools3
         from ui.nav import PageStack
+        from ui.settings_base import tidy
         self.diag, self.scan, self.subnet = DiagnosticsTab(), ScanTab(), SubnetTab()
         self.snmp = SnmpTab()
         self.runner = tools2.CommandRunnerTab()
@@ -597,7 +598,7 @@ class ToolsTab(QWidget):
         from ui import opensslui
         self.openssl = opensslui.OpensslTab()
         self.discovery.inventory_changed = self.inventory_changed.emit
-        self.tabs = PageStack()
+        self.tabs = PageStack(width=228)          # wide enough for 'Ping / Traceroute / DNS' without cutting it short
         for title, pages in (("Connect", ((self.runner, "Command Runner"),)),
                              ("Diagnose", ((self.diag, "Ping / Traceroute / DNS"), (self.liveping, "Live Ping"),
                                            (self.mtr, "Path Monitor (MTR)"), (self.scan, "Port Scanner"),
@@ -611,6 +612,7 @@ class ToolsTab(QWidget):
                              ("Utilities", ((self.utilities, "MAC and Wake-on-LAN"),))):
             self.tabs.addSection(title)
             for w, label in pages:
+                tidy(w, combo_min=460)                          # a button or drop-down is only as wide as what it says, even in a wide window
                 self.tabs.addTab(w, label)
         lay = QVBoxLayout(self)
         lay.addWidget(self.tabs)

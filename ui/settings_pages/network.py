@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComb
                                QTableWidgetItem, QTimeEdit, QVBoxLayout, QWidget)
 from core import agents, audit, db, maintenance, proxy
 from ui.widgets import GroupPicker
-from ui.settings_base import Page, note, row_of, spin
+from ui.settings_base import Collapsible, Page, compact_row, note, row_of, spin
 
 
 # ------------------------------------------------------------------ Proxy
@@ -173,26 +173,39 @@ class AgentsPage(Page):
         self.token_days.setToolTip("Computers that installed the package are given a new token this often. The old one still works for a week.")
         self.cert_note = QLabel("")
         self.cert_note.setWordWrap(True)
+        self.banner = QLabel("")                                          # one line that says whether this works, before any of the settings
+        self.banner.setWordWrap(True)
+        self.banner.setStyleSheet("font-weight: 600; padding: 6px 0;")
+        self.copy_fw = QPushButton("Copy")
+        self.copy_fw.setAutoDefault(False)
+        self.copy_fw.clicked.connect(lambda: QApplication.clipboard().setText(self.firewall.text()))
         self.form.addRow("", self.enabled)
         self.form.addRow("", self.enroll)
         self.form.addRow("Sign-up key", row_of(self.key, self.newkey))
-        self.form.addRow("Package", row_of(self.download, QLabel("reports every"), self.minutes))
-        self.form.addRow("Port", self.port)
-        self.form.addRow("Listen on", self.bind)
-        self.form.addRow("Toner's address", self.address)
-        self.form.addRow("Certificate", row_of(self.print, self.renew))
-        self.form.addRow("", self.cert_note)
-        self.form.addRow("Replace tokens every", self.token_days)
-        self.form.addRow("", self.status)
-        self.form.addRow("Windows Firewall", self.firewall)
+        self.form.addRow("Package", compact_row(self.download, QLabel("reports every"), self.minutes))
         self.form.addRow("Computers", self.computers)
-        self.lay.insertWidget(0, note(
+        adv = QWidget()                                                   # what most people never change
+        af = QFormLayout(adv)
+        af.setContentsMargins(0, 0, 0, 0)
+        af.addRow("Port", self.port)
+        af.addRow("Listen on", self.bind)
+        af.addRow("Toner's address", self.address)
+        af.addRow("Certificate", row_of(self.print, self.renew))
+        af.addRow("", self.cert_note)
+        af.addRow("Replace tokens every", self.token_days)
+        af.addRow("", self.status)
+        af.addRow("Windows Firewall", row_of(self.firewall, self.copy_fw))
+        self.advanced = Collapsible("Advanced: port, address, certificate, tokens, firewall", adv)
+        self.lay.insertWidget(1, self.advanced)
+        self.lay.insertWidget(0, self.banner)
+        self.intro = note(
             "An agent is a small program on a Windows computer that reports to Toner on a schedule. Nothing connects to the computer, so it "
             "suits laptops, computers outside the domain and anything behind a firewall. Download the package below, copy it to the computer "
             "and double-click Install-TonerAgent.cmd: the computer signs itself up and appears in the Inventory. Reports arrive over HTTPS, "
             "one token per computer, pinned to the certificate below. To set up one computer by hand instead, add a Windows device with "
             "How to monitor: Agent, then use its Windows tab > Get agent script. Toner only receives reports while it is running (in the tray "
-            "is fine). Windows may ask whether to allow Toner through its firewall the first time; allow it on the networks the agents are on."))
+            "is fine). Windows may ask whether to allow Toner through its firewall the first time; allow it on the networks the agents are on.")
+        self.lay.insertWidget(1, Collapsible("How agents work", self.intro))
         self.renew.clicked.connect(self._renew)
         self.newkey.clicked.connect(self._newkey)
         self.download.clicked.connect(self._download)
@@ -225,6 +238,7 @@ class AgentsPage(Page):
             self.status.setText("Not listening.")
         if self.enroll.isChecked() and not self.enabled.isChecked():
             self.status.setText(self.status.text() + " Sign-up needs the receiver turned on.")
+        self.firewall.setCursorPosition(0)                                # show the start of the command, not its end
         try:
             left = agents.cert_days_left()
             self.cert_note.setText(f"The certificate is good for {left} more days." if left >= 90 else
@@ -239,6 +253,16 @@ class AgentsPage(Page):
         self.computers.setText((f"{len(rows)} computer(s) report through an agent" + (f", {silent} silent" if silent else "") + ". ") if rows else
                                "No computer reports through an agent yet. ")
         self.computers.setText(self.computers.text() + "They are listed under Inventory > Agents, where you can revoke or remove one.")
+        if s["running"]:
+            self.banner.setText(f"Receiving reports on port {s['port']}  -  " + (f"{len(rows)} computer{'s' if len(rows) != 1 else ''} reporting"
+                                                                                  + (f", {silent} silent" if silent else "") if rows else "no computer has reported yet"))
+            self.banner.setStyleSheet("font-weight: 600; padding: 6px 0; color: #2e9e5b;")
+        elif s["error"]:
+            self.banner.setText("The receiver could not start: " + s["error"])
+            self.banner.setStyleSheet("font-weight: 600; padding: 6px 0; color: #d32f2f;")
+        else:
+            self.banner.setText("The receiver is off  -  tick 'Receive reports from agents' and save to start it")
+            self.banner.setStyleSheet("font-weight: 600; padding: 6px 0;")
 
     def validate(self):
         bind = self.bind.text().strip()

@@ -8,7 +8,7 @@ from pathlib import Path
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence, QPainter, QPixmap, QShortcut
 from PySide6.QtWidgets import QApplication, QMainWindow, QMenu, QMessageBox, QSystemTrayIcon
-from core import agents, audit, db, notify, paths, reports, sessionlog, sessions, trends
+from core import agents, audit, checks, db, notify, paths, reports, sessionlog, sessions, trends
 from ui import theme
 from ui.about import AboutTab
 from ui.configs import ConfigsTab
@@ -263,6 +263,17 @@ class Main(QMainWindow):
             entries.append((f"Device: {d['name']}", d["host"], lambda d=d: self.open_device_view(d)))
             if d["vendor"] in ("cisco", "juniper", "arista", "hpe", "mikrotik"):
                 entries.append((f"SSH to {d['name']}", d["host"], lambda d=d: self.open_ssh_console(d)))
+        # found by typing, so they come after what the list shows first: sections, tools, sessions and devices
+        for title in self.settings.page_titles():                       # any page of Settings by name
+            entries.append((f"Settings: {title}", "", lambda t=title: (self.go("Settings"), self.settings.select_page(t))))
+        for key, label in db.THRESHOLD_LABELS.items():
+            entries.append((f"Threshold: {label}", "Settings > Thresholds", lambda: (self.go("Settings"), self.settings.select_page("Thresholds"))))
+        shown = set()
+        for d in db.list_devices():                                     # the checks of the kinds of device that are in use
+            for _key, label in checks.CATALOG.get(d["vendor"], []):
+                if label not in shown:
+                    shown.add(label)
+                    entries.append((f"Check: {label}", "Settings > Checks", lambda: (self.go("Settings"), self.settings.select_page("Checks"))))
         self.palette.set_entries(entries)
         self.palette.popup()
 

@@ -139,6 +139,13 @@ growing disks. Save it as PDF, HTML or CSV. Settings > Reports can make one ever
 Export saved passwords writes them all to one file encrypted with a password you choose (scrypt and AES-256-GCM);
 Import saved passwords restores them on another computer, so a portable copy can have its passwords too.
 
+**UniFi by API key**: add a device with the vendor *UniFi*, choose **How to monitor** (*Network API*, *Protect API* or *Site Manager in the cloud*), and paste an API key made
+for that application (UniFi's documentation at developer.ui.com says to create keys at unifi.ui.com). Network and Protect talk to the console at its address
+(`/proxy/network/integration/v1`, `/proxy/protect/integration/v1`); the Site field picks a Network site (`default`, a name, or `*` for all). Site Manager
+reads every console and site on the account through api.ui.com, and its Site field can narrow that to one console or site. A console that runs both Network and
+Protect gets two devices (same vendor, a different way to monitor). In import and export files that is `vendor: unifi` with `platform: login`, `network`, `protect` or `cloud`. The first choice, *Console login*, signs in with a user name and password and stays for the checks the API does not have yet (port errors, uplinks,
+channel utilisation). Each type has its own checks (Settings > Checks, or per device) and its own limits (Settings > Thresholds).
+
 **Per-device checks and thresholds**: Edit device > Checks lets one device run its own list of checks and use its own WARN/FAIL limits. A device with
 nothing set there follows Settings > Checks and Settings > Thresholds, and its own limits beat the overrides in Settings. On a Windows device, **Choose...**
 beside the service fields lists the computer's services (asked live over WinRM or on this PC; from the last report for an agent) so you tick the ones
@@ -149,6 +156,10 @@ automation, config backups, notifications (email, Teams, Slack, Discord, ntfy, w
 appearance, terminal, reports, security (host keys), audit log, data and logs.
 
 Press **Ctrl+K** (or the Search button under the sections) anywhere to jump to a section, tool, device or action. Ctrl+1 to Ctrl+9 switch sections.
+
+Interface details: right-click a heading in Inventory or Results to choose its columns (empty ones hide themselves until you choose); Status columns and marks
+use different shapes as well as colours (circle OK, triangle WARN, square FAIL, diamond ERROR); the Overview says what changed since the previous run; Enter opens the
+selected device; Ctrl+K also finds Settings pages, limits and checks; a device dialog asks before throwing away edits.
 
 A few things that make the day-to-day quicker: the Inventory has a search box (Ctrl+F) and a dot beside each device for how its latest checks went; a finished run opens the
 devices that need a look; Settings marks the pages with unsaved edits; small confirmations appear as a short note that fades instead of a box to click away; a new
@@ -166,7 +177,10 @@ installation shows a getting-started list on the Overview; and the window opens 
 | Fortinet (FortiGate) | REST API | CPU, memory, firmware, WAN links, HA, IPsec tunnels |
 | Palo Alto (PAN-OS) | XML API | CPU, memory, uptime, version, sessions, HA, interfaces |
 | Cisco Meraki | Dashboard API | device status, appliance uplinks, licenses |
-| UniFi OS | controller API | site health, per device state, uptime, CPU, memory, temperature, firmware, uplink, port errors, clients, channel utilisation |
+| UniFi, console login | controller API | site health, per device state, uptime, CPU, memory, temperature, firmware, uplink, port errors, clients, channel utilisation |
+| UniFi, Network API (key) | Integration API on the console | API version, per device state, uptime, CPU, memory, firmware, Wi-Fi transmit retries per radio, devices waiting to be adopted, client count |
+| UniFi, Protect API (key) | Integration API on the console | NVR alarm state, cameras, lights, sensors, chimes and other devices connected or not, sensor batteries, recent leak / tamper / smoke alarms |
+| UniFi, Site Manager (cloud) | api.ui.com, one key for the account | per console device status and firmware, per site health and WAN uptime, ISP latency and packet loss, SD-WAN status |
 | Generic SNMP (anything else) | SNMP v1/v2c/v3 | reachability, CPU, memory, storage, uptime, temperature, interfaces, errors, utilisation |
 | Cloud status page | public Statuspage JSON, no login | overall status, components, open incidents |
 | This PC's Wi-Fi | `netsh wlan`, no login | connection, signal strength, link speed |

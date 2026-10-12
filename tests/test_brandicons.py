@@ -52,7 +52,7 @@ for t in ("discord", "slack", "teams"):
     ch = notify.new_channel(t); notify.save_channels(notify.channels() + [ch])
 page.reload_channels()
 names = {page.table.item(i, 1).text(): i for i in range(page.table.rowCount())}
-check("the channel list shows the mark beside each name and its type", len(names) == 3 and all(not page.table.item(i, 1).icon().isNull() and not page.table.item(i, 2).icon().isNull() for i in names.values()))
+check("the channel list shows the mark beside each name (the type is just its name)", len(names) == 3 and all(not page.table.item(i, 1).icon().isNull() and page.table.item(i, 2).icon().isNull() for i in names.values()))
 disc = [i for i in range(page.table.rowCount()) if page.table.item(i, 2).text() == "Discord"][0]
 check("each row has its own service's mark", page.table.item(disc, 1).icon().pixmap(32, 32).toImage() == brandicons.channel_icon("discord").pixmap(32, 32).toImage()
       and page.table.item(disc, 1).icon().pixmap(32, 32).toImage() != brandicons.channel_icon("slack").pixmap(32, 32).toImage())

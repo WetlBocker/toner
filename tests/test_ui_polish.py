@@ -189,5 +189,15 @@ for n in ("pc-fresh", "pc-nine", "pc-ancient", "pc-never"):
 fl.refresh()
 check("one computer is '1 computer'", "1 computer reporting" in fl.info.text(), fl.info.text())
 
+print("== rows of captioned boxes (OpenSSL > Create)")
+import ui.opensslui as OSL
+g = OSL.GenerateTab(); g.resize(1800, 400); g.show(); app.processEvents(); app.processEvents()
+pair = g.country.parentWidget()
+check("a box capped in width (Country) stays beside its caption instead of taking a share of the spare width", g.country.width() == 60 and pair.width() < 140, (g.country.width(), pair.width()))
+check("the boxes that can grow still share the room", g.org.width() > 200 and g.state.width() > 200 and g.email.width() > 200 and abs(g.org.width() - g.city.width()) < 8, (g.org.width(), g.city.width()))
+g.resize(700, 400); app.processEvents(); app.processEvents()
+check("and in a narrow window it wraps without overlapping", pair.geometry().width() >= g.country.width() and g.org.width() >= 100, (pair.width(), g.org.width()))
+g.close()
+
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

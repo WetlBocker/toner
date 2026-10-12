@@ -121,6 +121,9 @@ QCheckBox::indicator { width: 16px; height: 16px; border: 1.5px solid %(muted)s;
 QCheckBox::indicator:hover { border-color: %(accent)s; }
 QCheckBox::indicator:checked { background: %(accent)s; border-color: %(accent)s; image: url(%(check)s); }
 QCheckBox::indicator:disabled { border-color: %(border)s; background: %(bg)s; }
+QListView::indicator, QTreeView::indicator, QTableView::indicator { width: 16px; height: 16px; border: 1.5px solid %(muted)s; border-radius: 5px; background: %(input)s; }
+QListView::indicator:hover, QTreeView::indicator:hover, QTableView::indicator:hover { border-color: %(accent)s; }
+QListView::indicator:checked, QTreeView::indicator:checked, QTableView::indicator:checked { background: %(accent)s; border-color: %(accent)s; image: url(%(check)s); }
 
 /* ---- lists, tables, trees ---- */
 QTreeView, QTableView, QListView, QTreeWidget, QTableWidget, QListWidget {

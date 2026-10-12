@@ -3,7 +3,7 @@ from datetime import datetime
 
 from PySide6.QtCore import QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
-from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
+from PySide6.QtWidgets import (QAbstractItemView, QBoxLayout, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
                                QScrollArea, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 import html
 
@@ -124,6 +124,12 @@ class DashboardTab(QWidget):
         head.addWidget(self.backup_btn)
         head.addWidget(self.run_btn)
 
+        self.moved = QLabel("")                                         # what changed since the previous run
+        self.moved.setWordWrap(True)
+        self.moved.setTextFormat(Qt.TextFormat.RichText)
+        self.overlap = QLabel("")                                       # why the cards can add up to more than the devices
+        self.overlap.setProperty("muted", True)
+        self.overlap.setWordWrap(True)
         self.cards = {"devices": Card("Devices"), "ok": Card("Healthy", "OK"), "warn": Card("Warnings", "WARN"),
                       "fail": Card("Failing", "FAIL"), "changes": Card("Config changes")}
         grid = QHBoxLayout()
@@ -150,6 +156,7 @@ class DashboardTab(QWidget):
         self.attention.setItemDelegateForColumn(1, StatusDelegate(self.attention))
         self.attention.setMinimumHeight(230)
         self.attention.doubleClicked.connect(self._open)
+        self.attention.setMinimumWidth(330)                            # "What is wrong" is the point of this table: never squeeze it away
         self.hint = EmptyHint(self.attention, "Nothing needs attention", "Every device's latest checks are OK")
         self.names = []
 
@@ -190,7 +197,7 @@ class DashboardTab(QWidget):
         right.addWidget(panel("Availability", self.bars, self.period))
         right.addWidget(self.fleet_panel)
         right.addWidget(panel("Recent activity", self.recent), 1)
-        cols = QHBoxLayout()
+        cols = self.cols = QHBoxLayout()
         cols.setSpacing(12)
         cols.addWidget(left, 3)
         cols.addLayout(right, 2)
@@ -201,7 +208,9 @@ class DashboardTab(QWidget):
         bl.setContentsMargins(0, 0, 0, 0)
         bl.setSpacing(14)
         bl.addWidget(self.start)
+        bl.addWidget(self.moved)
         bl.addLayout(grid)
+        bl.addWidget(self.overlap)
         bl.addLayout(cols, 1)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -263,6 +272,14 @@ class DashboardTab(QWidget):
             label.style().polish(label)
         self.start.setVisible(not db.get_setting("onboarding_done") and not all(done.values()))
 
+    STACK_BELOW = 880                    # a window narrower than this puts the panels one under the other, so none is squeezed
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        want = QBoxLayout.Direction.TopToBottom if self.width() < self.STACK_BELOW else QBoxLayout.Direction.LeftToRight
+        if self.cols.direction() != want:
+            self.cols.setDirection(want)
+
     def _fleet(self):
         """The Windows panel: only there when there are Windows computers (or certificates running out)."""
         s = fleet.summary()
@@ -284,6 +301,35 @@ class DashboardTab(QWidget):
             lines.append("Nothing needs attention.")
         self.fleet_label.setText("<br>".join(lines))
 
+    @staticmethod
+    def _ago(stamp):
+        """'3 min ago' for a run time such as '2026-10-12 16:06:37' (the full time is in the tooltip)."""
+        try:
+            secs = (datetime.now() - datetime.strptime(stamp, "%Y-%m-%d %H:%M:%S")).total_seconds()
+        except (TypeError, ValueError):
+            return stamp or ""
+        if secs < 90:
+            return "just now"
+        if secs < 5400:
+            return f"{secs / 60:.0f} min ago"
+        if secs < 129600:
+            return f"{secs / 3600:.0f} h ago"
+        return f"{secs / 86400:.0f} days ago"
+
+    def _moved(self):
+        """'Since the previous run: 2 got worse (edge-fw, nvr), 1 improved (core-sw2).'"""
+        try:
+            ch = db.changes_since_previous()
+        except Exception:
+            ch = {"worse": [], "better": []}
+        bits = []
+        for key, word in (("worse", "got worse"), ("better", "improved")):
+            if ch[key]:
+                shown = ", ".join(f"{d}: {a} to {b}" for d, a, b in ch[key][:5]) + ("..." if len(ch[key]) > 5 else "")
+                bits.append(f"<b>{len(ch[key])} {word}</b> ({html.escape(shown)})")
+        self.moved.setText("Since the previous run: " + "; ".join(bits) + "." if bits else "")
+        self.moved.setVisible(bool(bits))
+
     def _open(self, *_):
         r = self.attention.currentRow()
         if 0 <= r < len(self.names):
@@ -299,11 +345,15 @@ class DashboardTab(QWidget):
         bad = count("FAIL") + count("ERROR")
         changes = backup.recent_changes(24)
         self.cards["devices"].set(len(devs), f"{len(enabled)} enabled", active=False)
-        self.cards["ok"].set(count("OK"), "devices with all checks OK")
+        self.cards["ok"].set(count("OK"), "all checks OK")
         warned = sum(1 for v in health.values() if any(st == "WARN" for _c, st, _m in v["problems"]))    # a device that also fails still has its warning
-        self.cards["warn"].set(warned, "devices with a warning")
+        self.cards["warn"].set(warned, "with a warning")
         self.cards["fail"].set(bad, "failing or unreachable")
-        self.cards["changes"].set(len(changes), "in the last 24 hours", active=False)
+        self.cards["changes"].set(len(changes), "in 24 hours", active=False)
+        both = sum(1 for v in health.values() if v["status"] in ("FAIL", "ERROR") and any(st == "WARN" for _c, st, _m in v["problems"]))
+        self.overlap.setText(f"{both} device{' has' if both == 1 else 's have'} both a warning and a failure, so it is counted in Warnings and in Failing." if both else "")
+        self.overlap.setVisible(bool(both))
+        self._moved()
         self._fleet()
         last = db.last_run()
         self._update_start(devs, last)
@@ -321,9 +371,9 @@ class DashboardTab(QWidget):
                 what += f"  (+{len(v['problems']) - 2} more)"
             if name in held:
                 what = "(maintenance) " + what
-            for j, text in enumerate([name, v["status"], what, v["at"]]):
+            for j, text in enumerate([name, v["status"], what, self._ago(v["at"])]):
                 item = QTableWidgetItem(text)
-                item.setToolTip(text)
+                item.setToolTip(v["at"] if j == 3 else text)
                 self.attention.setItem(i, j, item)
         self.hint.setVisible(not problems)
         self.hint.findChildren(QLabel)[0].setText("Nothing needs attention" if health else "No results yet")

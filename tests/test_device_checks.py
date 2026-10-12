@@ -124,6 +124,7 @@ from ui.devicechecks import DeviceChecks
 from ui.servicepicker import ServicePicker
 warned = []
 QMessageBox.warning = staticmethod(lambda *a, **k: warned.append(a[2]))
+QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes)          # closing a dialog with edits asks first
 w = DeviceChecks(); w.set_vendor("cisco"); w.load(None)
 check("a new device follows the global settings: nothing chosen, nothing saved", w.values() == {} and not w.own.isChecked() and not w.listing.isEnabled())
 check("the list shows today's global state", all(w.listing.item(i).checkState() == Qt.CheckState.Checked for i in range(w.listing.count())) and w.listing.count() == len(checks.CATALOG["cisco"]))
@@ -160,6 +161,11 @@ saved = dev("srv-1", "windows", platform="winrm", host="srv1.corp", winopts={"wa
 dlg = I.DeviceDialog(saved)
 check("the Checks tab is the last tab", dlg.tabs.tabText(dlg.tabs.count() - 1) == "Checks" and dlg.tabs.widget(dlg.tabs.count() - 1) is dlg.checks_tab)
 check("it holds this device's settings, for this device's vendor", dlg.checks_tab.vendor == "windows" and dlg.values()["checkopts"] == {"checks": ["cpu", "services"], "thresholds": {"cpu": {"warn": 60.0, "fail": 80.0}}}, dlg.values()["checkopts"])
+for vendor in ("cisco", "windows"):
+    d = I.DeviceDialog(); d.vendor.setCurrentIndex(d.vendor.findData(vendor)); d.show(); app.processEvents()
+    tb = d.tabs.tabBar(); vis = [i for i in range(tb.count()) if tb.isTabVisible(i)]
+    check(f"every tab fits in view in the {vendor} dialog (no scroll arrows hiding some)", not d.tabs.usesScrollButtons() and tb.tabRect(vis[-1]).right() <= tb.width() and d.width() >= tb.sizeHint().width(), (d.width(), tb.width(), tb.tabRect(vis[-1]).right()))
+    d.close()
 new = I.DeviceDialog()
 check("a new device has none", new.values()["checkopts"] == {})
 dlg.checks_tab.reset()

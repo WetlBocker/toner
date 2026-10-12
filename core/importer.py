@@ -99,15 +99,15 @@ def normalize(raw):
     name = text("name")
     if not name:
         raise ValueError("missing name")
-    vendor = text("vendor").lower()
+    vendor, platform_text = vendors.from_file(text("vendor"), text("platform"))        # unifi + platform 'network' is the Network API
     if vendor not in VENDORS:
-        raise ValueError(f"vendor must be one of {', '.join(VENDORS)} (got '{text('vendor')}')")
+        raise ValueError(f"vendor must be one of {', '.join(vendors.listed())} (got '{text('vendor')}')")
     host = nettools.check_host(text("host"))
     for part in text("folder").replace("\\", "/").split("/"):      # reject names the folder code would refuse
         if part.strip() in (".", ".."):
             raise ValueError("folder names cannot be '.' or '..'")
 
-    platform = text("platform").lower()
+    platform = platform_text.lower()
     allowed = vendors.platform_keys(vendor)
     if allowed and platform:
         # accept the short form too: "ios" -> cisco_ios, "eos" -> arista_eos
@@ -239,7 +239,8 @@ def export_rows(devices):
                  "proxy_port": px.get("port", "") if custom_px else "", "proxy_user": px.get("username", "") if custom_px else ""}
         own = db.normalize_checkopts(d.get("checkopts"))
         extra["checkopts"] = json.dumps(own) if own else ""
-        out.append({**extra, "name": d["name"], "vendor": d["vendor"], "host": d["host"], "platform": d.get("platform") or "",
+        kind = vendors.SHORT.get(d["vendor"]) if vendors.modes(d["vendor"]) else None        # UniFi: vendor unifi, platform login / network / protect / cloud
+        out.append({**extra, "name": d["name"], "vendor": vendors.family(d["vendor"]), "host": d["host"], "platform": kind or d.get("platform") or "",
                     "port": d.get("port") or "", "username": d.get("username") or "", "site": d.get("site") or "",
                     "location": d.get("location") or "", "details": d.get("details") or "",
                     "folder": paths.get(d.get("folder_id"), ""), "tags": d.get("tags") or "", "profile": prof,

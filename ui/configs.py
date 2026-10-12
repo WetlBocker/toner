@@ -138,11 +138,19 @@ class ConfigsTab(QWidget):
             t.verticalHeader().setVisible(False)
             t.setShowGrid(False)
             t.horizontalHeader().setStretchLastSection(True)
+        self.devs.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)          # fit the pane instead of scrolling sideways
+        self.devs.setTextElideMode(Qt.TextElideMode.ElideRight)
+        hh = self.devs.horizontalHeader()
+        hh.setStretchLastSection(False)
+        for col, mode in ((0, hh.ResizeMode.Stretch), (1, hh.ResizeMode.ResizeToContents), (2, hh.ResizeMode.ResizeToContents),
+                          (3, hh.ResizeMode.ResizeToContents), (4, hh.ResizeMode.ResizeToContents)):
+            hh.setSectionResizeMode(col, mode)
         self.devs.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.vers.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.devs.itemSelectionChanged.connect(self.show_versions)
         self.vers.itemSelectionChanged.connect(self.show_text)
         self.hint = EmptyHint(self.devs, "No devices to back up", "Add devices on the Inventory tab")
+        self.vers_hint = EmptyHint(self.vers, "No saved versions", "Select a device on the left, then press Back up now")
 
         self.view = QComboBox()
         self.view.addItem("Changes from the previous version", "diff")
@@ -150,6 +158,7 @@ class ConfigsTab(QWidget):
         self.view.currentIndexChanged.connect(self.show_text)
         self.text = QPlainTextEdit()
         self.text.setReadOnly(True)
+        self.text.setPlaceholderText("The configuration of the selected version appears here.")
         self.text.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         self.text.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
         self.highlighter = DiffHighlighter(self.text.document())
@@ -191,7 +200,7 @@ class ConfigsTab(QWidget):
         split = QSplitter()
         split.addWidget(self.devs)
         split.addWidget(right)
-        split.setSizes([430, 760])
+        split.setSizes([480, 710])
         lay = QVBoxLayout(self)
         lay.addLayout(top)
         lay.addWidget(split, 1)
@@ -211,7 +220,7 @@ class ConfigsTab(QWidget):
             state = ("not supported" if not backup.supported(d) else
                      {"error": "last backup FAILED", "changed": "changed", "new": "ok", "unchanged": "ok"}.get(s.get("status"), "never backed up"))
             for j, v in enumerate([d["name"], display.vendor_name(d["vendor"]), str(s.get("versions", 0)),
-                                   s.get("last", "") or "", state]):
+                                   (s.get("last", "") or "")[:16], state]):
                 it = QTableWidgetItem(v)
                 if j == 4 and state == "last backup FAILED":
                     it.setForeground(QColor("#d32f2f"))
@@ -250,6 +259,7 @@ class ConfigsTab(QWidget):
             for j, val in enumerate([v["taken_at"], f"{v['size']:,} bytes", str(v["lines"]), change]):
                 self.vers.setItem(i, j, QTableWidgetItem(val))
         self.vers.resizeColumnsToContents()
+        self.vers_hint.setVisible(not self.versions)
         if self.versions:
             self.vers.selectRow(0)
         else:

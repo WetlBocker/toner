@@ -6,7 +6,7 @@ from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import QCheckBox, QColorDialog, QComboBox, QFileDialog, QFontComboBox, QLineEdit, QPushButton
 from core import db, reports, trends
 from ui import terminal, theme
-from ui.settings_base import Page, note, row_of, spin
+from ui.settings_base import Page, compact_row, note, row_of, spin
 
 
 # ------------------------------------------------------------------ Appearance
@@ -34,7 +34,7 @@ class AppearancePage(Page):
         self.form.addRow("Accent colour", self.accent)
         self.form.addRow("Text size", self.font)
         self.form.addRow("Status colours", self.preset)
-        self.form.addRow("", row_of(*self.swatch.values()))
+        self.form.addRow("", compact_row(*self.swatch.values()))
         self.lay.insertWidget(1, note("Click a status to choose its colour. Text on top of each colour is "
                                       "switched between dark and white automatically so it stays readable. "
                                       "The status word is always shown, so colour is never the only signal."))

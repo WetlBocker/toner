@@ -17,7 +17,7 @@ from core import audit, cmdrun, custom, db, discovery, listeners, nettools, oui,
 from core import proxy, topology, vendors
 from ui import theme
 from ui.tools import DevicePicker, OutputBox, _row
-from ui.widgets import GroupPicker
+from ui.widgets import EmptyHint, GroupPicker
 from ui.toast import toast
 
 
@@ -727,6 +727,9 @@ class CommandRunnerTab(QWidget):
         self.stop.setEnabled(False)
         self.status = _muted("")
         self.table = _table(["Device", "Result", "Seconds", "First line of output"])
+        self.table_hint = EmptyHint(self.table, "No results yet", "Tick devices, type a command and press Run")
+        for sig in (self.table.model().rowsInserted, self.table.model().rowsRemoved, self.table.model().modelReset):
+            sig.connect(self._sync_hint)
         self.output = QPlainTextEdit()
         self.output.setReadOnly(True)
         self.output.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
@@ -772,6 +775,13 @@ class CommandRunnerTab(QWidget):
         self.copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(self.output.toPlainText()))
         self.save_btn.clicked.connect(self.save_all)
         self.refresh()
+
+
+    def _sync_hint(self, *_):
+        try:
+            self.table_hint.setVisible(self.table.rowCount() == 0)
+        except RuntimeError:                       # the window is closing and the table is already gone
+            pass
 
     def refresh(self):
         self.group.set_labels(db.group_labels()[1:])

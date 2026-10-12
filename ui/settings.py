@@ -22,7 +22,9 @@ from ui import terminal, theme
 from ui.snmpfields import SnmpFields
 from ui.widgets import GroupPicker
 from ui.nav import HEADING_HEIGHT, ITEM_HEIGHT
-from ui.settings_base import Page, TrimSpin, note, row_of, spin  # noqa: F401  (re-exported: other modules and the tests use them)
+from ui import settings_diff as SD
+from ui.toast import toast
+from ui.settings_base import Page, TrimSpin, note, row_of, spin, tidy  # noqa: F401  (re-exported: other modules and the tests use them)
 from ui.settings_pages.general import GeneralPage, ConnectionsPage, _bad_pair, ThresholdsPage, ChecksPage, AutomationPage  # noqa: F401
 from ui.settings_pages.appearance import AppearancePage, TerminalPage, ReportsPage  # noqa: F401
 from ui.settings_pages.notifications import ChannelDialog, NotificationsPage  # noqa: F401
@@ -62,6 +64,8 @@ class _NavDelegate(QStyledItemDelegate):
 def signature(page):
     """What the person can type or tick on a page, as one comparable value (lists kept in memory are not part of it)."""
     out = []
+    if not getattr(page, "track", True):
+        return ()
     for w in page.findChildren(QWidget):
         if isinstance(w, QLineEdit):
             out.append(w.text())
@@ -74,6 +78,9 @@ def signature(page):
             out.append(w.text())
         elif isinstance(w, (QPlainTextEdit, QTextEdit)) and not w.isReadOnly():
             out.append(w.toPlainText())
+    extra = getattr(page, "describe_extra", None)
+    if callable(extra):
+        out.append(tuple(extra()))                  # settings held in a table or a tree
     return tuple(out)
 
 
@@ -85,6 +92,8 @@ class SettingsTab(QWidget):
         self.pages = [GeneralPage(), ThresholdsPage(), ChecksPage(), CustomChecksPage(), ConnectionsPage(), ProxyPage(), AgentsPage(), AutomationPage(),
                       BackupsPage(), MaintenancePage(), NotificationsPage(), ProfilesPage(), AppearancePage(), TerminalPage(), ReportsPage(), SecurityPage(),
                       AuditPage(), DataPage(self.reload)]
+        for p in self.pages:
+            tidy(p)                                           # no drop-down or button stretches across a wide window
         self._texts = {}                                      # page index -> lower-case words on the page, for the search box
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search settings")
@@ -94,6 +103,7 @@ class SettingsTab(QWidget):
         self.nav.setSpacing(0)
         self.nav.setItemDelegate(_NavDelegate(self.nav))
         self.baseline = {}                                   # page index -> signature when last loaded or saved
+        self.snaps = {}                                      # page index -> the page's settings in words, taken at the same time
         self._dirty = {}                                     # page index -> it differs from that
         self.stack = QStackedWidget()
         for p in self.pages:
@@ -116,11 +126,11 @@ class SettingsTab(QWidget):
         self.status = QLabel("")
         self.unsaved = QLabel("")                                       # "Unsaved changes on 2 pages", next to the buttons
         self.unsaved.setStyleSheet("font-weight:600;")
-        save, revert = QPushButton("Save changes"), QPushButton("Revert")
+        save, revert = self.save_btn, self.revert_btn = QPushButton("Save changes"), QPushButton("Revert")
         save.setProperty("primary", True)
         save.setDefault(True)
-        save.clicked.connect(self.save)
-        revert.clicked.connect(self.reload)
+        save.clicked.connect(self.ask_save)                  # both say what they are about to change, and ask
+        revert.clicked.connect(self.ask_revert)
         bar = QHBoxLayout()
         bar.addWidget(self.status, 1)
         bar.addWidget(self.unsaved)
@@ -144,6 +154,7 @@ class SettingsTab(QWidget):
         for i, p in enumerate(self.pages):
             if only is None or i in only:
                 self.baseline[i] = signature(p)
+                self.snaps[i] = SD.snapshot(p)
         self._mark()
 
     def dirty_pages(self):
@@ -285,14 +296,50 @@ class SettingsTab(QWidget):
         self.refresh_dynamic()
         super().showEvent(e)
 
-    def save(self):
-        problems = []
-        first_bad = None
+    # ---------- asking before Save and Revert
+    def pending_changes(self):
+        """[(page title, [(setting, stored value, value now)])] for every page whose settings differ from what was loaded or saved."""
+        groups = []
+        for i, p in enumerate(self.pages):
+            rows = SD.changes(self.snaps.get(i, {}), SD.snapshot(p))
+            if rows:
+                groups.append((p.title, rows))
+        return groups
+
+    def _problems(self):
+        problems, first_bad = [], None
         for i, p in enumerate(self.pages):
             found = p.validate()
             if found and first_bad is None:
                 first_bad = i
             problems += found
+        return problems, first_bad
+
+    def ask_save(self):
+        """Save changes: list what will change (page, setting, from, to) and wait for a yes. Problems are reported first."""
+        problems, _ = self._problems()
+        groups = self.pending_changes()
+        if problems or not groups:                           # nothing to list (or something to fix first): the plain save says so
+            self.save()
+            return
+        dlg = SD.ConfirmChanges(self, "Save changes", "These {n} setting{s} will be changed. Save them?", ("Now", "Will become"), groups,
+                                "Save changes", "Keep editing")
+        if dlg.exec():
+            self.save()
+
+    def ask_revert(self):
+        """Revert: list what the edits are and what each goes back to, and wait for a yes."""
+        groups = [(title, [(name, now, stored) for name, stored, now in rows]) for title, rows in self.pending_changes()]
+        if not groups:
+            toast(self, "Nothing to revert: every setting is as it was saved.")
+            return
+        dlg = SD.ConfirmChanges(self, "Revert changes", "These {n} edited setting{s} will go back to what was last saved. Revert them?",
+                                ("Your edit", "Goes back to"), groups, "Revert", "Keep editing")
+        if dlg.exec():
+            self.reload()
+
+    def save(self):
+        problems, first_bad = self._problems()
         if problems:
             self.search.clear()
             self.select_page(self.pages[first_bad].title)

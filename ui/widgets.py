@@ -53,6 +53,14 @@ class FlowLayout(QLayout):
         m = self.contentsMargins()
         return size + QSize(m.left() + m.right(), m.top() + m.bottom())
 
+    @staticmethod
+    def _grows(item):
+        """Whether an item takes a share of the spare width. A widget says so with its own size policy: a pair whose box is capped
+        (a country code) must not grow just because the line edit inside it would."""
+        w = item.widget()
+        policy = w.sizePolicy().expandingDirections() if w is not None else item.expandingDirections()
+        return bool(policy & Qt.Orientation.Horizontal)
+
     def _arrange(self, rect, test):
         m = self.contentsMargins()
         eff = rect.adjusted(m.left(), m.top(), -m.right(), -m.bottom())
@@ -74,7 +82,7 @@ class FlowLayout(QLayout):
         for line in lines:
             height = max(it.sizeHint().height() for it, _ in line)
             extra = avail - sum(w for _, w in line) - self._h * (len(line) - 1)
-            grow = [e for e in line if e[0].expandingDirections() & Qt.Orientation.Horizontal]
+            grow = [e for e in line if self._grows(e[0])]
             if extra > 0 and grow:
                 share, rest = divmod(extra, len(grow))
                 for k, e in enumerate(grow):
@@ -96,7 +104,7 @@ def _pair(label, widget):
     h.setContentsMargins(0, 0, 0, 0)
     h.setSpacing(6)
     lab = label if isinstance(label, QLabel) else QLabel(label)
-    grows = bool(widget.sizePolicy().expandingDirections() & Qt.Orientation.Horizontal)
+    grows = bool(widget.sizePolicy().expandingDirections() & Qt.Orientation.Horizontal) and widget.maximumWidth() >= 16777215   # a box capped in width (a country code) keeps its size
     h.addWidget(lab)
     h.addWidget(widget, 1 if grows else 0)
     box.setSizePolicy(QSizePolicy.Policy.Expanding if grows else QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)

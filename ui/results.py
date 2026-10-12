@@ -1,11 +1,12 @@
 from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtGui import QColor, QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QHBoxLayout, QLabel, QMessageBox,
                                QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 from core import db, display, reports
 from core.alerts import base as device_of
 from core.runner import run_all
 from drivers.base import SEVERITY
+from ui.columns import ColumnChooser
 from ui.widgets import EmptyHint, GroupPicker, StatChips, StatusDelegate
 from ui.toast import toast
 
@@ -46,9 +47,12 @@ class ResultsTab(QWidget):
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self.show_menu)
         self.table.setItemDelegateForColumn(2, StatusDelegate(self.table))
+        self.columns = ColumnChooser(self.table, self.table.header(), "results_columns", self.COLS, locked=(0, 2))      # right-click a heading
         self.table.setIndentation(18)
         self.table.setAlternatingRowColors(False)
         self.hint = EmptyHint(self.table, "No results yet", "Choose devices and press Run checks")
+        for key in ("Return", "Enter"):                          # Enter opens the selected device's window
+            QShortcut(QKeySequence(key), self.table, activated=self._enter)
         self.table.itemExpanded.connect(lambda it: self._remember(it, True))
         self.table.itemCollapsed.connect(lambda it: self._remember(it, False))
         self.run_btn = QPushButton("Run checks")
@@ -80,13 +84,17 @@ class ResultsTab(QWidget):
         sub.addStretch()
         for text, fn in (("Expand all", lambda: self.table.expandAll()), ("Collapse all", lambda: self.table.collapseAll())):
             b = QPushButton(text)
-            b.setProperty("ghost", True)
             b.clicked.connect(lambda _=False, fn=fn: fn())
             sub.addWidget(b)
         lay = QVBoxLayout(self)
         lay.addLayout(top)
         lay.addLayout(sub)
         lay.addWidget(self.table, 1)
+
+    def _enter(self):
+        item = self.table.currentItem()
+        if item is not None:
+            self.open_device.emit((item.parent() or item).text(0))
 
     def refresh_groups(self):
         """Reload the group list (after inventory changes), keeping the current choice."""
@@ -177,8 +185,16 @@ class ResultsTab(QWidget):
                     counts[r.status] = counts.get(r.status, 0) + 1
                 top.setText(1, f"{len(rows)} check{'s' if len(rows) != 1 else ''}")
                 top.setText(2, status)
-                top.setText(4, ", ".join(f"{counts[s]} {s}" for s in ("ERROR", "FAIL", "WARN") if s in counts)
-                            or "all OK")
+                if bad:                                   # say what is wrong, so a collapsed row is readable without opening it
+                    first = bad[0]
+                    what = first.check if device_of(first.device) == first.device else f"{first.device.split(' / ', 1)[1]}: {first.check}"
+                    detail = first.message or first.value
+                    top.setText(4, f"{what}: {detail}" if detail else what)
+                    if len(bad) > 1:
+                        top.setText(4, top.text(4) + f"   (+{len(bad) - 1} more)")
+                    top.setToolTip(4, ", ".join(f"{counts[s]} {s}" for s in ("ERROR", "FAIL", "WARN") if s in counts))
+                else:
+                    top.setText(4, "all OK")
             else:
                 top.setText(2, "Running..." if self._active else "No results")
             self.table.addTopLevelItem(top)
@@ -188,6 +204,7 @@ class ResultsTab(QWidget):
                 child = QTreeWidgetItem(["", label, r.status, r.value, r.message])
                 top.addChild(child)
             top.setExpanded(name in self.expanded)
+        self.columns.apply()
         self.table.setUpdatesEnabled(True)
         self._building = False
         self.hint.setVisible(self.table.topLevelItemCount() == 0)

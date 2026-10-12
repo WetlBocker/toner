@@ -136,7 +136,7 @@ class DeviceView(QDialog):
             self.dev = d
         d = self.dev
         info = vendors.get(d["vendor"])
-        plat = display.platform_name(d.get("platform")) if d.get("platform") else ""
+        plat = vendors.mode_label(d["vendor"]) or (display.platform_name(d.get("platform")) if d.get("platform") else "")
         self.title.setText(d["name"])
         self.sub.setText(f"{display.vendor_name(d['vendor'])} {plat}  -  {d['host']}" + (f":{d['port']}" if d.get("port") else ""))
         self.buttons["ssh"].setEnabled(info.get("kind") == "ssh")
@@ -165,6 +165,7 @@ class DeviceView(QDialog):
             fields = {}
         health = db.device_health().get(d["name"])
         rows = [("Status", (health["status"] + f"  ({health['at']})") if health else "no results yet"),
+                ("Checks and limits", self._own_settings(d)),
                 ("Folder", db.folder_paths().get(d.get("folder_id"), "(top level)")),
                 ("Location", d.get("location") or ""), ("Tags", d.get("tags") or ""),
                 ("Credential profile", prof), ("Jump host", jump),
@@ -177,9 +178,26 @@ class DeviceView(QDialog):
         for k, v in rows:
             if v:
                 lab = QLabel(v)
+                if k == "Status" and health and health["status"] in ("WARN", "FAIL", "ERROR"):
+                    lab.setStyleSheet("font-weight: 600; color: " + {"WARN": "#e0a100", "FAIL": "#d32f2f", "ERROR": "#8e44ad"}[health["status"]] + ";")
                 lab.setWordWrap(True)
                 lab.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
                 self.info.addRow(QLabel(f"<span style='color:gray'>{k}</span>"), lab)
+
+    @staticmethod
+    def _own_settings(d):
+        """Whether this device follows the global checks and limits or has its own (Edit > Checks)."""
+        from core import checks
+        own = db.normalize_checkopts(d.get("checkopts"))
+        if not own:
+            return "Global checks and limits"
+        labels = dict(checks.CATALOG.get(d["vendor"], []))
+        parts = []
+        if "checks" in own:
+            parts.append("runs only: " + (", ".join(labels.get(c, c) for c in own["checks"]) or "nothing"))
+        if "thresholds" in own:
+            parts.append("own limits: " + ", ".join(f"{db.THRESHOLD_LABELS.get(k, k)} {p['warn']:g}/{p['fail']:g}" for k, p in own["thresholds"].items()))
+        return "; ".join(parts)
 
     def _latest_rows(self):
         name = self.dev["name"]

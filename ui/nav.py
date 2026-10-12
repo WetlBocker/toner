@@ -162,6 +162,7 @@ class PageStack(QWidget):
         self._pages.append(widget)
         item = QListWidgetItem(label)
         item.setSizeHint(QSize(0, ITEM_HEIGHT))
+        item.setToolTip(label)
         self.list.addItem(item)
         self._rows.append(self.list.count() - 1)
         self._names.append(label)

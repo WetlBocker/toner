@@ -528,8 +528,11 @@ class SessionsTab(QWidget):
         ll.setContentsMargins(0, 0, 8, 0)
         ll.addWidget(self.search)
         ll.addWidget(self.tree, 1)
-        ll.addLayout(flow(self.new_btn, self.folder_btn, self.connect_btn, self.edit_btn, self.copy_btn, self.delete_btn,
-                          self.expand_btn, self.collapse_btn, self.logs_btn))
+        self.more_btn = QPushButton("More")                         # the occasional buttons live in a menu, so the row stays one line
+        self.more_menu = QMenu(self.more_btn)
+        self.more_menu.aboutToShow.connect(self._fill_more)
+        self.more_btn.setMenu(self.more_menu)
+        ll.addLayout(flow(self.new_btn, self.connect_btn, self.edit_btn, self.delete_btn, self.more_btn))
         ll.addWidget(self.note)
         split = QSplitter()
         split.addWidget(left)
@@ -693,6 +696,14 @@ class SessionsTab(QWidget):
         if len(found) == 1 and not folders:
             return found[0].get("folder_id")
         return None
+
+    def _fill_more(self):
+        """The rarely used actions, each acting through its button (so they follow the same enabled state)."""
+        self.more_menu.clear()
+        for b in (self.folder_btn, self.copy_btn, self.expand_btn, self.collapse_btn, self.logs_btn):
+            act = self.more_menu.addAction(b.text())
+            act.setEnabled(b.isEnabled())
+            act.triggered.connect(lambda _=False, b=b: b.click())
 
     def _buttons(self):
         one = self.selected_id() is not None

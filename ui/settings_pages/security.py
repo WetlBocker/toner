@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFileDialog, QInput
 from core import audit, db, display, nettools, sessionlog, vault
 from ui.settings_base import Page, note, row_of
 from ui.toast import toast
+from ui.widgets import EmptyHint
 
 
 # ------------------------------------------------------------------ Security
@@ -34,6 +35,7 @@ class SecurityPage(Page):
         self.keys.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.keys.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.keys.setMinimumHeight(110)
+        self.keys_hint = EmptyHint(self.keys, "No host keys remembered", "A device's key is saved the first time you connect to it")
         forget, forget_all = QPushButton("Forget selected key"), QPushButton("Forget all keys")
         forget.clicked.connect(self.forget_one)
         forget_all.clicked.connect(self.forget_all)
@@ -47,6 +49,7 @@ class SecurityPage(Page):
         self.creds.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.creds.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.creds.setMinimumHeight(110)
+        self.creds_hint = EmptyHint(self.creds, "No stored passwords or tokens", "They are saved in Windows Credential Manager when you add a device")
         clear = QPushButton("Delete stored secret for selected device")
         clear.clicked.connect(self.clear_secret)
         self.lay.insertWidget(4, QLabel("<b>Stored credentials</b>  (passwords and API tokens; "
@@ -61,12 +64,14 @@ class SecurityPage(Page):
     def refresh(self):
         keys = nettools.list_host_keys()
         self.keys.setRowCount(len(keys))
+        self.keys_hint.setVisible(not keys)
         for i, row in enumerate(keys):
             for j, v in enumerate(row):
                 self.keys.setItem(i, j, QTableWidgetItem(v))
         self.keys.resizeColumnsToContents()
         devs = db.list_devices()
         self.creds.setRowCount(len(devs))
+        self.creds_hint.setVisible(not devs)
         for i, d in enumerate(devs):
             try:
                 has = bool(keyring.get_password(db.SERVICE, d["name"]))

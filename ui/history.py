@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QHBoxLayout, QLabel
 from core import db, display
 from core.reports import COLORS, fg_for
 from ui import theme
-from ui.widgets import GroupPicker, StatusDelegate, flow
+from ui.widgets import EmptyHint, GroupPicker, StatusDelegate, flow
 
 PCT_CHECKS = ("cpu", "memory")
 
@@ -45,6 +45,18 @@ def uptime_axis(peak_hours):
     top = math.ceil(want / step) * step
     label = (lambda h: f"{h:g} h") if step < 24 else (lambda h: f"{h / 24:g} d")
     return float(top), [(k * step, label(k * step)) for k in range(int(round(top / step)) + 1)]
+
+
+def nice_axis(peak):
+    """Grid lines at round numbers (0, 20, 40 ... or 0, 250, 500 ...) with the last at or above the peak: (top, [(value, label)])."""
+    peak = float(peak) if peak and peak > 0 else 1.0
+    magnitude = 10 ** math.floor(math.log10(peak / 4))
+    step = next(m * magnitude for m in (1, 2, 2.5, 5, 10) if peak * 1.04 / (m * magnitude) <= 5)
+    top = math.ceil(peak * 1.04 / step - 1e-9) * step
+    n = int(round(top / step))
+    decimals = next(d for d in range(0, 6) if abs(round(step, d) - step) < 1e-9 or d == 5)
+    fmt = lambda v: f"{v:,.{decimals}f}"
+    return float(top), [(round(k * step, 9), fmt(k * step)) for k in range(n + 1)]
 
 
 def restarts(points):
@@ -176,8 +188,10 @@ class TrendChart(QWidget):
         if only_uptime:
             hi, grid = uptime_axis(peak)                         # round days, so the lines read as 7 d, 14 d, 21 d
         else:
-            hi = 100.0 if allpct else (peak * 1.1 or 1.0)
-            grid = [(hi * f, f"{hi * f:.0f}" if hi >= 10 else f"{hi * f:.1f}") for f in (0, 0.25, 0.5, 0.75, 1)]
+            if allpct:
+                hi, grid = 100.0, [(v, f"{v:.0f}") for v in (0, 25, 50, 75, 100)]
+            else:
+                hi, grid = nice_axis(peak)
         y = lambda v: r.bottom() - (min(max(v, 0), hi) / hi) * r.height()
         stamps = sorted({s for _, pts, _ in self.series for s, _ in pts})     # runs, evenly spaced in time order
         pos = {s: i for i, s in enumerate(stamps)}
@@ -360,6 +374,13 @@ class HistoryTab(QWidget):
         self.detail = _table(["Device", "Check", "Status", "Value", "Message"])
         self.detail.setItemDelegateForColumn(2, StatusDelegate(self.detail))
         self.runs.itemSelectionChanged.connect(self.show_run)
+        self.runs_hint = EmptyHint(self.runs, "No runs yet", "Press Run checks (Results tab) to start the history")
+        self.detail_hint = EmptyHint(self.detail, "Choose a run above", "to see every check from that run")
+        hh = self.runs.horizontalHeader()
+        hh.setStretchLastSection(False)
+        hh.setSectionResizeMode(0, hh.ResizeMode.Stretch)                  # the run time takes what the counts leave
+        for col in range(1, 5):
+            hh.setSectionResizeMode(col, hh.ResizeMode.ResizeToContents)
         self.group, self.dev = GroupPicker(), QComboBox()
         self.chk = GroupPicker(all_text="Select checks", noun="checks", clear_text="Clear selection")
         self.check_keys = {}                     # shown name -> stored check name
@@ -406,7 +427,9 @@ class HistoryTab(QWidget):
         for i, r in enumerate(runs):
             for j, v in enumerate([r["started_at"], r["ok"], r["warn"], r["fail"], r["error"]]):
                 self.runs.setItem(i, j, QTableWidgetItem(str(v)))
-        self.runs.resizeColumnsToContents()
+        self.runs_hint.setVisible(not runs)
+        if runs and self.runs.currentRow() < 0:
+            self.runs.selectRow(0)                                          # the latest run, so the lower table is never blank
         names = self._group_names()
         self.map = {d: c for d, c in db.device_checks().items()
                     if names is None or self._base(d) in names}
@@ -422,11 +445,14 @@ class HistoryTab(QWidget):
     def show_run(self):
         row = self.runs.currentRow()
         if not 0 <= row < len(self.run_ids):
+            self.detail.setRowCount(0)                     # nothing chosen (or no runs): the lower table says so instead of showing an old run
+            self.detail_hint.setVisible(True)
             return
         names = self._group_names()
         res = [r for r in db.run_results(self.run_ids[row])
                if names is None or self._base(r["device"]) in names]
         self.detail.setRowCount(len(res))
+        self.detail_hint.setVisible(not res)
         for i, r in enumerate(res):
             for j, v in enumerate([r["device"], display.check_name(r["check_name"]), r["status"],
                                    display.value(r["value"]), r["message"]]):

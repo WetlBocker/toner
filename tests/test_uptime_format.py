@@ -57,6 +57,14 @@ check("the point where it restarted says so when hovered", [r[0] for r in rows] 
 ch.hover = 1
 check("other points just show the uptime", [r[0] for r in ch.hover_rows()] == ["Uptime"])
 
+print("== the Windows name on the About page")
+W = display.windows_name
+check("a server is named with its year and a space", W("Windows", "2025Server") == "Windows Server 2025" and W("Windows", "Server2025") == "Windows Server 2025" and W("Windows", "2022Server") == "Windows Server 2022")
+check("R2 servers keep the R2", W("Windows", "2012ServerR2") == "Windows Server 2012 R2" and W("Windows", "2008ServerR2") == "Windows Server 2008 R2" and W("Windows", "Server2025") != "Windows Server 2025 R2")
+check("a server with no year is still readable", W("Windows", "Server") == "Windows Server")
+check("a desktop is unchanged", W("Windows", "11") == "Windows 11" and W("Windows", "10") == "Windows 10" and W("Windows", "8.1") == "Windows 8.1")
+check("nothing at all does not fail", W("", "") == "Windows" and W(None, None) == "Windows")
+
 print()
 print(f"{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

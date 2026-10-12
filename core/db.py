@@ -29,6 +29,11 @@ DEFAULT_THRESHOLDS = {
     "patch_days":   {"warn": 45, "fail": 90},       # Windows: days since an update was last installed
     "cert_days":    {"warn": 30, "fail": 7},        # Windows: days until a certificate expires; LOWER is worse
     "agent_silent": {"warn": 15, "fail": 60},       # Windows agent: minutes without a report
+    "tx_retries":   {"warn": 15, "fail": 30},       # UniFi Network API: Wi-Fi transmit retries, % per radio
+    "sensor_battery": {"warn": 25, "fail": 10},     # UniFi Protect sensors: battery %; LOWER is worse
+    "wan_uptime":   {"warn": 99, "fail": 95},       # UniFi Site Manager: WAN uptime %; LOWER is worse
+    "isp_latency":  {"warn": 100, "fail": 250},     # UniFi Site Manager: ISP latency, milliseconds
+    "isp_loss":     {"warn": 1, "fail": 5},         # UniFi Site Manager: ISP packet loss, %
 }
 THRESHOLD_LABELS = {"cpu": "CPU %", "memory": "Memory %", "channel_util": "Channel utilization %",
                     "temperature": "Temperature C", "port_errors": "Port errors (count)",
@@ -36,8 +41,13 @@ THRESHOLD_LABELS = {"cpu": "CPU %", "memory": "Memory %", "channel_util": "Chann
                     "disk": "Disk used %", "utilization": "Interface utilization %",
                     "wifi_signal": "Wi-Fi signal below %", "win_events": "Windows error events (24 h)",
                     "patch_days": "Windows days since last update", "cert_days": "Windows certificate days left",
-                    "agent_silent": "Windows agent silent (minutes)"}
-LOWER_IS_WORSE = {"uptime", "wifi_signal", "cert_days"}
+                    "agent_silent": "Windows agent silent (minutes)", "tx_retries": "UniFi Wi-Fi retries %",
+                    "sensor_battery": "UniFi sensor battery below %", "wan_uptime": "UniFi WAN uptime below %",
+                    "isp_latency": "UniFi ISP latency (ms)", "isp_loss": "UniFi ISP packet loss %"}
+THRESHOLD_GROUPS = [("Network devices", ["cpu", "memory", "temperature", "uptime", "disk", "utilization", "port_errors", "sessions", "channel_util", "wifi_signal"]),
+                    ("Windows computers", ["win_events", "patch_days", "cert_days", "agent_silent"]),
+                    ("UniFi (API)", ["tx_retries", "sensor_battery", "wan_uptime", "isp_latency", "isp_loss"])]
+LOWER_IS_WORSE = {"uptime", "wifi_signal", "cert_days", "sensor_battery", "wan_uptime"}
 
 DEFAULT_SETTINGS = {
     # general
@@ -64,7 +74,7 @@ DEFAULT_SETTINGS = {
     "notify_enabled": False, "notify_channels": [], "notify_snooze_until": "",
     "notify_consecutive": 1, "notify_remind_hours": 0, "notify_on_manual": True,
     # inventory view
-    "inventory_view": "Folders", "inventory_expanded": [], "window_geometry": "", "onboarding_done": False,
+    "inventory_view": "Folders", "inventory_expanded": [], "window_geometry": "", "onboarding_done": False, "inventory_columns": None, "results_columns": None,
     # configuration backups
     "backup_enabled": False, "backup_hours": 24, "backup_groups": [], "backup_keep": 50, "backup_mask": True,
     "backup_on_start": False,
@@ -87,7 +97,7 @@ DEFAULT_SETTINGS = {
 }
 # Per-machine state that must not travel in an exported settings file (channel secrets stay in
 # Credential Manager, so an imported channel would be broken).
-NOT_PORTABLE = {"window_geometry", "onboarding_done", "notify_channels", "notify_snooze_until", "inventory_expanded", "snippets", "fileserver", "iperf_path", "openssl_path",
+NOT_PORTABLE = {"window_geometry", "onboarding_done", "inventory_columns", "results_columns", "notify_channels", "notify_snooze_until", "inventory_expanded", "snippets", "fileserver", "iperf_path", "openssl_path",
                 "update_last_check", "update_skip", "update_pending", "sessions_expanded", "agent_enabled", "agent_enroll", "agent_bind",
                 "agent_address"}
 
@@ -779,6 +789,26 @@ def device_health(exclude=("config backup",)):
     for d in out.values():
         d["problems"].sort(key=lambda p: -_SEV.get(p[1], 0))
     return out
+
+
+def changes_since_previous():
+    """How devices moved between the last two runs: {'worse': [(device, was, now)], 'better': [(device, was, now)]}, for devices that were in both.
+    A run of one group leaves other devices out of the comparison. Empty when there are fewer than two runs."""
+    with connect() as c:
+        ids = [r["id"] for r in c.execute("SELECT id FROM runs ORDER BY id DESC LIMIT 2")]
+        if len(ids) < 2:
+            return {"worse": [], "better": []}
+        worst = {}
+        for rid in ids:
+            seen = worst.setdefault(rid, {})
+            for r in c.execute("SELECT device, status FROM results WHERE run_id=? AND check_name != 'config backup'", (rid,)):
+                b = _base(r["device"])
+                if _SEV.get(r["status"], 0) >= _SEV.get(seen.get(b, "OK"), 0):
+                    seen[b] = r["status"]
+    now, before = worst[ids[0]], worst[ids[1]]
+    worse = sorted((d, before[d], now[d]) for d in now if d in before and _SEV.get(now[d], 0) > _SEV.get(before[d], 0))
+    better = sorted((d, before[d], now[d]) for d in now if d in before and _SEV.get(now[d], 0) < _SEV.get(before[d], 0))
+    return {"worse": worse, "better": better}
 
 
 def availability(days=7, start=None, end=None):

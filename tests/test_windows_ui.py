@@ -64,7 +64,7 @@ check("editing the device shows them", again.win_auth.currentData() == "ntlm" an
 print("== testing a connection")
 loc = I.DeviceDialog(); loc.vendor.setCurrentIndex(loc.vendor.findData("windows")); loc.platform.setCurrentIndex(loc.platform.findData("local")); loc.name.setText("this-pc")
 infos.clear(); warned.clear(); loc.test()
-check("'Test connection' on this computer really runs the checks", infos and "Connected to localhost" in infos[0] and not warned, (infos, warned))
+check("'Test connection' on this computer really runs the checks", __import__("ui.toast", fromlist=["x"]).history and "Connected to localhost" in __import__("ui.toast", fromlist=["x"]).history[-1] and not warned, (infos, warned))
 ag = I.DeviceDialog(); ag.vendor.setCurrentIndex(ag.vendor.findData("windows")); ag.name.setText("laptop-1"); ag.host.setText("laptop-1.corp.example.com")
 infos.clear(); warned.clear(); ag.test()
 check("testing an agent device with no report yet says how to set it up", warned and "agent script" in warned[0], (infos, warned))

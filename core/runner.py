@@ -26,6 +26,8 @@ def _transient(e):
 def sweepable(dev):
     """Devices whose address answers from here: not this computer's Wi-Fi, a status page, or a Windows agent that reports by itself."""
     kind = vendors.get(dev["vendor"]).get("kind")
+    if dev["vendor"] == "unifi_cloud":
+        return False                                   # that is api.ui.com, not a device of yours
     return kind in ("ssh", "api", "snmp") or (kind == "windows" and winmon.transport(dev) == "winrm")
 
 

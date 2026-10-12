@@ -2,7 +2,7 @@
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QHBoxLayout, QLabel, QLineEdit,
-                               QPushButton, QTableWidget, QTreeWidget, QTreeWidgetItem, QWidget)
+                               QPushButton, QTableWidget, QToolButton, QTreeWidget, QTreeWidgetItem, QWidget)
 from core import checks, custom, db, display
 from ui.widgets import GroupPicker
 from ui.settings_base import Page, TrimSpin, note, row_of, spin
@@ -86,22 +86,40 @@ class ThresholdsPage(Page):
     def __init__(self):
         super().__init__()
         self.form.addRow(QLabel("<b>When a check turns WARN / FAIL</b>"))
-        self.spins = {}
-        for key in db.DEFAULT_THRESHOLDS:
-            w, f = TrimSpin(), TrimSpin()
-            w.setPrefix("WARN at ")                          # the label is inside the box, so it can never drift from it
-            f.setPrefix("FAIL at ")
-            for s in (w, f):
-                s.setRange(0, 1_000_000)
-                s.setDecimals(0 if key == "port_errors" else 2)
-            self.spins[key] = (w, f)
-            box = QWidget()
-            bl = QHBoxLayout(box)
-            bl.setContentsMargins(0, 0, 0, 0)
-            bl.addWidget(w)
-            bl.addWidget(f)
-            bl.addStretch()
-            self.form.addRow(db.THRESHOLD_LABELS.get(key, key), box)
+        self.spins, self.resets = {}, {}
+        grouped = {k for _t, keys in db.THRESHOLD_GROUPS for k in keys}
+        for heading, keys in db.THRESHOLD_GROUPS + [("Other", [k for k in db.DEFAULT_THRESHOLDS if k not in grouped])]:
+            keys = [k for k in keys if k in db.DEFAULT_THRESHOLDS]
+            if not keys:
+                continue
+            title = QLabel(heading.upper())
+            title.setProperty("muted", True)
+            title.setStyleSheet("font-weight: 600; padding-top: 10px;")
+            self.form.addRow(title)
+            for key in keys:
+                w, f = TrimSpin(), TrimSpin()
+                w.setPrefix("WARN at ")                          # the label is inside the box, so it can never drift from it
+                f.setPrefix("FAIL at ")
+                for s_ in (w, f):
+                    s_.setRange(0, 1_000_000)
+                    s_.setDecimals(0 if key == "port_errors" else 2)
+                self.spins[key] = (w, f)
+                reset = QToolButton()
+                reset.setText("Reset")
+                d = db.DEFAULT_THRESHOLDS[key]
+                reset.setToolTip(f"Back to the default: WARN at {d['warn']:g}, FAIL at {d['fail']:g}")
+                reset.clicked.connect(lambda _=False, k=key: self.reset_one(k))
+                self.resets[key] = reset
+                for s_ in (w, f):
+                    s_.valueChanged.connect(lambda _=0, k=key: self._mark_reset(k))
+                box = QWidget()
+                bl = QHBoxLayout(box)
+                bl.setContentsMargins(0, 0, 0, 0)
+                bl.addWidget(w)
+                bl.addWidget(f)
+                bl.addWidget(reset)
+                bl.addStretch()
+                self.form.addRow(db.THRESHOLD_LABELS.get(key, key), box)
         self.form.addRow(note("Uptime and Wi-Fi signal work the other way round: a device that restarted less than "
                               "this many hours ago, or a signal weaker than the limit, is flagged. 0 switches a level off."))
         self.mode = QComboBox()
@@ -139,6 +157,17 @@ class ThresholdsPage(Page):
         bar.addStretch()
         self.lay.insertWidget(3, self.table)
         self.lay.insertLayout(4, bar)
+
+    def reset_one(self, key):
+        w, f = self.spins[key]
+        w.setValue(db.DEFAULT_THRESHOLDS[key]["warn"])
+        f.setValue(db.DEFAULT_THRESHOLDS[key]["fail"])
+
+    def _mark_reset(self, key):
+        """The Reset button is only there to press when the row differs from the default."""
+        w, f = self.spins[key]
+        d = db.DEFAULT_THRESHOLDS[key]
+        self.resets[key].setEnabled(abs(w.value() - d["warn"]) > 1e-9 or abs(f.value() - d["fail"]) > 1e-9)
 
     def reset(self):
         for key, (w, f) in self.spins.items():
@@ -182,6 +211,7 @@ class ThresholdsPage(Page):
         for key, (w, f) in self.spins.items():
             w.setValue(th[key]["warn"])
             f.setValue(th[key]["fail"])
+            self._mark_reset(key)
         self.mode.setCurrentIndex(max(0, self.mode.findData(db.get_setting("counter_mode"))))
         self.fw.setCurrentText(db.get_setting("firmware_severity"))
         self.table.setRowCount(0)
@@ -197,6 +227,10 @@ class ThresholdsPage(Page):
             combo.clear()
             combo.addItems(scopes + ([cur] if cur not in scopes else []))
             combo.setCurrentText(cur)
+
+    def describe_extra(self):
+        """The override table, for the list of changes shown before saving."""
+        return [(f"Override: {r['scope']} / {db.THRESHOLD_LABELS.get(r['check'], r['check'])}", f"WARN {r['warn']:g} / FAIL {r['fail']:g}") for r in self._rules()]
 
     def validate(self):
         bad = [db.THRESHOLD_LABELS[k] for k, (w, f) in self.spins.items() if _bad_pair(k, w.value(), f.value())]
@@ -231,7 +265,7 @@ class ChecksPage(Page):
         off = set(db.get_setting("disabled_checks"))
         self.tree.clear()
         for vendor, items in checks.CATALOG.items():
-            top = QTreeWidgetItem([display.vendor_name(vendor)])
+            top = QTreeWidgetItem([display.type_name(vendor)])
             self.tree.addTopLevelItem(top)
             for key, label in items:
                 it = QTreeWidgetItem([label])
@@ -241,6 +275,16 @@ class ChecksPage(Page):
                 it.setData(0, Qt.ItemDataRole.UserRole, checks.key(vendor, key))
                 top.addChild(it)
             top.setExpanded(True)
+
+    def describe_extra(self):
+        """Every check, on or off, for the list of changes shown before saving."""
+        rows = []
+        for i in range(self.tree.topLevelItemCount()):
+            top = self.tree.topLevelItem(i)
+            for j in range(top.childCount()):
+                it = top.child(j)
+                rows.append((f"{top.text(0)}: {it.text(0)}", "on" if it.checkState(0) == Qt.CheckState.Checked else "off"))
+        return rows
 
     def save(self):
         off = []

@@ -10,7 +10,7 @@ from PySide6.QtCore import QThread, QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QApplication, QCheckBox, QFormLayout, QFrame, QHBoxLayout, QLabel, QMessageBox,
                                QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QVBoxLayout, QWidget)
-from core import audit, db, updates
+from core import audit, db, display, updates
 from core.version import APP_NAME, LICENSE, TAGLINE, URL, VERSION
 from ui import logo
 
@@ -224,7 +224,7 @@ class AboutTab(QWidget):
                 ("Data folder", str(db.db_path().parent)), ("Database", dbtext),
                 ("Log file", str(db.db_path().parent / "toner.log")),
                 ("Python", f"{platform.python_version()}  ({platform.architecture()[0]})"),
-                ("Qt / PySide6", pyside), ("Windows", f"{platform.system()} {platform.release()}  ({platform.version()})"),
+                ("Qt / PySide6", pyside), ("Windows", f"{display.windows_name(platform.system(), platform.release())}  ({platform.version()})"),
                 ("Inventory", f"{len(db.list_devices())} device(s)"), ("License", LICENSE), ("Source code", URL)]
 
     def libraries(self):

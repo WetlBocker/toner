@@ -19,6 +19,12 @@ VENDORS = {
                      platforms=[], paging=""),
     "unifi": dict(name="UniFi", kind="api", secret="Password", username=True, site="Site", ha=False,
                   platforms=[], paging=""),
+    "unifi_network": dict(name="UniFi Network (API key)", kind="api", secret="API key", username=False, site="Site", ha=False,
+                          platforms=[], paging=""),
+    "unifi_protect": dict(name="UniFi Protect (API key)", kind="api", secret="API key", username=False, site="", ha=False,
+                          platforms=[], paging=""),
+    "unifi_cloud": dict(name="UniFi Site Manager (cloud)", kind="api", secret="API key", username=False, site="Console or site", ha=False,
+                        platforms=[], paging=""),
     "juniper": dict(name="Juniper", kind="ssh", secret="Password", username=True, site="", ha=False,
                     platforms=[("juniper_junos", "Junos")], paging="set cli screen-length 0"),
     "arista": dict(name="Arista", kind="ssh", secret="Password", username=True, site="", ha=False,
@@ -42,6 +48,43 @@ VENDORS = {
     "wifi": dict(name="This PC's Wi-Fi", kind="local", secret="", username=False, site="", ha=False,
                  platforms=[], paging="", login=False),
 }
+
+# One entry in the Vendor box can stand for several kinds of monitoring: UniFi is one vendor, and "how to monitor" picks the console login
+# or one of the API-key applications. Each kind is still its own type underneath (its own driver, checks and limits).
+FAMILY = {"unifi": "unifi", "unifi_network": "unifi", "unifi_protect": "unifi", "unifi_cloud": "unifi"}
+MODES = {"unifi": [("unifi", "Console login (user name and password)"), ("unifi_network", "Network API (API key)"),
+                   ("unifi_protect", "Protect API (API key)"), ("unifi_cloud", "Site Manager in the cloud (API key)")]}
+SHORT = {"unifi": "login", "unifi_network": "network", "unifi_protect": "protect", "unifi_cloud": "cloud"}     # the platform column in import and export files
+
+
+def family(vendor):
+    """The vendor as people think of it: all UniFi types are 'unifi'."""
+    return FAMILY.get(vendor, vendor)
+
+
+def modes(vendor):
+    """[(type, shown name)] a vendor can be monitored by, or [] when it has just one way."""
+    return MODES.get(family(vendor), [])
+
+
+def mode_label(vendor):
+    return dict(modes(vendor)).get(vendor, "")
+
+
+def listed():
+    """The vendors offered in the Vendor box."""
+    return [v for v in VENDORS if family(v) == v]
+
+
+def from_file(vendor, platform):
+    """('unifi', 'network') from an import file -> ('unifi_network', ''). Anything else is returned as it came."""
+    vendor, platform = (vendor or "").lower(), (platform or "").strip().lower()
+    if vendor == "unifi" and platform:
+        for key, short in SHORT.items():
+            if platform in (short, key, key.split("_")[-1]):
+                return key, ""
+    return vendor, platform
+
 
 DEFAULT_PAGING = "terminal length 0"      # the Settings > Terminal default
 

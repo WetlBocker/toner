@@ -1,6 +1,7 @@
 """What every Settings page shares: the page base class and a few small helpers."""
 
-from PySide6.QtWidgets import QDoubleSpinBox, QFormLayout, QHBoxLayout, QLabel, QSpinBox, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QDoubleSpinBox, QFormLayout, QHBoxLayout, QLabel, QSpinBox, QToolButton, QVBoxLayout, QWidget
 
 
 class TrimSpin(QDoubleSpinBox):
@@ -43,8 +44,63 @@ def row_of(*widgets):
 
 
 
+def compact_row(*widgets):
+    """Widgets side by side at their own size, left aligned, with the spare room at the end (not spread between them)."""
+    w = QWidget()
+    h = QHBoxLayout(w)
+    h.setContentsMargins(0, 0, 0, 0)
+    for x in widgets:
+        h.addWidget(x)
+    h.addStretch(1)
+    return w
+
+
+def tidy(page, combo_min=360):
+    """Stop buttons and boxes from stretching across a wide window: a drop-down, a number box or a button is only as wide as what it says.
+    Text boxes and tables are left alone, so they still take the room."""
+    from PySide6.QtWidgets import QComboBox, QDoubleSpinBox, QPushButton, QToolButton
+    for w in page.findChildren(QComboBox):
+        w.setMaximumWidth(max(combo_min, w.sizeHint().width() + 40))
+    for w in page.findChildren(QSpinBox) + page.findChildren(QDoubleSpinBox):
+        w.setMaximumWidth(max(180, w.sizeHint().width() + 30))
+    for w in page.findChildren(QPushButton) + page.findChildren(QToolButton):
+        if hasattr(w, "set_labels"):                      # a group picker: its text changes with what is ticked
+            continue
+        if w.maximumWidth() >= 16777215 and w.text():
+            w.setMaximumWidth(w.sizeHint().width() + 60)
+
+
+class Collapsible(QWidget):
+    """A heading with an arrow that shows or hides what is under it, for the details most people never need to change."""
+
+    def __init__(self, title, content, opened=False):
+        super().__init__()
+        self.toggle = QToolButton()
+        self.toggle.setText(title)
+        self.toggle.setCheckable(True)
+        self.toggle.setChecked(opened)
+        self.toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.toggle.setStyleSheet("QToolButton { border: none; font-weight: 600; padding: 4px 2px; }")
+        self.toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.content = content
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(self.toggle, 0, Qt.AlignmentFlag.AlignLeft)
+        lay.addWidget(content)
+        self.toggle.toggled.connect(self._show)
+        self._show(opened)
+
+    def _show(self, on):
+        self.toggle.setArrowType(Qt.ArrowType.DownArrow if on else Qt.ArrowType.RightArrow)
+        self.content.setVisible(on)
+
+    def open(self):
+        self.toggle.setChecked(True)
+
+
 class Page(QWidget):
     title = ""
+    track = True                                  # False: the boxes on this page are not settings, so Save and the unsaved marks ignore them
 
     def __init__(self):
         super().__init__()

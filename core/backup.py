@@ -74,7 +74,7 @@ def supported(dev):
 
 def why_unsupported(dev):
     v = dev.get("vendor")
-    if v in ("meraki", "unifi"):
+    if v in ("meraki", "unifi", "unifi_network", "unifi_protect", "unifi_cloud"):
         return "cloud/controller-managed: there is no per-device configuration to read"
     if v == "snmp":
         return "generic SNMP devices have no readable configuration"

@@ -6,7 +6,7 @@ from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFileDialog, QHBoxLayout, QLabel,
                                QMessageBox, QPushButton, QTableWidget, QTableWidgetItem,
                                QVBoxLayout, QWidget)
-from core import alerts, db, display, reports, trends
+from core import alerts, db, display, reports, trends, vendors
 from drivers.base import SEVERITY, Result
 from ui.widgets import FilterButton, StatusDelegate, flow
 from ui.toast import toast
@@ -96,7 +96,7 @@ class ReportsTab(QWidget):
         for r in self.base:
             d = devices.get(alerts.base(r.device), {})
             self._meta[id(r)] = {"Status": r.status, "Location": d.get("location") or NO_LOCATION,
-                                 "Vendor": d.get("vendor") or "", "Tag": {x.lower() for x in db.split_tags(d.get("tags"))}}
+                                 "Vendor": vendors.family(d.get("vendor") or ""), "Tag": {x.lower() for x in db.split_tags(d.get("tags"))}}
         self.filter.set_sections(self._sections())          # keeps ticks that still apply
         self.show_preview()
 

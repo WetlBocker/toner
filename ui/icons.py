@@ -1,6 +1,6 @@
 """Small line icons drawn from SVG paths, tinted to the current theme (no image files to ship)."""
-from PySide6.QtCore import QByteArray, QRectF, Qt
-from PySide6.QtGui import QColor, QIcon, QImage, QPainter, QPixmap
+from PySide6.QtCore import QByteArray, QPointF, QRectF, Qt
+from PySide6.QtGui import QColor, QIcon, QImage, QPainter, QPixmap, QPolygonF
 from PySide6.QtSvg import QSvgRenderer
 
 # 24x24 viewBox, stroke-only, in the style of common open icon sets.
@@ -47,17 +47,28 @@ def icon(name, normal, selected=None, size=40):
     return ic
 
 
-def icon_with_dot(name, normal, dot, size=40):
-    """An icon with a small status dot in its bottom-right corner (the health of a device)."""
+def _marker(p, shape, cx, cy, r, color):
+    """A status mark: circle (OK), triangle (WARN), square (FAIL) or diamond (ERROR), so the state does not rest on colour alone."""
+    pts = {"triangle": [(0, -1.15), (1.05, 0.85), (-1.05, 0.85)], "square": [(-0.9, -0.9), (0.9, -0.9), (0.9, 0.9), (-0.9, 0.9)],
+           "diamond": [(0, -1.2), (1.2, 0), (0, 1.2), (-1.2, 0)]}.get(shape)
+    if pts is None:
+        p.drawEllipse(QPointF(cx, cy), r, r)
+    else:
+        p.drawPolygon(QPolygonF([QPointF(cx + x * r, cy + y * r) for x, y in pts]))
+
+
+def icon_with_dot(name, normal, dot, size=40, shape="circle"):
+    """An icon with a small status mark in its bottom-right corner (the health of a device)."""
     pm = _render(name, normal, size)
     p = QPainter(pm)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    r = size * 0.26
+    r = size * 0.19
+    cx = cy = size - r * 1.25
+    p.setBrush(QColor("#ffffff"))              # a pale ring so the mark reads on light and dark rows alike
     p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(QColor("#ffffff"))              # a pale ring so the dot reads on light and dark rows alike
-    p.drawEllipse(QRectF(size - r * 1.9, size - r * 1.9, r * 1.9, r * 1.9))
+    _marker(p, shape, cx, cy, r * 1.32, QColor("#ffffff"))
     p.setBrush(QColor(dot))
-    p.drawEllipse(QRectF(size - r * 1.75, size - r * 1.75, r * 1.5, r * 1.5))
+    _marker(p, shape, cx, cy, r, QColor(dot))
     p.end()
     ic = QIcon()
     ic.addPixmap(pm, QIcon.Mode.Normal, QIcon.State.Off)

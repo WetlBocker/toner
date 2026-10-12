@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComb
                                QFormLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QTableWidget,
                                QTableWidgetItem, QVBoxLayout)
 from core import audit, custom, db
-from ui.widgets import GroupPicker
+from ui.widgets import EmptyHint, GroupPicker
 from ui.settings_base import Page, note, spin
 
 
@@ -213,6 +213,7 @@ class CustomChecksPage(Page):
         self.table.setShowGrid(False)
         self.table.setMinimumHeight(240)
         self.table.doubleClicked.connect(lambda *_: self.edit())
+        self.hint = EmptyHint(self.table, "No custom checks yet", "Press New... to add one")
         bar = QHBoxLayout()
         for text, fn in (("New...", self.add), ("Edit...", self.edit), ("Delete", self.delete)):
             b = QPushButton(text)
@@ -229,6 +230,7 @@ class CustomChecksPage(Page):
 
     def refresh(self):
         self.rows = custom.list_checks()
+        self.hint.setVisible(not self.rows)
         kinds = dict(custom.KINDS)
         self.table.setRowCount(len(self.rows))
         for i, c in enumerate(self.rows):
@@ -330,6 +332,7 @@ class BackupsPage(Page):
 # ------------------------------------------------------------------ Audit log
 class AuditPage(Page):
     title = "Audit log"
+    track = False                                  # its filter box is not a setting
 
     def __init__(self):
         super().__init__()

@@ -9,9 +9,12 @@ from .mikrotik import MikrotikDriver
 from .paloalto import PaloAltoDriver
 from .snmpdev import SnmpDriver
 from .unifi import UnifiDriver
+from .unifi_cloud import UnifiCloudDriver
+from .unifi_network import UnifiNetworkDriver
+from .unifi_protect import UnifiProtectDriver
 from .wifi import WifiDriver
 from .windows import WindowsDriver
 
-DRIVERS = {"cisco": CiscoDriver, "fortinet": FortinetDriver, "unifi": UnifiDriver, "juniper": JuniperDriver,
+DRIVERS = {"cisco": CiscoDriver, "fortinet": FortinetDriver, "unifi": UnifiDriver, "unifi_network": UnifiNetworkDriver, "unifi_protect": UnifiProtectDriver, "unifi_cloud": UnifiCloudDriver, "juniper": JuniperDriver,
            "arista": AristaDriver, "hpe": HpeDriver, "mikrotik": MikrotikDriver, "paloalto": PaloAltoDriver,
            "meraki": MerakiDriver, "snmp": SnmpDriver, "cloud": CloudDriver, "wifi": WifiDriver, "windows": WindowsDriver}
