@@ -114,7 +114,7 @@ AT = {"show processes top once": "top - 10:00:00 up 3 days\n%Cpu(s):  2.0 us,  1
 r = ssh_run("arista", AT)
 check("cpu 9.5%", r["cpu"].value == "10%" and r["cpu"].status == "OK", r["cpu"])
 check("memory 75%", r["memory"].value == "75%" and r["memory"].status == "OK", r["memory"])
-check("uptime 2d", r["uptime"].value == "2d 4h" and r["uptime"].status == "OK", r["uptime"])
+check("uptime 2d", r["uptime"].value == "2:04:46:40" and r["uptime"].status == "OK", r["uptime"])
 check("temperature graded (72C -> WARN)", r["temperature"].status == "WARN" and r["temperature"].value == "72C", r["temperature"])
 check("interfaces + err-disabled", r["interfaces"].value == "2/4 up" and r["interfaces"].status == "WARN" and "Ethernet3" in r["interfaces"].message, r["interfaces"])
 check("bgp down", r["bgp"].status == "FAIL" and r["bgp"].value == "1/2 established", r["bgp"])
@@ -130,7 +130,7 @@ AOSS = {"show system information": "\n Status and Counters - General System Info
 r = ssh_run("hpe", AOSS, platform="aruba_osswitch")
 check("AOS-S cpu", r["cpu"].value == "12%", r["cpu"])
 check("AOS-S memory 36.5%", r["memory"].value == "37%", r["memory"])
-check("AOS-S uptime 6 days", r["uptime"].value == "6 days" and abs(r["uptime"].numeric - 144) < 0.01, r["uptime"])
+check("AOS-S uptime 6 days", r["uptime"].value == "6:00:00:00" and abs(r["uptime"].numeric - 144) < 0.01, r["uptime"])
 check("AOS-S interfaces", r["interfaces"].value == "2/3 up", r["interfaces"])
 AOSCX = {"show system resource-utilization": "System Resource Utilization\n CPU usage       : 7 %\n Memory usage    : 41 %\n",
          "show system": "Hostname : cx1\nUp Time : 12 days, 3 hours\nCPU : x\n",

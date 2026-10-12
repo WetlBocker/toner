@@ -87,7 +87,7 @@ check("identity row names the device and vendor", r["reachability"].value == "sw
 check("cpu = busiest core (55%)", r["cpu"].value == "55%" and r["cpu"].status == "OK", r["cpu"])
 check("memory from hrStorage RAM (60%)", r["memory"].value == "60%", r["memory"])
 check("storage = fullest disk (85% -> WARN)", r["storage"].value == "85%" and r["storage"].status == "WARN" and r["storage"].message == "C:\\", r["storage"])
-check("uptime 1d 1h", r["uptime"].value == "1d 1h" and r["uptime"].status == "OK", r["uptime"])
+check("uptime 1d 1h", r["uptime"].value == "1:01:00:00" and r["uptime"].status == "OK", r["uptime"])
 check("temperature from entity sensor with precision", r["temperature"].value == "52C" or r["temperature"].value == "53C", r["temperature"])
 check("interfaces: loopback excluded, admin-down ignored", r["interfaces"].value == "1/2 up" and "Gi0/2" in r["interfaces"].message, r["interfaces"])
 check("interface errors total mode lists ports with errors", r["interface errors"].status == "WARN" and "Gi0/1" in r["interface errors"].message, r["interface errors"])

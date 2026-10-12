@@ -1,4 +1,4 @@
-from core import proxy
+from core import proxy, display
 import requests
 import urllib3
 from .base import Driver, OK, WARN, FAIL, grade, grade_low
@@ -7,8 +7,7 @@ STATES = {0: "disconnected", 1: "connected", 2: "pending", 4: "upgrading",
           5: "provisioning", 6: "heartbeat missed", 7: "adopting", 11: "isolated"}
 
 def fmt_uptime(s):
-    d, r = divmod(int(s), 86400)
-    return f"{d}d {r // 3600}h"
+    return display.uptime(seconds=s)
 
 class UnifiDriver(Driver):
     def run(self):

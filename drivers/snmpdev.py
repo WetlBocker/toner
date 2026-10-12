@@ -5,7 +5,7 @@ to a few common vendor MIBs for CPU and memory. Checks a device does not support
 """
 import time
 
-from core import snmp
+from core import display, snmp
 from core.snmp import number_of, text_of
 from .base import Driver, OK, WARN, FAIL, grade, grade_low
 
@@ -117,10 +117,9 @@ class SnmpDriver(Driver):
         if ticks is None:
             return []
         hours = ticks / 100 / 3600
-        d, r = divmod(int(ticks / 100), 86400)
         t = self.th["uptime"]
         status = grade_low(hours, t["warn"], t["fail"])
-        return self.result("uptime", status, f"{d}d {r // 3600}h", "recent reboot" if status != OK else "", numeric=hours)
+        return self.result("uptime", status, display.uptime(hours), "recent reboot" if status != OK else "", numeric=hours)
 
     def temperature(self):
         c = self.c

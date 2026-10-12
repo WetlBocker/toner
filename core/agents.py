@@ -27,7 +27,7 @@ from core import quiet
 
 MAX_BODY = 1_000_000
 DEFAULT_PORT = 8750
-AGENT_VERSION = 2                       # raise it when the package script changes: agents on an older one update themselves
+AGENT_VERSION = 3                       # raise it when the package script changes: agents on an older one update themselves
 TOKEN_GRACE_DAYS = 7                    # an old token still works this long after it was replaced
 
 

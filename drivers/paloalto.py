@@ -1,4 +1,4 @@
-from core import proxy
+from core import proxy, display
 import re
 import xml.etree.ElementTree as ET
 
@@ -59,10 +59,10 @@ class PaloAltoDriver(Driver):
         m = re.match(r"(?:(\d+)\s+days?,\s*)?(\d+):(\d+):(\d+)", text)
         if not m:
             raise ValueError(f"unrecognised uptime '{text}'")
-        hours = int(m.group(1) or 0) * 24 + int(m.group(2)) + int(m.group(3)) / 60
+        hours = int(m.group(1) or 0) * 24 + int(m.group(2)) + int(m.group(3)) / 60 + int(m.group(4)) / 3600
         t = self.th["uptime"]
         status = grade_low(hours, t["warn"], t["fail"])
-        return self.result("uptime", status, text, "recent reboot" if status != OK else "", numeric=hours)
+        return self.result("uptime", status, display.uptime(hours), "recent reboot" if status != OK else "", numeric=hours)
 
     def firmware(self):
         s = self._system()

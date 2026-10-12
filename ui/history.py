@@ -28,8 +28,7 @@ def fmt_value(check, v):
     if base == "temperature":
         return plain(v, 1) + " \u00b0C"
     if base == "uptime":
-        d, h = divmod(int(v), 24)
-        return f"{plain(v, 1)} h" + (f"  ({d}d {h}h)" if d else "")
+        return display.uptime(v)
     return plain(v, 2)
 
 

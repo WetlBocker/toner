@@ -3,7 +3,7 @@ and patch age. The data comes from an agent that reports to Toner, from WinRM, o
 the checks are the same for all three."""
 from datetime import datetime, timezone
 
-from core import agents, winmon
+from core import agents, display, winmon
 from .base import Driver, OK, WARN, FAIL, grade, grade_low
 
 
@@ -82,10 +82,9 @@ class WindowsDriver(Driver):
         hours = self.report.get("uptime_h")
         if hours is None:
             return []
-        d, rest = divmod(int(hours * 3600), 86400)
         t = self.th["uptime"]
         status = grade_low(hours, t["warn"], t["fail"])
-        return self.result("uptime", status, f"{d}d {rest // 3600}h", "recent reboot" if status != OK else "", numeric=float(hours))
+        return self.result("uptime", status, display.uptime(hours), "recent reboot" if status != OK else "", numeric=float(hours))
 
     def reboot(self):
         reasons = self.report.get("reboot") or []

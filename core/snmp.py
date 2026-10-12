@@ -108,9 +108,8 @@ def name_of(oid):
 
 
 def _ticks(v):
-    s = int(v) // 100
-    d, r = divmod(s, 86400)
-    return f"{int(v)} ({d}d {r // 3600:02d}:{r % 3600 // 60:02d}:{r % 60:02d})"
+    from core import display
+    return f"{int(v)} ({display.uptime(seconds=int(v) / 100)})"
 
 
 def format_value(value):

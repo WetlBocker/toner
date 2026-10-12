@@ -17,6 +17,15 @@ def platform_name(p):
     return PLATFORM_NAMES.get(p, p or "N/A")
 
 
+def uptime(hours=None, seconds=None):
+    """Uptime as Days:Hours:Minutes:Seconds, e.g. 12:03:45:09 (twelve days, three hours, 45 minutes, 9 seconds)."""
+    total = int(round(float(seconds) if seconds is not None else float(hours or 0) * 3600))
+    days, rest = divmod(max(total, 0), 86400)
+    hrs, rest = divmod(rest, 3600)
+    mins, secs = divmod(rest, 60)
+    return f"{days}:{hrs:02d}:{mins:02d}:{secs:02d}"
+
+
 def check_name(name):
     """'wan links' -> 'WAN Links'; 'channel util (ng)' -> 'Channel Util (NG)'."""
     base, sep, rest = (name or "").partition(" (")

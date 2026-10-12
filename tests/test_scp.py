@@ -141,7 +141,7 @@ if exe:
     except OSError: pass
     rs = ScpServer(share, pubkey=key)
     def real(*args):
-        r = subprocess.run([exe, "-O", "-q", "-P", str(rs.port), "-i", kf, "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=NUL", "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", *args],
+        r = subprocess.run([exe, "-O", "-q", "-P", str(rs.port), "-i", kf, "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=" + os.path.join(base, "known_hosts"), "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", *args],
                            capture_output=True, text=True, timeout=60)
         return r.returncode, (r.stdout + r.stderr).strip()
     rc, out = real(os.path.join(mine, "hello.txt"), "u@127.0.0.1:real-up.txt")

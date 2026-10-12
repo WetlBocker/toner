@@ -34,8 +34,7 @@ class AristaDriver(SshDriver):
 
     def uptime(self, c):
         secs = float(self.json(c, "show uptime")["upTime"])
-        d, r = divmod(int(secs), 86400)
-        return self.uptime_row(secs / 3600, f"{d}d {r // 3600}h")
+        return self.uptime_row(secs / 3600, "")
 
     def temperature(self, c):
         env = self.json(c, "show system environment temperature")

@@ -27,7 +27,7 @@ $o.joined = [bool]$cs.PartOfDomain
 $o.os = [string]$os.Caption
 $o.build = [string]$os.BuildNumber
 $o.boot = $os.LastBootUpTime.ToUniversalTime().ToString('o')
-$o.uptime_h = [math]::Round(((Get-Date) - $os.LastBootUpTime).TotalHours, 2)
+$o.uptime_h = [math]::Round(((Get-Date) - $os.LastBootUpTime).TotalHours, 5)
 $o.mem_total_mb = [math]::Round($os.TotalVisibleMemorySize / 1024)
 $o.mem_free_mb = [math]::Round($os.FreePhysicalMemory / 1024)
 $o.ips = @(Get-CimInstance Win32_NetworkAdapterConfiguration -Filter 'IPEnabled=True' | ForEach-Object { $_.IPAddress } | Where-Object { $_ -match '^\d+\.\d+\.\d+\.\d+$' })

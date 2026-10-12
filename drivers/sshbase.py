@@ -4,6 +4,7 @@ import re
 from netmiko import ConnectHandler
 
 from .base import Driver, OK, WARN, FAIL, SEVERITY, grade_low
+from core import display
 
 _UNITS = {"year": 8760, "week": 168, "day": 24, "hour": 1, "minute": 1 / 60}
 
@@ -95,7 +96,7 @@ class SshDriver(Driver):
     def uptime_row(self, hours, text):
         t = self.th["uptime"]
         status = grade_low(hours, t["warn"], t["fail"])
-        return self.result("uptime", status, text, "recent reboot" if status != OK else "", numeric=hours)
+        return self.result("uptime", status, display.uptime(hours), "recent reboot" if status != OK else "", numeric=hours)
 
     def link_summary(self, up, total, names_down=(), warn_names=()):
         """'interfaces' row: counts, plus a WARN for ports in a bad state (e.g. err-disabled)."""

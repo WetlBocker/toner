@@ -89,7 +89,7 @@ move(r.center().x(), r.bottom() + 200); check("pointer far outside the plot clea
 move(r.center().x(), r.center().y()); ch.grab().save(SP + r"\history_hover.png")
 ch.leaveEvent(None); check("leaving the chart clears it", ch.hover is None)
 check("value formats", H.fmt_value("cpu", 85.0) == "85%" and H.fmt_value("memory", 85.46) == "85.5%" and H.fmt_value("temperature", 72.0) == "72 °C"
-      and H.fmt_value("uptime", 100.0) == "100 h  (4d 4h)" and H.fmt_value("bgp", 2.0) == "2" and H.fmt_value("port errors", 10234.0) == "10,234" and H.fmt_value("channel util (ng)", 41.5) == "41.5%",
+      and H.fmt_value("uptime", 100.0) == "4:04:00:00" and H.fmt_value("bgp", 2.0) == "2" and H.fmt_value("port errors", 10234.0) == "10,234" and H.fmt_value("channel util (ng)", 41.5) == "41.5%",
       [H.fmt_value("cpu", 85.0), H.fmt_value("temperature", 72.0), H.fmt_value("uptime", 100.0), H.fmt_value("bgp", 2.0), H.fmt_value("port errors", 10234.0)])
 w.chk.set_selected(["CPU", "Memory", "Uptime", "BGP"]); w.chk._toggled(); QApplication.processEvents()
 w.grab().save(SP + r"\history_stack.png")

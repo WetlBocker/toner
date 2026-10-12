@@ -65,7 +65,7 @@ r2 = snmp.query("127.0.0.1", PORT, C, "bulkwalk", "system", timeout=2, retries=0
 check("bulk walk gives the same rows", [x.oid for x in r2.rows] == [x.oid for x in r.rows], (r2.error, len(r2.rows)))
 r = snmp.query("127.0.0.1", PORT, C, "system", timeout=2, retries=0)
 check("system info", not r.error and [x.name for x in r.rows][:3] == ["sysDescr.0", "sysObjectID.0", "sysUpTime.0"], (r.error, r.rows))
-check("uptime formatted", any(x.name == "sysUpTime.0" and "(" in x.value and "d " in x.value for x in r.rows), [x.value for x in r.rows])
+check("uptime formatted", any(x.name == "sysUpTime.0" and "(" in x.value and x.value.endswith(":00:00:00)") for x in r.rows), [x.value for x in r.rows])
 got = []
 r = snmp.query("127.0.0.1", PORT, C, "walk", "mib-2", timeout=2, retries=0, max_rows=5, on_rows=got.extend)
 check("row cap stops a runaway walk", r.truncated and len(r.rows) == 5 and len(got) == 5, (len(r.rows), r.truncated))

@@ -2,7 +2,7 @@ import re
 from netmiko import ConnectHandler
 from .base import Driver, OK, WARN, FAIL, grade_low
 from .sshbase import Recorder
-from core import quiet
+from core import quiet, display
 
 _UPTIME_UNITS = {"year": 8760, "week": 168, "day": 24, "hour": 1, "minute": 1 / 60}
 
@@ -70,7 +70,7 @@ class CiscoDriver(Driver):
         hours = uptime_hours(text)
         t = self.th["uptime"]
         status = grade_low(hours, t["warn"], t["fail"])
-        return self.result("uptime", status, text, "recent reboot" if status != OK else "", numeric=hours)
+        return self.result("uptime", status, display.uptime(hours), "recent reboot" if status != OK else "", numeric=hours)
 
     def interfaces(self, c):
         ifs = c.send_command("show interfaces", use_textfsm=True)
