@@ -300,7 +300,8 @@ class DashboardTab(QWidget):
         changes = backup.recent_changes(24)
         self.cards["devices"].set(len(devs), f"{len(enabled)} enabled", active=False)
         self.cards["ok"].set(count("OK"), "devices with all checks OK")
-        self.cards["warn"].set(count("WARN"), "devices with warnings")
+        warned = sum(1 for v in health.values() if any(st == "WARN" for _c, st, _m in v["problems"]))    # a device that also fails still has its warning
+        self.cards["warn"].set(warned, "devices with a warning")
         self.cards["fail"].set(bad, "failing or unreachable")
         self.cards["changes"].set(len(changes), "in the last 24 hours", active=False)
         self._fleet()

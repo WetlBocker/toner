@@ -498,10 +498,16 @@ def running():
     return _receiver is not None and _receiver.httpd is not None
 
 
+def _configured_port():
+    """The port set in Settings > Agents. 0 means any free port (what the tests use); only a missing value falls back to the default."""
+    value = db.get_setting("agent_port")
+    return DEFAULT_PORT if value in (None, "") else int(value)
+
+
 def status():
     """{'running', 'port', 'error', 'accepted', 'rejected'}"""
     r = _receiver
-    return {"running": running(), "port": r.port if running() else int(db.get_setting("agent_port") or DEFAULT_PORT),
+    return {"running": running(), "port": r.port if running() else _configured_port(),
             "error": r.error if r else "", "accepted": r.accepted if r else 0, "rejected": r.rejected if r else 0}
 
 
@@ -516,7 +522,7 @@ def apply():
     """Start, stop or restart the receiver to match Settings. Returns an error text ('' when fine)."""
     global _receiver
     want = bool(db.get_setting("agent_enabled"))
-    port = int(db.get_setting("agent_port") or DEFAULT_PORT)
+    port = _configured_port()
     bind = db.get_setting("agent_bind") or "0.0.0.0"
     if _receiver and want and running() and _receiver.port == port and _receiver.bind == bind:
         return ""

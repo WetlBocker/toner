@@ -117,6 +117,12 @@ w = A.Main(); w.show()
 w.inventory.edit_device = lambda d: None            # the real one opens a modal dialog
 check("sections, with the overview first", [w.tabs.tabText(i) for i in range(w.tabs.count())] == ["Overview", "Results", "Inventory", "Configs", "History", "Reports", "Tools", "Sessions", "Settings", "About"])
 check("the overview is filled from stored results at startup", w.dashboard.cards["warn"].value.text() == "1")
+db.save_run([Result("core1", "cpu", "WARN", "85%", numeric=85.0), Result("core1", "events", "FAIL", "295", "errors"), Result("edge-fw", "wan links", "OK", "2/2")])
+w.dashboard.refresh()
+check("a device with a warning and a failure counts in both cards", w.dashboard.cards["warn"].value.text() == "1" and w.dashboard.cards["fail"].value.text() == "1"
+      and w.dashboard.cards["ok"].value.text() == "1", {k: x.value.text() for k, x in w.dashboard.cards.items()})
+db.save_run([Result("core1", "cpu", "WARN", "85%", numeric=85.0), Result("edge-fw", "wan links", "OK", "2/2")])
+w.dashboard.refresh()
 w.go("Tools"); check("go() switches sections", w.tabs.currentWidget() is w.tools)
 w.open_palette(); names = [w.palette.list.item(i).text() for i in range(w.palette.list.count())]
 check("the palette offers sections, tools, devices and actions", any("Go to Inventory" in n for n in names) and any("Tool: Command Runner" in n for n in names) and any("Device: core1" in n for n in names) and any("Run checks" in n for n in names), names[:6])
