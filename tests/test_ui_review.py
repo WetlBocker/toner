@@ -106,10 +106,13 @@ check("(now one device has both)", dash.overlap.isVisibleTo(dash) and "1 device 
 now = datetime.now()
 check("times are short and relative", dash._ago(now.strftime("%Y-%m-%d %H:%M:%S")) == "just now" and dash._ago((now - timedelta(minutes=12)).strftime("%Y-%m-%d %H:%M:%S")) == "12 min ago"
       and dash._ago((now - timedelta(hours=5)).strftime("%Y-%m-%d %H:%M:%S")) == "5 h ago" and dash._ago((now - timedelta(days=3)).strftime("%Y-%m-%d %H:%M:%S")) == "3 days ago" and dash._ago("junk") == "junk")
-dash.resize(860, 600); app.processEvents(); app.processEvents()
+dash.STACK_BELOW = 100000                                  # "narrower than this" now includes this window, whatever the fonts make its smallest size
+dash.resize(dash.width() + 1, 700); app.processEvents(); app.processEvents()
 check("in a narrow window the panels stack, so 'What is wrong' is never squeezed away", dash.cols.direction().name == "TopToBottom", dash.cols.direction())
-dash.resize(1300, 700); app.processEvents(); app.processEvents()
+dash.STACK_BELOW = 0
+dash.resize(dash.width() + 1, 700); app.processEvents(); app.processEvents()
 check("and sit side by side in a wide one", dash.cols.direction().name == "LeftToRight")
+check("the width below which they stack is a sensible one", DashboardTab.STACK_BELOW >= 800)
 
 print("== Configs, History, Tools")
 from ui.configs import ConfigsTab
@@ -192,14 +195,15 @@ w.palette.hide()
 
 print("== nothing stretches across a wide window")
 from PySide6.QtWidgets import QComboBox, QDoubleSpinBox, QSpinBox, QToolButton
-def stretched(root, wide_button=380, wide_combo=650):
+def stretched(root, combo_min=360):
+    """Widgets wider than their own size allows (the caps in settings_base.tidy), so the result does not depend on the fonts."""
     out = []
     for b in root.findChildren(QPushButton) + root.findChildren(QToolButton):
-        if b.isVisibleTo(root) and b.width() > wide_button and not hasattr(b, "set_labels"): out.append(("button", b.text(), b.width()))
+        if b.isVisibleTo(root) and b.text() and not hasattr(b, "set_labels") and b.width() > b.sizeHint().width() + 62: out.append(("button", b.text(), b.width()))
     for b in root.findChildren(QSpinBox) + root.findChildren(QDoubleSpinBox):
-        if b.isVisibleTo(root) and b.width() > wide_button: out.append(("spin", b.value(), b.width()))
+        if b.isVisibleTo(root) and b.width() > max(220, b.sizeHint().width() + 30) + 2: out.append(("spin", b.value(), b.width()))
     for b in root.findChildren(QComboBox):
-        if b.isVisibleTo(root) and b.width() > wide_combo: out.append(("combo", b.currentText()[:20], b.width()))
+        if b.isVisibleTo(root) and b.width() > max(combo_min, b.sizeHint().width() + 40) + 2: out.append(("combo", b.currentText()[:20], b.width()))
     return out
 big = ST.SettingsTab(); big.resize(2000, 900); big.show()
 bad_pages = {}
@@ -210,15 +214,15 @@ for i, p in enumerate(big.pages):
 check("on a 2000 px window no Settings page has a stretched button, number box or drop-down", not bad_pages, bad_pages)
 ap = [p for p in big.pages if p.title == "Appearance"][0]
 xs = [b.x() for b in ap.swatch.values()]
-check("the four status colours sit together, not spread across the page", max(xs) - min(xs) < 400, xs)
+check("the four status colours sit together, not spread across the page", max(xs) - min(xs) < 4 * max(b.width() for b in ap.swatch.values()) + 40, xs)
 ag = [p for p in big.pages if p.title == "Agents"][0]
-check("Download agent package is as wide as its words, with the 'reports every' box right after it", ag.download.width() < 300 and ag.minutes.x() - ag.download.x() < 450, (ag.download.width(), ag.minutes.x() - ag.download.x()))
+check("Download agent package is as wide as its words, with the 'reports every' box right after it", ag.download.width() <= ag.download.sizeHint().width() + 62 and ag.minutes.x() - ag.download.x() < ag.download.width() + 250, (ag.download.width(), ag.minutes.x() - ag.download.x()))
 from ui.tools import ToolsTab
 tt2 = ToolsTab(); tt2.resize(2000, 900); tt2.show()
 bad_tools = {}
 for i in range(tt2.tabs.count()):
     tt2.tabs.setCurrentIndex(i); app.processEvents(); app.processEvents()
-    found = stretched(tt2.tabs.currentWidget())
+    found = stretched(tt2.tabs.currentWidget(), combo_min=460)
     if found: bad_tools[tt2.tabs.tabText(i)] = found
 check("and the same for every tool (Wake-on-LAN's button and iperf's mode box were both far too wide)", not bad_tools, bad_tools)
 sec = [p for p in big.pages if p.title == "Security"][0]
