@@ -35,6 +35,11 @@ def check_host(text):
         return t
     except ValueError:
         pass
+    if re.fullmatch(r"[0-9.]+", t):
+        # numbers and dots only is meant as an IP address (10.0.025, 10.0.0, 10.0.0.256), never a name, so no DNS lookup is worth making
+        raise ValueError(f"'{t}' is not a valid IP address. An IPv4 address is four numbers from 0 to 255, without leading zeros, separated by dots, e.g. 10.0.0.25.")
+    if ":" in t and re.fullmatch(r"[0-9A-Fa-f:.%]+", t):
+        raise ValueError(f"'{t}' is not a valid IPv6 address.")
     if t and len(t) <= 253 and all(_LABEL.match(label) for label in t.split(".")):
         return t
     raise ValueError("Host must be an IP address or DNS name, e.g. 10.0.0.2 or core-sw1.corp.example.com "

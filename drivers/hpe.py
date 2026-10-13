@@ -70,6 +70,9 @@ class HpeDriver(CliRows, SshDriver):
         return self.uptime_row(uptime_hours(text), text)
 
     def interfaces(self, c):
+        return self.interfaces_row(self.if_states(c))
+
+    def if_states(self, c):
         if self.cx:
             cmd = "show interface brief"
             rows = re.findall(r"(?m)^\s*(\d+/\d+/\d+|lag\s?\d+)\s.*?\s(up|down)\b", self.cmd(c, cmd), re.I)
@@ -78,5 +81,4 @@ class HpeDriver(CliRows, SshDriver):
             rows = re.findall(r"(?m)^\s*([A-Za-z]?\d+)\s+\S+\s*\|\s*\S+\s+\S+\s+(Up|Down)\b", self.cmd(c, cmd))
         if not rows:
             raise self.unreadable("interfaces", cmd)
-        up = [n for n, s in rows if s.lower() == "up"]
-        return self.link_summary(len(up), len(rows))
+        return [(n, "up" if s.lower() == "up" else "down") for n, s in rows]

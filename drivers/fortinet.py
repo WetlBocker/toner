@@ -4,7 +4,7 @@ import urllib3
 from datetime import datetime, timezone
 
 from . import apichecks
-from .base import Driver, OK, WARN, FAIL, grade, grade_low
+from .base import AuthRejected, Driver, OK, WARN, FAIL, grade, grade_low
 
 class FortinetDriver(Driver):
     def _get(self, path):
@@ -29,6 +29,18 @@ class FortinetDriver(Driver):
 
     def run(self):
         out = []
+        try:
+            self._get("system/status")                       # a rejected token is said once, not once per check
+        except requests.HTTPError as e:
+            code = getattr(e.response, "status_code", None)
+            if code == 401:
+                raise AuthRejected("FortiGate rejected the API token (HTTP 401): check the token stored for this device, that it has not expired, "
+                                   "and that this computer is in the API admin's trusted hosts.") from None
+            if code == 403:
+                raise AuthRejected("FortiGate refused the API token (HTTP 403): the REST API admin needs read access, and this computer must be in "
+                                   "its trusted hosts.") from None
+        except Exception:
+            pass
         for name, fn in (("resources", self.resources), ("firmware", self.firmware),
                          ("wan links", self.wan), ("ha", self.ha), ("vpn", self.vpn), ("licenses", self.licenses), ("certificates", self.certificates),
                          ("interfaces", self.interfaces), ("ha sync", self.ha_sync), ("fortiaps", self.fortiaps), ("fortiswitches", self.fortiswitches),
@@ -84,16 +96,29 @@ class FortinetDriver(Driver):
         t = self.th["cert_days"]
         return self.result("certificates", grade_low(days, t["warn"], t["fail"]), f"{days:.0f} days" if days >= 0 else "expired", name, numeric=float(days))
 
-    def interfaces(self):
+    def _physical(self):
         ifs = self._get("system/interface?scope=global")
-        phys = {n: i for n, i in ifs.items() if str(i.get("type", "physical")).lower() == "physical"}
+        return {n: i for n, i in ifs.items() if str(i.get("type", "physical")).lower() == "physical"}
+
+    @staticmethod
+    def _if_state(i):
+        if i.get("link"):
+            return "up"
+        return "down" if str(i.get("status", "up")).lower() == "up" and i.get("role") != "undefined" else "off"
+
+    def list_interfaces(self):
+        return [(n, self._if_state(i)) for n, i in self._physical().items()]
+
+    def interfaces(self):
+        phys = self._physical()
         if not phys:
             return []
-        down = [n for n, i in phys.items() if not i.get("link") and str(i.get("status", "up")).lower() == "up" and i.get("role") != "undefined"]
-        rows = [self.result("interfaces", OK, f"{len(phys) - len(down)}/{len(phys)} up", ("down: " + ", ".join(down[:6])) if down else "", numeric=float(len(phys) - len(down)))]
+        rows = self.interfaces_row([(n, self._if_state(i)) for n, i in phys.items()])
+        rows = [rows] if rows else []
         errs = {n: int(i.get("rx_errors", 0) or 0) + int(i.get("tx_errors", 0) or 0) for n, i in phys.items() if i.get("link")}
-        if errs:
-            rows.append(self.error_counter_rows("interface errors", errs))
+        found = self.error_counter_rows("interface errors", errs) if errs else None
+        if found:
+            rows.append(found)
         return rows
 
     def ha_sync(self):

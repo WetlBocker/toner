@@ -125,14 +125,15 @@ class JuniperDriver(CliRows, SshDriver):
                            "; ".join(descr[:3]) or f"{major} major, {minor} minor", numeric=float(m.group(1)))
 
     def interfaces(self, c):
+        return self.interfaces_row(self.if_states(c))
+
+    def if_states(self, c):
         cmd = "show interfaces terse"
         rows = re.findall(r"(?m)^(\S+)\s+(up|down)\s+(up|down)\s*$", self.cmd(c, cmd))
         phys = [(n, a, l) for n, a, l in rows if PHYSICAL.match(n) and "." not in n]
         if not phys:
             raise self.unreadable("interfaces", cmd)
-        active = [r for r in phys if r[1] == "up"]               # ports an admin has switched on
-        up = [r for r in active if r[2] == "up"]
-        return self.link_summary(len(up), len(active))
+        return [(n, "off" if a != "up" else "up" if l == "up" else "down") for n, a, l in phys]       # off: an admin switched the port off
 
     def bgp(self, c):
         out = self.cmd(c, "show bgp summary")

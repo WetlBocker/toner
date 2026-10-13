@@ -63,12 +63,44 @@ r = fg_run()
 check("the subscription that ends first decides: 20 days is a failure (limit 30), and it is named", r["licenses"].status == "FAIL" and "enhanced" in r["licenses"].message and r["licenses"].value == "20 days", r["licenses"])
 check("a certificate you manage that ends in 12 days warns; the expired one is the one named", r["certificates"].value == "expired" and r["certificates"].status == "FAIL" and r["certificates"].message == "old", r["certificates"])
 check("interfaces: the wan port that is down, VLANs left out, errors counted", r["interfaces"].value == "1/2 up" and "wan1" in r["interfaces"].message and "interface errors" in r, {k: v.value for k, v in r.items() if "interface" in k})
+check("any interface that is down is a FAIL, and it is named", r["interfaces"].status == "FAIL" and r["interfaces"].message == "down: wan1", r["interfaces"])
+r = fg_run(checkopts='{"interfaces": ["port1"]}')
+check("limited to port1 (up): OK, and the wan port is not read at all", r["interfaces"].status == "OK" and r["interfaces"].value == "1/1 up" and "wan1" not in r["interfaces"].message, r["interfaces"])
+check("its errors are read only for the chosen ones too", r["interface errors"].value == "1" and "port1" in r["interface errors"].message, r["interface errors"])
+r = fg_run(checkopts='{"interfaces": ["WAN1"]}')
+check("names match whatever their case; the chosen one is down, so FAIL, and there are no errors to read on a port with no link", r["interfaces"].status == "FAIL" and r["interfaces"].message == "down: wan1" and "interface errors" not in r, r["interfaces"])
+r = fg_run(checkopts='{"interfaces": ["port1", "port7"]}')
+check("a chosen port the firewall does not have is a WARN", r["interfaces"].status == "WARN" and "port7" in r["interfaces"].message, r["interfaces"])
+check("the firewall lists its physical ports for the picker (VLANs left out)", FG.FortinetDriver({"name": "fw", "vendor": "fortinet", "host": "10.0.0.1", "password": "TOK"}, TH, OPTS).list_interfaces() == [("port1", "up"), ("wan1", "down")])
 check("HA sync: out of sync, and which part", r["ha sync"].status == "WARN" and "root" in r["ha sync"].message)
 check("FortiAP offline warns, FortiSwitches fine", r["fortiaps"].status == "WARN" and "ap2" in r["fortiaps"].message and r["fortiswitches"].status == "OK")
 check("log disk 95% fails", r["log disk"].status == "FAIL" and r["log disk"].value == "95%")
 FGDATA.pop("license/status"); FGDATA.pop("wifi/managed_ap"); FGDATA.pop("system/ha-checksums")
 r = fg_run()
 check("a feature the firewall does not have (404) adds no row and no error", not ({"licenses", "fortiaps", "ha sync"} & set(r)) and not [k for k, v in r.items() if v.status == "ERROR"])
+
+print("== a rejected key is said once, in words")
+FGDATA_SAVE = dict(FGDATA)
+def fg_denied(url, headers=None, **kw): return Resp(status=401)
+FG.requests.get = fg_denied
+try: fg_run(); check("Fortinet: a rejected token stops the run with one reason", False)
+except ValueError as e: check("Fortinet: a rejected token stops the run with one reason", "rejected the API token" in str(e) and "401" in str(e) and "trusted hosts" in str(e) and "/api/v2" not in str(e), e)
+FG.requests.get = lambda url, headers=None, **kw: Resp(status=403)
+try: fg_run(); check("Fortinet: a token that may not read says so", False)
+except ValueError as e: check("Fortinet: a token that may not read says so", "refused the API token" in str(e) and "403" in str(e), e)
+FG.requests.get = fg_get
+check("with a good token nothing changes", fg_run()["interfaces"].value == "1/2 up")
+rows = []
+class Boom(Exception): pass
+import requests as _rq
+d0 = DRIVERS["fortinet"]({"name": "fw", "vendor": "fortinet", "host": "h", "password": "x"}, TH, OPTS)
+def http_err():
+    e = _rq.HTTPError("403 Client Error: Forbidden for url: https://h/api/?cmd=%3Cshow%3E"); e.response = Resp(status=500); raise e
+d0.safe(rows, "something", http_err)
+check("any other HTTP error row says the code, not the long address", rows[0].status == "ERROR" and rows[0].message == "the device's API answered HTTP 500", rows[0].message)
+rows.clear(); e403 = _rq.HTTPError("x"); e403.response = Resp(status=403)
+d0.safe(rows, "x", lambda: (_ for _ in ()).throw(e403))
+check("403 and 404 get a short hint", "may not read" in rows[0].message)
 
 print("== Palo Alto, from the API's answers")
 def el(xml): return ET.fromstring(xml)
@@ -103,6 +135,22 @@ check("content: 72-day-old antivirus/app content fails", r["content"].status == 
 check("disk: the logs partition at 98% fails", r["disk"].status == "FAIL" and r["disk"].value == "98%")
 check("Panorama not reachable warns", r["panorama"].status == "WARN" and "Panorama" in r["panorama"].message)
 check("the last commit failed", r["last commit"].status == "FAIL" and r["last commit"].value == "fail")
+PA.requests.get = lambda url, params=None, headers=None, **kw: Resp(b'<response status="error" code="403"><result><msg>Invalid Credential</msg></result></response>', status=403)
+try: pan_run(); check("Palo Alto: a rejected key stops the run with one reason", False)
+except ValueError as e:
+    m = str(e)
+    check("Palo Alto: a rejected key stops the run with one reason", m.startswith("Palo Alto rejected the API key (Invalid Credential)") and "/api/?type=op" not in m and "%3C" not in m, m)
+PA.requests.get = lambda url, params=None, headers=None, **kw: Resp(b"", status=403)
+try: pan_run(); check("Palo Alto: with no message from the firewall the code is named", False)
+except ValueError as e: check("Palo Alto: with no message from the firewall the code is named", "(HTTP 403)" in str(e), e)
+PA.requests.get = lambda url, params=None, headers=None, **kw: Resp(b"", status=500)
+r = pan_run()
+check("Palo Alto: any other failure is reported per check, without the address", r["resources"].status == "ERROR" and r["resources"].message == "the device's API answered HTTP 500", r["resources"])
+from core.runner import run_one
+PA.requests.get = lambda url, params=None, headers=None, **kw: Resp(b'<response status="error" code="403"><result><msg>Invalid Credential</msg></result></response>', status=403)
+rows = run_one({"name": "pa", "vendor": "paloalto", "host": "127.0.0.1", "password": "KEY", "checkopts": "", "location": ""}, TH, {**OPTS, "retries": 3, "retry_delay": 0})
+check("in a run it is one 'connection' row, in words, not retried", len(rows) == 1 and rows[0].check == "connection" and rows[0].message.startswith("Palo Alto rejected the API key (Invalid Credential)") and "AuthRejected" not in rows[0].message, rows)
+PA.requests.get = pan_get
 
 print("== Meraki, from the API's answers")
 alerts = [{"severity": "critical", "title": "Device offline", "network": {"name": "HQ"}}, {"severity": "warning", "title": "High CPU", "network": {"name": "HQ"}},

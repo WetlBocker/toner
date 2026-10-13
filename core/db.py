@@ -593,7 +593,7 @@ def bad_pair(key, warn, fail):
 
 def normalize_checkopts(raw):
     """A device's own check settings, cleaned: {'checks': [keys that run] (only when it picks its own list),
-    'thresholds': {key: {'warn', 'fail'}} (only the ones it overrides)}. Empty when it has none: it then follows the global settings."""
+    'thresholds': {key: {'warn', 'fail'}} (only the ones it overrides), 'interfaces': [names] (only those are checked; missing = all)}. Empty when it has none: it then follows the global settings."""
     if isinstance(raw, str):
         try:
             raw = json.loads(raw) if raw.strip() else {}
@@ -604,6 +604,10 @@ def normalize_checkopts(raw):
     out = {}
     if isinstance(raw.get("checks"), list):
         out["checks"] = [c for c in dict.fromkeys(str(x) for x in raw["checks"])]
+    if isinstance(raw.get("interfaces"), list):                          # only these interfaces are checked (empty or missing: all of them)
+        names = [n for n in dict.fromkeys(str(x).strip() for x in raw["interfaces"]) if n]
+        if names:
+            out["interfaces"] = names
     th = {}
     for key, pair in (raw.get("thresholds") or {}).items() if isinstance(raw.get("thresholds"), dict) else ():
         if key in DEFAULT_THRESHOLDS and isinstance(pair, dict):

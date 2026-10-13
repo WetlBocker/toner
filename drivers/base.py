@@ -10,6 +10,10 @@ SEVERITY = {OK: 0, WARN: 1, FAIL: 2, ERROR: 3}
 DEFAULT_OPTS = {"ssh_timeout": 20, "http_timeout": 15, "retries": 0, "retry_delay": 3,
                 "disabled": frozenset(), "counter_mode": "total", "firmware_severity": "WARN"}
 
+class AuthRejected(ValueError):
+    """The device's API turned the key or login away: every check would fail the same way, so the run stops and says so once."""
+
+
 @dataclass
 class Result:
     device: str
@@ -67,8 +71,53 @@ class Driver:
             db.set_baselines(self.name, self._new_baseline)
             self._new_baseline = {}
 
+    def interface_filter(self):
+        """The interface names (lower case) this device is limited to, or None when every interface is checked."""
+        if not hasattr(self, "_if_filter"):
+            own = db.normalize_checkopts(self.dev.get("checkopts")).get("interfaces")
+            self._if_chosen = list(own or [])
+            self._if_filter = {n.lower() for n in own} if own else None
+        return self._if_filter
+
+    def wanted_interface(self, name):
+        flt = self.interface_filter()
+        return flt is None or str(name).lower() in flt
+
+    def interfaces_row(self, states):
+        """The 'interfaces' row from [(name, state)], state being up, down, off (switched off by an administrator) or errdisabled.
+        Any interface that is down is a FAIL. With the device's own list of interfaces only those count, a listed one that is
+        switched off counts as down, and a listed one the device no longer has is a WARN."""
+        flt = self.interface_filter()
+        known = {str(n).lower() for n, _s in states}
+        chosen = [(n, s) for n, s in states if flt is None or str(n).lower() in flt]
+        if flt is not None:
+            chosen = [(n, "down" if s == "off" else s) for n, s in chosen]
+        counted = [(n, s) for n, s in chosen if s != "off"]
+        missing = [n for n in self._if_chosen if n.lower() not in known] if flt is not None else []
+        if not counted and not missing:
+            return []
+        up = [n for n, s in counted if s == "up"]
+        down = [n for n, s in counted if s == "down"]
+        bad = [n for n, s in counted if s == "errdisabled"]
+        parts = []
+        if down:
+            parts.append("down: " + ", ".join(down[:6]) + (f" (+{len(down) - 6} more)" if len(down) > 6 else ""))
+        if bad:
+            parts.append("err-disabled: " + ", ".join(bad[:5]))
+        if missing:
+            parts.append("not found on the device: " + ", ".join(missing[:5]))
+        status = FAIL if down else WARN if (bad or missing) else OK
+        return self.result("interfaces", status, f"{len(up)}/{len(counted)} up", "; ".join(parts), numeric=float(len(up)))
+
+    def list_interfaces(self):
+        """[(name, state)] of every interface on the device, for choosing which ones are checked. Drivers with interfaces implement it."""
+        raise NotImplementedError("this kind of device has no list of interfaces")
+
     def error_counter_rows(self, check, errs):
         """Row for cumulative error counters {name: count}: lifetime total, or only what is new since last run."""
+        errs = {n: e for n, e in errs.items() if self.wanted_interface(n)}
+        if not errs:
+            return None
         if not self.delta_mode:
             bad = [n for n, e in errs.items() if e > 0]
             return self.result(check, WARN if bad else OK, len(bad), ", ".join(bad[:5]), numeric=float(len(bad)))
@@ -98,8 +147,19 @@ class Driver:
             r = fn()
             out.extend(r if isinstance(r, list) else ([r] if r else []))
         except Exception as e:
-            out.append(self.result(check, ERROR, "", f"{type(e).__name__}: {e}"))
+            out.append(self.result(check, ERROR, "", self.explain(e)))
             self._save_diag(check)
+
+    @staticmethod
+    def explain(e):
+        """What an error looks like in a result row. An HTTP error from a device's API says the code, not the long address it was sent to."""
+        resp = getattr(e, "response", None)
+        code = getattr(resp, "status_code", None)
+        if type(e).__name__ == "HTTPError" and code:
+            hint = {401: "the login or key was not accepted", 403: "the key or login may not read this", 404: "not found on this device (version or feature)",
+                    429: "too many requests; try again shortly"}.get(code, "")
+            return f"the device's API answered HTTP {code}" + (f": {hint}" if hint else "")
+        return f"{type(e).__name__}: {e}"
 
     def _save_diag(self, check):
         """Keep what the device said, so 'unexpected output' can be fixed from a real sample. Never raises."""

@@ -6,7 +6,7 @@ from PySide6.QtCore import QPointF, QTimer, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QIcon, QKeySequence, QPainter, QPen, QPixmap, QPolygonF, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog,
                                QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout, QInputDialog, QLabel,
-                               QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSpinBox, QStyle, QTabWidget,
+                               QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSizePolicy, QSpinBox, QStyle, QTabWidget,
                                QStackedWidget, QToolButton, QTreeWidget,
                                QTreeWidgetItem, QVBoxLayout, QWidget, QWidgetAction)
 from core import agents, audit, bulk, db, display, importer, nettools, profiles, proxy, sessions, vendors, winmon
@@ -29,9 +29,16 @@ class DeviceDialog(QDialog):
         self.setMinimumWidth(460)
         self.name, self.host, self.username = QLineEdit(), QLineEdit(), QLineEdit()
         self.host.setPlaceholderText("10.0.0.2  or  core-sw1.corp.example.com")
+        self.host.editingFinished.connect(self._mark_host)
+        self.host.textEdited.connect(lambda _t: self.host.setStyleSheet("") or self.host.setToolTip(""))
         self.secret = QLineEdit()
         self.secret.setEchoMode(QLineEdit.EchoMode.Password)
         self.secret.setPlaceholderText("leave blank to keep the stored value")
+        self.get_key = QPushButton("Get API key from the firewall...")
+        self.get_key.setToolTip("Sign in once with an administrator's user name and password: Toner asks the device for the key and fills it in.")
+        self.get_key.setAutoDefault(False)
+        self.get_key.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)          # as wide as its words, not the whole row
+        self.get_key.clicked.connect(self._get_key)
         self.vendor = QComboBox()
         for v in vendors.listed():
             self.vendor.addItem(display.vendor_name(v), v)       # shown text, stored value
@@ -136,7 +143,7 @@ class DeviceDialog(QDialog):
                                              ("Port", self.port), ("Platform", self.platform),
                                              ("Details", self.details), ("", self.enabled)))
         self.page_access, self.access = page((("Credential profile", self.profile), ("Username", self.username),
-                                              ("Password", self.secret), ("Site", self.site),
+                                              ("Password", self.secret), ("", self.get_key), ("Site", self.site),
                                               ("Jump host", self.jump), ("Proxy", self.proxy_mode), ("Proxy type", self.proxy_kind),
                                               ("Proxy address", self.proxy_host), ("Proxy port", self.proxy_port),
                                               ("Proxy user", self.proxy_user), ("Proxy password", self.proxy_pw),
@@ -154,6 +161,7 @@ class DeviceDialog(QDialog):
         self.secret_label = "Password"
         self.secret_field = self.secret
         self.checks_tab = DeviceChecks()
+        self.checks_tab.fetch_interfaces = self._fetch_interfaces
         self.tabs = QTabWidget()
         self.tabs.addTab(self.page_general, "General")
         self.tabs.addTab(self.page_access, "Access")
@@ -252,6 +260,10 @@ class DeviceDialog(QDialog):
         snmp_only = vendors.is_snmp(vendor)
         self.access.setRowVisible(self.username, info["username"])
         self.access.setRowVisible(self.site, bool(info["site"]))
+        from ui.keydialog import KEYS
+        self.access.setRowVisible(self.get_key, vendor in KEYS)
+        if vendor in KEYS:
+            self.get_key.setText(KEYS[vendor]["button"])
         self.access.setRowVisible(self.ha, info["ha"])
         self.access.setRowVisible(self.verify, info["kind"] == "api")
         self.access.setRowVisible(self.jump, info["kind"] == "ssh")
@@ -404,6 +416,52 @@ class DeviceDialog(QDialog):
         if dlg.exec():
             field.setText(winmon.names_text(dlg.selected()))
 
+    def _get_key(self):
+        """Palo Alto and Proxmox: ask the device for an API key with an administrator's sign-in, and put it in the key box."""
+        from ui.keydialog import KeyDialog, KEYS
+        kind = self._vendor()
+        if kind not in KEYS:
+            return
+        dev = self.values()
+        dev["name"] = dev["name"] or self.dev.get("name", "")
+        if not dev["host"]:
+            QMessageBox.warning(self, "API key", "Enter the device's address on the General tab first.")
+            return
+        try:
+            nettools.check_host(dev["host"])
+        except ValueError as e:
+            QMessageBox.warning(self, "Invalid host", str(e))
+            return
+        if dev.get("proxy") and not isinstance(dev["proxy"], str):
+            dev["proxy"] = json.dumps(dev["proxy"])
+        if self.proxy_pw.text():
+            dev["_proxy_secret"] = self.proxy_pw.text()
+        dlg = KeyDialog(dev, kind, self)
+        if dlg.exec() and dlg.key:
+            self.secret.setText(dlg.key)
+            audit.log("api key requested", f"{dev['name']}: from {dev['host']}")
+            if dlg.note:
+                QMessageBox.information(self, "API key", dlg.note)
+            toast(self, "Key filled in. Press Test connection, then Save to keep it.")
+
+    def _fetch_interfaces(self):
+        """The device's own list of interfaces, from the details typed in this dialog (nothing has to be saved first)."""
+        from core import ifaces
+        dev = self.values()
+        dev["name"] = dev["name"] or self.dev.get("name", "")
+        if not dev["host"]:
+            raise ValueError("enter the device's address first")
+        for key in ("winopts", "snmp", "jump", "proxy", "checkopts"):
+            if dev.get(key) and not isinstance(dev[key], str):
+                dev[key] = json.dumps(dev[key])
+        if self.secret.text():
+            dev["password"] = self.secret.text()
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            return ifaces.listing(dev)
+        finally:
+            QApplication.restoreOverrideCursor()
+
     def _win_values(self):
         if self.vendor.currentData() != "windows":
             return ""
@@ -433,7 +491,27 @@ class DeviceDialog(QDialog):
             return
         super().accept()
 
+    def _mark_host(self, *_):
+        """Say so as soon as the address is left with something that is neither an IP address nor a name, before any lookup is tried."""
+        text = self.host.text().strip()
+        try:
+            if text:
+                nettools.check_host(text)
+            problem = ""
+        except ValueError as e:
+            problem = str(e)
+        self.host.setStyleSheet("border: 1px solid #d32f2f;" if problem else "")
+        self.host.setToolTip(problem)
+        return problem
+
     def test(self):
+        try:
+            nettools.check_host(self.host.text())
+        except ValueError as e:                       # a mistyped address is said so, not sent off to DNS
+            self.tabs.setCurrentIndex(0)
+            self.host.setFocus()
+            QMessageBox.warning(self, "Invalid host", str(e))
+            return
         dev = self.values()
         if self.secret.text():
             dev["password"] = self.secret.text()

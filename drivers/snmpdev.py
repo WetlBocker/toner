@@ -170,20 +170,27 @@ class SnmpDriver(SnmpExtras, Driver):
                 out.append(i)
         return out
 
-    def interfaces(self):
+    def _if_states(self):
         d = self._ifs()
-        ifs = self._real_ifs()
-        if not ifs:
-            return []
-        active = [i for i in ifs if number_of(d["admin"].get(i)) == 1]
-        up = [i for i in active if number_of(d["oper"].get(i)) == 1]
-        down = [self._label(i) for i in active if i not in up]
-        return self.result("interfaces", OK, f"{len(up)}/{len(active)} up",
-                           ("down: " + ", ".join(down[:5])) if down else "", numeric=float(len(up)))
+        return [(self._label(i), "off" if number_of(d["admin"].get(i)) != 1 else "up" if number_of(d["oper"].get(i)) == 1 else "down")
+                for i in self._real_ifs()]
+
+    def list_interfaces(self):
+        creds, port = snmp.credentials_for(self.dev)
+        with snmp.Client(self.dev["host"], port, creds, timeout=min(self.opts["http_timeout"], 10), retries=1) as c:
+            self.c = c
+            return self._if_states()
+
+    def interfaces(self):
+        return self.interfaces_row(self._if_states())
+
+    def _up_ifs(self):
+        """The interfaces that are up and not left out of this device's own list."""
+        return [i for i in self._real_ifs() if number_of(self._ifs()["oper"].get(i)) == 1 and self.wanted_interface(self._label(i))]
 
     def errors(self):
         c = self.c
-        ifs = [i for i in self._real_ifs() if number_of(self._ifs()["oper"].get(i)) == 1]
+        ifs = self._up_ifs()
         if not ifs:
             return []
         inn, out = c.try_column(N["ifInErrors"]), c.try_column(N["ifOutErrors"])
@@ -192,7 +199,7 @@ class SnmpDriver(SnmpExtras, Driver):
 
     def bandwidth(self):
         c = self.c
-        ifs = [i for i in self._real_ifs() if number_of(self._ifs()["oper"].get(i)) == 1]
+        ifs = self._up_ifs()
         if not ifs:
             return []
         hc_in, hc_out = c.try_column(N["ifHCInOctets"]), c.try_column(N["ifHCOutOctets"])

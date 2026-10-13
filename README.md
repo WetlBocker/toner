@@ -2,203 +2,236 @@
 
 A Windows desktop tool for checking, documenting and troubleshooting a multi-vendor network, from one window.
 
+## Contents
+
+- [Get started](#get-started)
+- [The sections](#the-sections)
+- [Supported devices and checks](#supported-devices-and-checks)
+- [Monitoring in detail](#monitoring-in-detail)
+  - [Windows computers](#windows-computers)
+  - [UniFi](#unifi)
+  - [API keys from the device](#api-keys-from-the-device)
+  - [Per-device checks and thresholds](#per-device-checks-and-thresholds)
+  - [Interfaces](#interfaces)
+  - [Custom checks and support dates](#custom-checks-and-support-dates)
+  - [Certificates](#certificates)
+  - [Maintenance windows](#maintenance-windows)
+  - [Proxy](#proxy)
+  - [Wi-Fi and cloud status pages](#wi-fi-and-cloud-status-pages)
+- [Tools in detail](#tools-in-detail)
+  - [OpenSSL](#openssl)
+  - [File servers (TFTP and SFTP)](#file-servers-tftp-and-sftp)
+  - [SCP and xcopy](#scp-and-xcopy)
+  - [iperf3](#iperf3)
+- [Without the window](#without-the-window)
+- [Updates and About](#updates-and-about)
+- [Build and test](#build-and-test)
+
+## Get started
+
+Run from source:
+
     pip install -r requirements.txt
     python app.py
 
-Everything is stored on your computer: the database in `%APPDATA%\NetCheck\netcheck.db`, passwords, tokens and SNMP
-communities in Windows Credential Manager (never in the database), logs next to the database.
+Or use the installer. Its first page asks how to set Toner up:
 
-## What it does
+- **Install on this computer**: Start Menu and desktop shortcuts, an entry in Installed apps, an uninstaller and an optional
+  start-with-Windows entry. Data is kept in `%APPDATA%\NetCheck`.
+- **Portable**: copies Toner to a folder you choose (a USB drive, a share) and nothing else. A `portable.flag` beside
+  `Toner.exe` keeps the database, settings, logs and updates in a `data` folder next to it, so copying the folder moves
+  everything. Delete the folder to remove it. It still checks for updates and updates itself in place.
 
-**Overview** shows how the network is doing from the stored results the moment it opens: healthy, warning and failing
-devices, what needs attention, availability over 24 hours / 7 days / 30 days, configuration changes and recent runs.
+From a script: `Toner-Setup-1.1.0.exe /VERYSILENT /MODE=portable /DIR="E:\Toner"`.
 
-**Results** runs the health checks. One row per device; open it to see its checks. Right-click a check that says
-"unexpected output" to see what the device actually said (passwords masked), for a bug report.
+**Your data stays on your computer.** The database is `%APPDATA%\NetCheck\netcheck.db` and the logs sit next to it. Passwords,
+tokens and SNMP communities are in Windows Credential Manager, never in the database. Because Credential Manager belongs to one
+computer, **Settings > Data and logs > Export saved passwords** writes them to one file encrypted with a password you choose
+(scrypt and AES-256-GCM), and **Import saved passwords** restores them on another computer.
 
-**Inventory** is a tree of folders and devices (drag to organise), with tags, credential profiles, jump hosts,
-bulk edit, import and export (CSV, JSON, YAML). Click a device's **Details** for one window with its checks, history,
-configuration and quick actions (SSH, ping, SNMP, web page).
+**Shortcuts:** **Ctrl+K** searches sections, tools, devices, Settings pages, limits, checks and actions. **Ctrl+1** to **Ctrl+9**
+switch sections. **Ctrl+B** folds the sidebar to icons and back (remembered). **Ctrl+F** searches the Inventory.
 
-**Configs** backs up device configurations, keeps only versions that really differ, shows what changed (diff),
-and searches every stored configuration. Passwords and keys are masked in stored copies by default.
+## The sections
 
-**History** charts any checks over time; hover for the measured values. Checks on very different scales get their own
-chart.
+| Section | What it does |
+|---|---|
+| **Overview** | How the network is doing, from stored results: healthy, warning and failing devices, what needs attention, availability over 24 hours / 7 / 30 days, configuration changes, what changed since the last run, and a panel for Windows computers and certificates running out. A new installation shows a getting-started list. |
+| **Results** | Runs the health checks. One row per device; open it for its checks. Right-click a check that says "unexpected output" to see what the device said (passwords masked) for a bug report. |
+| **Inventory** | Folders and devices (drag to organise), tags, credential profiles, jump hosts, bulk edit, import and export (CSV, JSON, YAML). **Details** opens one window per device: checks, history, configuration, quick actions (SSH, ping, SNMP, web page). **Agents** lists Windows computers that report by agent. Right-click a heading to choose columns. |
+| **Configs** | Backs up configurations (see below), keeps only versions that differ, shows diffs and searches every stored configuration. Passwords and keys are masked in stored copies by default. |
+| **History** | Charts any checks over time; hover for values. Checks on very different scales get their own chart. Uptime shows restarts. |
+| **Reports** | CSV, HTML and PDF. The **Trend report** (7, 30 or 90 days) compares with the period before: availability, worst offenders, repeat failures, what is still wrong, configuration changes, busiest CPUs and growing disks. Settings > Reports can make one every week or month. |
+| **Tools** | Command runner (one command on many devices, read-only by default), ping, traceroute, DNS, live ping graph, path monitor (MTR), port scanner, TLS certificate checker, subnet calculator, device discovery, LLDP / CDP topology map, SNMP (v1, v2c, v3), syslog and trap receivers, MAC lookup, Wake-on-LAN, Wi-Fi scanner, file servers, SCP and xcopy, OpenSSL, iperf3. |
+| **Sessions** | Saved connections in a folder tree (drag, rename, search, duplicate): SSH, Telnet and Serial open in tabs inside Toner, follow Settings > Terminal, and are logged. An SSH session can keep its password in Credential Manager or use an inventory device's login, jump host and proxy. Serial has a Send break button for ROMMON. Remote Desktop starts Windows' own client with a generated `.rdp` file. |
+| **Settings** | Thresholds (overrides per vendor, folder, tag or device), which checks run, custom checks, timeouts, automation, config backups, notifications (email, Teams, Slack, Discord, ntfy, webhook, desktop), credential profiles, proxy, agents, maintenance, appearance, terminal, reports, security (host keys), audit log, data and logs. Pages with unsaved edits are marked, and Save and Revert list exactly what changes. |
+| **About** | Version, how this copy was installed, locations, library versions, license. **Copy details** puts it all on the clipboard for a bug report. |
 
-**Reports** exports CSV, HTML and PDF.
-
-**Sessions** keeps your connections: SSH, Telnet, Remote Desktop and Serial (console cable). Create one with New session,
-choose the type, and it is saved so a double-click connects later. Sessions live in a folder tree like the inventory's: make
-folders and subfolders (New folder, or New folder... while creating a session), drag sessions and folders between them, rename
-or delete a folder (what is in it moves up, nothing is lost), and search, edit and duplicate sessions. SSH, Telnet and Serial open in tabs inside Toner (several at once), follow the font and colours in
-Settings > Terminal, and every one is logged (Session logs). An SSH session can keep its password in Credential Manager,
-or use an inventory device's saved login, jump host and proxy; Telnet and SSH sessions follow the proxy settings. Serial
-sessions have a Send break button for ROMMON. Remote Desktop starts Windows' own client with a generated .rdp file, and
-Windows asks for the password. Inventory > Open SSH session and a device window's SSH button open a Sessions tab.
-
-**Tools**: command runner (one command on many devices, read-only by default),
-ping / traceroute / DNS, live ping graph, path monitor (MTR), port scanner, TLS certificate checker (also for the whole
-inventory), subnet calculator, device discovery, topology map from LLDP / CDP, SNMP (v1, v2c, v3: get, walk, bulk walk,
-interface table and rates, neighbours), syslog and trap receivers, MAC lookup and Wake-on-LAN, a TFTP server and an SFTP
-server (see below), and an iperf3 throughput test.
-
-**OpenSSL** (Tools > Certificates) works without installing anything, using the same OpenSSL code as the command line.
-*Create* makes a private key (RSA 2048/3072/4096, ECDSA P-256/P-384, Ed25519), a certificate request (CSR) with alternative
-names, or a self-signed or CA certificate, and can reuse a key you already have. *Read* describes any certificate, request,
-key, DER file or .pfx (names, dates, key, fingerprints), tells you whether a key belongs to a certificate, and can fetch what a
-server presents. *Convert* goes between PEM, DER and .pfx and adds or removes a key's passphrase. *Hash and random* does
-digests, base64 and random bytes. *openssl.exe* runs the real command-line program for anything else, if the computer has one
-(Git for Windows includes it). Toner stores none of the keys or results: copy or save them.
-
-**File servers.** TFTP and SFTP serve one folder you choose, nothing outside it, and are off until you start them.
-They are read-only until you tick "Allow uploads", replacing or deleting files needs a second tick, you can limit them to
-the devices you name, and they stop themselves after a time you set. Every transfer is listed on screen, and starts,
-stops, uploads, deletions, refusals and logins go to the audit log. TFTP has no passwords by design, so name the devices
-in "Allowed clients" whenever uploads are on. SFTP needs a user name and password (kept in Credential Manager), has no
-shell, shows its fingerprint, and locks an address out for five minutes after five wrong passwords. Whole drives and
-system folders are refused.
-
-**SCP and xcopy** (Tools > File transfer). SCP copies files and folders to or from a device over SSH, using the device's saved login, jump host and proxy; the device must allow it (Cisco IOS: `ip scp server enable` and a privilege-15 user). Names a device sends are checked, so nothing can be written outside the folder you chose, and Stop leaves no half-written files. xcopy runs Windows xcopy to copy folders on this computer or to and from a network share, for example to move what the TFTP and SFTP servers received to a file server. Preview shows what would be copied without copying anything, and copying over existing files asks first.
-
-**iperf3** is run, not bundled: download iperf3 for Windows (iperf.fr) and choose `iperf3.exe` on the page, or put it on
-your PATH. The page can run a test against another iperf3 server (TCP or UDP, upload or download, several streams) or act
-as the server, and shows the sent and received rates and retransmits, with a live graph of the speed during the test.
-
-**Scheduled throughput.** Settings > Custom checks > Throughput (iperf3) runs a test from this computer to an iperf3
-server (`iperf3 -s` on the device) on every scheduled run. The speed is kept for the History charts, and WARN / FAIL
-fire when it drops below the limits you set.
-
-**Proxy.** Settings > Proxy sends Toner's connections through an HTTP (CONNECT), SOCKS5 or SOCKS4 proxy, with an
-optional user name and password (kept in Credential Manager) and a "do not use it for" list (names, `*.corp.example.com`,
-addresses, networks such as `10.0.0.0/8`). The options are no proxy, the Windows proxy settings (web connections only,
-as a browser would), or a proxy you enter. Any device can override it in its Access tab: use the global setting, connect
-directly, or use its own proxy. SSH (checks, backups, the console and jump hosts), the Fortinet, Palo Alto, Meraki and
-UniFi APIs, status pages, web, port and certificate checks and notifications all use it. SNMP, ping, traceroute, the
-listeners and the file servers use UDP or ICMP or listen for connections, so they never go through a proxy. A **Test**
-button on the page tries a connection through the proxy you have entered.
-
-**Maintenance windows** (Settings > Maintenance) hold back alerts for planned work: a one-off window or a weekly one
-(Saturday 22:00-02:00), for all devices or chosen groups. Checks still run and are recorded and the Overview marks the
-devices; when the window ends, a problem that is still there is announced and a fixed one is reported as recovered.
-
-**Wi-Fi.** Tools > Wi-Fi Scanner lists the networks this computer can hear (signal, channel, band, security, who made the
-access point) and suggests the quietest 2.4 GHz channel; Windows needs Location access switched on for it. Add "This PC's
-Wi-Fi" as a device (host `localhost`) to check a laptop's connection, signal strength and link speed on every run.
-
-**Cloud status.** Add a "Cloud status page" device (GitHub, Cloudflare, Zoom, Meraki, Duo, Discord and any other status
-page built on Atlassian Statuspage) to get its overall status, affected components and open incidents in the same
-results, history and alerts as your own devices. Microsoft 365 is not included: its service health is only available
-through an authenticated Microsoft Graph app registration.
-
-**Windows monitoring.** Add a device with Vendor **Windows** and choose how to monitor it:
-
-- **Agent**: a small program on the Windows computer reports to Toner over HTTPS every few minutes. Nothing connects to the
-  computer, so it suits laptops, computers outside the domain and anything behind a firewall. In Settings > **Agents** turn on
-  "Receive reports" (Toner listens on port 8750 while it is running, in the tray is fine) and "Let computers sign themselves up",
-  save, then **Download agent package**. Copy the zip to the Windows computer, unzip it and double-click
-  **Install-TonerAgent.cmd** (it asks for administrator permission). The computer signs itself up and appears in the Inventory
-  under its own name. The same package works for every computer. It installs as a scheduled task running as SYSTEM in
-  `C:\ProgramData\Toner Agent`, and only sends: it opens no port and takes no commands. Toner is identified by its certificate's
-  fingerprint, built into the package (no certificate authority to set up), and each computer gets its own token. The package
-  holds a sign-up key, so keep it private and turn sign-up off when you are done (a new key makes old packages useless).
-  To set up one computer by hand instead: add a Windows device with How to monitor: Agent, then its Windows tab > Get agent
-  script. A computer that stops reporting turns into a warning, then a failure ("last report 3.0 h ago").
-  Inventory > **Agents** (a Devices | Agents switch above the device list) lists every computer that reports through an
-  agent (system, last report, age, agent version, notes such as "silent" or "reboot pending"), and can **Revoke** an agent or
-  **Remove** the computer. The receiver, package, sign-up key and certificate stay in Settings > Agents. A package agent **updates itself** when Toner is newer than it: the
-  agent always has Toner's version number (Toner 1.3.4 means agent 1.3.4), and can be given a **new token every N days** (the old one keeps working for a week, so nothing is locked
-  out). Settings > Agents also has **Report every N minutes**; tick *Also change computers that already have the agent* and each installed agent changes its own schedule on its next report (needs an agent from this version on; the address and certificate are still fixed at install). Toner tells your notification channels when a computer signs itself up that you did not add, and warns when the
-  agent certificate is within 90 days of expiring. Each report is also stored as a point for the History charts.
-- **WinRM**: Toner connects to the computer over PowerShell remoting and nothing is installed on it. Leave the user name empty
-  to sign in as the Windows account Toner runs as (domain single sign-on), or give `DOMAIN\user`, `user@domain` or `.\user`
-  and a password (saved in Credential Manager). HTTP (5985) is encrypted by the sign-in; HTTPS (5986) is also available. The
-  server needs `Enable-PSRemoting`, the firewall open, and an account in Remote Management Users and Event Log Readers.
-- **This computer**: reads the computer Toner is running on.
-
-All three produce the same checks (plus **Changes**: what was installed or removed, who became or stopped being a local
-administrator, and which ports started or stopped listening since the previous check, reported once each): CPU, memory, disk space (fullest volume, every volume in the details), uptime and recent
-reboots, pending reboot, services (automatic services that are stopped, ignoring trigger-start and per-user services;
-plus a list of services that must be running, which fail), Critical and Error events in the last 24 hours, certificates in
-the machine store about to expire, and days since an update was installed. Limits are in Settings > Thresholds, and each check
-can be switched off in Settings > Checks. Remote Desktop is one click from the device's menu and window. Proxies and jump
-hosts do not apply to Windows devices. The 5985 and 5986 ports are in the default scan list, so discovery suggests Windows
-computers.
-
-**Certificates.** Settings > Automation > "Also check the HTTPS certificate of every device" adds a certificate row (days left)
-to every run for each device that answers TLS on the ports you list; it warns at 30 days and fails at 7 (Settings >
-Thresholds). Devices with nothing listening there are skipped. The Overview has a panel for Windows computers and any
-certificate running out: computers not reporting, waiting for a reboot, with filling disks, behind on updates, or changed.
-
-**Trend report.** Reports > Trend report (7, 30 or 90 days) compares the period with the one before: availability, worst
-offenders, what keeps failing, what is still wrong, configuration changes, and the Windows computers' busiest CPUs and
-growing disks. Save it as PDF, HTML or CSV. Settings > Reports can make one every week or month into the default folder
-(a PDF from the window, HTML from the background service).
-
-**Saved passwords.** Passwords live in Windows Credential Manager, which belongs to one computer. Settings > Data and logs >
-Export saved passwords writes them all to one file encrypted with a password you choose (scrypt and AES-256-GCM);
-Import saved passwords restores them on another computer, so a portable copy can have its passwords too.
-
-**UniFi by API key**: add a device with the vendor *UniFi*, choose **How to monitor** (*Network API*, *Protect API* or *Site Manager in the cloud*), and paste an API key made
-for that application (UniFi's documentation at developer.ui.com says to create keys at unifi.ui.com). Network and Protect talk to the console at its address
-(`/proxy/network/integration/v1`, `/proxy/protect/integration/v1`); the Site field picks a Network site (`default`, a name, or `*` for all). Site Manager
-reads every console and site on the account through api.ui.com, and its Site field can narrow that to one console or site. A console that runs both Network and
-Protect gets two devices (same vendor, a different way to monitor). In import and export files that is `vendor: unifi` with `platform: login`, `network`, `protect` or `cloud`. The first choice, *Console login*, signs in with a user name and password and stays for the checks the API does not have yet (port errors, uplinks,
-channel utilisation). Each type has its own checks (Settings > Checks, or per device) and its own limits (Settings > Thresholds).
-
-**Per-device checks and thresholds**: Edit device > Checks lets one device run its own list of checks and use its own WARN/FAIL limits. A device with
-nothing set there follows Settings > Checks and Settings > Thresholds, and its own limits beat the overrides in Settings. On a Windows device, **Choose...**
-beside the service fields lists the computer's services (asked live over WinRM or on this PC; from the last report for an agent) so you tick the ones
-that must be running or that may be stopped, instead of typing names.
-
-**Settings**: thresholds (with per-vendor, folder, tag and device overrides), which checks run, custom checks, timeouts,
-automation, config backups, notifications (email, Teams, Slack, Discord, ntfy, webhook, desktop; each with its service's mark in the list), credential profiles,
-appearance, terminal, reports, security (host keys), audit log, data and logs.
-
-Press **Ctrl+K** (or the Search button under the sections) anywhere to jump to a section, tool, device or action. Ctrl+1 to Ctrl+9 switch sections. **Ctrl+B** (or the button under the sections) folds the sidebar to a strip of icons and back; Toner remembers which you chose.
-
-Interface details: right-click a heading in Inventory or Results to choose its columns (empty ones hide themselves until you choose); Status columns and marks
-use different shapes as well as colours (circle OK, triangle WARN, square FAIL, diamond ERROR); the Overview says what changed since the previous run; Enter opens the
-selected device; Ctrl+K also finds Settings pages, limits and checks; a device dialog asks before throwing away edits.
-
-A few things that make the day-to-day quicker: the Inventory has a search box (Ctrl+F) and a dot beside each device for how its latest checks went; a finished run opens the
-devices that need a look; Settings marks the pages with unsaved edits; small confirmations appear as a short note that fades instead of a box to click away; a new
-installation shows a getting-started list on the Overview; and the window opens at the size and place you left it.
+Status marks use shapes as well as colours (circle OK, triangle WARN, square FAIL, diamond ERROR).
 
 ## Supported devices and checks
 
 | Vendor | How | Checks |
 |---|---|---|
-| Cisco (IOS, IOS XE, NX-OS, ASA) | SSH | CPU, memory, uptime, interfaces and error counters, BGP, OSPF, fans / power / temperature, NTP, unsaved configuration, flash space, switch stack, HSRP / VRRP, port-channels, ASA failover |
+| Cisco (IOS, IOS XE, NX-OS, ASA) | SSH | CPU, memory, uptime, interfaces and error counters, BGP, OSPF, fans / power / temperature, NTP, unsaved configuration, flash, switch stack, HSRP / VRRP, port-channels, ASA failover |
 | Juniper (Junos) | SSH | CPU, memory, uptime, chassis alarms, interfaces, BGP, OSPF, fans / power / temperature, NTP, uncommitted changes, core dumps, BFD, storage, virtual chassis |
-| Arista (EOS) | SSH | CPU, memory, uptime, temperature, interfaces, BGP, OSPF, fans and power, MLAG, NTP, flash space |
+| Arista (EOS) | SSH | CPU, memory, uptime, temperature, interfaces, BGP, OSPF, fans and power, MLAG, NTP, flash |
 | HPE Aruba (AOS-CX, AOS-S) | SSH | CPU, memory, uptime, interfaces, fans / power / temperature, NTP |
-| MikroTik (RouterOS) | SSH | CPU, memory, uptime, version, interfaces, OSPF, temperature and voltage, flash space, RouterBOARD firmware, NTP |
-| Fortinet (FortiGate) | REST API | CPU, memory, firmware, WAN links, HA, IPsec tunnels, FortiCare / FortiGuard subscriptions, certificates, interfaces and errors, HA configuration sync, FortiAPs and FortiSwitches, log disk |
-| Palo Alto (PAN-OS) | XML API | CPU, memory, uptime, version, sessions, HA, interfaces, subscriptions, content update age, disk, Panorama connection, last commit |
-| Cisco Meraki | Dashboard API | device status, appliance uplinks, licenses, dashboard alerts, configuration changes, site-to-site VPN, uplink loss and latency |
-| Proxmox VE | REST API with an API token | cluster quorum and nodes, node CPU / memory / uptime, storage, virtual machines and containers, failed tasks, backup jobs |
-| TrueNAS (CORE, SCALE) | REST API with an API key | pool health, errors and space, active alerts, load, uptime |
-| OPNsense | REST API with a key and secret | updates waiting, memory, disk, uptime, each gateway's state, delay and loss |
-| UniFi, console login | controller API | site health, per device state, uptime, CPU, memory, temperature, firmware, uplink, port errors, clients, channel utilisation |
-| UniFi, Network API (key) | Integration API on the console | API version, per device state, uptime, CPU, memory, firmware, Wi-Fi transmit retries per radio, devices waiting to be adopted, client count |
-| UniFi, Protect API (key) | Integration API on the console | NVR alarm state, cameras, lights, sensors, chimes and other devices connected or not, sensor batteries, recent leak / tamper / smoke alarms |
-| UniFi, Site Manager (cloud) | api.ui.com, one key for the account | per console device status and firmware, per site health and WAN uptime, ISP latency and packet loss, SD-WAN status |
-| Generic SNMP (anything else) | SNMP v1/v2c/v3 | reachability, CPU, memory, storage, uptime, temperature, interfaces, errors, utilisation, fans / power supplies / sensors, load average, UPS battery and load (UPS-MIB, APC), printer toner and paper, Synology and QNAP disks and volumes |
-| Cloud status page | public Statuspage JSON, no login | overall status, components (or only the ones named in a `watch` field), open incidents, planned maintenance |
-| This PC's Wi-Fi | `netsh wlan`, no login | connection, signal strength, link speed |
-| Windows | agent, WinRM (PowerShell remoting) or this computer | CPU, memory, disks, uptime, pending reboot, services, event errors, certificate expiry, update age, physical disk health, BitLocker, antivirus, firewall, clock difference, failed sign-ins and lockouts, activation, Remote Desktop sessions, failed scheduled tasks, Active Directory replication, Hyper-V, backup age |
+| MikroTik (RouterOS) | SSH | CPU, memory, uptime, version, interfaces, OSPF, temperature and voltage, flash, RouterBOARD firmware, NTP |
+| Fortinet (FortiGate) | REST API token | CPU, memory, firmware, WAN links, HA, IPsec, FortiCare / FortiGuard subscriptions, certificates, interfaces and errors, HA sync, FortiAPs and FortiSwitches, log disk |
+| Palo Alto (PAN-OS) | XML API key | CPU, memory, uptime, version, sessions, HA, interfaces, subscriptions, content update age, disk, Panorama connection, last commit |
+| Cisco Meraki | Dashboard API key | device status, appliance uplinks, licenses, alerts, configuration changes, site-to-site VPN, uplink loss and latency |
+| Proxmox VE | API token | cluster quorum and nodes, node CPU / memory / uptime, storage, VMs and containers, failed tasks, backup jobs |
+| TrueNAS (CORE, SCALE) | API key | pool health, errors and space, active alerts, load, uptime |
+| OPNsense | API key and secret | updates waiting, memory, disk, uptime, each gateway's state, delay and loss |
+| UniFi | console login, or API key (see [UniFi](#unifi)) | per type: site health, device state, uptime, CPU, memory, firmware, Wi-Fi retries, Protect cameras and sensors, WAN and ISP health |
+| Windows | agent, WinRM or this computer | CPU, memory, disks, uptime, reboots, services, event errors, certificates, update age, disk health, BitLocker, antivirus, firewall, clock, sign-in failures, activation, RDP sessions, scheduled tasks, Active Directory, Hyper-V, backup age, changes |
+| Generic SNMP (anything else) | SNMP v1/v2c/v3 | reachability, CPU, memory, storage, uptime, temperature, interfaces, errors, utilisation, fans / power / sensors, load, UPS battery and load, printer toner and paper, Synology and QNAP disks |
+| Cloud status page | public Statuspage JSON | overall status, components, open incidents, planned maintenance |
+| This PC's Wi-Fi | `netsh wlan` | connection, signal strength, link speed |
 
-**Every device** can also have support, warranty and licence end dates checked: put `support=2027-06`, `warranty=2026-12-31`, `eol=...` or `licence_expires=...` in its custom fields (Edit device > Tags and fields) and the days left appear as a result, graded by Settings > Thresholds.
+**Configuration backup** works for Cisco, Juniper, Arista, HPE, MikroTik (SSH), Fortinet and Palo Alto (API).
 
-Configuration backup: Cisco, Juniper, Arista, HPE, MikroTik (SSH), Fortinet and Palo Alto (API).
+The parsers for the SSH and API vendors, Proxmox, TrueNAS and OPNsense, and the SNMP checks for UPS, printers and NAS boxes, were
+written from the vendors' documented output and tested against samples, not real hardware. If a check says "unexpected output",
+the raw output is saved so it can be fixed from a real sample.
 
-**Custom checks** need no code: run a command over SSH, read an SNMP object, fetch a web page, test a TCP port, count
-the days left on a certificate, or ping, and turn the answer into OK / WARN / FAIL.
+## Monitoring in detail
 
-The parsers for Juniper, Arista, HPE, MikroTik, Palo Alto, Fortinet, Meraki, Proxmox, TrueNAS and OPNsense, and the SNMP checks for UPS, printers and NAS boxes, were written from the vendors' documented output and are
-tested against sample text, not real hardware. If a check reports "unexpected output", the raw output is saved so it can
-be fixed from a real sample.
+### Windows computers
+
+Add a device with Vendor **Windows** and choose how to monitor it:
+
+- **Agent**: a small program on the computer reports to Toner over HTTPS. Nothing connects to the computer, so it suits laptops,
+  computers outside the domain and anything behind a firewall.
+  1. In Settings > **Agents** turn on "Receive reports" (port 8750, while Toner runs; the tray is fine) and "Let computers sign
+     themselves up", save, then **Download agent package**.
+  2. Copy the zip to the computer, unzip it and double-click **Install-TonerAgent.cmd** (it asks for administrator permission).
+     The computer signs itself up and appears in the Inventory. The same package works for every computer.
+
+  The agent is a scheduled task running as SYSTEM in `C:\ProgramData\Toner Agent`. It only sends: no port, no commands. Toner is
+  identified by its certificate fingerprint built into the package, and each computer gets its own token. The package holds a
+  sign-up key, so keep it private and turn sign-up off when done (a new key makes old packages useless). For one computer by
+  hand: add a device with How to monitor: Agent, then its Windows tab > Get agent script.
+
+  A silent computer becomes a warning, then a failure. Inventory > **Agents** lists each one (system, last report, version, notes
+  like "silent" or "reboot pending") and can **Revoke** an agent or **Remove** the computer. Agents **update themselves** when
+  Toner is newer (the agent version is always Toner's version), can get **a new token every N days**, and can have their **reporting
+  interval changed from Toner** (Settings > Agents > Report every N minutes > *Also change computers that already have the agent*).
+  Toner warns when a computer signs itself up that you did not add, and when the agent certificate is within 90 days of expiring.
+- **WinRM**: PowerShell remoting, nothing installed. Leave the user name empty to sign in as the account Toner runs as, or give
+  `DOMAIN\user`, `user@domain` or `.\user` and a password. HTTP (5985) or HTTPS (5986). The server needs `Enable-PSRemoting`, the
+  firewall open, and an account in Remote Management Users and Event Log Readers.
+- **This computer**: reads the computer Toner runs on.
+
+All three give the same checks, including **Changes** (software installed or removed, local administrators added or removed, ports
+that started or stopped listening). Services: automatic services that are stopped (trigger-start and per-user services ignored),
+plus a list that must be running. Limits are in Settings > Thresholds and each check can be switched off in Settings > Checks.
+Proxies and jump hosts do not apply to Windows devices.
+
+### UniFi
+
+Add a device with vendor *UniFi* and pick **How to monitor**:
+
+- **Console login**: user name and password; also covers port errors, uplinks and channel utilisation.
+- **Network API**, **Protect API**: an API key made on the console (developer.ui.com says to create keys at unifi.ui.com). The Site
+  field picks a Network site (`default`, a name, or `*` for all). A console running both gets two devices.
+- **Site Manager in the cloud**: one key reads every console and site on the account through api.ui.com; the Site field can narrow it.
+
+In import files that is `vendor: unifi` with `platform: login`, `network`, `protect` or `cloud`. Each type has its own checks and limits.
+
+### API keys from the device
+
+For **Palo Alto** and **Proxmox**, the **Get API key / token** button on the device's Access tab signs in once with an
+administrator's user name and password, asks the device for a key and fills it in. The password is sent over HTTPS in the request
+body and never kept; only the key is saved. Proxmox gets a read-only token called `toner` (PVEAuditor on `/`), and an account with
+two-factor sign-in cannot be used. For other products paste a key made in their own interface. A rejected key is reported once,
+in words, instead of once per check.
+
+### Per-device checks and thresholds
+
+Edit device > **Checks** lets one device run its own list of checks and use its own WARN / FAIL limits. A device with nothing set
+follows Settings > Checks and Settings > Thresholds; its own limits beat the overrides in Settings. On a Windows device,
+**Choose...** beside the service fields lists the computer's services (live over WinRM or on this PC; from the last report for an
+agent) so you tick them instead of typing names.
+
+### Interfaces
+
+The *interfaces* row is a **FAIL** when any interface that should be up is down (ports an administrator switched off are not
+counted; an err-disabled port is a WARN). Edit device > Checks > **Check only some of this device's interfaces** > **Choose
+interfaces...** asks the device for its list (using the address and login typed in the dialog, saved or not) and you tick the
+ones that matter. Only those are read, for the interfaces row and for error and utilisation checks. A chosen port that is
+switched off counts as down; one the device no longer has is a WARN, so a rename is noticed.
+
+### Custom checks and support dates
+
+**Custom checks** (Settings > Custom checks) need no code: run a command over SSH, read an SNMP object, fetch a web page, test a
+TCP port, count the days left on a certificate, ping, or run an **iperf3** throughput test on every scheduled run (the speed is kept
+for History, and WARN / FAIL fire below your limits). Each turns the answer into OK / WARN / FAIL.
+
+**Support dates**: put `support=2027-06`, `warranty=2026-12-31`, `eol=...` or `licence_expires=...` in a device's custom fields (Edit
+device > Tags and fields) and the days left appear as a result, graded by Settings > Thresholds.
+
+### Certificates
+
+Settings > Automation > "Also check the HTTPS certificate of every device" adds a days-left row for each device that answers TLS on
+the ports you list. It warns at 30 days and fails at 7; devices with nothing listening are skipped.
+
+### Maintenance windows
+
+Settings > Maintenance holds back alerts for planned work: one-off or weekly (e.g. Saturday 22:00-02:00), for all devices or chosen
+groups. Checks still run and are recorded and the Overview marks the devices. When the window ends, a problem still there is
+announced and a fixed one is reported as recovered.
+
+### Proxy
+
+Settings > Proxy sends Toner's connections through an HTTP (CONNECT), SOCKS5 or SOCKS4 proxy, with an optional user name and
+password and a "do not use it for" list (names, `*.corp.example.com`, addresses, networks). Choose no proxy, the Windows proxy
+settings (web connections only), or one you enter; a **Test** button tries it. Any device can override it on its Access tab. SSH,
+the vendor APIs, status pages, web / port / certificate checks and notifications use it; SNMP, ping, traceroute, the listeners and
+the file servers use UDP or ICMP or listen for connections, so they never do.
+
+### Wi-Fi and cloud status pages
+
+- **Wi-Fi**: Tools > Wi-Fi Scanner lists the networks this computer can hear (signal, channel, band, security, maker) and suggests the
+  quietest 2.4 GHz channel (Windows needs Location access on). Add "This PC's Wi-Fi" (host `localhost`) to check a laptop's connection,
+  signal and link speed on every run.
+- **Cloud status**: add a "Cloud status page" device (GitHub, Cloudflare, Zoom, Meraki, Duo, Discord and any other Atlassian
+  Statuspage) for its overall status, affected components and open incidents. Microsoft 365 is not included: its health is only
+  available through an authenticated Microsoft Graph app.
+
+## Tools in detail
+
+### OpenSSL
+
+Tools > Certificates works without installing anything. *Create* makes a private key (RSA 2048/3072/4096, ECDSA P-256/P-384,
+Ed25519), a CSR with alternative names, or a self-signed or CA certificate. *Read* describes any certificate, request, key, DER
+file or .pfx, says whether a key belongs to a certificate, and can fetch what a server presents. *Convert* goes between PEM, DER and
+.pfx and adds or removes a passphrase. *Hash and random* does digests, base64 and random bytes. *openssl.exe* runs the real
+program if the computer has one (Git for Windows includes it). Toner stores none of the keys or results.
+
+### File servers (TFTP and SFTP)
+
+Each serves one folder you choose, nothing outside it, and is off until you start it. Read-only until you tick "Allow uploads";
+replacing or deleting needs a second tick; you can limit them to named devices; they stop after a time you set. Every transfer is
+listed, and starts, stops, uploads, deletions, refusals and logins go to the audit log. TFTP has no passwords by design, so name
+the devices in "Allowed clients" whenever uploads are on. SFTP needs a user name and password (in Credential Manager), has no
+shell, shows its fingerprint and locks an address out for five minutes after five wrong passwords. Whole drives and system folders
+are refused.
+
+### SCP and xcopy
+
+Tools > File transfer. **SCP** copies files and folders to or from a device over SSH using its saved login, jump host and proxy
+(the device must allow it; Cisco IOS: `ip scp server enable` and a privilege-15 user). Names a device sends are checked so nothing
+is written outside your folder, and Stop leaves no half-written files. **xcopy** runs Windows xcopy between this computer and a
+network share, for example to move what the TFTP and SFTP servers received. Preview shows what would be copied, and overwriting
+asks first.
+
+### iperf3
+
+Run, not bundled: download iperf3 for Windows (iperf.fr) and choose `iperf3.exe` on the page, or put it on your PATH. Test against
+another iperf3 server (TCP or UDP, upload or download, several streams) or act as the server; it shows sent and received rates and
+retransmits with a live graph.
 
 ## Without the window
 
@@ -208,61 +241,34 @@ be fixed from a real sample.
     python cli.py service --metrics-port 9108                       keep running scheduled checks, backups and alerts
     python cli.py metrics --port 9108                               Prometheus /metrics from the stored results
 
-`service` uses the schedules from Settings > Automation and Config backups, so it can run from Task Scheduler or any
-service wrapper. In the desktop app, **Settings > General > Keep running in the system tray** does the same while the
-window is closed.
+`service` uses the schedules from Settings > Automation and Config backups, so it can run from Task Scheduler or any service
+wrapper. **Settings > General > Keep running in the system tray** does the same while the window is closed. The installed program
+does it without Python: `Toner.exe cli service`, `Toner.exe cli run --json` (output goes to the console, or to `toner-service.log`
+in the data folder when there is none). The service also runs the agent receiver when it is on, makes the scheduled trend report and
+watches the agent certificate. It uses the data folder and Credential Manager of the account it runs as, so run it as the account you
+set Toner up with.
 
-The installed program does the same without Python: `Toner.exe cli service`, `Toner.exe cli run --json`, and so on (output
-goes to the console that started it, or to `toner-service.log` in the data folder when there is none, as under Task
-Scheduler). The service also runs the **agent receiver** when it is turned on in Settings > Agents, makes the scheduled
-trend report, and watches the agent certificate, so a server can collect Windows reports with nobody logged in. It uses the
-data folder and Credential Manager of the account it runs as, so run it as the same account you set Toner up with.
+## Updates and About
 
-## Tests
+**Check for updates** looks at the newest GitHub release (daily if "Check for updates automatically" is ticked, or when you press the
+button). A newer version puts a dot next to About with its release notes and **Download and install**, **View release** and **Skip
+this version**. The installer comes from GitHub over HTTPS only, its SHA-256 is compared with the one GitHub published, and only
+then is it run (a mismatch, or a release with no checksum, is never run). Your inventory, history and saved passwords are kept.
+**Install updates automatically** installs a verified update when you close Toner. Copies run from source or unzipped can check but
+not install.
+
+## Build and test
 
     python tests/run_all.py            every test file, one line each
     python tests/test_custom.py        a single file
 
-The tests use fakes (simulated devices and APIs, a local SNMP agent, local TLS and SSH servers) and a throw-away
-database; they never touch your inventory or credentials.
-
-## About and updates
-
-**About** (the last section) shows the version, how this copy was installed, the program, data, database and log
-locations, the Python, Qt and Windows versions, the libraries Toner is built with and the license. **Copy details**
-puts all of it on the clipboard for a bug report.
-
-**Check for updates** looks at the newest GitHub release (once a day if "Check for updates automatically" is ticked,
-or whenever you press the button). A newer version puts a dot next to About, and shows its release notes with
-**Download and install**, **View release** and **Skip this version**. The installer is downloaded from GitHub over
-HTTPS only, its SHA-256 checksum is compared with the one GitHub published for the file, and only then is it run (a
-download that does not match, or a release with no checksum, is never run). Your inventory, history and saved passwords
-are kept. **Install updates automatically** downloads and verifies a new version as soon as it is found and installs it
-when you close Toner. Copies not set up with the installer (running from source, or unzipped) can check for updates but
-not install them.
-
-To publish a release for the update check to find: raise `VERSION` in `core\version.py`, run `packaging\build.ps1`, then
-create a GitHub release tagged `v<version>` (for example `v1.2.0`) and attach `Toner-Setup-<version>.exe`. GitHub adds the
-checksum itself.
-
-## Install or portable
-
-The installer's first page asks how to set Toner up:
-
-- **Install on this computer** adds Start Menu and desktop shortcuts, an entry in Installed apps, an uninstaller and an
-  optional start-with-Windows entry. Data is kept in `%APPDATA%\NetCheck`.
-- **Portable** copies Toner into a folder you choose (a USB drive, a share) and nothing else: no shortcuts, no registry
-  entries, no uninstaller. A `portable.flag` file beside `Toner.exe` makes Toner keep its database, settings, logs and
-  downloaded updates in a `data` folder next to it, so copying the whole folder moves everything. Delete the folder to
-  remove it. Saved passwords are the one thing that stays behind: they live in Windows Credential Manager on each computer.
-  A portable copy still checks for updates and updates itself in place, keeping its data.
-
-Both can also be chosen from a script: `Toner-Setup-1.1.0.exe /VERYSILENT /MODE=portable /DIR="E:\Toner"`.
-## Build the installer
+The tests use fakes (simulated devices and APIs, a local SNMP agent, local TLS and SSH servers) and a throw-away database, so they
+never touch your inventory or credentials.
 
     powershell -File packaging\build.ps1
 
-This builds the program folder with PyInstaller, then `build\installer\Toner-Setup-1.0.0.exe` with
-[Inno Setup 6](https://jrsoftware.org/isinfo.php) (`winget install JRSoftware.InnoSetup`). The installer needs no
-administrator rights, offers desktop and start-with-Windows shortcuts, and leaves your data and saved passwords alone
-when you uninstall or upgrade. `Toner.exe --minimized` starts in the tray when background running is on.
+builds the program folder with PyInstaller, then `build\installer\Toner-Setup-<version>.exe` with
+[Inno Setup 6](https://jrsoftware.org/isinfo.php) (`winget install JRSoftware.InnoSetup`). The installer needs no administrator
+rights and leaves your data and saved passwords alone on uninstall or upgrade. `Toner.exe --minimized` starts in the tray.
+To publish: raise `VERSION` in `core\version.py`, build, then create a GitHub release tagged `v<version>` with
+`Toner-Setup-<version>.exe` attached (GitHub adds the checksum).

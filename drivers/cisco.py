@@ -140,13 +140,28 @@ class CiscoDriver(CliRows, Driver):
         this, other, problems = r
         return self.result("failover", FAIL if problems else OK, f"{this} / {other}", "; ".join(problems))
 
+    @staticmethod
+    def _states(ifs):
+        out = []
+        for i in ifs:
+            link = str(i.get("link_status", "")).lower()
+            out.append((i["interface"], "up" if link == "up" else "off" if link.startswith("admin") else "down"))
+        return out
+
+    def if_states(self, c):
+        ifs = c.send_command("show interfaces", use_textfsm=True)
+        return self._states(ifs) if isinstance(ifs, list) else []
+
     def interfaces(self, c):
         ifs = c.send_command("show interfaces", use_textfsm=True)
         if not isinstance(ifs, list):
             return []
         up = [i for i in ifs if i.get("link_status", "").lower() == "up"]
-        errs = {i["interface"]: int(i.get("crc") or 0) + int(i.get("input_errors") or 0) for i in up}
-        rows = [self.result("interfaces", OK, f"{len(up)}/{len(ifs)} up")]
+        errs = {i["interface"]: int(i.get("crc") or 0) + int(i.get("input_errors") or 0) for i in up if self.wanted_interface(i["interface"])}
+        rows = self.interfaces_row(self._states(ifs))
+        rows = [rows] if rows else []
+        if not errs:
+            return rows
         if not self.delta_mode:                      # any interface that has ever counted an error
             bad = [n for n, e in errs.items() if e > 0]
             rows.append(self.result("interface errors", WARN if bad else OK, len(bad),

@@ -6,7 +6,7 @@ import requests
 import urllib3
 
 from . import apichecks
-from .base import Driver, OK, WARN, FAIL, grade, grade_low
+from .base import AuthRejected, Driver, OK, WARN, FAIL, grade, grade_low
 from .sshbase import worse
 
 
@@ -20,6 +20,15 @@ class PaloAltoDriver(Driver):
         r = requests.get(f"https://{d['host']}:{d.get('port') or 443}/api/",
                          params={"type": "op", "cmd": cmd}, headers={"X-PAN-KEY": self.password or ""},
                          verify=bool(d.get("verify_ssl")), timeout=self.opts["http_timeout"], **proxy.requests_kwargs(d))
+        if r.status_code in (401, 403):
+            why = ""
+            try:
+                why = (ET.fromstring(r.content).findtext(".//msg") or "").strip()
+            except ET.ParseError:
+                pass
+            raise AuthRejected("Palo Alto rejected the API key" + (f" ({why})" if why else f" (HTTP {r.status_code})") +
+                               ": paste the key from a user that may use the XML API (Device > Administrators; the key itself is made with "
+                               "https://<firewall>/api/?type=keygen&user=...&password=...), and check the address is the firewall's management one.")
         r.raise_for_status()
         root = ET.fromstring(r.content)
         if root.get("status") != "success":
@@ -29,6 +38,12 @@ class PaloAltoDriver(Driver):
 
     def run(self):
         out = []
+        try:
+            self._system()                                   # a rejected key is said once, not once per check
+        except AuthRejected:
+            raise
+        except Exception:
+            pass                                             # anything else: each check reports its own reason
         for name, fn in (("resources", self.resources), ("uptime", self.uptime), ("firmware", self.firmware),
                          ("sessions", self.sessions), ("ha", self.ha), ("interfaces", self.interfaces), ("licenses", self.licenses),
                          ("content", self.content), ("disk", self.disk), ("panorama", self.panorama), ("last commit", self.last_commit)):
@@ -142,10 +157,14 @@ class PaloAltoDriver(Driver):
             status, msgs = worse(status, WARN), msgs + [f"config {sync}"]
         return self.result("ha", status, f"{local} / peer {peer}", "; ".join(msgs))
 
-    def interfaces(self):
-        res = self._op("<show><interface>all</interface></show>")
-        hw = res.findall("hw/entry")
+    def _if_states(self):
+        hw = self._op("<show><interface>all</interface></show>").findall("hw/entry")
         if not hw:
             raise ValueError("no interfaces in the reply")
-        up = [e.findtext("name") for e in hw if (e.findtext("state") or "").lower() == "up"]
-        return self.result("interfaces", OK, f"{len(up)}/{len(hw)} up", numeric=float(len(up)))
+        return [(e.findtext("name") or "?", "up" if (e.findtext("state") or "").lower() == "up" else "down") for e in hw]
+
+    def list_interfaces(self):
+        return self._if_states()
+
+    def interfaces(self):
+        return self.interfaces_row(self._if_states())

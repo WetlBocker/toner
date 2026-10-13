@@ -4,7 +4,7 @@ import os as _os, sys as _sys, tempfile as _tmp
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-import os, sys, time, traceback
+import os, sys, time, traceback, json
 pass
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + r"\eng%d.db" % int(time.time())
@@ -98,11 +98,12 @@ class FakeConn:
         if cmd.startswith("show processes memory"): return "Processor Pool Total:  1000 Used:  300 Free: 700"
         if cmd == "show version": return "router uptime is 2 days, 3 hours, 5 minutes"
         if cmd == "show interfaces": return [{"interface": "Gi0/1", "link_status": "up", "crc": cisco_state["crc"], "input_errors": 0},
-                                              {"interface": "Gi0/2", "link_status": "up", "crc": 0, "input_errors": 0}]
+                                              {"interface": "Gi0/2", "link_status": "up", "crc": 0, "input_errors": 0}] + cisco_state.get("more", [])
         return ""
 seen = {}
 def fake_handler(**kw): seen.update(kw); return FakeConn()
 C.ConnectHandler = fake_handler
+dev_own = lambda names: run_one({**dev("sw", "cisco"), "checkopts": json.dumps({"interfaces": names})}, th, {"retries": 0})
 def run_cisco(thr=th, **opts): return {r.check: r for r in run_one(dev("sw", "cisco"), thr, {"retries": 0, **opts})}
 r = run_cisco(ssh_timeout=45)
 check("ssh timeout passed to netmiko", seen.get("timeout") == 45 and seen.get("conn_timeout") == 45, seen)
@@ -112,6 +113,17 @@ check("disabled cisco checks skipped", set(run_cisco(disabled={"cisco:cpu", "cis
 rr = run_cisco(disabled={"cisco:cpu", "cisco:memory", "cisco:uptime", "cisco:interfaces"}); check("all four off leaves nothing", not [k for k in rr if k in ("cpu", "memory", "uptime", "interfaces", "interface errors")], list(rr))
 cisco_state["crc"] = 9
 t1 = run_cisco()["interface errors"]; check("total mode warns on any lifetime error", t1.status == "WARN" and t1.value == "1", t1)
+cisco_state["crc"] = 9
+only = [{"interface": "Gi0/2", "link_status": "up", "crc": 0, "input_errors": 0}]
+check("cisco: both ports up is OK", run_cisco()["interfaces"].status == "OK" and run_cisco()["interfaces"].value == "2/2 up", run_cisco()["interfaces"])
+cisco_state["more"] = [{"interface": "Gi0/3", "link_status": "down", "crc": 0, "input_errors": 0}, {"interface": "Gi0/4", "link_status": "administratively down", "crc": 0, "input_errors": 0}]
+check("cisco: a port that is down is a FAIL; one an administrator switched off is not counted", run_cisco()["interfaces"].status == "FAIL" and run_cisco()["interfaces"].value == "2/3 up" and run_cisco()["interfaces"].message == "down: Gi0/3", run_cisco()["interfaces"])
+check("cisco: limited to the two that are up, it is OK again", {r.check: r for r in dev_own(["Gi0/1", "Gi0/2"])}["interfaces"].status == "OK")
+rows = {r.check: r for r in dev_own(["Gi0/2"])}
+check("cisco: limited to Gi0/2, the error on Gi0/1 is not read", rows["interfaces"].value == "1/1 up" and rows["interface errors"].status == "OK" and rows["interface errors"].value == "0", (rows["interfaces"], rows["interface errors"]))
+rows = {r.check: r for r in dev_own(["Gi0/1", "Gi0/7"])}
+check("cisco: a chosen interface that is not there is a WARN", rows["interfaces"].status == "WARN" and "Gi0/7" in rows["interfaces"].message and rows["interface errors"].status == "WARN", rows["interfaces"])
+cisco_state["more"] = []
 b0 = run_cisco(counter_mode="delta")["interface errors"]; check("delta first run: baseline recorded", b0.value == "baseline set" and b0.status == "OK", b0)
 b1 = run_cisco(counter_mode="delta")["interface errors"]; check("delta: old errors no longer warn", b1.status == "OK" and b1.value == "0", b1)
 cisco_state["crc"] = 14; b2 = run_cisco(counter_mode="delta")["interface errors"]; check("delta: new errors warn and say how many", b2.status == "WARN" and "Gi0/1 (+5)" in b2.message, b2)

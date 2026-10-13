@@ -3,7 +3,9 @@ Settings > Thresholds, so a device with nothing set here behaves exactly as befo
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton,
                                QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
-from core import checks, db
+from PySide6.QtWidgets import QMessageBox
+from core import checks, db, ifaces
+from ui.interfacepicker import InterfacePicker
 from ui.settings_base import TrimSpin, note
 
 KEY = Qt.ItemDataRole.UserRole
@@ -15,6 +17,8 @@ class DeviceChecks(QWidget):
         self.vendor = ""
         self._own = None                                   # the device's own list of check keys, or None to follow the global one
         self._limits = {}                                  # threshold key -> {'warn', 'fail'} this device overrides
+        self._ifs = []                                     # the interfaces this device is limited to (empty: all of them)
+        self.fetch_interfaces = None                       # set by the device dialog: asks the device for its interfaces
         self.own = QCheckBox("Choose which checks run on this device")
         self.own.setToolTip("Off: the list in Settings > Checks decides, like every other device of this type.")
         self.listing = QListWidget()
@@ -22,6 +26,23 @@ class DeviceChecks(QWidget):
         self.listing.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self.state = QLabel("")
         self.state.setProperty("muted", True)
+        self.pick_ifs = QCheckBox("Check only some of this device's interfaces")
+        self.pick_ifs.setToolTip("Off: every interface is checked, and any one that is down is a FAIL. On: only the ones you choose are read, "
+                                 "so ports that are meant to be empty or unused stop counting.")
+        self.if_choose = QPushButton("Choose interfaces...")
+        self.if_choose.setAutoDefault(False)
+        self.if_summary = QLabel("")
+        self.if_summary.setWordWrap(True)
+        self.if_summary.setProperty("muted", True)
+        self.if_box = QWidget()
+        ib = QVBoxLayout(self.if_box)
+        ib.setContentsMargins(0, 6, 0, 10)
+        row = QHBoxLayout()
+        row.addWidget(self.pick_ifs)
+        row.addWidget(self.if_choose)
+        row.addStretch()
+        ib.addLayout(row)
+        ib.addWidget(self.if_summary)
         self.limits = QTableWidget(0, 4)
         self.limits.setHorizontalHeaderLabels(["Own limits", "Check", "WARN", "FAIL"])
         self.limits.verticalHeader().setVisible(False)
@@ -59,6 +80,7 @@ class DeviceChecks(QWidget):
         lay.addWidget(self.own)
         lay.addWidget(self.listing)
         lay.addWidget(self.state)
+        lay.addWidget(self.if_box)
         lay.addWidget(QLabel("<b>Thresholds</b>  (tick a row to give this device its own limits; the others stay global)"))
         lay.addWidget(self.limits, 1)
         bar = QHBoxLayout()
@@ -66,7 +88,10 @@ class DeviceChecks(QWidget):
         bar.addStretch()
         lay.addLayout(bar)
         self.own.toggled.connect(self._own_toggled)
+        self.pick_ifs.toggled.connect(self._pick_toggled)
+        self.if_choose.clicked.connect(self.choose_interfaces)
         self._refresh_globals()
+        self._show_ifs()
 
     # ---------- what is shown
     def _refresh_globals(self):
@@ -80,6 +105,43 @@ class DeviceChecks(QWidget):
     def set_vendor(self, vendor):
         self.vendor = vendor
         self._fill_list()
+        self._show_ifs()
+
+    # ---------- which interfaces
+    def _show_ifs(self):
+        """The interface choice, for the kinds of device that have an interfaces check."""
+        self.if_box.setVisible(ifaces.available(self.vendor))
+        self.if_choose.setEnabled(self.pick_ifs.isChecked())
+        n = len(self._ifs)
+        self.if_summary.setText(
+            ("All interfaces are checked." if not self.pick_ifs.isChecked() else
+             "No interface is chosen yet: all of them are checked until you choose." if not n else
+             f"{n} chosen: " + ", ".join(self._ifs[:8]) + (f" and {n - 8} more" if n > 8 else "") + ". The others are not read."))
+
+    def _pick_toggled(self, on):
+        self._show_ifs()
+        if on and not self._ifs:
+            self.choose_interfaces()
+            if not self._ifs:                              # nothing chosen: back to checking all of them
+                self.pick_ifs.blockSignals(True)
+                self.pick_ifs.setChecked(False)
+                self.pick_ifs.blockSignals(False)
+                self._show_ifs()
+
+    def choose_interfaces(self):
+        """Ask the device for its interfaces and let the person tick the ones to check."""
+        if self.fetch_interfaces is None:
+            return
+        try:
+            found = self.fetch_interfaces()
+        except Exception as e:
+            QMessageBox.warning(self, "Interfaces", f"Could not get the list of interfaces from the device:\n\n{e}\n\n"
+                                "Check the address and login on the General tab first.")
+            return
+        dlg = InterfacePicker(found, self._ifs, parent=self)
+        if dlg.exec():
+            self._ifs = dlg.selected()
+            self._show_ifs()
 
     def _fill_list(self):
         off = set(db.get_setting("disabled_checks"))
@@ -121,7 +183,8 @@ class DeviceChecks(QWidget):
             self._refresh_globals()
 
     def reset(self):
-        self._own, self._limits = None, {}
+        self._own, self._limits, self._ifs = None, {}, []
+        self.pick_ifs.setChecked(False)
         self.own.setChecked(False)
         for r in range(self.limits.rowCount()):
             self.limits.item(r, 0).setCheckState(Qt.CheckState.Unchecked)
@@ -133,6 +196,11 @@ class DeviceChecks(QWidget):
         opts = db.normalize_checkopts(opts)
         self._own = list(opts["checks"]) if "checks" in opts else None
         self._limits = {}
+        self._ifs = list(opts.get("interfaces", []))
+        self.pick_ifs.blockSignals(True)
+        self.pick_ifs.setChecked(bool(self._ifs))
+        self.pick_ifs.blockSignals(False)
+        self._show_ifs()
         self.own.blockSignals(True)
         self.own.setChecked(self._own is not None)
         self.own.blockSignals(False)
@@ -160,6 +228,8 @@ class DeviceChecks(QWidget):
                              if self.listing.item(i).checkState() == Qt.CheckState.Checked]
         elif self.own.isChecked() and self._own is not None:
             out["checks"] = list(self._own)
+        if self.pick_ifs.isChecked() and self._ifs and ifaces.available(self.vendor):
+            out["interfaces"] = list(self._ifs)
         th = {}
         for r in range(self.limits.rowCount()):
             if self.limits.item(r, 0).checkState() == Qt.CheckState.Checked:

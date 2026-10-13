@@ -83,6 +83,18 @@ class SshDriver(Driver):
                 out.extend(custom.run_ssh(self, c, custom_ssh))
         return out
 
+    def if_states(self, c):
+        """[(name, state)] for every interface (state: up, down, off, errdisabled). Drivers with an interfaces check implement it."""
+        raise NotImplementedError("this kind of device has no list of interfaces")
+
+    def list_interfaces(self):
+        self._cache = {}
+        self.plat = self.dev.get("platform") or self.DEFAULT_PLATFORM
+        with self.connect() as conn:
+            c = Recorder(conn, self.transcript)
+            self.prepare(c)
+            return self.if_states(c)
+
     def cmd(self, c, command):
         """Run a command once per run, even if several checks read it."""
         if command not in self._cache:
@@ -97,12 +109,6 @@ class SshDriver(Driver):
         t = self.th["uptime"]
         status = grade_low(hours, t["warn"], t["fail"])
         return self.result("uptime", status, display.uptime(hours), "recent reboot" if status != OK else "", numeric=hours)
-
-    def link_summary(self, up, total, names_down=(), warn_names=()):
-        """'interfaces' row: counts, plus a WARN for ports in a bad state (e.g. err-disabled)."""
-        msg = ", ".join(list(warn_names)[:5])
-        status = WARN if warn_names else OK
-        return self.result("interfaces", status, f"{up}/{total} up", msg, numeric=float(up))
 
     def peers_row(self, check, established, total, down, fail=True):
         if not total:

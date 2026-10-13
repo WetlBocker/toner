@@ -82,13 +82,14 @@ class MikrotikDriver(CliRows, SshDriver):
         return self.ntp_row(state)
 
     def interfaces(self, c):
+        return self.interfaces_row(self.if_states(c))
+
+    def if_states(self, c):
         cmd = "/interface print terse"
         rows = re.findall(r"(?m)^\s*\d+\s+(?:([A-Z]+)\s+)?name=(\S+)", self.cmd(c, cmd))
-        enabled = [(f, n) for f, n in rows if "X" not in f]          # X = switched off by an admin
         if not rows:
             raise self.unreadable("interfaces", cmd)
-        up = [n for f, n in enabled if "R" in f]
-        return self.link_summary(len(up), len(enabled))
+        return [(n, "off" if "X" in f else "up" if "R" in f else "down") for f, n in rows]      # X = switched off by an admin, R = running
 
     def ospf(self, c):
         out = self.cmd(c, "/routing ospf neighbor print terse")

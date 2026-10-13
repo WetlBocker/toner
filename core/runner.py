@@ -7,7 +7,7 @@ import requests
 from core import custom, db, profiles, support, vendors, winmon
 from core.nettools import resolve_host
 from drivers import DRIVERS
-from drivers.base import Result, ERROR
+from drivers.base import AuthRejected, Driver, Result, ERROR
 from core import quiet
 
 
@@ -55,7 +55,8 @@ def run_one(dev, thresholds, opts=None):
                 time.sleep(max(0, int(opts.get("retry_delay", 0))))
                 continue
             tail = f" (after {attempt} attempts)" if attempt > 1 else ""
-            rows = [Result(dev["name"], "connection", ERROR, "", f"{type(e).__name__}: {e}{tail}")]
+            said = str(e) if isinstance(e, AuthRejected) else Driver.explain(e)          # a rejected key already says so in words; an HTTP error names its code, not the long address
+            rows = [Result(dev["name"], "connection", ERROR, "", f"{said}{tail}")]
             try:                                   # web, port, certificate and ping checks do not need the login
                 rows += custom.run_network(dev, [c for c in custom.for_device(dev, opts.get("custom"))
                                                  if c["kind"] in ("http", "tcp", "tls", "ping", "iperf")])

@@ -86,13 +86,15 @@ class AristaDriver(CliRows, SshDriver):
         return self.result("temperature", st, f"{hottest:.0f}C" if temps else status, msg,
                            numeric=hottest if temps else None)
 
-    def interfaces(self, c):
+    def if_states(self, c):
         ifs = self.json(c, "show interfaces status").get("interfaceStatuses", {})
         if not ifs:
             raise self.unreadable("interfaces", "show interfaces status | json")
-        up = [n for n, i in ifs.items() if i.get("linkStatus") == "connected"]
-        bad = [n for n, i in ifs.items() if i.get("linkStatus") == "errdisabled"]
-        return self.link_summary(len(up), len(ifs), warn_names=[f"{n} (err-disabled)" for n in bad])
+        return [(n, "up" if i.get("linkStatus") == "connected" else "errdisabled" if i.get("linkStatus") == "errdisabled"
+                 else "off" if i.get("linkStatus") == "disabled" else "down") for n, i in ifs.items()]
+
+    def interfaces(self, c):
+        return self.interfaces_row(self.if_states(c))
 
     def bgp(self, c):
         out = self.cmd(c, "show ip bgp summary | json")
