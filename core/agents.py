@@ -470,6 +470,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 answer["update"] = True
             if token_due(device):
                 answer["token"] = replace_token(device)
+            if db.get_setting("agent_push_minutes"):          # the interval chosen in Settings > Agents; the agent changes itself only if it differs
+                answer["minutes"] = max(1, min(60, int(db.get_setting("agent_minutes") or 5)))
         self._send(200, json.dumps(answer).encode())
 
 
@@ -780,6 +782,21 @@ try {
         $Cfg.token = [string]$answer.token
         [IO.File]::WriteAllText($ConfigPath, ($Cfg | ConvertTo-Json -Compress), (New-Object Text.UTF8Encoding($false)))
         Write-Host 'Toner gave this computer a new token.'
+    }
+    if ($answer.minutes) {                                                 # a new reporting interval, chosen in Toner
+        $m = [int]$answer.minutes
+        if ($m -ge 1 -and $m -le 60 -and $m -ne [int]$Cfg.minutes) {
+            $mine = Get-ScheduledTask -TaskName $Task -ErrorAction SilentlyContinue      # only the task that runs this very script
+            if ($mine) { $mine = @($mine.Actions | Where-Object { ([string]$_.Arguments).IndexOf($PSCommandPath, [StringComparison]::OrdinalIgnoreCase) -ge 0 }).Count -gt 0 }
+            if ((Test-Admin) -and $mine) {
+                $start = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes $m)
+                $boot  = New-ScheduledTaskTrigger -AtStartup
+                Set-ScheduledTask -TaskName $Task -Trigger @($start, $boot) | Out-Null
+                $Cfg.minutes = $m
+                [IO.File]::WriteAllText($ConfigPath, ($Cfg | ConvertTo-Json -Compress), (New-Object Text.UTF8Encoding($false)))
+                Write-Host "Toner changed this agent to report every $m minutes."
+            } else { Write-Host "Toner asked for a report every $m minutes, but this copy is not the installed agent, so it was left alone." }
+        }
     }
     if ($answer.update) {
         $new = (Invoke-WebRequest -Uri (([string]$Cfg.server) -replace '/report$', '/agent.ps1') -Headers @{ Authorization = ('Bearer ' + $Cfg.token) } -UseBasicParsing -TimeoutSec 30).Content

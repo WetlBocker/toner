@@ -216,7 +216,7 @@ ap = [p for p in big.pages if p.title == "Appearance"][0]
 xs = [b.x() for b in ap.swatch.values()]
 check("the four status colours sit together, not spread across the page", max(xs) - min(xs) < 4 * max(b.width() for b in ap.swatch.values()) + 40, xs)
 ag = [p for p in big.pages if p.title == "Agents"][0]
-check("Download agent package is as wide as its words, with the 'reports every' box right after it", ag.download.width() <= ag.download.sizeHint().width() + 62 and ag.minutes.x() - ag.download.x() < ag.download.width() + 250, (ag.download.width(), ag.minutes.x() - ag.download.x()))
+check("Download agent package is as wide as its words, and the interval box and its tick sit above it, lined up", ag.download.width() <= ag.download.sizeHint().width() + 62 and ag.minutes.y() < ag.push.y() < ag.download.y() and abs(ag.minutes.x() - ag.push.x()) <= 12 and abs(ag.push.x() - ag.download.x()) <= 12, (ag.download.width(), ag.minutes.pos(), ag.push.pos(), ag.download.pos()))
 from ui.tools import ToolsTab
 tt2 = ToolsTab(); tt2.resize(2000, 900); tt2.show()
 bad_tools = {}

@@ -70,7 +70,7 @@ def signature(page):
         if isinstance(w, QLineEdit):
             out.append(w.text())
         elif isinstance(w, QAbstractButton):
-            if w.isCheckable():
+            if w.isCheckable() and not w.property("notSetting"):
                 out.append(w.isChecked())
         elif isinstance(w, QComboBox):
             out.append((w.currentIndex(), w.currentText()))

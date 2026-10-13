@@ -78,6 +78,7 @@ class Collapsible(QWidget):
         self.toggle = QToolButton()
         self.toggle.setText(title)
         self.toggle.setCheckable(True)
+        self.toggle.setProperty("notSetting", True)                    # opening a section is not a change to the settings
         self.toggle.setChecked(opened)
         self.toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.toggle.setStyleSheet("QToolButton { border: none; font-weight: 600; padding: 4px 2px; }")

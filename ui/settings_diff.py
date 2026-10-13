@@ -27,7 +27,7 @@ def _is_input(w):
     if isinstance(w, QLineEdit):
         return not isinstance(w.parentWidget(), (QAbstractSpinBox, QComboBox)) and not w.isReadOnly()      # the box inside a spin box is part of it
     if isinstance(w, QAbstractButton):
-        return w.isCheckable()
+        return w.isCheckable() and not w.property("notSetting")
     return isinstance(w, (QComboBox, QAbstractSpinBox, QPlainTextEdit, QTextEdit)) and not (hasattr(w, "isReadOnly") and w.isReadOnly())
 
 

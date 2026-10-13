@@ -115,7 +115,7 @@ DEFAULT_SETTINGS = {
     "proxy": {"mode": "system", "kind": "http", "host": "", "port": 8080, "username": "",
               "bypass": "localhost, 127.0.0.1"},
     # Windows agents (see core/agents.py): Toner listens for their reports while this is on
-    "agent_cert_warned": "", "trend_schedule": "", "trend_last": "", "tls_sweep": False, "tls_sweep_ports": "443", "agent_enabled": False, "agent_enroll": False, "agent_token_days": 0, "agent_port": 8750, "agent_bind": "0.0.0.0", "agent_address": "",
+    "agent_cert_warned": "", "trend_schedule": "", "trend_last": "", "tls_sweep": False, "tls_sweep_ports": "443", "agent_enabled": False, "agent_enroll": False, "agent_token_days": 0, "agent_port": 8750, "agent_minutes": 5, "agent_push_minutes": False, "agent_bind": "0.0.0.0", "agent_address": "",
 }
 # Per-machine state that must not travel in an exported settings file (channel secrets stay in
 # Credential Manager, so an imported channel would be broken).

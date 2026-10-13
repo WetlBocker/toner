@@ -108,7 +108,7 @@ through an authenticated Microsoft Graph app registration.
   agent (system, last report, age, agent version, notes such as "silent" or "reboot pending"), and can **Revoke** an agent or
   **Remove** the computer. The receiver, package, sign-up key and certificate stay in Settings > Agents. A package agent **updates itself** when Toner is newer than it: the
   agent always has Toner's version number (Toner 1.3.4 means agent 1.3.4), and can be given a **new token every N days** (the old one keeps working for a week, so nothing is locked
-  out). Toner tells your notification channels when a computer signs itself up that you did not add, and warns when the
+  out). Settings > Agents also has **Report every N minutes**; tick *Also change computers that already have the agent* and each installed agent changes its own schedule on its next report (needs an agent from this version on; the address and certificate are still fixed at install). Toner tells your notification channels when a computer signs itself up that you did not add, and warns when the
   agent certificate is within 90 days of expiring. Each report is also stored as a point for the History charts.
 - **WinRM**: Toner connects to the computer over PowerShell remoting and nothing is installed on it. Leave the user name empty
   to sign in as the Windows account Toner runs as (domain single sign-on), or give `DOMAIN\user`, `user@domain` or `.\user`

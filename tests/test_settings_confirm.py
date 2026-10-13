@@ -54,6 +54,26 @@ check("the checks page lists every check, on or off", SD.snapshot(page("Checks")
 check("the difference between two readings is old and new, with additions and removals said", SD.changes({"a": "1", "b": "2"}, {"a": "1", "b": "3", "c": "4"}) == [("b", "2", "3"), ("c", "(not set)", "4")]
       and SD.changes({"a": "1"}, {}) == [("a", "1", "(removed)")])
 
+print("== opening a folded section is not a change")
+from ui.settings_base import Collapsible
+ag = page("Agents"); folds = ag.findChildren(Collapsible)
+before_sig, before_snap = ST.signature(ag), SD.snapshot(ag)
+check("the Agents page has folded sections", len(folds) >= 2 and not any(f.toggle.isChecked() for f in folds))
+for f in folds:
+    f.toggle.setChecked(True)
+app.processEvents()
+check("opening every one changes neither what is compared nor what is listed", ST.signature(ag) == before_sig and SD.snapshot(ag) == before_snap and not any("Advanced" in k or "How agents" in k for k in SD.snapshot(ag)), SD.snapshot(ag))
+check("so no change is pending and no page is marked", S.pending_changes() == [])
+for f in folds:
+    f.toggle.setChecked(False)
+all_folds = [(p.title, f) for p in S.pages for f in p.findChildren(Collapsible)]
+for _t, f in all_folds:
+    f.toggle.setChecked(True)
+app.processEvents()
+check("on any page", S.pending_changes() == [] and len(all_folds) >= 2, [t for t, _f in all_folds])
+for _t, f in all_folds:
+    f.toggle.setChecked(False)
+
 print("== nothing changed")
 check("freshly loaded, there is nothing to list", S.pending_changes() == [])
 T.history.clear(); seen.clear(); answer(True)

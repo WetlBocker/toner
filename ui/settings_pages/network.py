@@ -149,6 +149,9 @@ class AgentsPage(Page):
         self.newkey = QPushButton("New key...")
         self.minutes = spin(1, 60, " minutes")
         self.minutes.setValue(5)
+        self.push = QCheckBox("Also change computers that already have the agent")
+        self.push.setToolTip("Toner tells each installed agent this interval in its next report, and the agent changes its own schedule. "
+                             "Leave it off to keep each computer as it was installed. Only agents from this version of Toner on take it.")
         self.download = QPushButton("Download agent package...")
         self.download.setProperty("primary", True)
         self.port = spin(1, 65535)
@@ -182,7 +185,9 @@ class AgentsPage(Page):
         self.form.addRow("", self.enabled)
         self.form.addRow("", self.enroll)
         self.form.addRow("Sign-up key", row_of(self.key, self.newkey))
-        self.form.addRow("Package", compact_row(self.download, QLabel("reports every"), self.minutes))
+        self.form.addRow("Report every", self.minutes)
+        self.form.addRow("", self.push)
+        self.form.addRow("Package", self.download)
         self.form.addRow("Computers", self.computers)
         adv = QWidget()                                                   # what most people never change
         af = QFormLayout(adv)
@@ -214,6 +219,8 @@ class AgentsPage(Page):
         self.enabled.setChecked(bool(db.get_setting("agent_enabled")))
         self.enroll.setChecked(bool(db.get_setting("agent_enroll")))
         self.port.setValue(int(db.get_setting("agent_port") or agents.DEFAULT_PORT))
+        self.minutes.setValue(int(db.get_setting("agent_minutes") or 5))
+        self.push.setChecked(bool(db.get_setting("agent_push_minutes")))
         self.bind.setText(db.get_setting("agent_bind") if db.get_setting("agent_bind") != "0.0.0.0" else "")
         self.address.setText(db.get_setting("agent_address") or "")
         self.token_days.setValue(int(db.get_setting("agent_token_days") or 0))
@@ -277,6 +284,11 @@ class AgentsPage(Page):
         db.set_setting("agent_enabled", self.enabled.isChecked())
         db.set_setting("agent_enroll", self.enroll.isChecked())
         db.set_setting("agent_port", self.port.value())
+        was = (int(db.get_setting("agent_minutes") or 5), bool(db.get_setting("agent_push_minutes")))
+        db.set_setting("agent_minutes", self.minutes.value())
+        db.set_setting("agent_push_minutes", self.push.isChecked())
+        if self.push.isChecked() and (self.minutes.value(), True) != was:
+            audit.log("agent interval", f"installed agents are told to report every {self.minutes.value()} min")
         db.set_setting("agent_bind", self.bind.text().strip() or "0.0.0.0")
         db.set_setting("agent_address", self.address.text().strip())
         db.set_setting("agent_token_days", self.token_days.value())
@@ -289,6 +301,7 @@ class AgentsPage(Page):
         """The package is built from what is saved, so unsaved edits would not be in it."""
         bind = self.bind.text().strip() or "0.0.0.0"
         return (self.port.value() == int(db.get_setting("agent_port") or agents.DEFAULT_PORT)
+                and self.minutes.value() == int(db.get_setting("agent_minutes") or 5)
                 and self.address.text().strip() == (db.get_setting("agent_address") or "")
                 and self.enabled.isChecked() == bool(db.get_setting("agent_enabled"))
                 and self.enroll.isChecked() == bool(db.get_setting("agent_enroll")) and bind == (db.get_setting("agent_bind") or "0.0.0.0"))
