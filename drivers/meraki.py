@@ -4,7 +4,8 @@ from datetime import datetime, timezone
 
 import requests
 
-from .base import Driver, OK, WARN, FAIL
+from . import apichecks
+from .base import Driver, OK, WARN, FAIL, grade
 
 
 class MerakiDriver(Driver):
@@ -51,7 +52,8 @@ class MerakiDriver(Driver):
         org = self._org()
         self._org_id = org["id"]
         out = []
-        for name, fn in (("devices", self.devices), ("uplinks", self.uplinks), ("licenses", self.licenses)):
+        for name, fn in (("devices", self.devices), ("uplinks", self.uplinks), ("licenses", self.licenses), ("alerts", self.alerts),
+                         ("config changes", self.config_changes), ("vpn", self.vpn), ("uplink quality", self.uplink_quality)):
             if self.enabled(name):
                 self.safe(out, name, fn)
         return out
@@ -98,6 +100,39 @@ class MerakiDriver(Driver):
         total = sum(len(ap.get("uplinks") or []) for ap in rows)
         return self.result("uplinks", status, f"{total - len(down)}/{total} up",
                            ("down: " + ", ".join(down[:5])) if down else "", numeric=float(total - len(down)))
+
+    def alerts(self):
+        rows = self._optional(f"/organizations/{self._org_id}/assurance/alerts")
+        if rows is None:
+            return []
+        crit, warn, titles = apichecks.meraki_alerts(rows)
+        if not crit and not warn:
+            return self.result("alerts", OK, "none active", "", numeric=0.0)
+        return self.result("alerts", FAIL if crit else WARN, f"{crit} critical, {warn} warning", "; ".join(titles), numeric=float(crit + warn))
+
+    def config_changes(self):
+        rows = self._optional(f"/organizations/{self._org_id}/configurationChanges?timespan=86400")
+        if rows is None:
+            return []
+        admins = sorted({r.get("adminName") for r in rows if isinstance(r, dict) and r.get("adminName")})
+        return self.result("config changes", OK, f"{len(rows)} in 24 h", ("by " + ", ".join(admins[:4])) if admins else "", numeric=float(len(rows)))
+
+    def vpn(self):
+        rows = self._optional(f"/organizations/{self._org_id}/appliance/vpn/statuses")
+        total, bad = apichecks.meraki_vpn(rows)
+        if not total:
+            return []
+        return self.result("vpn", WARN if bad else OK, f"{total - len(bad)}/{total} reachable", ("unreachable: " + ", ".join(bad[:4])) if bad else "", numeric=float(total - len(bad)))
+
+    def uplink_quality(self):
+        worst = apichecks.meraki_uplink_quality(self._optional(f"/organizations/{self._org_id}/devices/uplinksLossAndLatency?timespan=300"))
+        if worst is None:
+            return []
+        loss, lat, label = worst
+        tl, tt = self.th["isp_loss"], self.th["isp_latency"]
+        s1, s2 = grade(loss, tl["warn"], tl["fail"]), grade(lat, tt["warn"], tt["fail"])
+        status = FAIL if FAIL in (s1, s2) else WARN if WARN in (s1, s2) else OK
+        return self.result("uplink quality", status, f"{lat:.0f} ms, {loss:g}% loss", label if status != OK else "", numeric=float(loss))
 
     def licenses(self):
         ov = self._optional(f"/organizations/{self._org_id}/licenses/overview")

@@ -1,9 +1,11 @@
 import re
 
 from .sshbase import SshDriver, uptime_hours
+from .clirows import CliRows
+from . import clichecks
 
 
-class HpeDriver(SshDriver):
+class HpeDriver(CliRows, SshDriver):
     """Aruba / HPE switches: AOS-CX (aruba_aoscx) and AOS-S, formerly ProCurve (aruba_osswitch)."""
     DEFAULT_PLATFORM = "aruba_aoscx"
 
@@ -13,7 +15,15 @@ class HpeDriver(SshDriver):
 
     def checks(self):
         return [("cpu", self.cpu), ("memory", self.memory), ("uptime", self.uptime),
-                ("interfaces", self.interfaces)]
+                ("interfaces", self.interfaces), ("environment", self.environment), ("ntp", self.ntp)]
+
+    def environment(self, c):
+        if self.cx:
+            return self.env_row(c, "show environment fan", "show environment power-supply", "show environment temperature")
+        return self.env_row(c, "show system fans", "show system power-supply", "show system temperature")
+
+    def ntp(self, c):
+        return self.ntp_row(clichecks.ntp_state(self.cmd(c, "show ntp status"))) if self.cx else []
 
     # AOS-S: everything is on one screen; AOS-CX: resource usage and system info are separate commands.
     def _info(self, c):

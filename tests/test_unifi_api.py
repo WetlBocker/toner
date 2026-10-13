@@ -177,8 +177,10 @@ check("checks can be switched off", ("nvr1 / Basement leak", "battery") not in R
 
 print("== UniFi Site Manager (the cloud)")
 def host_pages(p):
-    return ({"data": [{"id": "h1", "type": "console", "ipAddress": "1.2.3.4"}], "nextToken": "T2", "httpStatusCode": 200} if not p.get("nextToken")
-            else {"data": [{"id": "h2", "type": "console"}], "httpStatusCode": 200})
+    old = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 10 * 86400))
+    fresh = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 3600))
+    return ({"data": [{"id": "h1", "type": "console", "ipAddress": "1.2.3.4", "latestBackupTime": old}], "nextToken": "T2", "httpStatusCode": 200} if not p.get("nextToken")
+            else {"data": [{"id": "h2", "type": "console", "latestBackupTime": fresh, "isBlocked": False}], "httpStatusCode": 200})
 CLOUD_DEVS = {"data": [
     {"hostId": "h1", "hostName": "HQ UDM", "devices": [{"id": "1", "name": "UDM", "status": "online", "isConsole": True, "updateAvailable": None}, {"id": "2", "name": "Switch", "status": "online", "updateAvailable": "7.1.2"},
                                                          {"id": "3", "name": "AP 1", "status": "offline", "updateAvailable": None}]},
@@ -207,6 +209,8 @@ check("a console that is itself offline is a failure", R[("uni-cloud / Branch UD
 check("firmware updates are listed per console", R[("uni-cloud / HQ UDM", "firmware")].status == "WARN" and "7.1.2" in R[("uni-cloud / HQ UDM", "firmware")].message)
 check("each site's health says what is wrong", R[("uni-cloud / HQ", "site health")].status == "WARN" and "1 device offline" in R[("uni-cloud / HQ", "site health")].value
       and R[("uni-cloud / Branch", "site health")].status == "WARN" and "internet issue" in R[("uni-cloud / Branch", "site health")].value)
+check("a console whose last backup is 10 days old fails (limit 7), one backed up an hour ago is fine", R[("uni-cloud / HQ UDM", "console")].status == "FAIL" and "10 days" in R[("uni-cloud / HQ UDM", "console")].value
+      and R[("uni-cloud / Branch UDM", "console")].status == "OK" and R[("uni-cloud / Branch UDM", "console")].value == "backed up today", [(k, v.value) for k, v in R.items() if k[1] == "console"])
 check("WAN uptime is graded, lower being worse", R[("uni-cloud / HQ", "wan uptime")].status == "WARN" and R[("uni-cloud / Branch", "wan uptime")].status == "OK")
 check("the latest ISP figures are used (300 ms is a failure, 2% loss a warning)", R[("uni-cloud / HQ", "isp latency")].status == "FAIL" and R[("uni-cloud / HQ", "isp latency")].value == "300 ms"
       and R[("uni-cloud / HQ", "isp loss")].status == "WARN" and R[("uni-cloud / Branch", "isp latency")].status == "OK" and R[("uni-cloud / HQ", "isp latency")].message == "Fiber Co")

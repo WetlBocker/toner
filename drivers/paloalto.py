@@ -5,6 +5,7 @@ import xml.etree.ElementTree as ET
 import requests
 import urllib3
 
+from . import apichecks
 from .base import Driver, OK, WARN, FAIL, grade, grade_low
 from .sshbase import worse
 
@@ -29,7 +30,8 @@ class PaloAltoDriver(Driver):
     def run(self):
         out = []
         for name, fn in (("resources", self.resources), ("uptime", self.uptime), ("firmware", self.firmware),
-                         ("sessions", self.sessions), ("ha", self.ha), ("interfaces", self.interfaces)):
+                         ("sessions", self.sessions), ("ha", self.ha), ("interfaces", self.interfaces), ("licenses", self.licenses),
+                         ("content", self.content), ("disk", self.disk), ("panorama", self.panorama), ("last commit", self.last_commit)):
             if self.enabled(name):
                 self.safe(out, name, fn)
         return out
@@ -67,6 +69,49 @@ class PaloAltoDriver(Driver):
     def firmware(self):
         s = self._system()
         return self.result("firmware", OK, s.findtext("sw-version") or "?", s.findtext("model") or "")
+
+    def licenses(self):
+        res = self._op("<request><license><info/></license></request>")
+        found = apichecks.pan_licenses(res.findall(".//entry") if res is not None else [])
+        timed = [(f, d, x) for f, d, x in found if d is not None]
+        expired = [f for f, d, x in found if x]
+        if not timed and not expired:
+            return []
+        t = self.th["support_days"]
+        feature, days, _ = min(timed, key=lambda x: x[1]) if timed else (expired[0], -1, True)
+        status = FAIL if expired else grade_low(days, t["warn"], t["fail"])
+        return self.result("licenses", status, "expired" if expired else f"{days} days", (f"expired: {', '.join(expired[:4])}" if expired else f"ends first: {feature}") if status != OK else "",
+                           numeric=float(days))
+
+    def content(self):
+        ages = apichecks.pan_content_ages(self._system())
+        if not ages:
+            return []
+        name, days = max(ages, key=lambda x: x[1])
+        t = self.th["content_age"]
+        return self.result("content", grade(days, t["warn"], t["fail"]), f"{days} days", f"oldest: {name} package" if days >= t["warn"] else "application, threat and antivirus content", numeric=float(days))
+
+    def disk(self):
+        res = self._op("<show><system><disk-space/></system></show>")
+        worst = apichecks.pan_disk((res.text or "") if res is not None else "")
+        if worst is None:
+            return []
+        return self.level_check("disk", float(worst[0]))
+
+    def panorama(self):
+        res = self._op("<show><panorama-status/></show>")
+        state = apichecks.pan_panorama((res.text or "") if res is not None else "")
+        if state is None:
+            return []
+        return self.result("panorama", OK if state else WARN, "connected" if state else "not connected", "" if state else "this firewall cannot reach Panorama")
+
+    def last_commit(self):
+        res = self._op("<show><jobs><all/></jobs></show>")
+        last = apichecks.pan_last_commit(res.findall(".//job") if res is not None else [])
+        if last is None:
+            return []
+        result, when = last
+        return self.result("last commit", OK if result == "OK" else FAIL, "ok" if result == "OK" else result.lower() or "unknown", f"finished {when}" if when else "")
 
     def sessions(self):
         res = self._op("<show><session><info/></session></show>")

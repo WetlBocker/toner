@@ -3,15 +3,17 @@ import re
 
 from .base import OK, WARN, FAIL, grade
 from .sshbase import SshDriver, worse
+from .clirows import CliRows
+from . import clichecks
 
 
-class AristaDriver(SshDriver):
+class AristaDriver(CliRows, SshDriver):
     DEFAULT_PLATFORM = "arista_eos"
 
     def checks(self):
         return [("cpu", self.cpu), ("memory", self.memory), ("uptime", self.uptime),
                 ("temperature", self.temperature), ("interfaces", self.interfaces),
-                ("bgp", self.bgp), ("ospf", self.ospf)]
+                ("bgp", self.bgp), ("ospf", self.ospf), ("environment", self.environment), ("mlag", self.mlag), ("ntp", self.ntp), ("flash", self.flash)]
 
     def json(self, c, command):
         out = self.cmd(c, command + " | json")
@@ -19,6 +21,38 @@ class AristaDriver(SshDriver):
             return json.loads(out)
         except ValueError:
             raise self.unreadable(command, command + " | json") from None
+
+    # ---------------------------------------------------------------- health and redundancy
+    def environment(self, c):
+        found, seen = [], 0
+        for part in ("cooling", "power"):
+            try:
+                data = json.loads(self.cmd(c, f"show system environment {part} | json"))
+            except ValueError:
+                continue
+            seen += 1
+            found += clichecks.deep_status(data)
+        if not seen:
+            return []
+        if not found:
+            return self.result("environment", OK, "ok", "cooling and power", numeric=0.0)
+        return self.result("environment", FAIL if any(lv == FAIL for lv, _ in found) else WARN, f"{len(found)} not ok", "; ".join(m for _, m in found[:3]), numeric=float(len(found)))
+
+    def mlag(self, c):
+        try:
+            data = json.loads(self.cmd(c, "show mlag | json"))
+        except ValueError:
+            return []
+        problems = clichecks.mlag_problems(data)
+        if problems is None:
+            return []
+        return self.result("mlag", FAIL if problems else OK, "problem" if problems else "active", "; ".join(problems))
+
+    def ntp(self, c):
+        return self.ntp_row(clichecks.ntp_state(self.cmd(c, "show ntp status")))
+
+    def flash(self, c):
+        return self.flash_row(c, "dir flash:")
 
     def cpu(self, c):
         cmd = "show processes top once"

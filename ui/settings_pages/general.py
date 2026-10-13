@@ -259,7 +259,17 @@ class ChecksPage(Page):
                                       "Inventory > Edit device > Checks. Devices without one use this list."))
         self.tree = QTreeWidget()
         self.tree.setHeaderHidden(True)
-        self.lay.insertWidget(1, self.tree, 1)
+        self.collapse_all, self.expand_all = QPushButton("Collapse all"), QPushButton("Expand all")
+        self.collapse_all.setToolTip("Fold every group, to see the list of device types")
+        self.expand_all.setToolTip("Open every group, to see all of its checks")
+        self.collapse_all.clicked.connect(self.tree.collapseAll)
+        self.expand_all.clicked.connect(self.tree.expandAll)
+        bar = QHBoxLayout()
+        bar.addWidget(self.expand_all)
+        bar.addWidget(self.collapse_all)
+        bar.addStretch()
+        self.lay.insertLayout(1, bar)
+        self.lay.insertWidget(2, self.tree, 1)
 
     def load(self):
         off = set(db.get_setting("disabled_checks"))

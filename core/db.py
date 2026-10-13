@@ -34,6 +34,19 @@ DEFAULT_THRESHOLDS = {
     "wan_uptime":   {"warn": 99, "fail": 95},       # UniFi Site Manager: WAN uptime %; LOWER is worse
     "isp_latency":  {"warn": 100, "fail": 250},     # UniFi Site Manager: ISP latency, milliseconds
     "isp_loss":     {"warn": 1, "fail": 5},         # UniFi Site Manager: ISP packet loss, %
+    "load_per_core": {"warn": 1.5, "fail": 3},      # SNMP: 5-minute load average per processor core
+    "ups_battery":  {"warn": 50, "fail": 20},       # SNMP UPS: battery charge, %; LOWER is worse
+    "ups_runtime":  {"warn": 15, "fail": 5},        # SNMP UPS: minutes of runtime left; LOWER is worse
+    "ups_load":     {"warn": 80, "fail": 95},       # SNMP UPS: output load, %
+    "toner":        {"warn": 20, "fail": 5},        # SNMP printers: the lowest supply left, %; LOWER is worse
+    "clock_offset": {"warn": 60, "fail": 300},      # Windows: seconds the computer's clock differs from Toner's
+    "failed_logons": {"warn": 50, "fail": 500},     # Windows: failed sign-ins in the last 24 hours
+    "lockouts":     {"warn": 1, "fail": 5},         # Windows: account lockouts in the last 24 hours
+    "av_age":       {"warn": 3, "fail": 7},         # Windows: days since Defender's signatures were updated
+    "backup_days":  {"warn": 2, "fail": 7},         # Windows: days since the last good Windows Server Backup
+    "rdp_disconnected": {"warn": 5, "fail": 20},    # Windows: Remote Desktop sessions left disconnected
+    "content_age":  {"warn": 14, "fail": 45},       # Palo Alto: days since the newest application / threat / antivirus content
+    "support_days": {"warn": 90, "fail": 30},       # any device: days until a support / warranty / licence date in its fields; LOWER is worse
 }
 THRESHOLD_LABELS = {"cpu": "CPU %", "memory": "Memory %", "channel_util": "Channel utilization %",
                     "temperature": "Temperature C", "port_errors": "Port errors (count)",
@@ -43,11 +56,20 @@ THRESHOLD_LABELS = {"cpu": "CPU %", "memory": "Memory %", "channel_util": "Chann
                     "patch_days": "Windows days since last update", "cert_days": "Windows certificate days left",
                     "agent_silent": "Windows agent silent (minutes)", "tx_retries": "UniFi Wi-Fi retries %",
                     "sensor_battery": "UniFi sensor battery below %", "wan_uptime": "UniFi WAN uptime below %",
-                    "isp_latency": "UniFi ISP latency (ms)", "isp_loss": "UniFi ISP packet loss %"}
+                    "isp_latency": "UniFi ISP latency (ms)", "isp_loss": "UniFi ISP packet loss %",
+                    "load_per_core": "Load average per core", "ups_battery": "UPS battery below %", "ups_runtime": "UPS runtime below (minutes)",
+                    "ups_load": "UPS load %", "toner": "Printer supplies below %",
+                    "support_days": "Support, warranty and licence days left", "clock_offset": "Windows clock difference (seconds)",
+                    "failed_logons": "Windows failed sign-ins (24 h)", "lockouts": "Windows account lockouts (24 h)",
+                    "av_age": "Windows antivirus signatures (days old)", "backup_days": "Windows Server Backup (days old)",
+                    "rdp_disconnected": "Windows disconnected sessions", "content_age": "Palo Alto content (days old)"}
 THRESHOLD_GROUPS = [("Network devices", ["cpu", "memory", "temperature", "uptime", "disk", "utilization", "port_errors", "sessions", "channel_util", "wifi_signal"]),
-                    ("Windows computers", ["win_events", "patch_days", "cert_days", "agent_silent"]),
-                    ("UniFi (API)", ["tx_retries", "sensor_battery", "wan_uptime", "isp_latency", "isp_loss"])]
-LOWER_IS_WORSE = {"uptime", "wifi_signal", "cert_days", "sensor_battery", "wan_uptime"}
+                    ("Windows computers", ["win_events", "patch_days", "cert_days", "agent_silent", "clock_offset", "failed_logons", "lockouts", "av_age", "backup_days", "rdp_disconnected"]),
+                    ("UniFi (API)", ["tx_retries", "sensor_battery", "wan_uptime", "isp_latency", "isp_loss"]),
+                    ("Any device", ["support_days"]),
+                    ("Firewalls", ["content_age"]),
+                    ("UPS, printers and servers (SNMP)", ["load_per_core", "ups_battery", "ups_runtime", "ups_load", "toner"])]
+LOWER_IS_WORSE = {"uptime", "wifi_signal", "cert_days", "sensor_battery", "wan_uptime", "ups_battery", "ups_runtime", "toner", "support_days"}
 
 DEFAULT_SETTINGS = {
     # general
@@ -74,7 +96,7 @@ DEFAULT_SETTINGS = {
     "notify_enabled": False, "notify_channels": [], "notify_snooze_until": "",
     "notify_consecutive": 1, "notify_remind_hours": 0, "notify_on_manual": True,
     # inventory view
-    "inventory_view": "Folders", "inventory_expanded": [], "window_geometry": "", "onboarding_done": False, "inventory_columns": None, "results_columns": None,
+    "inventory_view": "Folders", "inventory_expanded": [], "window_geometry": "", "sidebar_collapsed": False, "onboarding_done": False, "inventory_columns": None, "results_columns": None,
     # configuration backups
     "backup_enabled": False, "backup_hours": 24, "backup_groups": [], "backup_keep": 50, "backup_mask": True,
     "backup_on_start": False,
@@ -97,7 +119,7 @@ DEFAULT_SETTINGS = {
 }
 # Per-machine state that must not travel in an exported settings file (channel secrets stay in
 # Credential Manager, so an imported channel would be broken).
-NOT_PORTABLE = {"window_geometry", "onboarding_done", "inventory_columns", "results_columns", "notify_channels", "notify_snooze_until", "inventory_expanded", "snippets", "fileserver", "iperf_path", "openssl_path",
+NOT_PORTABLE = {"window_geometry", "sidebar_collapsed", "onboarding_done", "inventory_columns", "results_columns", "notify_channels", "notify_snooze_until", "inventory_expanded", "snippets", "fileserver", "iperf_path", "openssl_path",
                 "update_last_check", "update_skip", "update_pending", "sessions_expanded", "agent_enabled", "agent_enroll", "agent_bind",
                 "agent_address"}
 

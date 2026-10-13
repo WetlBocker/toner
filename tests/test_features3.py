@@ -207,9 +207,21 @@ check("overall status follows the page's indicator", r["status"].status == "WARN
 check("components: a major outage makes it FAIL; groups and maintenance are ignored", r["components"].status == "FAIL" and r["components"].value == "3 affected" and r["components"].numeric == 3 and "Git operations (major outage)" in r["components"].message and "Group" not in r["components"].message and "Pages" not in r["components"].message, r["components"])
 check("only unresolved incidents count", r["incidents"].value == "1 open" and r["incidents"].status == "WARN" and "Delayed webhooks" in r["incidents"].message and "Old one" not in r["incidents"].message)
 calm = {"status": {"indicator": "none", "description": "All Systems Operational"}, "components": [{"name": "API", "status": "operational"}], "incidents": []}
-r = run_cloud(calm); check("a healthy page is all OK", [x.status for x in r.values()] == ["OK", "OK", "OK"] and r["incidents"].value == "none" and r["components"].value == "all operational")
+r = run_cloud(calm); check("a healthy page is all OK", [x.status for x in r.values()] == ["OK", "OK", "OK", "OK"] and r["incidents"].value == "none" and r["components"].value == "all operational")
 r = run_cloud({**calm, "status": {"indicator": "critical", "description": "Major outage"}}); check("critical is a FAIL", r["status"].status == "FAIL" and r["status"].numeric == 3)
 r = run_cloud({**calm, "incidents": [{"name": "Outage", "status": "identified", "impact": "major"}]}); check("a major open incident is a FAIL", r["incidents"].status == "FAIL")
+from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+soon = (_dt.now(_tz.utc) + _td(hours=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+r = run_cloud({**calm, "scheduled_maintenances": [{"name": "Database upgrade", "status": "scheduled", "scheduled_for": soon}, {"name": "Far away", "status": "scheduled", "scheduled_for": (_dt.now(_tz.utc) + _td(days=9)).strftime("%Y-%m-%dT%H:%M:%SZ")}]})
+check("planned maintenance in the next two days warns, with when; work far off is not mentioned", r["maintenance"].status == "WARN" and "Database upgrade (in 5 h)" in r["maintenance"].message and r["maintenance"].value == "1 planned", r["maintenance"])
+check("no planned maintenance is fine", run_cloud(calm)["maintenance"].value == "none planned")
+cdw = {**cd, "fields": json.dumps({"watch": "actions, copilot"})}
+Fake.data = SUMMARY
+r = {x.check: x for x in Fake(cdw, db.thresholds_for(cdw), {"disabled": frozenset()}).run()}
+check("a 'watch' field limits the components to those named (Git operations is not looked at)", r["components"].value == "2 affected" and "Git operations" not in r["components"].message and "Actions" in r["components"].message, r["components"])
+cdn = {**cd, "fields": json.dumps({"watch": "nothing like it"})}
+r = {x.check: x for x in Fake(cdn, db.thresholds_for(cdn), {"disabled": frozenset()}).run()}
+check("watching a name that matches nothing says all clear (and the page's overall status still shows)", r["components"].value == "all operational" and r["status"].status == "WARN")
 check("the real driver asks the right address", "api/v2/summary.json" in open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "drivers", "cloud.py")).read())
 from drivers import cloud as cloudmod
 class Resp:
@@ -222,7 +234,7 @@ class Resp:
 seen = []
 cloudmod.requests.get = lambda url, **kw: (seen.append(url), Resp(SUMMARY))[1]
 out = DRIVERS["cloud"](cd, db.thresholds_for(cd), {"http_timeout": 5, "disabled": frozenset()}).run()
-check("fetched from the status page's own address", seen == ["https://www.githubstatus.com/api/v2/summary.json"] and len(out) == 3, seen)
+check("fetched from the status page's own address", seen == ["https://www.githubstatus.com/api/v2/summary.json"] and len(out) == 4, seen)
 cloudmod.requests.get = lambda url, **kw: Resp(ValueError("not json"))
 try: DRIVERS["cloud"](cd, db.thresholds_for(cd), {"http_timeout": 5, "disabled": frozenset()}).run(); check("a page that is not a status page is explained", False)
 except ValueError as e: check("a page that is not a status page is explained", "summary.json" in str(e))
@@ -311,7 +323,7 @@ cd_.kind.setCurrentIndex(cd_.kind.findData("ping")); check("other kinds carry no
 cd2 = S.CheckDialog({**saved, "options": {"seconds": 12, "streams": 4, "reverse": True, "udp": False, "bandwidth": ""}}); check("editing restores them", cd2.seconds.value() == 12 and cd2.streams.value() == 4 and cd2.reverse.isChecked())
 cp = S.CustomChecksPage(); cp.refresh(); check("the list describes it", any("iperf3 port" in cp.table.item(i, 2).text() for i in range(cp.table.rowCount())))
 th_page = S.ThresholdsPage(); check("the Wi-Fi signal limits are in Settings > Thresholds", "wifi_signal" in th_page.spins)
-from core import checks as _checks; check("the new vendors' checks can be switched on and off in Settings > Checks", {k for k, _ in _checks.CATALOG["cloud"]} == {"status", "components", "incidents"} and {k for k, _ in _checks.CATALOG["wifi"]} == {"connection", "signal", "link speed"})
+from core import checks as _checks; check("the new vendors' checks can be switched on and off in Settings > Checks", {k for k, _ in _checks.CATALOG["cloud"]} == {"status", "components", "incidents", "maintenance"} and {k for k, _ in _checks.CATALOG["wifi"]} == {"connection", "signal", "link speed"})
 
 dd = I.DeviceDialog(); dd.vendor.setCurrentIndex(dd.vendor.findData("cloud"))
 check("a status page needs no credentials, SNMP, profile or login", not dd.access.isRowVisible(dd.secret) and not dd.access.isRowVisible(dd.profile) and not dd.use_snmp.isVisibleTo(dd) and not dd.tabs.isTabVisible(2) and dd.form.isRowVisible(dd.preset))

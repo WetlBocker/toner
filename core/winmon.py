@@ -75,6 +75,61 @@ try {
     Get-Process | ForEach-Object { $names[[int]$_.Id] = $_.ProcessName }
     $o.ports = @(Get-NetTCPConnection -State Listen -ErrorAction Stop | Sort-Object LocalPort -Unique | ForEach-Object { ([string]$_.LocalPort) + '/' + $names[[int]$_.OwningProcess] })
 } catch {}
+# ---- health of the machine itself: each part is optional and leaves nothing behind when the computer does not have it
+try { $o.physical = @(Get-PhysicalDisk -ErrorAction Stop | ForEach-Object { [ordered]@{ name = [string]$_.FriendlyName; health = [string]$_.HealthStatus; op = ((@($_.OperationalStatus) | ForEach-Object { [string]$_ }) -join ','); media = [string]$_.MediaType } }) } catch {}
+try { $o.volumes = @(Get-Volume -ErrorAction Stop | Where-Object { $_.DriveLetter -and $_.DriveType -eq 'Fixed' } | ForEach-Object { [ordered]@{ drive = ([string]$_.DriveLetter + ':'); health = [string]$_.HealthStatus } }) } catch {}
+try { $o.bitlocker = @(Get-BitLockerVolume -ErrorAction Stop | Where-Object { $_.VolumeType -eq 'OperatingSystem' -or $_.VolumeType -eq 'Data' } | ForEach-Object { [ordered]@{ mount = [string]$_.MountPoint; protection = [string]$_.ProtectionStatus; status = [string]$_.VolumeStatus } }) } catch {}
+try {
+    $mp = Get-MpComputerStatus -ErrorAction Stop
+    $o.defender = [ordered]@{ enabled = [bool]$mp.AMServiceEnabled; realtime = [bool]$mp.RealTimeProtectionEnabled; sig_days = [int]$mp.AntivirusSignatureAge; mode = [string]$mp.AMRunningMode }
+} catch {}
+try { $o.av_products = @(Get-CimInstance -Namespace 'root/SecurityCenter2' -ClassName AntiVirusProduct -ErrorAction Stop | ForEach-Object { [string]$_.displayName }) } catch {}
+try { $o.firewall = @(Get-NetFirewallProfile -ErrorAction Stop | ForEach-Object { [ordered]@{ name = [string]$_.Name; on = [bool]$_.Enabled } }) } catch {}
+try {
+    $lic = Get-CimInstance SoftwareLicensingProduct -Filter "ApplicationID='55c92734-d682-4d71-983e-d6ec3f16059f' AND PartialProductKey IS NOT NULL" -ErrorAction Stop | Select-Object -First 1
+    if ($lic) { $o.activation = [ordered]@{ status = [int]$lic.LicenseStatus; grace_min = [int]$lic.GracePeriodRemaining } }
+} catch {}
+try {
+    $q = @(& quser 2>$null)
+    if ($q.Count -gt 1) {
+        $rows = @($q | Select-Object -Skip 1)
+        $o.sessions = [ordered]@{ active = @($rows | Where-Object { $_ -match '\sActive\s' }).Count; disconnected = @($rows | Where-Object { $_ -match '\sDisc\s' }).Count }
+    } else { $o.sessions = [ordered]@{ active = 0; disconnected = 0 } }
+} catch {}
+try {
+    $lg = [ordered]@{}
+    $f = @(Get-WinEvent -FilterHashtable @{ LogName = 'Security'; Id = 4625; StartTime = (Get-Date).AddHours(-24) } -MaxEvents 2000 -ErrorAction Stop)
+    $lg.failed = $f.Count; $lg.capped = ($f.Count -ge 2000)
+    $lg.top = @($f | ForEach-Object { [string]$_.Properties[5].Value } | Group-Object | Sort-Object Count -Descending | Select-Object -First 3 | ForEach-Object { [ordered]@{ user = $_.Name; count = $_.Count } })
+    $lock = @(Get-WinEvent -FilterHashtable @{ LogName = 'Security'; Id = 4740; StartTime = (Get-Date).AddHours(-24) } -MaxEvents 200 -ErrorAction SilentlyContinue)
+    $lg.lockouts = $lock.Count
+    $o.logons = $lg
+} catch { if ($_.Exception.Message -match 'No events were found') { $o.logons = [ordered]@{ failed = 0; capped = $false; top = @(); lockouts = 0 } } }
+if ([int]$cs.DomainRole -ge 4) {
+    try {
+        $rs = @(& repadmin /replsummary 2>$null)
+        $fails = 0; $total = 0; $seen = $false
+        foreach ($line in $rs) { if ($line -match '(\d+)\s*/\s*(\d+)\s+(\d+)\s*') { $seen = $true; $fails += [int]$matches[1]; $total += [int]$matches[2] } }
+        if ($seen) { $o.ad = [ordered]@{ repl_fail = $fails; repl_total = $total } }
+    } catch {}
+}
+try {
+    $vms = @(Get-VM -ErrorAction Stop)
+    $o.hyperv = [ordered]@{ running = @($vms | Where-Object { [string]$_.State -eq 'Running' }).Count; off = @($vms | Where-Object { [string]$_.State -eq 'Off' }).Count
+        bad = @($vms | Where-Object { [string]$_.State -match 'Critical|Paused|Saved' -or ([string]$_.PrimaryOperationalStatus -ne 'Ok' -and [string]$_.State -eq 'Running') } | ForEach-Object { [string]$_.Name + ' (' + [string]$_.State + ')' }) }
+} catch {}
+try {
+    $wb = Get-WBSummary -ErrorAction Stop
+    if ($wb -and $wb.LastSuccessfulBackupTime) { $o.backup = [ordered]@{ last = $wb.LastSuccessfulBackupTime.ToUniversalTime().ToString('o'); result = [int]$wb.LastBackupResultHR } }
+} catch {}
+try {
+    $bad = @(Get-ScheduledTask -ErrorAction Stop | Where-Object { $_.TaskPath -notlike '\Microsoft*' -and $_.State -ne 'Disabled' } | ForEach-Object {
+        $i = Get-ScheduledTaskInfo -InputObject $_ -ErrorAction SilentlyContinue
+        if ($i -and $i.LastRunTime -gt (Get-Date).AddDays(-7) -and $i.LastTaskResult -ne 0 -and $i.LastTaskResult -ne 267009 -and $i.LastTaskResult -ne 267011 -and $i.LastTaskResult -ne 267008 -and $i.LastTaskResult -ne 267010 -and $i.LastTaskResult -ne 267014) {
+            [ordered]@{ name = [string]$_.TaskName; result = ('0x{0:X}' -f [uint32]$i.LastTaskResult) } } })
+    $o.task_failures = $bad
+} catch {}
+$o.now = (Get-Date).ToUniversalTime().ToString('o')
 $o | ConvertTo-Json -Depth 6 -Compress
 """
 

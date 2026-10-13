@@ -19,6 +19,8 @@ def vendor_name(v):
 def type_name(v):
     """'UniFi - Network API (API key)' for one of several ways to monitor a vendor, else the vendor's name."""
     from core import vendors
+    if v == "all":
+        return "Every device"
     label = vendors.mode_label(v)
     return f"{vendor_name(v)} - {label}" if label else vendor_name(v)
 

@@ -155,7 +155,7 @@ that must be running or that may be stopped, instead of typing names.
 automation, config backups, notifications (email, Teams, Slack, Discord, ntfy, webhook, desktop; each with its service's mark in the list), credential profiles,
 appearance, terminal, reports, security (host keys), audit log, data and logs.
 
-Press **Ctrl+K** (or the Search button under the sections) anywhere to jump to a section, tool, device or action. Ctrl+1 to Ctrl+9 switch sections.
+Press **Ctrl+K** (or the Search button under the sections) anywhere to jump to a section, tool, device or action. Ctrl+1 to Ctrl+9 switch sections. **Ctrl+B** (or the button under the sections) folds the sidebar to a strip of icons and back; Toner remembers which you chose.
 
 Interface details: right-click a heading in Inventory or Results to choose its columns (empty ones hide themselves until you choose); Status columns and marks
 use different shapes as well as colours (circle OK, triangle WARN, square FAIL, diamond ERROR); the Overview says what changed since the previous run; Enter opens the
@@ -169,29 +169,34 @@ installation shows a getting-started list on the Overview; and the window opens 
 
 | Vendor | How | Checks |
 |---|---|---|
-| Cisco (IOS, IOS XE, NX-OS, ASA) | SSH | CPU, memory, uptime, interfaces and error counters, BGP, OSPF |
-| Juniper (Junos) | SSH | CPU, memory, uptime, chassis alarms, interfaces, BGP, OSPF |
-| Arista (EOS) | SSH | CPU, memory, uptime, temperature, interfaces, BGP, OSPF |
-| HPE Aruba (AOS-CX, AOS-S) | SSH | CPU, memory, uptime, interfaces |
-| MikroTik (RouterOS) | SSH | CPU, memory, uptime, version, interfaces, OSPF |
-| Fortinet (FortiGate) | REST API | CPU, memory, firmware, WAN links, HA, IPsec tunnels |
-| Palo Alto (PAN-OS) | XML API | CPU, memory, uptime, version, sessions, HA, interfaces |
-| Cisco Meraki | Dashboard API | device status, appliance uplinks, licenses |
+| Cisco (IOS, IOS XE, NX-OS, ASA) | SSH | CPU, memory, uptime, interfaces and error counters, BGP, OSPF, fans / power / temperature, NTP, unsaved configuration, flash space, switch stack, HSRP / VRRP, port-channels, ASA failover |
+| Juniper (Junos) | SSH | CPU, memory, uptime, chassis alarms, interfaces, BGP, OSPF, fans / power / temperature, NTP, uncommitted changes, core dumps, BFD, storage, virtual chassis |
+| Arista (EOS) | SSH | CPU, memory, uptime, temperature, interfaces, BGP, OSPF, fans and power, MLAG, NTP, flash space |
+| HPE Aruba (AOS-CX, AOS-S) | SSH | CPU, memory, uptime, interfaces, fans / power / temperature, NTP |
+| MikroTik (RouterOS) | SSH | CPU, memory, uptime, version, interfaces, OSPF, temperature and voltage, flash space, RouterBOARD firmware, NTP |
+| Fortinet (FortiGate) | REST API | CPU, memory, firmware, WAN links, HA, IPsec tunnels, FortiCare / FortiGuard subscriptions, certificates, interfaces and errors, HA configuration sync, FortiAPs and FortiSwitches, log disk |
+| Palo Alto (PAN-OS) | XML API | CPU, memory, uptime, version, sessions, HA, interfaces, subscriptions, content update age, disk, Panorama connection, last commit |
+| Cisco Meraki | Dashboard API | device status, appliance uplinks, licenses, dashboard alerts, configuration changes, site-to-site VPN, uplink loss and latency |
+| Proxmox VE | REST API with an API token | cluster quorum and nodes, node CPU / memory / uptime, storage, virtual machines and containers, failed tasks, backup jobs |
+| TrueNAS (CORE, SCALE) | REST API with an API key | pool health, errors and space, active alerts, load, uptime |
+| OPNsense | REST API with a key and secret | updates waiting, memory, disk, uptime, each gateway's state, delay and loss |
 | UniFi, console login | controller API | site health, per device state, uptime, CPU, memory, temperature, firmware, uplink, port errors, clients, channel utilisation |
 | UniFi, Network API (key) | Integration API on the console | API version, per device state, uptime, CPU, memory, firmware, Wi-Fi transmit retries per radio, devices waiting to be adopted, client count |
 | UniFi, Protect API (key) | Integration API on the console | NVR alarm state, cameras, lights, sensors, chimes and other devices connected or not, sensor batteries, recent leak / tamper / smoke alarms |
 | UniFi, Site Manager (cloud) | api.ui.com, one key for the account | per console device status and firmware, per site health and WAN uptime, ISP latency and packet loss, SD-WAN status |
-| Generic SNMP (anything else) | SNMP v1/v2c/v3 | reachability, CPU, memory, storage, uptime, temperature, interfaces, errors, utilisation |
-| Cloud status page | public Statuspage JSON, no login | overall status, components, open incidents |
+| Generic SNMP (anything else) | SNMP v1/v2c/v3 | reachability, CPU, memory, storage, uptime, temperature, interfaces, errors, utilisation, fans / power supplies / sensors, load average, UPS battery and load (UPS-MIB, APC), printer toner and paper, Synology and QNAP disks and volumes |
+| Cloud status page | public Statuspage JSON, no login | overall status, components (or only the ones named in a `watch` field), open incidents, planned maintenance |
 | This PC's Wi-Fi | `netsh wlan`, no login | connection, signal strength, link speed |
-| Windows | agent, WinRM (PowerShell remoting) or this computer | CPU, memory, disks, uptime, pending reboot, services, event errors, certificate expiry, update age |
+| Windows | agent, WinRM (PowerShell remoting) or this computer | CPU, memory, disks, uptime, pending reboot, services, event errors, certificate expiry, update age, physical disk health, BitLocker, antivirus, firewall, clock difference, failed sign-ins and lockouts, activation, Remote Desktop sessions, failed scheduled tasks, Active Directory replication, Hyper-V, backup age |
+
+**Every device** can also have support, warranty and licence end dates checked: put `support=2027-06`, `warranty=2026-12-31`, `eol=...` or `licence_expires=...` in its custom fields (Edit device > Tags and fields) and the days left appear as a result, graded by Settings > Thresholds.
 
 Configuration backup: Cisco, Juniper, Arista, HPE, MikroTik (SSH), Fortinet and Palo Alto (API).
 
 **Custom checks** need no code: run a command over SSH, read an SNMP object, fetch a web page, test a TCP port, count
 the days left on a certificate, or ping, and turn the answer into OK / WARN / FAIL.
 
-The parsers for Juniper, Arista, HPE, MikroTik and Palo Alto were written from the vendors' documented output and are
+The parsers for Juniper, Arista, HPE, MikroTik, Palo Alto, Fortinet, Meraki, Proxmox, TrueNAS and OPNsense, and the SNMP checks for UPS, printers and NAS boxes, were written from the vendors' documented output and are
 tested against sample text, not real hardware. If a check reports "unexpected output", the raw output is saved so it can
 be fixed from a real sample.
 

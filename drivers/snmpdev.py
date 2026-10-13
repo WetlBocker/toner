@@ -8,6 +8,7 @@ import time
 from core import display, snmp
 from core.snmp import number_of, text_of
 from .base import Driver, OK, WARN, FAIL, grade, grade_low
+from .snmpextra import SnmpExtras
 
 N = snmp.NAMES
 HR_RAM = "1.3.6.1.2.1.25.2.1.2"
@@ -15,7 +16,7 @@ HR_DISK = "1.3.6.1.2.1.25.2.1.4"
 VIRTUAL_IF = {"24", "53", "131", "135", "136", "142", "161"}      # loopback, virtual, tunnel, vlan, lag helpers
 
 
-class SnmpDriver(Driver):
+class SnmpDriver(SnmpExtras, Driver):
     def run(self):
         creds, port = snmp.credentials_for(self.dev)
         out = []
@@ -27,7 +28,8 @@ class SnmpDriver(Driver):
             for key, fn in (("cpu", self.cpu), ("memory", self.memory), ("storage", self.storage),
                             ("uptime", self.uptime), ("temperature", self.temperature),
                             ("interfaces", self.interfaces), ("interface errors", self.errors),
-                            ("bandwidth", self.bandwidth)):
+                            ("bandwidth", self.bandwidth), ("environment", self.environment), ("load", self.load),
+                            ("ups", self.ups), ("printer", self.printer), ("nas", self.nas)):
                 if self.enabled(key):
                     self.safe(out, key, fn)
         return out

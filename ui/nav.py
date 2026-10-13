@@ -4,18 +4,22 @@ Offers the small part of QTabWidget's API that the rest of the app uses (addTab,
 currentWidget, indexOf, count, tabText), so sections can be switched from code.
 """
 from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtWidgets import (QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QScrollArea, QStackedWidget,
+from PySide6.QtGui import QIcon
+from PySide6.QtWidgets import (QBoxLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QScrollArea, QStackedWidget,
                                QVBoxLayout, QWidget)
 from ui import icons, theme
 
 
 ITEM_HEIGHT = 36            # a row in a page list; Qt does not take the style sheet's padding into account by itself
-HEADING_HEIGHT = 44         # a group heading: the room is above it, so the heading sits close to its own items
+EXPANDED_WIDTH = 208        # the sidebar in full
+COLLAPSED_WIDTH = 68        # and as a strip of icons
+HEADING_HEIGHT = 44        # a group heading: the room is above it, so the heading sits close to its own items
 
 
 class NavStack(QWidget):
     currentChanged = Signal(int)
     search_requested = Signal()
+    collapsed_changed = Signal(bool)
     PAGE_MARGINS = (24, 20, 24, 20)
 
     def __init__(self, title="Toner"):
@@ -23,7 +27,6 @@ class NavStack(QWidget):
         self._names, self._icon_names = [], []
         self.side = QWidget()
         self.side.setObjectName("sidebar")
-        self.side.setFixedWidth(208)
         from ui import logo
         mark = QLabel()
         mark.setPixmap(logo.pixmap(32, 2.0))
@@ -49,7 +52,15 @@ class NavStack(QWidget):
         self.quick.setToolTip("Jump to a section, tool, device or action")
         self.quick.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.quick.clicked.connect(self.search_requested)
-        side.addWidget(self.quick)
+        self.fold = QPushButton()                                          # shrinks the sidebar to a strip of icons, and back
+        self.fold.setProperty("ghost", True)
+        self.fold.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.fold.clicked.connect(lambda: self.setCollapsed(not self._collapsed))
+        self.bottom = QBoxLayout(QBoxLayout.Direction.LeftToRight)
+        self.bottom.setSpacing(6)
+        self.bottom.addWidget(self.quick, 1)
+        self.bottom.addWidget(self.fold)
+        side.addLayout(self.bottom)
         self.stack = QStackedWidget()
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -57,6 +68,37 @@ class NavStack(QWidget):
         lay.addWidget(self.side)
         lay.addWidget(self.stack, 1)
         self.list.currentRowChanged.connect(self._row_changed)
+        self._brand = brand
+        self._badges = set()
+        self.setCollapsed(False)
+
+    def collapsed(self):
+        return self._collapsed
+
+    def setCollapsed(self, on):
+        """The sidebar as a strip of icons (names show as tooltips) or in full."""
+        on = bool(on)
+        changed = on != getattr(self, "_collapsed", None)
+        self._collapsed = on
+        self.side.setFixedWidth(COLLAPSED_WIDTH if on else EXPANDED_WIDTH)
+        self._brand.setVisible(not on)
+        self.quick.setText("" if on else "Search      Ctrl+K")
+        self.bottom.setDirection(QBoxLayout.Direction.TopToBottom if on else QBoxLayout.Direction.LeftToRight)
+        self.fold.setToolTip("Show the sidebar in full   (Ctrl+B)" if on else "Collapse the sidebar   (Ctrl+B)")
+        self.quick.setToolTip("Search   (Ctrl+K)\nJump to a section, tool, device or action" if on else "Jump to a section, tool, device or action")
+        for i, name in enumerate(self._names):
+            self._label(i)
+        self.restyle()
+        if changed:
+            self.collapsed_changed.emit(on)
+
+    def _label(self, i):
+        """What row i shows: its name, and a dot after it when something is new (the dot is on the icon when only icons show)."""
+        item = self.list.item(i)
+        dot = i in self._badges
+        item.setText("" if self._collapsed else self._names[i] + ("   ●" if dot else ""))
+        tip = self._names[i] + ("   (new)" if dot and self._collapsed else "")
+        item.setToolTip(tip + (f"   (Ctrl+{i + 1})" if i < 9 else ""))
 
     def _row_changed(self, row):
         if row >= 0:
@@ -70,20 +112,21 @@ class NavStack(QWidget):
         self.stack.addWidget(widget)
         item = QListWidgetItem(label)
         item.setSizeHint(QSize(0, 42))
-        if self.list.count() < 9:
-            item.setToolTip(f"{label}   (Ctrl+{self.list.count() + 1})")
         self.list.addItem(item)
         self._names.append(label)
         self._icon_names.append(icon_name)
+        self._label(self.list.count() - 1)
         self.restyle()
         if self.list.currentRow() < 0:
             self.list.setCurrentRow(0)
 
     def setBadge(self, widget, on):
-        """Mark a section that has something new (a dot after its name)."""
+        """Mark a section that has something new (a dot after its name, or on its icon when only icons show)."""
         i = self.stack.indexOf(widget)
         if i >= 0:
-            self.list.item(i).setText(self._names[i] + ("   \u25cf" if on else ""))
+            (self._badges.add if on else self._badges.discard)(i)
+            self._label(i)
+            self.restyle()
 
     def restyle(self):
         """Re-tint the icons after the theme or accent changed."""
@@ -92,7 +135,10 @@ class NavStack(QWidget):
             return
         for i, name in enumerate(self._icon_names):
             if name:
-                self.list.item(i).setIcon(icons.icon(name, t["muted"], t["accent"]))
+                self.list.item(i).setIcon(icons.icon_with_dot(name, t["muted"], t["accent"]) if self._collapsed and i in self._badges
+                                          else icons.icon(name, t["muted"], t["accent"]))
+        self.fold.setIcon(icons.icon("panel", t["muted"], t["text"]))
+        self.quick.setIcon(icons.icon("search", t["muted"], t["text"]) if self._collapsed else QIcon())
 
     def count(self):
         return self.stack.count()

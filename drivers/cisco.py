@@ -2,6 +2,8 @@ import re
 from netmiko import ConnectHandler
 from .base import Driver, OK, WARN, FAIL, grade_low
 from .sshbase import Recorder
+from .clirows import CliRows
+from . import clichecks
 from core import quiet, display
 
 _UPTIME_UNITS = {"year": 8760, "week": 168, "day": 24, "hour": 1, "minute": 1 / 60}
@@ -10,7 +12,7 @@ def uptime_hours(text):
     """'1 year, 2 weeks, 3 days, 4 hours, 5 minutes' -> hours."""
     return sum(int(n) * _UPTIME_UNITS[u] for n, u in re.findall(r"(\d+)\s+(year|week|day|hour|minute)", text))
 
-class CiscoDriver(Driver):
+class CiscoDriver(CliRows, Driver):
     def run(self):
         d = self.dev
         self.plat = d.get("platform") or "cisco_ios"
@@ -22,7 +24,9 @@ class CiscoDriver(Driver):
             except Exception:
                 quiet.ignored()
             for name, fn in (("cpu", self.cpu), ("memory", self.memory), ("uptime", self.uptime),
-                             ("interfaces", self.interfaces), ("bgp", self.bgp), ("ospf", self.ospf)):
+                             ("interfaces", self.interfaces), ("bgp", self.bgp), ("ospf", self.ospf),
+                             ("environment", self.environment), ("ntp", self.ntp), ("unsaved config", self.unsaved), ("flash", self.flash),
+                             ("stack", self.stack), ("hsrp", self.hsrp), ("port-channels", self.port_channels), ("failover", self.failover)):
                 if self.enabled(name):
                     self.safe(out, name, lambda fn=fn: fn(c))
             custom_ssh = [x for x in getattr(self, "custom", []) if x["kind"] == "ssh"]
@@ -71,6 +75,70 @@ class CiscoDriver(Driver):
         t = self.th["uptime"]
         status = grade_low(hours, t["warn"], t["fail"])
         return self.result("uptime", status, display.uptime(hours), "recent reboot" if status != OK else "", numeric=hours)
+
+    # ---------------------------------------------------------------- health and redundancy
+    def environment(self, c):
+        return self.env_row(c, "show environment" if ("nxos" in self.plat or "asa" in self.plat) else "show environment all")
+
+    def ntp(self, c):
+        if "nxos" in self.plat:
+            return []
+        return self.ntp_row(clichecks.ntp_state(c.send_command("show ntp status")))
+
+    def unsaved(self, c):
+        """The running configuration changed since it was last saved to the startup configuration (IOS and IOS XE)."""
+        if "nxos" in self.plat or "asa" in self.plat:
+            return []
+        r = clichecks.unsaved_ios(c.send_command("show running-config | include ^! Last configuration change|^! NVRAM config last updated"))
+        if r is None:
+            return []
+        return self.result("unsaved config", WARN if r[0] else OK, "not saved" if r[0] else "saved", r[1])
+
+    def flash(self, c):
+        if "asa" in self.plat:
+            return []
+        return self.flash_row(c, "dir bootflash:" if "nxos" in self.plat else "dir flash:", "dir bootflash:")
+
+    def stack(self, c):
+        if "nxos" in self.plat or "asa" in self.plat:
+            return []
+        members = clichecks.stack_members(c.send_command("show switch"))
+        if len(members) < 2:
+            return []                      # a single switch, or one that cannot stack
+        bad = [f"switch {n} ({st})" for n, role, st in members if st.strip().lower() != "ready"]
+        return self.result("stack", FAIL if bad else OK, f"{len(members) - len(bad)}/{len(members)} ready", "not ready: " + ", ".join(bad) if bad else "",
+                           numeric=float(len(members) - len(bad)))
+
+    def hsrp(self, c):
+        if "asa" in self.plat:
+            return []
+        groups = clichecks.hsrp_groups(c.send_command("show standby brief")) or clichecks.hsrp_groups(c.send_command("show vrrp brief"))
+        if not groups:
+            return []
+        stuck = [f"{i} group {g} ({s})" for i, g, s in groups if s in ("Init", "Listen", "Speak", "Learn", "Disabled")]
+        return self.result("hsrp", WARN if stuck else OK, f"{len(groups) - len(stuck)}/{len(groups)} active or standby", "not settled: " + ", ".join(stuck[:4]) if stuck else "",
+                           numeric=float(len(groups) - len(stuck)))
+
+    def port_channels(self, c):
+        if "asa" in self.plat:
+            return []
+        chans = clichecks.etherchannels(c.send_command("show port-channel summary" if "nxos" in self.plat else "show etherchannel summary"))
+        if not chans:
+            return []
+        down = [name for name, flags, _ in chans if "D" in flags and "U" not in flags]
+        weak = [f"{name}: {m} ({f})" for name, flags, members in chans for m, f in members if not set(f) & {"P", "H"} and name not in down]
+        status = FAIL if down else WARN if weak else OK
+        return self.result("port-channels", status, f"{len(chans) - len(down)}/{len(chans)} up",
+                           ("down: " + ", ".join(down)) if down else ("members not bundled: " + ", ".join(weak[:4])) if weak else "", numeric=float(len(chans) - len(down)))
+
+    def failover(self, c):
+        if "asa" not in self.plat:
+            return []
+        r = clichecks.asa_failover(c.send_command("show failover"))
+        if r is None:
+            return []
+        this, other, problems = r
+        return self.result("failover", FAIL if problems else OK, f"{this} / {other}", "; ".join(problems))
 
     def interfaces(self, c):
         ifs = c.send_command("show interfaces", use_textfsm=True)

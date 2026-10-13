@@ -375,7 +375,15 @@ ENTERPRISES = {9: "cisco", 2636: "juniper", 30065: "arista", 11: "hpe", 25506: "
                4526: "netgear", 3955: "linksys", 2021: "net-snmp (Linux/BSD)", 8072: "net-snmp (Linux/BSD)",
                2620: "checkpoint", 6876: "vmware", 311: "windows", 232: "hpe", 1991: "foundry/brocade", 1588: "brocade",
                6486: "alcatel-lucent", 890: "zyxel", 171: "d-link", 5951: "netscaler", 3375: "f5", 19746: "f5",
-               17713: "ubiquiti-airos", 10002: "ubiquiti", 7: "kyocera"}
+               17713: "ubiquiti-airos", 10002: "ubiquiti", 7: "kyocera",
+               8741: "sonicwall", 3097: "watchguard", 21067: "sophos", 2604: "sophos", 25053: "ruckus", 318: "apc", 534: "eaton", 476: "vertiv",
+               3808: "cyberpower", 850: "tripp lite", 6574: "synology", 24681: "qnap", 789: "netapp", 10876: "supermicro", 19046: "lenovo",
+               11863: "tp-link", 14823: "aruba", 4413: "extreme", 5624: "enterasys", 1602: "canon", 367: "ricoh", 253: "xerox", 641: "lexmark",
+               2435: "brother", 1248: "epson", 236: "samsung printer", 1347: "kyocera/mita", 10734: "ricoh", 12325: "fireeye", 9148: "apple",
+               4881: "ruijie", 2352: "ericsson", 2021: "net-snmp (Linux/BSD)", 3224: "netscreen", 25461: "paloalto", 3375: "f5", 2620: "checkpoint",
+               388: "motorola", 2272: "passport/nortel", 45: "nortel", 1872: "alteon", 4874: "juniper (erx)", 3076: "silver peak", 12356: "fortinet",
+               35265: "eltex", 33049: "sandvine", 12148: "ceragon", 22610: "a10", 14179: "cisco wlc", 14525: "trapeze", 6527: "nokia",
+               2636: "juniper", 7114: "lantronix", 1991: "foundry/brocade", 674: "dell", 10892: "dell idrac", 232: "hpe", 343: "intel", 9: "cisco"}
 
 
 class SnmpError(Exception):

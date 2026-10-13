@@ -1,7 +1,9 @@
 import re
 
-from .base import OK
+from .base import OK, WARN, grade
 from .sshbase import SshDriver, compact_hours
+from .clirows import CliRows
+from . import clichecks
 
 _SIZE = {"b": 1, "kib": 1024, "mib": 1024 ** 2, "gib": 1024 ** 3}
 
@@ -11,12 +13,13 @@ def _bytes(text):
     return float(m.group(1)) * _SIZE.get(m.group(2).lower(), 1) if m else None
 
 
-class MikrotikDriver(SshDriver):
+class MikrotikDriver(CliRows, SshDriver):
     DEFAULT_PLATFORM = "mikrotik_routeros"
 
     def checks(self):
         return [("cpu", self.cpu), ("memory", self.memory), ("uptime", self.uptime),
-                ("firmware", self.firmware), ("interfaces", self.interfaces), ("ospf", self.ospf)]
+                ("firmware", self.firmware), ("interfaces", self.interfaces), ("ospf", self.ospf),
+                ("health", self.health), ("disk", self.disk), ("routerboard", self.routerboard), ("ntp", self.ntp)]
 
     def _res(self, c):
         cmd = "/system resource print"
@@ -45,6 +48,38 @@ class MikrotikDriver(SshDriver):
     def firmware(self, c):
         kv = self._res(c)
         return self.result("firmware", OK, kv.get("version", "?"), kv.get("board-name", ""))
+
+    def health(self, c):
+        """Temperature and supply voltage (boards with sensors only)."""
+        temps, volt = clichecks.mikrotik_health(self.cmd(c, "/system health print"))
+        if not temps:
+            return []
+        hottest = max(temps.values())
+        t = self.th["temperature"]
+        return self.result("health", grade(hottest, t["warn"], t["fail"]), f"{hottest:.0f}C", f"{', '.join(f'{k} {v:.0f}C' for k, v in list(temps.items())[:3])}" + (f"; {volt:g} V" if volt else ""),
+                           numeric=float(hottest))
+
+    def disk(self, c):
+        pct = clichecks.mikrotik_disk(self._res(c))
+        if pct is None:
+            return []
+        return self.level_check("disk", pct)
+
+    def routerboard(self, c):
+        """The RouterBOARD firmware is a separate thing from RouterOS: it needs its own upgrade, and then a reboot."""
+        fw = clichecks.mikrotik_firmware(self.cmd(c, "/system routerboard print"))
+        if fw is None:
+            return []
+        cur, up = fw
+        if cur == up:
+            return self.result("routerboard", OK, cur, "firmware is current")
+        return self.result("routerboard", WARN, f"{cur} to {up}", "RouterBOARD firmware can be upgraded (/system routerboard upgrade, then reboot)")
+
+    def ntp(self, c):
+        state = clichecks.mikrotik_ntp(self.cmd(c, "/system ntp client print"))
+        if state in (None, "off"):
+            return []
+        return self.ntp_row(state)
 
     def interfaces(self, c):
         cmd = "/interface print terse"

@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 
-from core import custom, db, profiles, vendors, winmon
+from core import custom, db, profiles, support, vendors, winmon
 from core.nettools import resolve_host
 from drivers import DRIVERS
 from drivers.base import Result, ERROR
@@ -44,6 +44,8 @@ def run_one(dev, thresholds, opts=None):
             drv.custom = custom.for_device(dev, opts.get("custom"))        # user-defined checks that apply here
             res = drv.run()
             res += custom.run_network(dev, drv.custom)                       # web, port, certificate, ping, SNMP
+            if "all:support" not in opts.get("disabled", ()):
+                res += support.rows(dev, thresholds)                         # support, warranty and licence dates kept in the device's fields
             if opts.get("tls_sweep") and sweepable(dev):
                 res += custom.sweep(dev, thresholds, opts.get("tls_sweep_ports", "443"))
             drv.flush_baselines()            # only after a complete run

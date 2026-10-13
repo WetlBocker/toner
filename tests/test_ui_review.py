@@ -150,7 +150,7 @@ pg = ST.NotificationsPage(); pg.load()
 check("the Type column is plain text; the mark is by the name", pg.table.horizontalHeaderItem(2).text() == "Type")
 check("the delivery log says what it will hold", pg.log_hint.isVisibleTo(pg))
 th = ST.ThresholdsPage(); th.load()
-check("the limits are grouped", set(db.DEFAULT_THRESHOLDS) <= {k for _t, ks in db.THRESHOLD_GROUPS for k in ks} and len(db.THRESHOLD_GROUPS) == 3)
+check("the limits are grouped", set(db.DEFAULT_THRESHOLDS) <= {k for _t, ks in db.THRESHOLD_GROUPS for k in ks} and len(db.THRESHOLD_GROUPS) >= 3 and len({k for _t, ks in db.THRESHOLD_GROUPS for k in ks}) == sum(len(ks) for _t, ks in db.THRESHOLD_GROUPS))
 w, f = th.spins["cpu"]
 check("each limit has a Reset button, enabled only when it differs from the default", not th.resets["cpu"].isEnabled())
 w.setValue(55)

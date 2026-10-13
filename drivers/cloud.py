@@ -1,5 +1,12 @@
 """A cloud service's public status page (any page built on Atlassian Statuspage: GitHub, Cloudflare, Zoom, Meraki, Duo,
-Discord and many more). The host is the status page's address, for example www.githubstatus.com."""
+Discord and many more). The host is the status page's address, for example www.githubstatus.com.
+
+To watch only some of a service's components, put their names in the device's custom fields (Edit device > Tags and fields):
+    watch=Git Operations, Actions
+A name matches any component whose name contains it (capitals do not matter)."""
+import json
+from datetime import datetime, timezone
+
 from core import proxy
 import requests
 
@@ -27,7 +34,7 @@ class CloudDriver(Driver):
     def run(self):
         data = self.fetch()
         out = []
-        for key, fn in (("status", self.status), ("components", self.components), ("incidents", self.incidents)):
+        for key, fn in (("status", self.status), ("components", self.components), ("incidents", self.incidents), ("maintenance", self.maintenance)):
             if self.enabled(key):
                 self.safe(out, key, lambda fn=fn: fn(data))
         return out
@@ -39,9 +46,40 @@ class CloudDriver(Driver):
         return self.result("status", status, s.get("description", s.get("indicator", "?")),
                            ("maintenance in progress: " + "; ".join(maint[:3])) if maint else "", numeric=float(level))
 
+    def watched(self):
+        """The component names to look at, from the 'watch' custom field; an empty list means all of them."""
+        try:
+            raw = self.dev.get("fields")
+            fields = json.loads(raw) if isinstance(raw, str) and raw else (raw or {})
+        except ValueError:
+            fields = {}
+        text = next((v for k, v in fields.items() if str(k).strip().lower() in ("watch", "components")), "")
+        return [w.strip().lower() for w in str(text).replace(";", ",").split(",") if w.strip()]
+
+    def maintenance(self, data):
+        """Planned work in the next two days, so a quiet outage is not a surprise."""
+        now, soon = datetime.now(timezone.utc), []
+        for m in data.get("scheduled_maintenances") or []:
+            if m.get("status") not in ("scheduled", "in_progress"):
+                continue
+            try:
+                start = datetime.fromisoformat(str(m.get("scheduled_for", "")).replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            hours = (start - now).total_seconds() / 3600
+            if m.get("status") == "in_progress" or -1 <= hours <= 48:
+                soon.append((hours, m.get("name", "maintenance")))
+        if not soon:
+            return self.result("maintenance", OK, "none planned", "", numeric=0.0)
+        soon.sort()
+        first = soon[0]
+        when = "now" if first[0] <= 0 else f"in {first[0]:.0f} h"
+        return self.result("maintenance", WARN, f"{len(soon)} planned", f"{first[1]} ({when})" + (f"; and {len(soon) - 1} more" if len(soon) > 1 else ""), numeric=float(len(soon)))
+
     def components(self, data):
+        watch = self.watched()
         bad = [(c.get("name", "?"), COMPONENT.get(c.get("status"), WARN), c.get("status", ""))
-               for c in data.get("components") or [] if not c.get("group")]
+               for c in data.get("components") or [] if not c.get("group") and (not watch or any(w in str(c.get("name", "")).lower() for w in watch))]
         bad = [b for b in bad if b[2] not in ("operational", "under_maintenance")]
         if not bad:
             return self.result("components", OK, "all operational", numeric=0.0)

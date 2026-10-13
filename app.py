@@ -145,6 +145,9 @@ class Main(QMainWindow):
         for i in range(min(9, tabs.count())):
             QShortcut(QKeySequence(f"Ctrl+{i + 1}"), self, activated=lambda i=i: tabs.setCurrentIndex(i))
         tabs.search_requested.connect(self.open_palette)
+        tabs.setCollapsed(bool(db.get_setting("sidebar_collapsed")))
+        tabs.collapsed_changed.connect(lambda on: db.set_setting("sidebar_collapsed", on))
+        QShortcut(QKeySequence("Ctrl+B"), self, activated=lambda: tabs.setCollapsed(not tabs.collapsed()))
         self.restore_layout()
         self.scheduler.apply(first=True)
         self.backup_scheduler.apply(first=True)

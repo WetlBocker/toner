@@ -1,6 +1,8 @@
 """UniFi Site Manager (api.ui.com): every console and site on the account at once, through one API key. It reports device status and
 firmware per console, the health figures UniFi keeps for each site, the ISP's latency and packet loss, and SD-WAN topologies.
 The Site field is an optional filter on console and site names ('default', blank, * and all mean everything)."""
+from datetime import datetime, timezone
+
 from .base import OK, WARN, FAIL, grade, grade_low
 from .unifiapi import CLOUD_HOST, UnifiApi, state_status
 
@@ -16,6 +18,8 @@ class UnifiCloudDriver(UnifiApi):
         hosts = self.token_pages("/hosts")
         if self.enabled("reachability"):
             out.append(self.result("reachability", OK, f"{len(hosts)} console{'s' if len(hosts) != 1 else ''}", "UniFi Site Manager API"))
+        if self.enabled("consoles"):
+            self.safe(out, "consoles", lambda: self.consoles(out, hosts))
         sites = self.token_pages("/sites") if any(self.enabled(k) for k in ("sites", "isp latency", "isp loss")) else []
         names = {(s.get("hostId"), s.get("siteId")): ((s.get("meta") or {}).get("name") or s.get("siteId")) for s in sites}
         if self.enabled("devices") or self.enabled("firmware"):
@@ -29,6 +33,32 @@ class UnifiCloudDriver(UnifiApi):
         if self.enabled("sd-wan"):
             self.safe(out, "sd-wan", lambda: self.sdwan(out))
         return out
+
+    # ---------------------------------------------------------------- the consoles themselves
+    def consoles(self, out, hosts):
+        """Each console's last backup (an old one means backups have stopped) and whether it has been blocked from the account."""
+        names = {}
+        for entry in self.token_pages("/devices"):
+            names[entry.get("hostId")] = entry.get("hostName")
+        t = self.th["backup_days"]
+        for h in hosts:
+            label = names.get(h.get("id")) or h.get("ipAddress") or h.get("id")
+            if not self.wanted(label, h.get("id")):
+                continue
+            if h.get("isBlocked"):
+                out.append(self.row(label, "console", FAIL, "blocked", "this console is blocked from the account"))
+                continue
+            when = h.get("latestBackupTime")
+            days = None
+            try:
+                days = (datetime.now(timezone.utc) - datetime.fromisoformat(str(when).replace("Z", "+00:00"))).total_seconds() / 86400 if when else None
+            except ValueError:
+                days = None
+            if days is None:
+                continue
+            days = max(0.0, days)
+            out.append(self.row(label, "console", grade(days, t["warn"], t["fail"]), f"backup {days:.0f} days ago" if days >= 1 else "backed up today",
+                                "backups may have stopped" if days >= t["warn"] else "", numeric=days))
 
     # ---------------------------------------------------------------- devices, per console
     def devices(self, out):
