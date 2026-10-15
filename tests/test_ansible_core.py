@@ -189,7 +189,7 @@ before = set(p for p in os.listdir(_tmp.gettempdir()) if p.startswith("toner_ans
 lines = []; rc = w.run(spec, files_text, lines.append)
 after = set(p for p in os.listdir(_tmp.gettempdir()) if p.startswith("toner_ansible_"))
 check("it runs ansible-playbook with env settings, the three files and the playbook as WSL paths", rc == 0 and "ansible-playbook" in seen["cmd"] and "ANSIBLE_NOCOLOR=1" in seen["cmd"] and "/mnt/" in seen["cmd"] and "--check --diff" in seen["cmd"]
-      and "--limit '@/mnt/" in seen["cmd"], seen["cmd"])
+      and __import__("re").search(r"--limit '?@/mnt/", seen["cmd"]), seen["cmd"])      # quoted only when the temp path has a character the shell would take
 check("the logins were on disk only for the run, in a folder of its own, and are gone", seen["secret_on_disk"] and (after - before) == set(), (after - before))
 check("a password is never on the command line", "S3cretIOS" not in seen["cmd"] and "S3cretIOS" not in " ".join(seen["argv"]))
 AN.stream_process = real_stream
