@@ -7,6 +7,7 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QLabel, QMessageBox, QPushButton, QTableWidget, QTableWidgetItem,
                                QVBoxLayout, QWidget)
 from core import agents, audit, db
+from ui import status as st
 
 DEVICE = Qt.ItemDataRole.UserRole           # on a row's first cell: which computer the row is, whatever the sort order
 SORT_KEY = Qt.ItemDataRole.UserRole + 1     # on the Age cell: minutes, so "9 min" sorts before "2.0 h"
@@ -127,7 +128,7 @@ class AgentFleet(QWidget):
                 if j == self.AGE:
                     item.setData(SORT_KEY, age if age is not None else 1e12)
                 if j == self.NOTES and ("silent" in v or "revoked" in v):
-                    item.setForeground(QColor("#d32f2f"))
+                    item.setForeground(st.qink("FAIL"))
                 self.table.setItem(i, j, item)
         same = all((r["computer"] or "").lower() in ("", r["device"].lower()) for r in self.rows)
         self.table.setColumnHidden(self.COMPUTER, bool(self.rows) and same)    # the same name twice is only clutter

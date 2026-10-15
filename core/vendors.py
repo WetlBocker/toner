@@ -111,6 +111,10 @@ def is_snmp(vendor):
     return get(vendor).get("kind") == "snmp"
 
 
+# firewalls Toner checks through their API, whose command line can also be reached over SSH (for the Command Runner): netmiko's device type
+CLI_TYPES = {"fortinet": "fortinet", "paloalto": "paloalto_panos"}
+
+
 def uses_ssh_login(vendor):
     return get(vendor).get("kind") == "ssh" or vendor == "unifi"     # UniFi stores a password that SSH can reuse
 

@@ -595,8 +595,9 @@ class ToolsTab(QWidget):
         self.wifi = tools3.WifiTab()
         self.scp, self.xcopy = tools3.ScpTab(), tools3.XcopyTab()
         self.utilities = tools2.UtilitiesTab()
-        from ui import opensslui
+        from ui import opensslui, playbookeditor
         self.openssl = opensslui.OpensslTab()
+        self.playbooks = playbookeditor.PlaybookEditorTab()
         self.discovery.inventory_changed = self.inventory_changed.emit
         self.tabs = PageStack(width=228)          # wide enough for 'Ping / Traceroute / DNS' without cutting it short
         for title, pages in (("Connect", ((self.runner, "Command Runner"),)),
@@ -609,6 +610,7 @@ class ToolsTab(QWidget):
                              ("File transfer", ((self.tftp, "TFTP Server"), (self.sftp, "SFTP Server"), (self.scp, "SCP"),
                                                (self.xcopy, "Copy Files (xcopy)"))),
                              ("Certificates", ((self.tls, "TLS Certificates"), (self.openssl, "OpenSSL"))),
+                             ("Automation", ((self.playbooks, "Playbook Editor"),)),
                              ("Utilities", ((self.utilities, "MAC and Wake-on-LAN"),))):
             self.tabs.addSection(title)
             for w, label in pages:
@@ -636,7 +638,13 @@ class ToolsTab(QWidget):
                     widget.picker.setCurrentIndex(i)
                     break
 
+    def edit_playbook(self, name):
+        """Open a playbook in the editor (Automation > Playbooks > Edit)."""
+        self.tabs.setCurrentWidget(self.playbooks)
+        self.playbooks.refresh()
+        self.playbooks.open_playbook(name)
+
     def shutdown(self):
         for t in (self.diag, self.scan, self.snmp, self.liveping, self.mtr, self.tls, self.runner,
-                  self.discovery, self.topology, self.listeners, self.utilities, self.tftp, self.sftp, self.iperf, self.wifi, self.scp, self.xcopy, self.openssl):
+                  self.discovery, self.topology, self.listeners, self.utilities, self.tftp, self.sftp, self.iperf, self.wifi, self.scp, self.xcopy, self.openssl, self.playbooks):
             t.shutdown()

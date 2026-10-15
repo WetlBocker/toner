@@ -83,9 +83,9 @@ DEFAULT_SETTINGS = {
     # automation (runs only while the app is open)
     "schedule_enabled": False, "schedule_minutes": 60, "schedule_groups": [], "schedule_on_start": False,
     # appearance
-    "theme": "System", "font_size": 0, "accent": "Blue", "color_preset": "Default", "status_colors": {},
+    "theme": "System", "ui_style": "Standard", "font_size": 0, "accent": "Blue", "color_preset": "Default", "status_colors": {},
     # terminal
-    "term_font": "Consolas", "term_font_size": 10, "term_scrollback": 5000, "term_scheme": "Dark",
+    "term_font": "Consolas", "rdp_embedded": True, "term_font_size": 10, "term_scrollback": 5000, "term_scheme": "Dark",
     "paging_cmd": "terminal length 0",
     # reports
     "report_title": "Toner Health Report", "report_org": "", "report_folder": "",
@@ -96,7 +96,9 @@ DEFAULT_SETTINGS = {
     "notify_enabled": False, "notify_channels": [], "notify_snooze_until": "",
     "notify_consecutive": 1, "notify_remind_hours": 0, "notify_on_manual": True,
     # inventory view
-    "inventory_view": "Folders", "inventory_expanded": [], "window_geometry": "", "sidebar_collapsed": False, "onboarding_done": False, "inventory_columns": None, "results_columns": None,
+    "inventory_view": "Folders", "inventory_expanded": [], "window_geometry": "", "ansible_backend": "wsl", "ansible_distro": "", "ansible_command": "ansible-playbook", "ansible_playbooks": "",
+    "ansible_server_device": "", "ansible_server": {"host": "", "port": 22, "user": "", "key_file": ""}, "ansible_check_default": True, "ansible_keep_runs": 200,
+    "sidebar_collapsed": False, "acks": {}, "client_scope": None, "onboarding_done": False, "inventory_columns": None, "results_columns": None,
     # configuration backups
     "backup_enabled": False, "backup_hours": 24, "backup_groups": [], "backup_keep": 50, "backup_mask": True,
     "backup_on_start": False,
@@ -119,7 +121,7 @@ DEFAULT_SETTINGS = {
 }
 # Per-machine state that must not travel in an exported settings file (channel secrets stay in
 # Credential Manager, so an imported channel would be broken).
-NOT_PORTABLE = {"window_geometry", "sidebar_collapsed", "onboarding_done", "inventory_columns", "results_columns", "notify_channels", "notify_snooze_until", "inventory_expanded", "snippets", "fileserver", "iperf_path", "openssl_path",
+NOT_PORTABLE = {"window_geometry", "ansible_distro", "ansible_playbooks", "ansible_server", "ansible_server_device", "sidebar_collapsed", "acks", "client_scope", "onboarding_done", "inventory_columns", "results_columns", "notify_channels", "notify_snooze_until", "inventory_expanded", "snippets", "fileserver", "iperf_path", "openssl_path",
                 "update_last_check", "update_skip", "update_pending", "sessions_expanded", "agent_enabled", "agent_enroll", "agent_bind",
                 "agent_address"}
 
@@ -274,7 +276,17 @@ def _m4_device_checks(c):
         c.execute("ALTER TABLE devices ADD COLUMN checkopts TEXT DEFAULT ''")
 
 
-MIGRATIONS = [(1, _m1_legacy_columns), (2, _m2_agent_history), (3, _m3_agent_tokens), (4, _m4_device_checks)]
+def _m5_ansible_runs(c):
+    """The history of Ansible playbook runs (their output is kept compressed)."""
+    c.executescript("""
+    CREATE TABLE IF NOT EXISTS ansible_runs (
+        id INTEGER PRIMARY KEY, started_at TEXT NOT NULL, playbook TEXT NOT NULL, mode TEXT NOT NULL, backend TEXT DEFAULT '', targets TEXT DEFAULT '[]',
+        ok INTEGER DEFAULT 0, changed INTEGER DEFAULT 0, unreachable INTEGER DEFAULT 0, failed INTEGER DEFAULT 0, exit_code INTEGER DEFAULT 0,
+        seconds REAL DEFAULT 0, output BLOB);
+    """)
+
+
+MIGRATIONS = [(1, _m1_legacy_columns), (2, _m2_agent_history), (3, _m3_agent_tokens), (4, _m4_device_checks), (5, _m5_ansible_runs)]
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 
 
@@ -311,7 +323,7 @@ def move_secret(old, new):
 
 # A device can hold up to four secrets: its password/token, and an SNMP community or v3 auth/privacy passwords.
 SECRET_KINDS = {"main": "", "snmp": ":snmp", "snmp_auth": ":snmp-auth", "snmp_priv": ":snmp-priv", "proxy": ":proxy",
-                "agent": ":agent"}
+                "agent": ":agent", "ssh": ":ssh"}
 
 def secret_name(owner, kind="main"):
     return owner + SECRET_KINDS[kind]
@@ -364,6 +376,8 @@ def in_group(dev, label):
         return display.vendor_name(dev["vendor"]) == label[len("Vendor: "):]
     if label.startswith("Location: "):
         return (dev.get("location") or "") == label[len("Location: "):]
+    if label.startswith("Device: "):      # one device by name (the Overview's "Run checks" on a single device)
+        return dev["name"] == label[len("Device: "):]
     if label.startswith("Folder: "):      # a folder includes everything in its subfolders
         want = label[len("Folder: "):].lower()
         have = (folder_paths().get(dev.get("folder_id")) or "").lower()
@@ -782,6 +796,30 @@ _SEV = {"OK": 0, "WARN": 1, "FAIL": 2, "ERROR": 3}
 
 def _base(label):
     return (label or "").split(" / ")[0]
+
+
+def latest_results(exclude=("config backup",)):
+    """([result rows], time of the newest run among them): every device's rows from the newest run that included it (the same reading as
+    device_health), for the Results section to show before anything is run in this session. Rows: device, check_name, status, value,
+    message, numeric, at."""
+    rows, newest_at = [], ""
+    with connect() as c:
+        newest = {}
+        skip = ",".join("?" * len(exclude)) or "''"
+        for r in c.execute(f"SELECT device, MAX(run_id) AS rid FROM results WHERE check_name NOT IN ({skip}) GROUP BY device", list(exclude)):
+            b = _base(r["device"])
+            newest[b] = max(newest.get(b, 0), r["rid"])
+        times = {r["id"]: r["started_at"] for r in c.execute("SELECT id, started_at FROM runs")}
+        by_run = {}
+        for b, rid in newest.items():
+            by_run.setdefault(rid, set()).add(b)
+        for rid, bases in by_run.items():
+            at = times.get(rid, "")
+            newest_at = max(newest_at, at)
+            for r in c.execute("SELECT device, check_name, status, value, message, numeric FROM results WHERE run_id=?", (rid,)):
+                if _base(r["device"]) in bases and r["check_name"] not in exclude:
+                    rows.append({**dict(r), "at": at})
+    return rows, newest_at
 
 
 def device_health(exclude=("config backup",)):

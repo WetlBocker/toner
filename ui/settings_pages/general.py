@@ -1,8 +1,8 @@
-"""Settings pages: General, Connections, Thresholds, Checks and Automation."""
+"""Settings pages: General, Connections, Thresholds, and Checks (which holds the list of checks, their schedule and the custom ones)."""
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QHBoxLayout, QLabel, QLineEdit,
-                               QPushButton, QTableWidget, QToolButton, QTreeWidget, QTreeWidgetItem, QWidget)
+                               QPushButton, QTableWidget, QTabWidget, QToolButton, QTreeWidget, QTreeWidgetItem, QWidget)
 from core import checks, custom, db, display
 from ui.widgets import GroupPicker
 from ui.settings_base import Page, TrimSpin, note, row_of, spin
@@ -22,13 +22,22 @@ class GeneralPage(Page):
         self.background.setToolTip("Scheduled checks, backups and alerts keep working. Use the tray icon to open or quit.")
         self.scan_over = spin(0, 10_000_000, " addresses")
         self.scan_over.setSpecialValueText("never ask")
-        for label, w in (("Keep run history", self.retention), ("Keep SSH session logs", self.ssh_logs),
-                         ("Devices checked in parallel", self.workers),
-                         ("Default SSH port (console)", self.ssh_port), ("", self.verify), ("", self.background),
-                         ("Confirm scans larger than", self.scan_over)):
-            self.form.addRow(label, w)
-        self.lay.insertWidget(1, note("History and logs older than this are deleted when Toner starts "
-                                      "(history also after each run)."))
+        def heading(text):
+            title = QLabel(text.upper())
+            title.setProperty("muted", True)
+            title.setStyleSheet("font-weight: 600; padding-top: 10px;")
+            self.form.addRow(title)
+        heading("Stored data")
+        self.form.addRow("Keep run history", self.retention)
+        self.form.addRow("Keep SSH session logs", self.ssh_logs)
+        self.form.addRow("", note("History and logs older than this are deleted when Toner starts (history also after each run)."))
+        heading("Running")
+        self.form.addRow("Devices checked in parallel", self.workers)
+        self.form.addRow("", self.background)
+        heading("Devices and scans")
+        self.form.addRow("Default SSH port (console)", self.ssh_port)
+        self.form.addRow("", self.verify)
+        self.form.addRow("Confirm scans larger than", self.scan_over)
 
     def load(self):
         self.retention.setValue(int(db.get_setting("retention_days")))
@@ -249,7 +258,8 @@ class ThresholdsPage(Page):
 
 
 # ------------------------------------------------------------------ Checks
-class ChecksPage(Page):
+class ChecksListPage(Page):
+    """Which checks run (the list, by kind of device). It is the first tab of the Checks page."""
     title = "Checks"
 
     def __init__(self):
@@ -351,3 +361,58 @@ class AutomationPage(Page):
         db.set_setting("schedule_on_start", self.on_start.isChecked())
         db.set_setting("tls_sweep", self.sweep.isChecked())
         db.set_setting("tls_sweep_ports", ", ".join(str(p) for p in custom.sweep_ports(self.sweep_ports.text())))
+
+
+# ------------------------------------------------------------------ Checks: the list, when they run, and the ones you write
+class ChecksPage(Page):
+    """One page, three tabs: Checks (which run), Schedule (when they run, and the certificate check) and Custom (checks you write)."""
+    title = "Checks"
+    TABS = ("Checks", "Schedule", "Custom")
+
+    def __init__(self):
+        super().__init__()
+        from ui.settings_pages.checks import CustomChecksPage
+        self.list, self.schedule, self.custom = ChecksListPage(), AutomationPage(), CustomChecksPage()
+        self.tabs = QTabWidget()
+        self.tabs.setDocumentMode(True)
+        for name, page in zip(self.TABS, (self.list, self.schedule, self.custom)):
+            self.tabs.addTab(page, name)
+        self.lay.insertWidget(0, self.tabs, 1)
+        self.tree, self.collapse_all, self.expand_all = self.list.tree, self.list.collapse_all, self.list.expand_all       # the list's own parts, as before
+
+    def pages(self):
+        return (self.list, self.schedule, self.custom)
+
+    def select_tab(self, name):
+        """Open the Checks, Schedule or Custom tab (any case; 'Custom checks' and 'Automation' work too)."""
+        want = {"automation": "Schedule", "custom checks": "Custom"}.get(name.lower(), name).lower()
+        for i in range(self.tabs.count()):
+            if self.tabs.tabText(i).lower() == want:
+                self.tabs.setCurrentIndex(i)
+                return True
+        return False
+
+    def context_of(self, widget):
+        """Which tab a setting is on, so the list of changes can say 'Schedule: Every' and not just 'Every'."""
+        for name, page in zip(self.TABS, self.pages()):
+            if page is widget or page.isAncestorOf(widget):
+                return "" if page is self.list else name
+        return ""
+
+    def load(self):
+        for p in self.pages():
+            p.load()
+
+    def validate(self):
+        return [x for p in self.pages() for x in p.validate()]
+
+    def save(self):
+        for p in self.pages():
+            p.save()
+
+    def refresh(self):
+        for p in self.pages():
+            p.refresh()
+
+    def describe_extra(self):
+        return self.list.describe_extra()

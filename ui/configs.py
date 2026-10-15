@@ -6,11 +6,12 @@ from PySide6.QtGui import QColor, QFont, QFontDatabase, QSyntaxHighlighter, QTex
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
                                QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QSplitter,
                                QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
-from core import audit, backup, db, display
+from core import audit, backup, db, display, scope
 from drivers.base import SEVERITY
 from ui import theme
 from ui.widgets import EmptyHint, GroupPicker
 from ui.toast import toast
+from ui import status as st
 
 
 class DiffHighlighter(QSyntaxHighlighter):
@@ -142,7 +143,7 @@ class ConfigsTab(QWidget):
         self.devs.setTextElideMode(Qt.TextElideMode.ElideRight)
         hh = self.devs.horizontalHeader()
         hh.setStretchLastSection(False)
-        for col, mode in ((0, hh.ResizeMode.Stretch), (1, hh.ResizeMode.ResizeToContents), (2, hh.ResizeMode.ResizeToContents),
+        for col, mode in ((0, hh.ResizeMode.ResizeToContents), (1, hh.ResizeMode.Stretch), (2, hh.ResizeMode.ResizeToContents),
                           (3, hh.ResizeMode.ResizeToContents), (4, hh.ResizeMode.ResizeToContents)):
             hh.setSectionResizeMode(col, mode)
         self.devs.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -150,7 +151,8 @@ class ConfigsTab(QWidget):
         self.devs.itemSelectionChanged.connect(self.show_versions)
         self.vers.itemSelectionChanged.connect(self.show_text)
         self.hint = EmptyHint(self.devs, "No devices to back up", "Add devices on the Inventory tab")
-        self.vers_hint = EmptyHint(self.vers, "No saved versions", "Select a device on the left, then press Back up now")
+        self.vers_hint = EmptyHint(self.vers, "No saved versions", "Select a device on the left, then press Back up now",
+                                   actions=[("Back up now", lambda: self.start())])
 
         self.view = QComboBox()
         self.view.addItem("Changes from the previous version", "diff")
@@ -200,7 +202,9 @@ class ConfigsTab(QWidget):
         split = QSplitter()
         split.addWidget(self.devs)
         split.addWidget(right)
-        split.setSizes([480, 710])
+        self.devs.setMinimumWidth(440)                 # the device name keeps room to be read; the other columns fit their contents
+        split.setCollapsible(0, False)
+        split.setSizes([560, 620])
         lay = QVBoxLayout(self)
         lay.addLayout(top)
         lay.addWidget(split, 1)
@@ -210,7 +214,7 @@ class ConfigsTab(QWidget):
     # ---------- the device list
     def refresh(self):
         keep = self.current_device()
-        devs = db.list_devices()
+        devs = scope.keep(db.list_devices())
         info = backup.summary()
         self.names = [d["name"] for d in devs]
         self.devs.blockSignals(True)
@@ -223,7 +227,7 @@ class ConfigsTab(QWidget):
                                    (s.get("last", "") or "")[:16], state]):
                 it = QTableWidgetItem(v)
                 if j == 4 and state == "last backup FAILED":
-                    it.setForeground(QColor("#d32f2f"))
+                    it.setForeground(st.qink("FAIL"))
                 self.devs.setItem(i, j, it)
         self.devs.resizeColumnsToContents()
         self.devs.blockSignals(False)
@@ -336,6 +340,8 @@ class ConfigsTab(QWidget):
         if self.running():
             return
         devices = [d for d in db.list_devices(enabled_only=True) if db.in_groups(d, labels) and (only is None or d["name"] == only)]
+        if not scheduled:
+            devices = scope.keep(devices)
         if not devices:
             if not scheduled:
                 toast(self, "No enabled devices in this group.")

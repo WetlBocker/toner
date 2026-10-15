@@ -20,3 +20,7 @@ toner-settings.json
 # a portable build marker and its data
 /portable.flag
 /data/
+
+# Postman workspace files
+.postman/
+postman/

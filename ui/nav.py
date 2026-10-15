@@ -3,10 +3,10 @@
 Offers the small part of QTabWidget's API that the rest of the app uses (addTab, setCurrentWidget,
 currentWidget, indexOf, count, tabText), so sections can be switched from code.
 """
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QSize, Qt, Signal
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import (QBoxLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QScrollArea, QStackedWidget,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QBoxLayout, QComboBox, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QScrollArea,
+                               QStackedWidget, QVBoxLayout, QWidget)
 from ui import icons, theme
 
 
@@ -20,6 +20,7 @@ class NavStack(QWidget):
     currentChanged = Signal(int)
     search_requested = Signal()
     collapsed_changed = Signal(bool)
+    client_changed = Signal(object)            # a top-level folder id, or None for all clients
     PAGE_MARGINS = (24, 20, 24, 20)
 
     def __init__(self, title="Toner"):
@@ -46,6 +47,13 @@ class NavStack(QWidget):
         side = QVBoxLayout(self.side)
         side.setContentsMargins(12, 16, 12, 12)
         side.addLayout(head)
+        self.client = QComboBox()                 # the client being looked at: every section follows it
+        self.client.setObjectName("clientPicker")
+        self.client.setToolTip("Show one client (a top-level folder of the Inventory) in every section, or all of them")
+        self.client.currentIndexChanged.connect(lambda _i: None if self._filling else self.client_changed.emit(self.client.currentData()))
+        self._filling = False
+        side.addWidget(self.client)
+        side.addSpacing(6)
         side.addWidget(self.list, 1)
         self.quick = QPushButton("Search      Ctrl+K")                   # the command palette is easy to miss otherwise
         self.quick.setProperty("ghost", True)
@@ -68,21 +76,63 @@ class NavStack(QWidget):
         lay.addWidget(self.side)
         lay.addWidget(self.stack, 1)
         self.list.currentRowChanged.connect(self._row_changed)
+        self.list.installEventFilter(self)             # a short window squeezes the rows rather than hiding the last sections
         self._brand = brand
         self._badges = set()
         self.setCollapsed(False)
 
+    ROW_MIN = 28
+
+    @staticmethod
+    def expanded_width():
+        return 176 if theme.is_ops() else EXPANDED_WIDTH
+
+    @staticmethod
+    def row_height():
+        return 32 if theme.is_ops() else 42
+
+    def eventFilter(self, obj, event):
+        if obj is self.list and event.type() == QEvent.Type.Resize:
+            self._fit_rows(event.size().height())
+        return super().eventFilter(obj, event)
+
+    def _fit_rows(self, height=None):
+        """The sections share the height there is: 42 px each when it all fits, less (down to 30) in a short window."""
+        n = self.list.count()
+        if not n:
+            return
+        if height is None and not self.list.isVisible():
+            return                                     # not laid out yet: the first resize does it
+        avail = (self.list.height() if height is None else height) - 6
+        h = max(self.ROW_MIN, min(self.row_height(), avail // n))
+        for i in range(n):
+            if self.list.item(i).sizeHint().height() != h:
+                self.list.item(i).setSizeHint(QSize(0, h))
+
     def collapsed(self):
         return self._collapsed
+
+    def set_clients(self, clients, current=None):
+        """[(folder id, name)]: the choices besides "All clients". Hidden while there are none."""
+        self._filling = True
+        self.client.clear()
+        self.client.addItem("All clients", None)
+        for fid, name in clients:
+            self.client.addItem(name, fid)
+        self.client.setCurrentIndex(max(0, self.client.findData(current)))
+        self._filling = False
+        self.client.setVisible(bool(clients) and not self._collapsed)
 
     def setCollapsed(self, on):
         """The sidebar as a strip of icons (names show as tooltips) or in full."""
         on = bool(on)
         changed = on != getattr(self, "_collapsed", None)
         self._collapsed = on
-        self.side.setFixedWidth(COLLAPSED_WIDTH if on else EXPANDED_WIDTH)
+        self.side.setFixedWidth(COLLAPSED_WIDTH if on else self.expanded_width())
         self._brand.setVisible(not on)
-        self.quick.setText("" if on else "Search      Ctrl+K")
+        if hasattr(self, "client"):
+            self.client.setVisible(not on and self.client.count() > 1)
+        self.quick.setText("" if on else ("Search   Ctrl+K" if theme.is_ops() else "Search      Ctrl+K"))
         self.bottom.setDirection(QBoxLayout.Direction.TopToBottom if on else QBoxLayout.Direction.LeftToRight)
         self.fold.setToolTip("Show the sidebar in full   (Ctrl+B)" if on else "Collapse the sidebar   (Ctrl+B)")
         self.quick.setToolTip("Search   (Ctrl+K)\nJump to a section, tool, device or action" if on else "Jump to a section, tool, device or action")
@@ -115,6 +165,7 @@ class NavStack(QWidget):
         self.list.addItem(item)
         self._names.append(label)
         self._icon_names.append(icon_name)
+        self._fit_rows()
         self._label(self.list.count() - 1)
         self.restyle()
         if self.list.currentRow() < 0:
@@ -133,6 +184,10 @@ class NavStack(QWidget):
         t = theme.current()
         if not t:
             return
+        if not self._collapsed:
+            self.side.setFixedWidth(self.expanded_width())              # the console style has a narrower sidebar
+            self.quick.setText("Search   Ctrl+K" if theme.is_ops() else "Search      Ctrl+K")
+        self._fit_rows()
         for i, name in enumerate(self._icon_names):
             if name:
                 self.list.item(i).setIcon(icons.icon_with_dot(name, t["muted"], t["accent"]) if self._collapsed and i in self._badges

@@ -64,7 +64,7 @@ tab.refresh()
 check("silent ones are counted on the button", "1 silent" in tab.view_agents.text(), tab.view_agents.text())
 tab.view_agents.click()
 silent_row = [i for i in range(tab.fleet.table.rowCount()) if tab.fleet.table.item(i, 0).text() == "pc-2"][0]
-check("and marked in the notes, in red", "silent" in tab.fleet.table.item(silent_row, 7).text() and tab.fleet.table.item(silent_row, 7).foreground().color().name() == "#d32f2f")
+check("and marked in the notes, in red", "silent" in tab.fleet.table.item(silent_row, 7).text() and tab.fleet.table.item(silent_row, 7).foreground().color().name() == __import__("ui.status", fromlist=["x"]).ink("FAIL"))
 check("the heading says so too", "1 silent" in tab.fleet.info.text())
 
 print("== revoke and remove")

@@ -31,7 +31,7 @@ QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.StandardButton.Y
 
 tab = S.SettingsTab(); tab.resize(1100, 700); tab.show()
 P = {p.title: p for p in tab.pages}
-check("new pages are listed", all(t in P for t in ("Credentials", "Custom checks", "Config backups", "Audit log")), list(P))
+check("new pages are listed; Custom checks and Automation are now tabs of Checks", all(t in P for t in ("Credentials", "Config backups", "Audit log")) and "Custom checks" not in P and "Automation" not in P, list(P))
 def dev(name, vendor="cisco", **kw):
     d = dict(name=name, vendor=vendor, host="10.0.0.1", port=0, platform="", username="", site="default", verify_ssl=0, ha_expected=0, enabled=1, location="", details="", folder_id=None); d.update(kw)
     db.save_device(d); return [x for x in db.list_devices() if x["name"] == name][0]
@@ -59,7 +59,7 @@ check("a duplicate name is refused with a message", warns and "already exists" i
 cp.table.selectRow(0); cp.delete(); check("delete removes it, its secrets and detaches devices", cp.table.rowCount() == 0 and not profiles.has_secret("Renamed") and [x for x in db.list_devices() if x["name"] == "s1"][0]["profile_id"] is None)
 
 print("== Custom checks page")
-cc = P["Custom checks"]; cc.refresh()
+cc = P["Checks"].custom; cc.refresh()
 dlg = S.CheckDialog()
 dlg.name.setText("Disk"); dlg.kind.setCurrentIndex(dlg.kind.findData("ssh")); dlg.target.setText("show disk"); dlg.warn.setText("80"); dlg.fail.setText("90"); dlg.unit.setText("%")
 v = dlg.values(); check("values from the dialog", v["name"] == "Disk" and v["kind"] == "ssh" and v["warn"] == 80.0 and v["fail"] == 90.0 and v["mode"] == "number")

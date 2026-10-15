@@ -25,20 +25,22 @@ from ui.nav import HEADING_HEIGHT, ITEM_HEIGHT
 from ui import settings_diff as SD
 from ui.toast import toast
 from ui.settings_base import Page, TrimSpin, note, row_of, spin, tidy  # noqa: F401  (re-exported: other modules and the tests use them)
-from ui.settings_pages.general import GeneralPage, ConnectionsPage, _bad_pair, ThresholdsPage, ChecksPage, AutomationPage  # noqa: F401
+from ui.settings_pages.general import GeneralPage, ConnectionsPage, _bad_pair, ThresholdsPage, ChecksPage, ChecksListPage, AutomationPage  # noqa: F401
 from ui.settings_pages.appearance import AppearancePage, TerminalPage, ReportsPage  # noqa: F401
 from ui.settings_pages.notifications import ChannelDialog, NotificationsPage  # noqa: F401
 from ui.settings_pages.security import SecurityPage, DataPage  # noqa: F401
 from ui.settings_pages.profiles import ProfileDialog, ProfilesPage  # noqa: F401
 from ui.settings_pages.checks import CheckDialog, row_of_layout, CustomChecksPage, BackupsPage, AuditPage  # noqa: F401
 from ui.settings_pages.network import ProxyPage, AgentsPage, MaintenanceDialog, MaintenancePage  # noqa: F401
+from ui.settings_pages.ansible import AnsiblePage  # noqa: F401
 
 
 
 # The order and grouping of the list on the left. A page that is not named here still appears, under "Other".
-GROUPS = [("Monitoring", ["General", "Thresholds", "Checks", "Custom checks", "Automation", "Maintenance"]),
+GROUPS = [("Monitoring", ["General", "Thresholds", "Checks", "Maintenance"]),
           ("Connections", ["Connections", "Proxy", "Credentials", "Agents"]),
           ("Alerts and reports", ["Notifications", "Reports", "Config backups"]),
+          ("Automation", ["Ansible"]),
           ("Look and feel", ["Appearance", "Terminal"]),
           ("Security and data", ["Security", "Audit log", "Data and logs"])]
 
@@ -89,8 +91,8 @@ class SettingsTab(QWidget):
 
     def __init__(self):
         super().__init__()
-        self.pages = [GeneralPage(), ThresholdsPage(), ChecksPage(), CustomChecksPage(), ConnectionsPage(), ProxyPage(), AgentsPage(), AutomationPage(),
-                      BackupsPage(), MaintenancePage(), NotificationsPage(), ProfilesPage(), AppearancePage(), TerminalPage(), ReportsPage(), SecurityPage(),
+        self.pages = [GeneralPage(), ThresholdsPage(), ChecksPage(), ConnectionsPage(), ProxyPage(), AgentsPage(),
+                      BackupsPage(), MaintenancePage(), NotificationsPage(), ProfilesPage(), AnsiblePage(), AppearancePage(), TerminalPage(), ReportsPage(), SecurityPage(),
                       AuditPage(), DataPage(self.reload)]
         for p in self.pages:
             tidy(p)                                           # no drop-down or button stretches across a wide window
@@ -139,9 +141,11 @@ class SettingsTab(QWidget):
         right = QVBoxLayout()
         right.addWidget(self.stack, 1)
         right.addLayout(bar)
-        lay = QHBoxLayout(self)
-        lay.addWidget(left)
-        lay.addLayout(right, 1)
+        body = QHBoxLayout()
+        body.addWidget(left)
+        body.addLayout(right, 1)
+        lay = QVBoxLayout(self)
+        lay.addLayout(body, 1)
         self.select_page(self.pages[0].title)
         self.reload()
         self.watch = QTimer(self)                             # edits are noticed by looking, a few times a second, at the page in view
@@ -222,11 +226,17 @@ class SettingsTab(QWidget):
         """The pages in the order the list shows them."""
         return [self.nav.item(r).text() for r in range(self.nav.count()) if self._index_of(r) is not None]
 
-    def select_page(self, title):
+    def select_page(self, title, tab=""):
+        """Open a page by its name in the list. `tab` opens one of its tabs (Checks > Schedule)."""
+        title, _, inline = title.partition("/")                          # "Checks/Schedule" works as well as ("Checks", "Schedule")
+        tab = tab or inline
         for r in range(self.nav.count()):
             if self._index_of(r) is not None and self.nav.item(r).text() == title:
                 self.search.clear() if self.nav.isRowHidden(r) else None
                 self.nav.setCurrentRow(r)
+                page = self.pages[self._index_of(r)]
+                if tab and hasattr(page, "select_tab"):
+                    page.select_tab(tab)
                 return True
         return False
 

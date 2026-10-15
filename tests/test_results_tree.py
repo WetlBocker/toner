@@ -53,7 +53,7 @@ check("what needs a look opens by itself, healthy devices stay collapsed", all(t
 d = {t.text(0): t for t in tops()}
 check("device row shows worst status and counts", d["core-sw1"].text(2) == "WARN" and d["core-sw1"].text(1) == "3 checks" and d["core-sw1"].text(4) == "memory: high" and d["core-sw1"].toolTip(4) == "1 WARN", [d["core-sw1"].text(i) for i in range(5)])
 check("all-OK device says so", d["quiet"].text(2) == "OK" and d["quiet"].text(4) == "all OK")
-check("error device", d["dead"].text(2) == "ERROR" and d["dead"].text(4).startswith("connection") and d["dead"].toolTip(4) == "1 ERROR", d["dead"].text(4))
+check("error device", d["dead"].text(2) == "ERROR" and d["dead"].text(1) == "connection" and d["dead"].text(4) == "TimeoutError" and d["dead"].childCount() == 0 and d["dead"].toolTip(4) == "1 ERROR", d["dead"].text(4))
 check("checks are the children, worst first", [d["core-sw1"].child(i).text(1) for i in range(3)] == ["memory", "cpu", "uptime"] and d["core-sw1"].child(0).text(0) == "" and d["core-sw1"].child(0).text(3) == "85%" and d["core-sw1"].child(0).text(4) == "high")
 check("UniFi children name their sub-device", sorted(d["udm"].child(i).text(1) for i in range(3)) == ["ap-1: temperature", "ap-1: uptime", "usw: cpu"], [d["udm"].child(i).text(1) for i in range(3)])
 check("results still stored flat for reports/notifications", len(w.results) == len(RES) and w.results[0].status == "ERROR")

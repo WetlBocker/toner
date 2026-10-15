@@ -337,7 +337,7 @@ class AuditPage(Page):
     def __init__(self):
         super().__init__()
         self.search = QLineEdit()
-        self.search.setPlaceholderText("filter by action, detail or user")
+        self.search.setPlaceholderText("Filter by action, detail or user")
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["When", "Who", "What", "Detail"])
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)

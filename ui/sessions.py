@@ -61,7 +61,7 @@ class SessionDialog(QDialog):
         self.remember = QCheckBox("Remember the password (kept in Windows Credential Manager)")
         self.paging = QCheckBox("Turn off paging after login")
         # remote desktop
-        self.fullscreen = QCheckBox("Full screen")
+        self.fullscreen = QCheckBox("Fill the window (full screen in Windows' own client)")
         self.width_, self.height_ = QSpinBox(), QSpinBox()
         for s, v in ((self.width_, 1280), (self.height_, 800)):
             s.setRange(320, 8192)
@@ -150,10 +150,10 @@ class SessionDialog(QDialog):
             self.form.setRowVisible(widget, kinds == "all" or k in kinds)
         info = next(t for kk, _, _, t in sessions.KINDS if kk == k)
         self.about_kind.setText(info)
-        self.connect_btn.setText("Connect" if k != "rdp" else "Open Remote Desktop")
+        self.connect_btn.setText("Connect")
         self.note.setText({"ssh": "A password left empty is asked for when you connect, or taken from the inventory device.",
                            "telnet": "Telnet sends everything, passwords included, without encryption.",
-                           "rdp": "Windows asks for the password when the connection starts; it is never stored in the file.",
+                           "rdp": "Opens in a tab inside Toner. Windows asks for the password when the connection starts; Toner never stores it.",
                            "serial": "Enter sends a carriage return, as consoles expect. Use Send break from the session tab for ROMMON."}[k])
         self.adjustSize()
 
@@ -479,7 +479,7 @@ class SessionsTab(QWidget):
         super().__init__()
         self.logs_dialog = None
         self.search = QLineEdit()
-        self.search.setPlaceholderText("search sessions")
+        self.search.setPlaceholderText("Search sessions")
         self.search.setClearButtonEnabled(True)
         self.payload = {}                                  # item key -> session / folder
         self._building = False
@@ -496,6 +496,9 @@ class SessionsTab(QWidget):
         self.tree.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.tree.header().setStretchLastSection(True)                  # the host column takes what is left
         self.tree.setTextElideMode(Qt.TextElideMode.ElideRight)
+        from ui.widgets import EmptyHint
+        self.tree_hint = EmptyHint(self.tree, "No saved sessions", "A saved session reopens with one double-click", wrap=True,
+                                   actions=[("New SSH session", lambda: self.new_session("ssh"))])
         self.new_btn = QToolButton()
         self.new_btn.setText("New session")
         self.new_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -514,11 +517,30 @@ class SessionsTab(QWidget):
         self.tabs.setTabsClosable(True)
         self.tabs.setMovable(True)
         self.tabs.setDocumentMode(True)
-        self.welcome = QLabel("No session is open.\n\nDouble-click a saved session, or choose New session to connect to a "
-                              "device by SSH, Telnet, Remote Desktop or a serial cable.")
-        self.welcome.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.welcome.setWordWrap(True)
-        self.welcome.setProperty("muted", True)
+        self.welcome = QWidget()                                          # nothing open: say so, and offer the usual first steps
+        wl = QVBoxLayout(self.welcome)
+        wl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        head = QLabel("No session is open")
+        head.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        head.setStyleSheet("font-size: 13pt; font-weight: 600;")
+        sub = QLabel("Double-click a saved session on the left, or start a new one.")
+        sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        sub.setProperty("muted", True)
+        sub.setWordWrap(True)
+        wl.addWidget(head)
+        wl.addWidget(sub)
+        wl.addSpacing(8)
+        starts = QHBoxLayout()
+        starts.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.welcome_buttons = {}
+        for kind, text in (("ssh", "New SSH session"), ("rdp", "New Remote Desktop"), ("serial", "New serial console")):
+            b = QPushButton(text)
+            b.setProperty("primary", kind == "ssh")
+            b.setAutoDefault(False)
+            b.clicked.connect(lambda _=False, k=kind: self.new_session(k))
+            starts.addWidget(b)
+            self.welcome_buttons[kind] = b
+        wl.addLayout(starts)
         self.stack = QStackedWidget()
         self.stack.addWidget(self.welcome)
         self.stack.addWidget(self.tabs)
@@ -532,7 +554,7 @@ class SessionsTab(QWidget):
         self.more_menu = QMenu(self.more_btn)
         self.more_menu.aboutToShow.connect(self._fill_more)
         self.more_btn.setMenu(self.more_menu)
-        ll.addLayout(flow(self.new_btn, self.connect_btn, self.edit_btn, self.delete_btn, self.more_btn))
+        ll.addLayout(flow(self.new_btn, self.connect_btn, self.edit_btn, self.more_btn))      # Delete: the More menu, the Delete key or a right-click
         ll.addWidget(self.note)
         split = QSplitter()
         split.addWidget(left)
@@ -634,8 +656,8 @@ class SessionsTab(QWidget):
         for i in range(2):
             self.tree.resizeColumnToContents(i)
         total = len(all_sessions)
-        self.note.setText((f"{shown[0]} of {total} session(s)" if want else f"{total} saved session(s), {len(folders)} folder(s)")
-                          if shown[0] or not want else "No session matches.")
+        self.note.setText((f"{shown[0]} of {total} session(s)" if shown[0] else "No session matches.") if want else "")      # the header already says how many are saved
+        self.tree_hint.setVisible(total == 0)
         self._buttons()
 
     def _folder_icon(self):
@@ -700,7 +722,7 @@ class SessionsTab(QWidget):
     def _fill_more(self):
         """The rarely used actions, each acting through its button (so they follow the same enabled state)."""
         self.more_menu.clear()
-        for b in (self.folder_btn, self.copy_btn, self.expand_btn, self.collapse_btn, self.logs_btn):
+        for b in (self.folder_btn, self.copy_btn, self.delete_btn, self.expand_btn, self.collapse_btn, self.logs_btn):
             act = self.more_menu.addAction(b.text())
             act.setEnabled(b.isEnabled())
             act.triggered.connect(lambda _=False, b=b: b.click())
@@ -925,8 +947,41 @@ class SessionsTab(QWidget):
             spec["password"] = sessions.password(saved_id)
         return spec
 
+    def _open_rdp_tab(self, spec):
+        """Remote Desktop inside Toner. Returns the pane, or None when this computer cannot host the control (the caller then uses Windows' own client)."""
+        from ui.rdppane import RdpPane, RdpUnavailable
+        try:
+            pane = RdpPane(spec)
+        except RdpUnavailable as e:
+            self.note.setText(f"Remote Desktop cannot run inside Toner here ({e}). Using Windows' own client.")
+            return None
+        pane.state_changed.connect(self._retitle)
+        pane.logs_changed.connect(self._logs_changed)
+        i = self.tabs.addTab(pane, spec["name"])
+        self.tabs.setCurrentIndex(i)
+        self.stack.setCurrentWidget(self.tabs)
+        QTimer.singleShot(0, lambda: pane.connect_now() if pane in self.panes() else None)      # once the tab has its real size
+        return pane
+
+    def open_rdp_device(self, dev):
+        """Inventory > Open Remote Desktop, the device window and the command palette: a Remote Desktop tab for a Windows computer."""
+        for i in range(self.tabs.count()):
+            p = self.tabs.widget(i)
+            if p.kind == "rdp" and p.spec.get("dev") and p.spec["dev"]["name"] == dev["name"]:
+                self.tabs.setCurrentIndex(i)
+                if not p.connected():
+                    p.connect_now()
+                return p
+        base = sessions.rdp_for_device(dev)
+        spec = self._spec({"name": dev["name"], "kind": "rdp", "host": dev["host"], "port": 3389, "device": dev["name"],
+                           "username": base["username"], "options": {"fullscreen": True}})
+        self.open_spec(spec)
+        return self.tabs.currentWidget() if self.tabs.count() else None
+
     def open_spec(self, spec):
         if spec["kind"] == "rdp":
+            if sessions.use_embedded() and self._open_rdp_tab(spec) is not None:
+                return
             try:
                 path = sessions.launch_rdp({"name": spec["name"], "host": spec["host"], "port": spec["port"],
                                             "username": spec["username"], "options": spec["options"]})

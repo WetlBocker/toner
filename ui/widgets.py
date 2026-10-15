@@ -1,9 +1,10 @@
 from PySide6.QtCore import QEvent, QPointF, QRect, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (QAbstractSpinBox, QApplication, QCheckBox, QComboBox, QHBoxLayout, QLabel, QLayout, QLineEdit,
-                               QMenu, QSizePolicy, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QToolButton,
+                               QMenu, QPushButton, QSizePolicy, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QToolButton,
                                QVBoxLayout, QWidget, QWidgetAction)
 from core import reports
+from ui import status as st, theme
 
 
 class FlowLayout(QLayout):
@@ -237,25 +238,32 @@ class StatusDelegate(QStyledItemDelegate):
         opt.text = ""
         style = opt.widget.style() if opt.widget else QApplication.style()
         style.drawControl(QStyle.ControlElement.CE_ItemViewItem, opt, painter, opt.widget)
+        ops = theme.is_ops()
         font = QFont(option.font)
         font.setBold(True)
-        font.setPointSizeF(max(7.0, font.pointSizeF() - 1))
+        font.setPointSizeF(max(7.0, font.pointSizeF() - (1.5 if ops else 1)))
         painter.save()
         painter.setFont(font)
         fm = painter.fontMetrics()
-        w, h = fm.horizontalAdvance(status) + 20, fm.height() + 4
+        w, h = fm.horizontalAdvance(status) + (14 if ops else 20), fm.height() + (2 if ops else 4)
         r = QRect(option.rect.left() + 6, option.rect.center().y() - h // 2, w, h)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(bg))
-        painter.drawRoundedRect(r, h / 2, h / 2)
-        painter.setPen(QColor(reports.fg_for(bg)))
+        if ops:                                           # a flat tag: the status colour as a tint behind its word, in the readable ink
+            c = QColor(bg)
+            painter.setBrush(QColor(c.red(), c.green(), c.blue(), 56))
+            painter.drawRoundedRect(r, 2, 2)
+            painter.setPen(QColor(st.ink(status)))
+        else:
+            painter.setBrush(QColor(bg))
+            painter.drawRoundedRect(r, h / 2, h / 2)
+            painter.setPen(QColor(reports.fg_for(bg)))
         painter.drawText(r, Qt.AlignmentFlag.AlignCenter, status)
         painter.restore()
 
     def sizeHint(self, option, index):
         s = super().sizeHint(option, index)
-        return QSize(s.width() + 22, s.height())
+        return QSize(s.width() + (18 if theme.is_ops() else 22), s.height())
 
 
 class StatChips(QWidget):
@@ -290,30 +298,99 @@ class StatChips(QWidget):
                                   "padding:0px 9px; border:1px solid palette(mid);")
 
 
-class EmptyHint(QWidget):
-    """A centred message laid over an empty list or table. Show or hide it as the view fills."""
+class SectionHeader(QWidget):
+    """The top line of a section: its name, one line of context ("8 devices, 2 failing") and, on the right, its main actions.
+    Every section has one, so where to look and where to click is the same everywhere."""
 
-    def __init__(self, view, title, detail=""):
+    def __init__(self, title, context=""):
+        super().__init__()
+        self.title = QLabel(title)
+        self.title.setProperty("title", True)
+        self.context = QLabel(context)
+        self.context.setProperty("muted", True)
+        self.context.setWordWrap(True)                     # a long line wraps under itself instead of pushing the actions off
+        self.context.setMinimumWidth(80)
+        self.lay = QHBoxLayout(self)
+        self.lay.setContentsMargins(0, 0, 0, 4)
+        self.lay.setSpacing(10)
+        self.lay.addWidget(self.title)
+        self.lay.addWidget(self.context, 1)
+
+    def set_context(self, text):
+        self.context.setText(text)
+
+    def add(self, *widgets):
+        for w in widgets:
+            self.lay.addWidget(w)
+        return self
+
+
+class EmptyHint(QWidget):
+    """A centred message laid over an empty list or table, with optional buttons for the next step. Show or hide it as the view fills."""
+
+    def __init__(self, view, title, detail="", actions=(), wrap=False):
         super().__init__(view.viewport())
         self.view = view
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         lay = QVBoxLayout(self)
         lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        head = QLabel(title)
-        head.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        head.setStyleSheet("font-size: 13pt; font-weight: 600; background: transparent;")
-        sub = QLabel(detail)
-        sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        sub.setProperty("muted", True)
-        sub.setStyleSheet("background: transparent;")
-        lay.addWidget(head)
-        lay.addWidget(sub)
+        self.head = QLabel(title)
+        self.head.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.head.setWordWrap(wrap)                          # in a narrow list the title wraps instead of being cut off
+        self.head.setStyleSheet("font-size: 13pt; font-weight: 600; background: transparent;")
+        self.sub = QLabel(detail)
+        self.sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.sub.setProperty("muted", True)
+        self.sub.setStyleSheet("background: transparent;")
+        self.sub.setWordWrap(wrap)
+        lay.addWidget(self.head)
+        lay.addWidget(self.sub)
+        self.bar = QHBoxLayout()
+        self.bar.setSpacing(8)
+        self.bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addSpacing(6)
+        lay.addLayout(self.bar)
+        self.buttons = []
+        self.set_actions(actions)
         view.viewport().installEventFilter(self)
-        self.setGeometry(view.viewport().rect())
+        self._place()
+
+    def set_text(self, title, detail=""):
+        self.head.setText(title)
+        self.sub.setText(detail)
+        self._place()
+
+    def set_actions(self, actions):
+        """[(text, callable)] or [(text, callable, primary)]: buttons under the message. The first one is the main one unless said."""
+        for b in self.buttons:
+            b.hide()
+            self.bar.removeWidget(b)
+            b.setParent(None)
+            b.deleteLater()
+        self.buttons = []
+        for n, spec in enumerate(actions or ()):
+            text, fn = spec[0], spec[1]
+            b = QPushButton(text)
+            b.setProperty("primary", bool(spec[2]) if len(spec) > 2 else n == 0)
+            b.setAutoDefault(False)
+            b.clicked.connect(lambda _=False, fn=fn: fn())
+            self.bar.addWidget(b)
+            self.buttons.append(b)
+        # without buttons the hint lets clicks through to the view (right-click, drops); with them it takes only its own rectangle
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not self.buttons)
+        self._place()
+
+    def _place(self):
+        r = self.view.viewport().rect()
+        if not self.buttons:
+            self.setGeometry(r)
+            return
+        hint = self.sizeHint()
+        w, h = min(r.width(), max(hint.width(), 360)), min(r.height(), hint.height())
+        self.setGeometry(r.x() + (r.width() - w) // 2, r.y() + (r.height() - h) // 2, w, h)
 
     def eventFilter(self, obj, ev):
         if obj is self.view.viewport() and ev.type() == QEvent.Type.Resize:
-            self.setGeometry(self.view.viewport().rect())
+            self._place()
         return False
 
 class GroupPicker(QToolButton):

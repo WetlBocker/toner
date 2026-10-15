@@ -194,7 +194,8 @@ def parse_report(text):
 LIST_SERVICES = r"""
 $ErrorActionPreference = 'Stop'
 $list = @(Get-CimInstance Win32_Service | ForEach-Object {
-    [ordered]@{ name = [string]$_.Name; display = [string]$_.DisplayName; state = [string]$_.State; start = [string]$_.StartMode } })
+    [ordered]@{ name = [string]$_.Name; display = [string]$_.DisplayName; state = [string]$_.State; start = [string]$_.StartMode;
+                delayed = [bool]$_.DelayedAutoStart } })
 [ordered]@{ services = $list } | ConvertTo-Json -Depth 4 -Compress
 """
 
@@ -212,7 +213,8 @@ def parse_services(text):
     if not isinstance(rows, list):
         raise ValueError("the list of services was not understood")
     out = [{"name": str(r.get("name") or ""), "display": str(r.get("display") or ""), "state": str(r.get("state") or ""),
-            "start": str(r.get("start") or "")} for r in rows if isinstance(r, dict) and r.get("name")]
+            "start": str(r.get("start") or ""), "delayed": bool(r.get("delayed")) and str(r.get("start") or "") == "Auto"}
+           for r in rows if isinstance(r, dict) and r.get("name")]
     return sorted(out, key=lambda r: (r["display"] or r["name"]).lower())
 
 

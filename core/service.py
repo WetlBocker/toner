@@ -132,7 +132,7 @@ class MetricsServer:
 
 
 class Daemon:
-    """The same schedules the desktop app uses (Settings > Automation and Config backups), without a window."""
+    """The same schedules the desktop app uses (Settings > Checks > Schedule and Config backups), without a window."""
 
     def __init__(self, log=print):
         self.log = log
@@ -191,7 +191,7 @@ class Daemon:
                 except Exception as e:
                     self.log(f"agent certificate check failed: {e}")
         self.log("Toner service started. "
-                 + ("Checks every %s min. " % db.get_setting("schedule_minutes") if self.next_checks else "Scheduled checks are off (Settings > Automation). ")
+                 + ("Checks every %s min. " % db.get_setting("schedule_minutes") if self.next_checks else "Scheduled checks are off (Settings > Checks > Schedule). ")
                  + ("Backups every %s h." % db.get_setting("backup_hours") if self.next_backup else "Scheduled backups are off."))
         while not self.stop_event.is_set():
             try:

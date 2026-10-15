@@ -2,6 +2,7 @@
 
 import os
 
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import QCheckBox, QColorDialog, QComboBox, QFileDialog, QFontComboBox, QLineEdit, QPushButton
 from core import db, reports, trends
@@ -30,12 +31,21 @@ class AppearancePage(Page):
             self.swatch[s] = b
         self.accent = QComboBox()
         self.accent.addItems(theme.ACCENTS)
+        self.ui_style = QComboBox()
+        for name, tip in (("Standard", "Roomy rows, rounded pills and large numbers"),
+                          ("Ops console", "Dense and flat for watching many devices: 22 px rows, monospace data, small tags, a narrower sidebar")):
+            self.ui_style.addItem(name)
+            self.ui_style.setItemData(self.ui_style.count() - 1, tip, Qt.ItemDataRole.ToolTipRole)
+        self.ui_style.setToolTip("How much fits on screen, and how it looks. Works with the light and the dark theme.")
+        self.form.addRow("Style", self.ui_style)
         self.form.addRow("Theme", self.theme)
         self.form.addRow("Accent colour", self.accent)
         self.form.addRow("Text size", self.font)
         self.form.addRow("Status colours", self.preset)
         self.form.addRow("", compact_row(*self.swatch.values()))
-        self.lay.insertWidget(1, note("Click a status to choose its colour. Text on top of each colour is "
+        self.lay.insertWidget(1, note("Style: Standard has roomy rows and rounded pills; Ops console is denser and flatter, with monospace data, for watching many "
+                                      "devices at once. Both follow Theme. In the Ops console the default Blue accent shows as teal; choose another accent to change it."))
+        self.lay.insertWidget(2, note("Click a status to choose its colour. Text on top of each colour is "
                                       "switched between dark and white automatically so it stays readable. "
                                       "The status word is always shown, so colour is never the only signal."))
         self.preset.currentTextChanged.connect(self.use_preset)
@@ -57,6 +67,7 @@ class AppearancePage(Page):
             self.paint()
 
     def load(self):
+        self.ui_style.setCurrentText(db.get_setting("ui_style"))
         self.theme.setCurrentText(db.get_setting("theme"))
         self.accent.setCurrentText(db.get_setting("accent"))
         self.font.setValue(int(db.get_setting("font_size")))
@@ -70,6 +81,7 @@ class AppearancePage(Page):
     def save(self):
         preset = self.preset.currentText()
         base = reports.COLOR_PRESETS.get(preset, reports.DEFAULT_COLORS)
+        db.set_setting("ui_style", self.ui_style.currentText())
         db.set_setting("theme", self.theme.currentText())
         db.set_setting("accent", self.accent.currentText())
         db.set_setting("font_size", self.font.value())
@@ -90,8 +102,12 @@ class TerminalPage(Page):
         self.scheme = QComboBox()
         self.scheme.addItems(terminal.SCHEMES)
         self.paging = QLineEdit()
+        self.rdp = QComboBox()
+        self.rdp.addItem("Inside Toner, as a tab in Sessions", True)
+        self.rdp.addItem("In Windows' own Remote Desktop window", False)
+        self.rdp.setToolTip("Inside Toner uses the Remote Desktop control Windows ships. If this computer cannot host it, Windows' own client is used instead.")
         for label, w in (("Font", self.family), ("Size", self.size), ("Colours", self.scheme),
-                         ("Scrollback", self.scrollback), ("Paging command", self.paging)):
+                         ("Scrollback", self.scrollback), ("Paging command", self.paging), ("Remote Desktop", self.rdp)):
             self.form.addRow(label, w)
         self.lay.insertWidget(1, note("Font, size and colours apply to the console straight away. A new "
                                       "scrollback length applies from the next connection. Each vendor "
@@ -104,8 +120,10 @@ class TerminalPage(Page):
         self.scheme.setCurrentText(db.get_setting("term_scheme"))
         self.scrollback.setValue(int(db.get_setting("term_scrollback")))
         self.paging.setText(db.get_setting("paging_cmd"))
+        self.rdp.setCurrentIndex(0 if db.get_setting("rdp_embedded") else 1)
 
     def save(self):
+        db.set_setting("rdp_embedded", bool(self.rdp.currentData()))
         db.set_setting("term_font", self.family.currentFont().family())
         db.set_setting("term_font_size", self.size.value())
         db.set_setting("term_scheme", self.scheme.currentText())

@@ -23,6 +23,7 @@ A Windows desktop tool for checking, documenting and troubleshooting a multi-ven
   - [File servers (TFTP and SFTP)](#file-servers-tftp-and-sftp)
   - [SCP and xcopy](#scp-and-xcopy)
   - [iperf3](#iperf3)
+- [Automation (Ansible)](#automation-ansible)
 - [Without the window](#without-the-window)
 - [Updates and About](#updates-and-about)
 - [Build and test](#build-and-test)
@@ -56,18 +57,31 @@ switch sections. **Ctrl+B** folds the sidebar to icons and back (remembered). **
 
 | Section | What it does |
 |---|---|
-| **Overview** | How the network is doing, from stored results: healthy, warning and failing devices, what needs attention, availability over 24 hours / 7 / 30 days, configuration changes, what changed since the last run, and a panel for Windows computers and certificates running out. A new installation shows a getting-started list. |
-| **Results** | Runs the health checks. One row per device; open it for its checks. Right-click a check that says "unexpected output" to see what the device said (passwords masked) for a bug report. |
-| **Inventory** | Folders and devices (drag to organise), tags, credential profiles, jump hosts, bulk edit, import and export (CSV, JSON, YAML). **Details** opens one window per device: checks, history, configuration, quick actions (SSH, ping, SNMP, web page). **Agents** lists Windows computers that report by agent. Right-click a heading to choose columns. |
+| **Overview** | How the network is doing, from stored results: healthy, warning and failing devices (click a number to see them in Results), what needs attention, availability over 24 hours / 7 / 30 days, configuration changes, what changed since the last run, and a panel for Windows computers and certificates running out. Under **Needs attention**: open the device, run its checks, SSH or Remote Desktop to it, **Acknowledge** or **Snooze** (see below). A new installation shows a getting-started list. |
+| **Results** | Runs the health checks, and opens on every device's latest stored results. One row per device; open it for its checks. Filter to problems, warnings, failures or healthy devices. Right-click a check that says "unexpected output" to see what the device said (passwords masked) for a bug report. |
+| **Inventory** | Folders and devices (drag to organise), tags, credential profiles, jump hosts, bulk edit, import and export (CSV, JSON, YAML). Each device shows its status and when it was last checked. **Details** opens one window per device: checks, history, configuration, quick actions (SSH, ping, SNMP, web page). **Agents** lists Windows computers that report by agent. Right-click a heading to choose columns. |
 | **Configs** | Backs up configurations (see below), keeps only versions that differ, shows diffs and searches every stored configuration. Passwords and keys are masked in stored copies by default. |
 | **History** | Charts any checks over time; hover for values. Checks on very different scales get their own chart. Uptime shows restarts. |
 | **Reports** | CSV, HTML and PDF. The **Trend report** (7, 30 or 90 days) compares with the period before: availability, worst offenders, repeat failures, what is still wrong, configuration changes, busiest CPUs and growing disks. Settings > Reports can make one every week or month. |
-| **Tools** | Command runner (one command on many devices, read-only by default), ping, traceroute, DNS, live ping graph, path monitor (MTR), port scanner, TLS certificate checker, subnet calculator, device discovery, LLDP / CDP topology map, SNMP (v1, v2c, v3), syslog and trap receivers, MAC lookup, Wake-on-LAN, Wi-Fi scanner, file servers, SCP and xcopy, OpenSSL, iperf3. |
-| **Sessions** | Saved connections in a folder tree (drag, rename, search, duplicate): SSH, Telnet and Serial open in tabs inside Toner, follow Settings > Terminal, and are logged. An SSH session can keep its password in Credential Manager or use an inventory device's login, jump host and proxy. Serial has a Send break button for ROMMON. Remote Desktop starts Windows' own client with a generated `.rdp` file. |
-| **Settings** | Thresholds (overrides per vendor, folder, tag or device), which checks run, custom checks, timeouts, automation, config backups, notifications (email, Teams, Slack, Discord, ntfy, webhook, desktop), credential profiles, proxy, agents, maintenance, appearance, terminal, reports, security (host keys), audit log, data and logs. Pages with unsaved edits are marked, and Save and Revert list exactly what changes. |
+| **Tools** | Command runner (the same commands on many devices, read-only by default: Cisco, Juniper, Arista, HPE and MikroTik by SSH, Windows computers by PowerShell, Fortinet and Palo Alto firewalls by SSH with a login set on the device), ping, traceroute, DNS, live ping graph, path monitor (MTR), port scanner, TLS certificate checker, subnet calculator, device discovery, LLDP / CDP topology map, SNMP (v1, v2c, v3), syslog and trap receivers, MAC lookup, Wake-on-LAN, Wi-Fi scanner, file servers, SCP and xcopy, OpenSSL, iperf3, and the Ansible **Playbook Editor**. |
+| **Sessions** | Saved connections in a folder tree (drag, rename, search, duplicate): SSH, Telnet and Serial open in tabs inside Toner, follow Settings > Terminal, and are logged. An SSH session can keep its password in Credential Manager or use an inventory device's login, jump host and proxy. Serial has a Send break button for ROMMON. **Remote Desktop** runs inside a Toner tab, using the Remote Desktop control Windows ships (the one `mstsc.exe` is built on): Windows asks for the password and Toner never stores it. Fill the window or use a fixed size; clipboard, drives, printers, the console session and a gateway are options. Settings > Terminal can send it to Windows' own window instead. |
+| **Automation** | Runs **Ansible** playbooks on Inventory devices: pick a playbook and devices, check first (nothing changes), then run for real after a confirmation naming the playbook and devices. Output streams live, with a recap per device and a history. See [Automation (Ansible)](#automation-ansible). More will be added here. |
+| **Settings** | Thresholds (overrides per vendor, folder, tag or device), which checks run and when (Checks has tabs for the list, the schedule and your own checks), timeouts, config backups, notifications (email, Teams, Slack, Discord, ntfy, webhook, desktop), credential profiles, proxy, agents, maintenance, appearance, terminal, reports, security (host keys), audit log, data and logs. Pages with unsaved edits are marked, and Save and Revert list exactly what changes. |
 | **About** | Version, how this copy was installed, locations, library versions, license. **Copy details** puts it all on the clipboard for a bug report. |
 
-Status marks use shapes as well as colours (circle OK, triangle WARN, square FAIL, diamond ERROR).
+Every section has the same header: its name and a line of context. The line along the bottom of the window shows the last run (or
+the progress of the one going), the next scheduled run and backup, the agent receiver and notifications; click a part to go where it is
+set. **Styles.** Settings > Appearance > *Style* switches between **Standard** (roomy rows, rounded pills) and **Ops console** (dense and flat: 22 px rows, monospace data, small tags, a narrower sidebar, teal accent by default) for watching many devices at once. Both follow the light or dark theme; **Ctrl+K** > *Style* switches at once. Status colours are one set everywhere (pills, text, dots, numbers), tuned per theme to stay readable, and marks use shapes as well
+as colours (circle OK, triangle WARN, square FAIL, diamond ERROR).
+
+**Clients.** The top-level folders of the Inventory are treated as clients. Pick one at the top of the sidebar and every section shows
+only that client: the Overview, Results, Inventory, Configs, History and Reports, and the runs and backups you start by hand (scheduled
+ones keep their own groups). The window title names the client.
+
+**Acknowledge and snooze.** On the Overview, *Acknowledge* puts a device's problems aside while they stay the same or get better; a new
+problem, or one getting worse, brings it back. *Snooze* puts them aside for 1 hour to 7 days (sooner if something gets worse). Put-aside
+devices leave Needs attention (*Show put aside* lists them, marked) and are not announced by notifications, but their checks still run,
+are recorded and count in the numbers. Each one is in the audit log.
 
 ## Supported devices and checks
 
@@ -124,6 +138,14 @@ Add a device with Vendor **Windows** and choose how to monitor it:
   firewall open, and an account in Remote Management Users and Event Log Readers.
 - **This computer**: reads the computer Toner runs on.
 
+**Services.** A Windows computer's device window has a **Services** button: every service with its state and startup type, a search box,
+and filters (running, stopped, automatic but not running). Select one or more and **Start**, **Stop** or **Restart** them (Restart only for running ones), or right-click
+for the same plus **Startup type** (Automatic, Automatic (Delayed Start), Manual, Disabled) and copying names; Toner asks
+first, warns about services that matter (Remote Management, Remote Desktop, Netlogon, Active Directory, DNS...), says what a restart
+stops along with it, shows the reason when Windows refuses, and logs each change in the audit log. It works on this PC and over WinRM.
+A computer that reports by agent is listed from its last report, because an agent only sends and takes no commands; **Sign in to manage...**
+lists it live and controls it over WinRM with an administrator account typed for that window only (never saved).
+
 All three give the same checks, including **Changes** (software installed or removed, local administrators added or removed, ports
 that started or stopped listening). Services: automatic services that are stopped (trigger-start and per-user services ignored),
 plus a list that must be running. Limits are in Settings > Thresholds and each check can be switched off in Settings > Checks.
@@ -145,7 +167,12 @@ In import files that is `vendor: unifi` with `platform: login`, `network`, `prot
 For **Palo Alto** and **Proxmox**, the **Get API key / token** button on the device's Access tab signs in once with an
 administrator's user name and password, asks the device for a key and fills it in. The password is sent over HTTPS in the request
 body and never kept; only the key is saved. Proxmox gets a read-only token called `toner` (PVEAuditor on `/`), and an account with
-two-factor sign-in cannot be used. For other products paste a key made in their own interface. A rejected key is reported once,
+two-factor sign-in cannot be used. For other products paste a key made in their own interface.
+
+**Command line on firewalls.** Fortinet and Palo Alto are checked through their API, so for the Command Runner their device dialog also has an
+**SSH user name** and **SSH password** (Access tab; separate from the API key, kept in Credential Manager). Without them the firewall is listed greyed.
+On Windows, the Command Runner works for this PC and for computers reached over WinRM; one that reports by agent is listed greyed, because an agent takes no
+commands. Read-only mode lets PowerShell *look* (Get-..., Where-Object on `$_`, hostname, ipconfig, netstat ...) and asks before anything that could change a computer. A rejected key is reported once,
 in words, instead of once per check.
 
 ### Per-device checks and thresholds
@@ -165,7 +192,7 @@ switched off counts as down; one the device no longer has is a WARN, so a rename
 
 ### Custom checks and support dates
 
-**Custom checks** (Settings > Custom checks) need no code: run a command over SSH, read an SNMP object, fetch a web page, test a
+**Custom checks** (Settings > Checks > Custom) need no code: run a command over SSH, read an SNMP object, fetch a web page, test a
 TCP port, count the days left on a certificate, ping, or run an **iperf3** throughput test on every scheduled run (the speed is kept
 for History, and WARN / FAIL fire below your limits). Each turns the answer into OK / WARN / FAIL.
 
@@ -174,7 +201,7 @@ device > Tags and fields) and the days left appear as a result, graded by Settin
 
 ### Certificates
 
-Settings > Automation > "Also check the HTTPS certificate of every device" adds a days-left row for each device that answers TLS on
+Settings > Checks > Schedule > "Also check the HTTPS certificate of every device" adds a days-left row for each device that answers TLS on
 the ports you list. It warns at 30 days and fails at 7; devices with nothing listening are skipped.
 
 ### Maintenance windows
@@ -233,6 +260,31 @@ Run, not bundled: download iperf3 for Windows (iperf.fr) and choose `iperf3.exe`
 another iperf3 server (TCP or UDP, upload or download, several streams) or act as the server; it shows sent and received rates and
 retransmits with a live graph.
 
+## Automation (Ansible)
+
+Ansible does not run on Windows, so Toner runs it somewhere that does and shows you the result. Choose where in **Settings > Ansible**:
+
+- **This PC, through WSL.** Needs WSL with a Linux distribution that has Ansible (`wsl --install -d Ubuntu`, then
+  `sudo apt install ansible` inside it). Toner never installs anything for you; **Test** says what is missing.
+- **A Linux server, over SSH.** Use an Inventory device as the server (its address, SSH port, user and saved password), or type the
+  address, user, key file and password (the password goes to Credential Manager). Toner copies the playbook folder to a private
+  temporary folder on the server, runs it and removes the folder.
+
+**Playbooks** are ordinary `.yml` files in a folder you can change (default: a `ansible\playbooks` folder in Toner's data folder; point
+it at a Git checkout if you like). **Tools > Playbook Editor** lists them, makes new ones from templates (ping, show commands on Cisco IOS,
+restart a Windows service, install Windows updates, set NTP on Cisco IOS), highlights YAML, checks it as you type, and can run Ansible's own
+`--syntax-check`.
+
+**The inventory is made for you** from Toner's Inventory: every device with its address and connection settings for its kind
+(network devices over `network_cli`, Windows over WinRM, Fortinet and Palo Alto through their APIs), plus groups for each vendor, folder
+(`folder_Acme_Branch`), location and tag (`tag_core`). Add your own variables as custom fields named `ansible_...`. Passwords and tokens
+are never in the inventory or any playbook: they go in a second file that exists only for the run and is deleted afterwards.
+
+**Running.** Automation > Playbooks starts in **check mode** (`--check --diff`: shows what would change, changes nothing). Turn it off for
+a real run, which asks first and names the playbook and the devices. You can add tags and variables (`ntp=10.0.0.1`), raise verbosity, and
+stop a run. Every check and run is kept (newest 200 by default) under Automation > Run history, with its output and totals, and in the
+audit log.
+
 ## Without the window
 
     python cli.py run --group "Tag: core" --json --fail-on warn     checks; exit code 1 if anything is WARN or worse
@@ -241,7 +293,7 @@ retransmits with a live graph.
     python cli.py service --metrics-port 9108                       keep running scheduled checks, backups and alerts
     python cli.py metrics --port 9108                               Prometheus /metrics from the stored results
 
-`service` uses the schedules from Settings > Automation and Config backups, so it can run from Task Scheduler or any service
+`service` uses the schedules from Settings > Checks > Schedule and Config backups, so it can run from Task Scheduler or any service
 wrapper. **Settings > General > Keep running in the system tray** does the same while the window is closed. The installed program
 does it without Python: `Toner.exe cli service`, `Toner.exe cli run --json` (output goes to the console, or to `toner-service.log`
 in the data folder when there is none). The service also runs the agent receiver when it is on, makes the scheduled trend report and

@@ -10,6 +10,8 @@ ACCENTS = {                      # name -> (light-mode accent, dark-mode accent)
     "Green": ("#16a34a", "#4ade80"), "Orange": ("#ea580c", "#fb923c"), "Rose": ("#e11d48", "#fb7185"),
 }
 DEFAULT_ACCENT = "Blue"
+STYLES = ["Standard", "Ops console"]       # Ops console: denser, flatter, monospace data; made for watching many devices at once
+OPS = "Ops console"
 BASE_POINT_SIZE = 10             # the text size when Settings says "default"
 _current = {}
 
@@ -25,7 +27,10 @@ def is_dark(app, theme):
         return False
 
 
-def tokens(dark, accent=DEFAULT_ACCENT):
+def tokens(dark, accent=DEFAULT_ACCENT, style="Standard"):
+    ops = style == OPS
+    if ops and accent == DEFAULT_ACCENT:
+        accent = "Teal"                                   # the console look is teal unless another accent is chosen
     light_acc, dark_acc = ACCENTS.get(accent, ACCENTS[DEFAULT_ACCENT])
     a = QColor(dark_acc if dark else light_acc)
     soft = QColor(a)
@@ -40,6 +45,18 @@ def tokens(dark, accent=DEFAULT_ACCENT):
         accent_soft=f"rgba({a.red()},{a.green()},{a.blue()},{soft.alpha()})",
         input="#171a1f" if dark else "#ffffff", scroll="#3a404b" if dark else "#c7ccd4",
     )
+    if ops:
+        t.update(dict(bg="#0a0d12", surface="#10141b", surface2="#161b24", border="#222a36", text="#d5dae3", muted="#7b8697", hover="#182030", input="#0c1017",
+                      scroll="#2b3442") if dark else
+                 dict(bg="#eceff3", surface="#ffffff", surface2="#f3f5f8", border="#d6dbe3", text="#161b22", muted="#5b6675", hover="#e8ecf1", input="#ffffff",
+                      scroll="#c3cad4"))
+    t["ops"] = ops
+    # the selected row of a list or table: the accent mixed into the surface as one opaque colour (a see-through one is painted twice on a
+    # table row and comes out too strong)
+    surf = QColor(t["surface"])
+    mix = 0.18 if dark else 0.11
+    t["select"] = QColor(int(surf.red() + (a.red() - surf.red()) * mix), int(surf.green() + (a.green() - surf.green()) * mix),
+                         int(surf.blue() + (a.blue() - surf.blue()) * mix)).name()
     t["chev_down"] = icons.png_path("chev-down", t["muted"])
     t["check"] = icons.png_path("check", t["accent_text"])
     t["chev_up"] = icons.png_path("chev-up", t["muted"])
@@ -128,12 +145,12 @@ QListView::indicator:checked, QTreeView::indicator:checked, QTableView::indicato
 /* ---- lists, tables, trees ---- */
 QTreeView, QTableView, QListView, QTreeWidget, QTableWidget, QListWidget {
     background: %(surface)s; alternate-background-color: %(surface)s; border: 1px solid %(border)s; border-radius: 10px;
-    gridline-color: transparent; selection-background-color: %(accent_soft)s; selection-color: %(text)s;
+    gridline-color: transparent; selection-background-color: %(select)s; selection-color: %(text)s;
 }
 QTreeView::item, QTableView::item, QListView::item { padding: 5px 6px; border: 0; }
 QTreeView::item:hover, QTableView::item:hover, QListView::item:hover { background: %(hover)s; }
 QTreeView::item:selected, QTableView::item:selected, QListView::item:selected {
-    background: %(accent_soft)s; color: %(text)s;
+    background: %(select)s; color: %(text)s;
 }
 QHeaderView { background: transparent; }
 QHeaderView::section {
@@ -196,10 +213,45 @@ QListWidget#settingsNav::item { padding: 9px 12px; margin: 1px 6px; border-radiu
 QListWidget#settingsNav::item:selected { background: %(accent_soft)s; color: %(accent)s; font-weight: 600; }
 QListWidget#settingsNav::item:hover { background: %(hover)s; color: %(text)s; }
 QFrame#statusChip { border-radius: 11px; }
-""" % t
+""" % t + (OPS_QSS % t if t.get("ops") else "")
 
 
-def apply(app: QApplication, theme="System", font_size=0, accent=DEFAULT_ACCENT):
+# The Ops console look: the same widgets, tighter and flatter. Rows are 22 px, data is monospace, corners are 3 px, headers are small capitals.
+OPS_QSS = """
+QPushButton, QToolButton { border-radius: 3px; padding: 3px 10px; min-height: 16px; background: %(surface2)s; }
+QPushButton:hover, QToolButton:hover { background: %(hover)s; border-color: %(muted)s; }
+QPushButton[primary="true"], QPushButton:default { font-weight: 700; }
+QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QAbstractSpinBox { border-radius: 3px; padding: 2px 7px; min-height: 16px; }
+QPlainTextEdit, QTextEdit { border-radius: 3px; padding: 6px; }
+QComboBox QAbstractItemView, QMenu { border-radius: 4px; }
+QMenu::item { padding: 4px 20px 4px 12px; border-radius: 3px; }
+QFrame[card="true"] { border-radius: 4px; }
+QGroupBox { border-radius: 4px; }
+QTreeView, QTableView, QListView, QTreeWidget, QTableWidget, QListWidget { border-radius: 4px; font-family: "Cascadia Mono", Consolas, "Courier New"; }
+QTreeView::item, QTableView::item { padding: 1px 6px; border-bottom: 1px solid %(bg)s; }
+QHeaderView::section { padding: 4px 8px; font-size: 8pt; font-family: "Segoe UI Variable Text", "Segoe UI"; }
+QWidget#sidebar { background: %(bg)s; }
+QListWidget#nav, QListWidget#settingsNav { font-family: "Segoe UI Variable Text", "Segoe UI"; }
+QListWidget#nav::item { border-radius: 3px; padding: 4px 8px; margin: 0; }
+QListWidget#nav::item:selected { background: %(select)s; border-left: 2px solid %(accent)s; }
+QListWidget#settingsNav::item { border-radius: 3px; padding: 5px 10px; margin: 0 6px; }
+QListWidget#settingsNav::item:selected { background: %(select)s; border-left: 2px solid %(accent)s; }
+QTabBar::tab { padding: 6px 12px; }
+QFrame#statusChip { border-radius: 2px; }
+QLabel[title="true"] { font-size: 13pt; font-weight: 700; }
+QLabel#brand { font-size: 12pt; }
+QCheckBox::indicator, QListView::indicator, QTreeView::indicator, QTableView::indicator { border-radius: 2px; width: 13px; height: 13px; }
+QProgressBar { border-radius: 2px; }
+QProgressBar::chunk { border-radius: 2px; }
+"""
+
+
+def is_ops():
+    """True while the Ops console style is in use (widgets that draw themselves ask, so they match)."""
+    return bool(_current.get("ops"))
+
+
+def apply(app: QApplication, theme="System", font_size=0, accent=DEFAULT_ACCENT, style="Standard"):
     # Tell Qt which scheme we want so window frames and native pop-ups follow it (Qt 6.8+).
     try:
         app.styleHints().setColorScheme({"Dark": Qt.ColorScheme.Dark, "Light": Qt.ColorScheme.Light}
@@ -207,14 +259,14 @@ def apply(app: QApplication, theme="System", font_size=0, accent=DEFAULT_ACCENT)
     except Exception:
         pass
     dark = is_dark(app, theme)
-    t = tokens(dark, accent)
+    t = tokens(dark, accent, style)
     _current.clear()
     _current.update(t, dark=dark)
     app.setStyle("Fusion")                               # one style everywhere, so the stylesheet looks the same
     app.setPalette(palette(t))
     font = QFont(app.font())
     font.setFamilies(["Segoe UI Variable Text", "Segoe UI", "Inter", "Helvetica Neue", "Arial"])
-    font.setPointSize(int(font_size) if font_size and font_size > 0 else BASE_POINT_SIZE)
+    font.setPointSize(int(font_size) if font_size and font_size > 0 else (BASE_POINT_SIZE - 1 if t["ops"] else BASE_POINT_SIZE))
     app.setFont(font)
     app.setStyleSheet(stylesheet(t))
 

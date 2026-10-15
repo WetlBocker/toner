@@ -120,7 +120,7 @@ w.reports.base = [Result("d", "cpu", "OK", "1%")]; w.reports.filter.set_sections
 w.reports.export_html(); check("save dialog opens in the default folder with a dated name", captured["start"].startswith(SP) and captured["start"].endswith(".html"), captured)
 
 print("== automation / scheduler")
-Au = P["Automation"]; Au.enabled.setChecked(True); Au.minutes.setValue(15); Au.groups.boxes["Location: Chicago"].setChecked(True); Au.on_start.setChecked(False); S.save()
+Au = P["Checks"].schedule; Au.enabled.setChecked(True); Au.minutes.setValue(15); Au.groups.boxes["Location: Chicago"].setChecked(True); Au.on_start.setChecked(False); S.save()
 sch = w.scheduler; check("timer armed with the interval", sch.timer.isActive() and sch.timer.interval() == 15 * 60000 and sch.next_at is not None)
 check("next run shown on the Results tab", w.results.schedule_note.text().startswith("Next scheduled run:"), w.results.schedule_note.text())
 launched = []; w.results.start_scheduled = lambda labels: launched.append(labels)

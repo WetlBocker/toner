@@ -14,6 +14,7 @@ from core import audit, db, fileserver, iperf, nettools, oui, profiles, proxy, s
 from ui import theme
 from ui.tools import DevicePicker, OutputBox, Runner, _row
 from ui.tools2 import _muted, _primary, _table
+from ui import status as st
 
 SECRET = "service:sftp-server"
 AUDITED = {"write", "delete", "mkdir", "rename", "login"}              # plain reads stay out of the audit log
@@ -262,9 +263,9 @@ class FileServerTab(QWidget):
         for j, v in enumerate(values):
             it = QTableWidgetItem(v)
             if j == 5 and e["status"] == "denied":
-                it.setForeground(QColor("#d32f2f"))
+                it.setForeground(st.qink("FAIL"))
             elif j == 5 and e["status"] == "failed":
-                it.setForeground(QColor("#e6b800"))
+                it.setForeground(st.qink("WARN"))
             self.table.setItem(i, j, it)
 
     def clear_rows(self):
@@ -519,7 +520,7 @@ class WifiTab(QWidget):
         self.band = QComboBox()
         self.band.addItems(["All bands", "2.4 GHz", "5 GHz", "6 GHz"])
         self.filter = QLineEdit()
-        self.filter.setPlaceholderText("filter by network name or maker")
+        self.filter.setPlaceholderText("Filter by network name or maker")
         self.me = _muted("")
         self.summary = _muted("")
         self.table = _table(self.COLS)
@@ -587,7 +588,7 @@ class WifiTab(QWidget):
             for j, v in enumerate(vals):
                 it = QTableWidgetItem(str(v))
                 if j == 1 and sig is not None:
-                    it.setForeground(QColor("#2e9e44" if sig >= 65 else "#e6a100" if sig >= 40 else "#d32f2f"))
+                    it.setForeground(st.qink(st.level(sig, 65, 40, lower_is_worse=True)))
                 self.table.setItem(i, j, it)
         self.table.resizeColumnsToContents()
 

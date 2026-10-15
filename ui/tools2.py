@@ -19,6 +19,7 @@ from ui import theme
 from ui.tools import DevicePicker, OutputBox, _row
 from ui.widgets import EmptyHint, GroupPicker
 from ui.toast import toast
+from ui import status as st
 
 
 def _table(cols, stretch_last=True):
@@ -671,9 +672,9 @@ class MtrTab(QWidget):
             for j, v in enumerate(cells):
                 it = QTableWidgetItem(v)
                 if j == 2 and h.loss >= 50 and h.address != "*":
-                    it.setForeground(QColor("#d32f2f"))
+                    it.setForeground(st.qink("FAIL"))
                 elif j == 2 and h.loss > 0 and h.address != "*":
-                    it.setForeground(QColor("#e6b800"))
+                    it.setForeground(st.qink("WARN"))
                 self.table.setItem(i, j, it)
         self.table.resizeColumnsToContents()
 
@@ -712,17 +713,22 @@ class CommandRunnerTab(QWidget):
         self.group.changed.connect(self.fill_devices)
         self.devs = QListWidget()
         self.devs.setMaximumWidth(280)
+        self.devs.itemClicked.connect(self._devs_clicked)
+        self.devs_hint = EmptyHint(self.devs, "No devices in these groups take commands", "Try other groups, or see Edit device > Access.", wrap=True)
         self.all_btn, self.none_btn = QPushButton("All"), QPushButton("None")
         self.commands = QPlainTextEdit()
-        self.commands.setPlaceholderText("one command per line, e.g.\nshow version\nshow ip interface brief")
+        self.commands.setPlaceholderText("one command per line, e.g.\nshow version\nshow ip interface brief\n\nWindows computers take PowerShell, e.g.\nGet-Service | Where-Object { $_.Status -eq 'Stopped' }")
         self.commands.setFixedHeight(110)
         self.commands.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
         self.snippets = QComboBox()
         self.snippets.setMinimumWidth(140)
-        self.snip_save, self.snip_del = QPushButton("Save snippet..."), QPushButton("Delete snippet")
+        self.snip_save, self.snip_del = QPushButton("Save..."), QPushButton("Delete")       # next to "Snippets", so short words are enough
+        self.snip_save.setToolTip("Save the commands as a snippet")
+        self.snip_del.setToolTip("Delete the chosen snippet")
         self.safe = QCheckBox("Read-only mode")
         self.safe.setChecked(True)
-        self.safe.setToolTip("Blocks commands that could change a device (reload, configure, clear, copy ...)")
+        self.safe.setToolTip("Blocks commands that could change a device: reload, configure, clear, copy ... on network devices and firewalls; "
+                             "anything but looking commands (Get-..., hostname, ipconfig ...) in PowerShell")
         self.go, self.stop = _primary("Run"), QPushButton("Stop")
         self.stop.setEnabled(False)
         self.status = _muted("")
@@ -788,25 +794,71 @@ class CommandRunnerTab(QWidget):
         self.fill_devices()
         self.fill_snippets()
 
+    def candidates(self):
+        """Enabled devices, in the chosen groups, that are of a kind that takes commands (whether or not they can be reached that way now)."""
+        return [d for d in db.list_devices(enabled_only=True) if cmdrun.kind_of(d) and db.in_groups(d, self.group.selected())]
+
     def ssh_devices(self):
-        return [d for d in db.list_devices(enabled_only=True) if vendors.get(d["vendor"]).get("kind") == "ssh"
-                and db.in_groups(d, self.group.selected())]
+        """The devices commands can be run on now."""
+        return [d for d in self.candidates() if cmdrun.runnable(d)[0]]
+
+    GROUP = Qt.ItemDataRole.UserRole + 1                                   # marks the row that holds the devices that cannot take commands
 
     def fill_devices(self):
-        ticked = {self.devs.item(i).text() for i in range(self.devs.count()) if self.devs.item(i).checkState() == Qt.CheckState.Checked}
+        ticked = {self.devs.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.devs.count()) if self.devs.item(i).checkState() == Qt.CheckState.Checked}
         self.devs.clear()
-        for d in self.ssh_devices():
+        skipped = []
+        for d in self.candidates():
+            can, why = cmdrun.runnable(d)
+            if not can:
+                skipped.append((d, why))
+                continue
             it = QListWidgetItem(d["name"])
+            it.setData(Qt.ItemDataRole.UserRole, d["name"])
             it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             it.setCheckState(Qt.CheckState.Checked if d["name"] in ticked else Qt.CheckState.Unchecked)
+            it.setToolTip(cmdrun.KINDS[cmdrun.kind_of(d)])
             self.devs.addItem(it)
+        if len(skipped) == 1:                                               # one: just show it, greyed, with its reason
+            self._add_skipped(*skipped[0], indent=False)
+        elif skipped:                                                       # several: one row that opens to show them, so they do not crowd the list
+            opened = getattr(self, "_skipped_open", False)
+            head = QListWidgetItem(("\u25be " if opened else "\u25b8 ") + f"{len(skipped)} devices cannot take commands")
+            head.setData(self.GROUP, True)
+            head.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            f = head.font()
+            f.setBold(True)
+            head.setFont(f)
+            why_count = {}
+            for _d, why in skipped:
+                why_count[why] = why_count.get(why, 0) + 1
+            head.setToolTip("Click to " + ("hide" if opened else "show") + " them.\n" + "\n".join(f"{n} x {w}" for w, n in sorted(why_count.items())))
+            self.devs.addItem(head)
+            if opened:
+                for d, why in skipped:
+                    self._add_skipped(d, why, indent=True)
+        self.devs_hint.setVisible(self.devs.count() == 0)
+
+    def _add_skipped(self, d, why, indent):
+        it = QListWidgetItem(("    " if indent else "") + f"{d['name']}  ({why})")
+        it.setData(Qt.ItemDataRole.UserRole, d["name"])
+        it.setFlags(Qt.ItemFlag.NoItemFlags)                                # shown, greyed, so it is clear why it cannot be ticked
+        it.setToolTip(cmdrun.HELP.get(why, why))
+        self.devs.addItem(it)
+
+    def _devs_clicked(self, item):
+        """The row of devices that cannot take commands opens and closes."""
+        if item.data(self.GROUP):
+            self._skipped_open = not getattr(self, "_skipped_open", False)
+            self.fill_devices()
 
     def _tick_all(self, on):
         for i in range(self.devs.count()):
-            self.devs.item(i).setCheckState(Qt.CheckState.Checked if on else Qt.CheckState.Unchecked)
+            if self.devs.item(i).flags() & Qt.ItemFlag.ItemIsUserCheckable:
+                self.devs.item(i).setCheckState(Qt.CheckState.Checked if on else Qt.CheckState.Unchecked)
 
     def checked_devices(self):
-        names = {self.devs.item(i).text() for i in range(self.devs.count()) if self.devs.item(i).checkState() == Qt.CheckState.Checked}
+        names = {self.devs.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.devs.count()) if self.devs.item(i).checkState() == Qt.CheckState.Checked}
         return [d for d in self.ssh_devices() if d["name"] in names]
 
     # ---- snippets
@@ -852,9 +904,16 @@ class CommandRunnerTab(QWidget):
         if not cmds or not devs:
             self.status.setText("Tick at least one device and enter at least one command.")
             return
-        risky = [c for c in cmds if not cmdrun.read_only(c)]
+        kinds = {cmdrun.kind_of(d) for d in devs}
+        if len(kinds) > 1 and QMessageBox.question(
+                self, "Different kinds of device",
+                "You ticked " + " and ".join(cmdrun.KINDS[k] for k in sorted(kinds)) + ".\n\nEvery device gets the same commands, and each kind has its own: "
+                "a command line for network devices and firewalls, PowerShell for Windows. A command meant for one will fail on the other.\n\nRun anyway?") \
+                != QMessageBox.StandardButton.Yes:
+            return
+        risky = cmdrun.risky_commands(devs, cmds)
         if risky and self.safe.isChecked():
-            self.status.setText("Blocked (read-only mode): " + "; ".join(risky[:3]) + ". Untick 'Read-only commands only' to allow them.")
+            self.status.setText("Blocked (read-only mode): " + "; ".join(risky[:3]) + ". Untick 'Read-only mode' to allow them.")
             return
         if risky and QMessageBox.question(
                 self, "Commands that may change devices",
@@ -892,7 +951,7 @@ class CommandRunnerTab(QWidget):
             for j, v in enumerate([r["device"], "ok" if r["ok"] else "FAILED", f"{r['seconds']:.1f}", first]):
                 it = QTableWidgetItem(v)
                 if j == 1 and not r["ok"]:
-                    it.setForeground(QColor("#d32f2f"))
+                    it.setForeground(st.qink("FAIL"))
                 self.table.setItem(i, j, it)
         self.table.resizeColumnsToContents()
         bad = sum(1 for r in results if not r["ok"])
@@ -1018,7 +1077,7 @@ class TlsTab(QWidget):
             self.details.setText("")
             return
         d = res["days_left"]
-        color = "#d32f2f" if d < 7 else "#e6b800" if d < 30 else "#16a34a"
+        color = st.ink(st.level(d, 30, 7, lower_is_worse=True))
         esc = lambda s: str(s).replace("&", "&amp;").replace("<", "&lt;")
         self.status.setText("")
         self.details.setText(
@@ -1073,7 +1132,7 @@ class TlsTab(QWidget):
             for j, v in enumerate(cells):
                 it = QTableWidgetItem(v)
                 if info and j in (4, 5):
-                    it.setForeground(QColor("#d32f2f" if info["days_left"] < 7 else "#e6b800" if info["days_left"] < 30 else "#16a34a"))
+                    it.setForeground(st.qink(st.level(info["days_left"], 30, 7, lower_is_worse=True)))
                 self.table.setItem(i, j, it)
         self.table.resizeColumnsToContents()
         self.status.setText(f"{sum(1 for r in res if r[1])} of {len(res)} device(s) presented a certificate.")
@@ -1103,7 +1162,7 @@ class ListenersTab(QWidget):
         self.pause, self.clear, self.save = QPushButton("Pause"), QPushButton("Clear"), QPushButton("Save...")
         self.pause.setCheckable(True)
         self.filter = QLineEdit()
-        self.filter.setPlaceholderText("filter the list")
+        self.filter.setPlaceholderText("Filter the list")
         self.kind = QComboBox()
         self.kind.addItems(["Everything", "Syslog only", "Traps only"])
         self.sev = QComboBox()
@@ -1188,9 +1247,9 @@ class ListenersTab(QWidget):
         for j, v in enumerate([m["time"], m["type"], m["source"], m.get("device", ""), m.get("severity", ""), m["text"] if m["type"] == "syslog" else (m.get("trap", "") + "  " + m["text"]).strip()]):
             it = QTableWidgetItem(v)
             if j == 4 and m.get("severity_no", 7) <= 3:
-                it.setForeground(QColor("#d32f2f"))
+                it.setForeground(st.qink("FAIL"))
             elif j == 4 and m.get("severity_no", 7) == 4:
-                it.setForeground(QColor("#e6b800"))
+                it.setForeground(st.qink("WARN"))
             self.table.setItem(i, j, it)
 
     def on_message(self, m):

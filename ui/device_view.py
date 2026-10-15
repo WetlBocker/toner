@@ -10,6 +10,7 @@ from core.runner import run_one
 from ui.configs import DiffHighlighter
 from ui.history import ChartStack
 from ui.widgets import GroupPicker, StatusDelegate
+from ui import status as st
 
 
 class _Job(QThread):
@@ -28,6 +29,7 @@ class _Job(QThread):
 
 class DeviceView(QDialog):
     ssh_requested = Signal(dict)
+    rdp_requested = Signal(dict)
     tool_requested = Signal(str, dict)          # 'ping' | 'snmp' | 'tls' | 'mtr', device
     edit_requested = Signal(dict)
     changed = Signal()                          # a run or backup was done from here
@@ -51,7 +53,7 @@ class DeviceView(QDialog):
         head.addWidget(self.sub)
         actions = QHBoxLayout()
         self.buttons = {}
-        for key, text in (("checks", "Run checks"), ("backup", "Back up config"), ("ssh", "SSH session"), ("rdp", "Remote Desktop"), ("ping", "Ping"),
+        for key, text in (("checks", "Run checks"), ("backup", "Back up config"), ("ssh", "SSH session"), ("rdp", "Remote Desktop"), ("services", "Services"), ("ping", "Ping"),
                           ("snmp", "SNMP"), ("web", "Open web page"), ("edit", "Edit...")):
             b = QPushButton(text)
             b.setAutoDefault(False)                     # Enter must not trigger whichever button comes first
@@ -115,6 +117,8 @@ class DeviceView(QDialog):
         self.tabs.addTab(hist, "History")
         self.tabs.addTab(cfgw, "Configuration")
         lay = QVBoxLayout(self)
+        lay.setContentsMargins(18, 16, 18, 16)
+        lay.setSpacing(10)
         lay.addLayout(head)
         lay.addLayout(actions)
         lay.addWidget(self.status)
@@ -142,6 +146,8 @@ class DeviceView(QDialog):
         self.buttons["ssh"].setEnabled(info.get("kind") == "ssh")
         self.buttons["ssh"].setVisible(d["vendor"] != "windows")
         self.buttons["rdp"].setVisible(d["vendor"] == "windows")
+        self.buttons["services"].setVisible(d["vendor"] == "windows")
+        self.buttons["services"].setToolTip("List the computer's services, and start, stop or restart them")
         self.buttons["backup"].setEnabled(backup.supported(d))
         self.buttons["snmp"].setEnabled(profiles.snmp_configured(d) or vendors.is_snmp(d["vendor"]))
         self.buttons["web"].setEnabled(True)
@@ -179,7 +185,7 @@ class DeviceView(QDialog):
             if v:
                 lab = QLabel(v)
                 if k == "Status" and health and health["status"] in ("WARN", "FAIL", "ERROR"):
-                    lab.setStyleSheet("font-weight: 600; color: " + {"WARN": "#e0a100", "FAIL": "#d32f2f", "ERROR": "#8e44ad"}[health["status"]] + ";")
+                    lab.setStyleSheet(f"font-weight: 600; color: {st.ink(health['status'])};")
                 lab.setWordWrap(True)
                 lab.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
                 self.info.addRow(QLabel(f"<span style='color:gray'>{k}</span>"), lab)
@@ -269,10 +275,9 @@ class DeviceView(QDialog):
         elif key == "ssh":
             self.ssh_requested.emit(d)
         elif key == "rdp":
-            try:
-                sessions.launch_rdp(sessions.rdp_for_device(d))
-            except OSError as e:
-                QMessageBox.warning(self, "Remote Desktop", str(e))
+            self.rdp_requested.emit(d)
+        elif key == "services":
+            self.open_services()
         elif key == "ping":
             self.tool_requested.emit("ping", d)
         elif key == "snmp":
@@ -281,6 +286,17 @@ class DeviceView(QDialog):
             QDesktopServices.openUrl(QUrl(f"https://{d['host']}" + (f":{d['port']}" if d.get("port") else "")))
         elif key == "edit":
             self.edit_requested.emit(d)
+
+    def open_services(self):
+        """The computer's services in a window of their own (one per device; asking again brings it back)."""
+        from ui.serviceswindow import ServicesDialog
+        win = getattr(self, "services_window", None)
+        if win is None or not win.isVisible():
+            self.services_window = win = ServicesDialog(self.dev, self)
+        win.show()
+        win.raise_()
+        win.activateWindow()
+        return win
 
     def _run(self, fn, done, text):
         if self.job and self.job.isRunning():

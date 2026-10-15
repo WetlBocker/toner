@@ -61,7 +61,7 @@ check("SSH: host, port, user, password, remember and paging", all(vis(d, k) for 
 d.kind.setCurrentIndex(d.kind.findData("telnet"))
 check("Telnet: host and port, no user name or password, a warning about encryption", vis(d, "host") and vis(d, "port") and not vis(d, "user") and not vis(d, "password") and "not encrypted" in d.about_kind.text() + d.note.text() or "without encryption" in d.note.text())
 d.kind.setCurrentIndex(d.kind.findData("rdp"))
-check("RDP: size, full screen, sharing options, gateway, and a button that says what it does", all(vis(d, k) for k in ("fullscreen", "width", "height", "clipboard", "drives", "printers", "admin", "gateway", "user")) and not vis(d, "password") and d.connect_btn.text() == "Open Remote Desktop" and "never stored" in d.note.text())
+check("RDP: size, full screen, sharing options, gateway, and a button that says what it does", all(vis(d, k) for k in ("fullscreen", "width", "height", "clipboard", "drives", "printers", "admin", "gateway", "user")) and not vis(d, "password") and d.connect_btn.text() == "Connect" and "never stores" in d.note.text() and "tab inside Toner" in d.note.text())
 d.kind.setCurrentIndex(d.kind.findData("serial"))
 check("Serial: port list, baud rate, data bits, parity, stop bits and flow control; no host", all(vis(d, k) for k in ("serial_port", "baud", "bits", "parity", "stop", "flow")) and not vis(d, "host") and d.connect_btn.text() == "Connect")
 check("the baud list has the usual speeds, 9600 first chosen", d.baud.findText("115200") >= 0 and d.baud.currentText() == "9600" and d.flow.count() == 3 and d.parity.count() == 5)

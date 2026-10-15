@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 import keyring
 import requests
 
-from core import alerts, db, display, maintenance, proxy
+from core import acks, alerts, db, display, maintenance, proxy
 from drivers.base import SEVERITY
 from core import quiet
 
@@ -337,8 +337,8 @@ def process_run(results, ran, scheduled, desktop=None, retry_delay=2):
         return "no channels"
     if not scheduled and not db.get_setting("notify_on_manual"):
         return "manual runs are not notified"
-    held = maintenance.devices_in_maintenance()
-    if held:                                       # planned work: say nothing, and leave the alert state as it was
+    held = set(maintenance.devices_in_maintenance()) | acks.held_by_results(results)     # planned work, or acknowledged / snoozed on the Overview
+    if held:                                       # say nothing, and leave the alert state as it was
         results = [r for r in results if alerts.base(r.device) not in held]
         ran = [d for d in ran if alerts.base(d) not in held]
     events = alerts.evaluate(results, ran, consecutive=int(db.get_setting("notify_consecutive")),

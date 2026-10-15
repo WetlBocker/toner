@@ -83,7 +83,7 @@ from ui.results import ResultsTab
 rt = ResultsTab(); rt.results = [Result("sw-warn", "cpu", "WARN", "75%", "high"), Result("sw-warn", "memory", "FAIL", "95%", "too full"), Result("sw-ok", "cpu", "OK", "5%")]
 rt.last_ran = ["sw-warn", "sw-ok"]; rt.repopulate()
 tops = {rt.table.topLevelItem(i).text(0): rt.table.topLevelItem(i) for i in range(rt.table.topLevelItemCount())}
-check("a collapsed row says what is wrong, worst first, and how many more", tops["sw-warn"].text(4) == "memory: too full   (+1 more)" and tops["sw-ok"].text(4) == "all OK", tops["sw-warn"].text(4))
+check("a collapsed row says what is wrong, worst first, and how many more", tops["sw-warn"].text(4) == "memory: too full   (+1 more)" and tops["sw-ok"].text(1) == "cpu" and tops["sw-ok"].text(3) == "5%" and tops["sw-ok"].childCount() == 0, tops["sw-warn"].text(4))
 seen = []; rt.open_device.connect(seen.append); rt.table.setCurrentItem(tops["sw-warn"].child(0)); rt._enter()
 check("Enter on any row opens its device", seen == ["sw-warn"], seen)
 rt.columns.toggle(3, False)
@@ -140,7 +140,7 @@ from ui.sessions import SessionsTab
 ss = SessionsTab()
 ss._fill_more()
 labels = [a.text() for a in ss.more_menu.actions()]
-check("the rarely used buttons live in a More menu", labels == ["New folder", "Duplicate", "Expand all", "Collapse all", "Session logs"], labels)
+check("the rarely used buttons live in a More menu", labels == ["New folder", "Duplicate", "Delete", "Expand all", "Collapse all", "Session logs"], labels)
 check("and the row itself is short", ss.more_btn.text() == "More" and all(not b.isVisibleTo(ss) for b in (ss.folder_btn, ss.copy_btn, ss.expand_btn, ss.collapse_btn, ss.logs_btn)))
 check("Duplicate follows the selection like its button (off with nothing chosen)", not [a for a in ss.more_menu.actions() if a.text() == "Duplicate"][0].isEnabled())
 
@@ -227,7 +227,7 @@ for i in range(tt2.tabs.count()):
 check("and the same for every tool (Wake-on-LAN's button and iperf's mode box were both far too wide)", not bad_tools, bad_tools)
 sec = [p for p in big.pages if p.title == "Security"][0]
 check("an empty table in Security says what it will hold, and the hint goes when it has rows", sec.keys_hint.isVisibleTo(sec) and sec.creds.rowCount() > 0 and not sec.creds_hint.isVisibleTo(sec))
-cu = [p for p in big.pages if p.title == "Custom checks"][0]
+cu = [p for p in big.pages if p.title == "Checks"][0].custom
 check("and so does the list of custom checks", cu.hint.isVisibleTo(cu))
 
 print("== the search (Ctrl+K) closes when you click elsewhere")

@@ -40,8 +40,8 @@ QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.StandardButton.Y
 tools = T.ToolsTab(); tools.resize(1300, 800); tools.show()
 print("== Tools navigation")
 names = [tools.tabs.tabText(i) for i in range(tools.tabs.count())]
-check("every tool is listed, grouped under headings", len(names) == 19 and "OpenSSL" in names and "SSH Console" not in names and "Session Logs" not in names and "SCP" in names and "Copy Files (xcopy)" in names and "Wi-Fi Scanner" in names and "TFTP Server" in names and "SFTP Server" in names and "Throughput (iperf3)" in names and "Command Runner" in names and "Find Devices" in names and "SNMP" in names)
-check("headings are not selectable", sum(1 for r in range(tools.tabs.list.count()) if not (tools.tabs.list.item(r).flags() & Qt.ItemFlag.ItemIsSelectable)) == 7)
+check("every tool is listed, grouped under headings", len(names) == 20 and "OpenSSL" in names and "SSH Console" not in names and "Session Logs" not in names and "SCP" in names and "Copy Files (xcopy)" in names and "Wi-Fi Scanner" in names and "TFTP Server" in names and "SFTP Server" in names and "Throughput (iperf3)" in names and "Command Runner" in names and "Find Devices" in names and "SNMP" in names)
+check("headings are not selectable", sum(1 for r in range(tools.tabs.list.count()) if not (tools.tabs.list.item(r).flags() & Qt.ItemFlag.ItemIsSelectable)) == 8)
 tools.tabs.setCurrentWidget(tools.mtr); check("switching tools", tools.tabs.currentWidget() is tools.mtr)
 dev("sw1", host="127.0.0.1")
 tools.show_tool(tools.liveping, {"name": "sw1"}); check("show_tool opens a tool with the device chosen", tools.tabs.currentWidget() is tools.liveping and tools.liveping.host.text() == "127.0.0.1")
@@ -128,7 +128,7 @@ class FakeMtr:
 pinger.Mtr = FakeMtr
 M.host.setText("8.8.8.8"); M.go.click(); QCoreApplication.processEvents()
 check("a row per hop with loss and times", M.table.rowCount() == 3 and M.table.item(0, 5).text() == "2" and M.table.item(2, 2).text() == "50" and "3 hop" in M.status.text(), M.status.text())
-check("loss is coloured; hops that never answer are not alarming", M.table.item(2, 2).foreground().color().name() == "#d32f2f" and M.table.item(1, 2).foreground().color().name() != "#d32f2f")
+check("loss is coloured; hops that never answer are not alarming", M.table.item(2, 2).foreground().color().name() == __import__("ui.status", fromlist=["x"]).ink("FAIL") and M.table.item(1, 2).foreground().color().name() != __import__("ui.status", fromlist=["x"]).ink("FAIL"))
 M.stop.click(); check("stop re-enables Start", M.go.isEnabled() and M.mtr is None)
 
 print("== Command runner")
@@ -170,7 +170,7 @@ TL = tools.tls
 info = {"subject": "lab.example.test", "issuer": "CN=Lab CA", "not_before": datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc), "not_after": datetime.datetime(2026, 11, 1, tzinfo=datetime.timezone.utc), "days_left": 20, "sans": ["lab.example.test", "alt"], "serial": "abc", "protocol": "TLSv1.3", "cipher": "TLS_AES_256_GCM_SHA384"}
 T2.read_certificate = lambda host, port, sni=None, timeout=8: dict(info) if host != "10.0.0.250" else (_ for _ in ()).throw(OSError("connection refused"))
 TL.host.setText("10.0.0.5"); TL.go.click(); pump(lambda: TL.go.isEnabled())
-check("certificate details shown, days left highlighted", "lab.example.test" in TL.details.text() and "Lab CA" in TL.details.text() and "TLSv1.3" in TL.details.text() and "e6b800" in TL.details.text(), TL.details.text()[:200])
+check("certificate details shown, days left highlighted", "lab.example.test" in TL.details.text() and "Lab CA" in TL.details.text() and "TLSv1.3" in TL.details.text() and __import__("ui.status", fromlist=["x"]).ink("WARN") in TL.details.text(), TL.details.text()[:200])
 TL.host.setText("10.0.0.250"); TL.go.click(); pump(lambda: TL.go.isEnabled()); check("a failure is shown plainly", "No certificate" in TL.status.text() and TL.details.text() == "")
 dev("down1", host="10.0.0.250"); dev("ok1", host="10.0.0.6")
 TL.audit_btn.click(); pump(lambda: TL.audit_btn.isEnabled() and TL.table.rowCount() > 0)

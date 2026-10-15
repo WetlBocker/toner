@@ -3,6 +3,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QApplication, QDialog, QDialogButtonBox, QFormLayout, QLabel, QLineEdit, QVBoxLayout)
 
 from core import panos, pvekey
+from ui import status as st
 
 
 def _palo(dev, user, password):
@@ -34,7 +35,7 @@ class KeyDialog(QDialog):
         self.password.setEchoMode(QLineEdit.EchoMode.Password)
         self.status = QLabel("")
         self.status.setWordWrap(True)
-        self.status.setStyleSheet("color: #d32f2f;")
+        self.status.setStyleSheet(f"color: {st.ink('FAIL')};")
         intro = QLabel(f"Toner asks {self.spec['what']} at <b>{dev.get('host', '')}</b> for a key with an administrator's sign-in. " + self.spec["intro"])
         intro.setWordWrap(True)
         form = QFormLayout()

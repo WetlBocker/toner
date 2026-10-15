@@ -61,7 +61,7 @@ QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.StandardButton.Y
 I.run_one = lambda *a, **k: (ran.append(a), [])[1]
 dlg = I.DeviceDialog()
 dlg.name.setText("PaloVM"); dlg.host.setText("10.0.025")
-check("leaving the field with a bad address marks it and says why", dlg._mark_host() != "" and "d32f2f" in dlg.host.styleSheet() and "not a valid IP address" in dlg.host.toolTip())
+check("leaving the field with a bad address marks it and says why", dlg._mark_host() != "" and __import__("ui.status", fromlist=["x"]).ink("FAIL") in dlg.host.styleSheet() and "not a valid IP address" in dlg.host.toolTip())
 dlg.host.textEdited.emit("10.0.02")
 check("typing again clears the mark until it is left", dlg.host.styleSheet() == "" and dlg.host.toolTip() == "")
 dlg.host.setText("10.0.0.25")

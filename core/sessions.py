@@ -1,12 +1,13 @@
 """Saved connection sessions: SSH, Telnet, Remote Desktop (RDP) and Serial. A session is a name plus how to connect, kept
 so it can be opened again with a double-click. SSH sessions can keep their password in Credential Manager; the rest of a
-session is stored in the database. RDP sessions start Windows' own Remote Desktop client (mstsc) with a generated .rdp
+session is stored in the database. RDP sessions run in a tab (Windows' Remote Desktop control, hosted by Toner) or start Windows' own client (mstsc) with a generated .rdp
 file, so Windows asks for the password. The others open in a terminal tab inside Toner."""
 import json
 import os
 import re
 import shutil
 import subprocess
+import sys
 from datetime import datetime
 
 import keyring
@@ -16,7 +17,7 @@ from core.folders import FolderTree
 
 KINDS = [("ssh", "SSH", 22, "Encrypted command line to a switch, router, firewall or server."),
          ("telnet", "Telnet", 23, "Plain-text command line. Not encrypted: use it only on networks you trust."),
-         ("rdp", "Remote Desktop (RDP)", 3389, "Windows' own Remote Desktop client, started with these settings."),
+         ("rdp", "Remote Desktop (RDP)", 3389, "Windows' Remote Desktop client, as a tab inside Toner (or in its own window, see Settings > Terminal)."),
          ("serial", "Serial", 0, "A console cable on a COM port (or a network serial server).")]
 NAMES = {k: label for k, label, _, _ in KINDS}
 DEFAULT_PORT = {k: p for k, _, p, _ in KINDS}
@@ -222,3 +223,46 @@ def launch_rdp(s):
     path.write_text(rdp_file_text(s), encoding="utf-8")
     subprocess.Popen([exe, str(path)], close_fds=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return path
+
+
+# ---------------------------------------------------------------- Remote Desktop inside Toner
+PROG_ID = "MsTscAx.MsTscAx"          # Windows' Remote Desktop ActiveX control (mstscax.dll), the same client mstsc.exe uses
+
+
+def embedded_available():
+    """True when Windows has the Remote Desktop control and Qt can host it, so a session can run inside Toner."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import winreg
+        winreg.CloseKey(winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, PROG_ID))
+        from PySide6 import QtAxContainer          # noqa: F401
+    except (ImportError, OSError):
+        return False
+    return True
+
+
+def use_embedded():
+    """Settings > Terminal > Remote Desktop: inside Toner (the default) when that is possible."""
+    return bool(db.get_setting("rdp_embedded")) and embedded_available()
+
+
+def split_user(username):
+    """(domain, user) for a name written domain-slash-user; ('', name) for user@domain or a plain name. The control takes the domain separately."""
+    u = (username or "").strip()
+    if "\\" in u:
+        dom, _, name = u.partition("\\")
+        return dom, name
+    return "", u
+
+
+def rdp_settings(s, width=0, height=0):
+    """What the embedded client is given for a session. `width` and `height` are the room in the tab, used when the session is
+    set to fill the window (otherwise its own size is used)."""
+    o = {**DEFAULTS["rdp"], **(s.get("options") or {})}
+    domain, user = split_user(s.get("username"))
+    fit = bool(o["fullscreen"]) and width >= 320 and height >= 240
+    return {"server": s["host"], "port": int(s.get("port") or 3389), "username": user, "domain": domain, "fit": fit,
+            "width": int(width) if fit else int(o["width"]), "height": int(height) if fit else int(o["height"]),
+            "clipboard": bool(o["clipboard"]), "drives": bool(o["drives"]), "printers": bool(o["printers"]),
+            "admin": bool(o["admin"]), "gateway": (o.get("gateway") or "").strip()}

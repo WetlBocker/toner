@@ -67,7 +67,10 @@ def snapshot(page):
             return
         for w in widgets:
             seen.add(id(w))
-        name = label
+        ctx = getattr(page, "context_of", None)
+        where = ctx(widgets[0]) if callable(ctx) else ""
+        name = f"{where}: {label}" if where else label
+        label = name
         n = 2
         while name in out:                                      # two rows with the same label stay apart
             name = f"{label} ({n})"

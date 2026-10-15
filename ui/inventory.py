@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComb
                                QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSizePolicy, QSpinBox, QStyle, QTabWidget,
                                QStackedWidget, QToolButton, QTreeWidget,
                                QTreeWidgetItem, QVBoxLayout, QWidget, QWidgetAction)
-from core import agents, audit, bulk, db, display, importer, nettools, profiles, proxy, sessions, vendors, winmon
+from core import agents, audit, bulk, db, display, importer, nettools, profiles, proxy, scope, sessions, vendors, winmon
 from ui import icons, theme
 from ui.agentfleet import AgentFleet
 from ui.columns import ColumnChooser
@@ -18,6 +18,7 @@ from ui.servicepicker import ServicePicker
 from ui.snmpfields import SnmpFields
 from core.runner import run_one
 from ui.toast import toast
+from ui import status as st
 
 
 
@@ -28,6 +29,9 @@ class DeviceDialog(QDialog):
         self.setWindowTitle("Edit device" if dev else "Add device")
         self.setMinimumWidth(460)
         self.name, self.host, self.username = QLineEdit(), QLineEdit(), QLineEdit()
+        self.ssh_pw = QLineEdit()                                  # a firewall's SSH password, for the Command Runner (its checks use the API key)
+        self.ssh_pw.setEchoMode(QLineEdit.EchoMode.Password)
+        self.ssh_pw.setPlaceholderText("leave blank to keep the stored value")
         self.host.setPlaceholderText("10.0.0.2  or  core-sw1.corp.example.com")
         self.host.editingFinished.connect(self._mark_host)
         self.host.textEdited.connect(lambda _t: self.host.setStyleSheet("") or self.host.setToolTip(""))
@@ -142,7 +146,7 @@ class DeviceDialog(QDialog):
                                              ("Location", self.location), ("Popular pages", self.preset), ("Host / DNS name", self.host),
                                              ("Port", self.port), ("Platform", self.platform),
                                              ("Details", self.details), ("", self.enabled)))
-        self.page_access, self.access = page((("Credential profile", self.profile), ("Username", self.username),
+        self.page_access, self.access = page((("Credential profile", self.profile), ("Username", self.username), ("SSH password", self.ssh_pw),
                                               ("Password", self.secret), ("", self.get_key), ("Site", self.site),
                                               ("Jump host", self.jump), ("Proxy", self.proxy_mode), ("Proxy type", self.proxy_kind),
                                               ("Proxy address", self.proxy_host), ("Proxy port", self.proxy_port),
@@ -218,6 +222,8 @@ class DeviceDialog(QDialog):
             self.win_ignore.setText(winmon.names_text(wo["ignore"]))
             if keyring.get_password(db.SERVICE, db.secret_name(dev["name"], "proxy")):
                 self.proxy_pw.setPlaceholderText("saved; leave blank to keep")
+            if keyring.get_password(db.SERVICE, db.secret_name(dev["name"], "ssh")):
+                self.ssh_pw.setPlaceholderText("saved; leave blank to keep")
             try:
                 own = json.loads(dev.get("snmp") or "{}")
             except ValueError:
@@ -258,7 +264,14 @@ class DeviceDialog(QDialog):
         self.checks_tab.set_vendor(vendor)
         info = vendors.get(vendor)
         snmp_only = vendors.is_snmp(vendor)
-        self.access.setRowVisible(self.username, info["username"])
+        cli = vendor in vendors.CLI_TYPES
+        self.access.setRowVisible(self.username, info["username"] or cli)
+        self.access.setRowVisible(self.ssh_pw, cli)
+        self.access.labelForField(self.username).setText("SSH user name" if cli else "Username")
+        self.username.setPlaceholderText("optional, for the Command Runner (the checks use the API key)" if cli else "")
+        tip = "Only the Command Runner uses this SSH login, to run commands on the firewall's command line. The checks and backups use the API key." if cli else ""
+        self.username.setToolTip(tip)
+        self.ssh_pw.setToolTip(tip)
         self.access.setRowVisible(self.site, bool(info["site"]))
         from ui.keydialog import KEYS
         self.access.setRowVisible(self.get_key, vendor in KEYS)
@@ -343,6 +356,10 @@ class DeviceDialog(QDialog):
                     "port": self.proxy_port.value(), "username": self.proxy_user.text().strip()}
         return ""
 
+    def ssh_secrets(self):
+        """A firewall's SSH password, when one was typed."""
+        return {"ssh": self.ssh_pw.text()} if self._vendor() in vendors.CLI_TYPES and self.ssh_pw.text() else {}
+
     def proxy_secrets(self):
         v = self._proxy_values()
         return {"proxy": self.proxy_pw.text()} if v and v["mode"] == "custom" and self.proxy_pw.text() else {}
@@ -376,7 +393,7 @@ class DeviceDialog(QDialog):
 
     def _snapshot(self):
         try:
-            return json.dumps([self.values(), self.secret.text(), self.proxy_pw.text(), self.snmp_secrets()], sort_keys=True, default=str)
+            return json.dumps([self.values(), self.secret.text(), self.proxy_pw.text(), self.snmp_secrets(), self.ssh_pw.text()], sort_keys=True, default=str)
         except Exception:
             return ""
 
@@ -500,7 +517,7 @@ class DeviceDialog(QDialog):
             problem = ""
         except ValueError as e:
             problem = str(e)
-        self.host.setStyleSheet("border: 1px solid #d32f2f;" if problem else "")
+        self.host.setStyleSheet(f"border: 1px solid {st.ink('FAIL')};" if problem else "")
         self.host.setToolTip(problem)
         return problem
 
@@ -657,9 +674,12 @@ class InventoryTab(QWidget):
     changed = Signal()
     open_agent_settings = Signal()
     open_ssh = Signal(dict)
+    open_rdp_tab = Signal(dict)
+    scan_requested = Signal()                    # the empty inventory's "Scan the network": the discovery tool
     open_details = Signal(dict)
-    COLS = ["Name", "Vendor", "Platform", "Location", "Host", "Site", "Details", "Tags", "Status"]
+    COLS = ["Name", "Vendor", "Platform", "Location", "Host", "Site", "Details", "Tags", "Status", "Last checked"]
     STATUS = 8
+    CHECKED = 9
 
     def __init__(self):
         super().__init__()
@@ -693,6 +713,8 @@ class InventoryTab(QWidget):
         self.table.customContextMenuRequested.connect(self.show_menu)
         self.table.itemSelectionChanged.connect(self.update_buttons)
         self.table.itemDoubleClicked.connect(self.double_clicked)
+        from ui.widgets import StatusDelegate
+        self.table.setItemDelegateForColumn(self.STATUS, StatusDelegate(self.table))      # the same pill as Results and the Overview
         self.columns = ColumnChooser(self.table, self.table.header(), "inventory_columns", self.COLS, locked=(0,), auto=self._empty_columns)
         self.table.itemExpanded.connect(lambda it: (self.remember(it, True), self._autosize()))
         self.table.itemCollapsed.connect(lambda it: (self.remember(it, False), self._autosize()))
@@ -803,7 +825,6 @@ class InventoryTab(QWidget):
             cache[key] = icons.icon(name, key[1])
         return cache[key]
 
-    DOTS = {"OK": "#2e9e5b", "WARN": "#e0a100", "FAIL": "#d32f2f", "ERROR": "#8e44ad"}
     SHAPES = {"OK": "circle", "WARN": "triangle", "FAIL": "square", "ERROR": "diamond"}
 
     def _device_icon(self, status):
@@ -811,10 +832,11 @@ class InventoryTab(QWidget):
         t = theme.current()
         if not t:
             return QIcon()
-        key = ("dot", status, t["muted"])
+        ink = st.ink(status)
+        key = ("dot", status, t["muted"], ink)
         cache = self.__dict__.setdefault("_icons", {})
         if key not in cache:
-            cache[key] = icons.icon_with_dot("device", t["muted"], self.DOTS.get(status, "#9e9e9e"), shape=self.SHAPES.get(status, "circle"))
+            cache[key] = icons.icon_with_dot("device", t["muted"], ink, shape=self.SHAPES.get(status, "circle"))
         return cache[key]
 
     @staticmethod
@@ -907,11 +929,12 @@ class InventoryTab(QWidget):
         return "group", ident
 
     def _device_values(self, d):
-        site = d["site"] if vendors.get(d["vendor"]).get("site") else "N/A"
+        site = d["site"] if vendors.get(d["vendor"]).get("site") else ""              # blank where it does not apply, not "N/A"
         platform = vendors.mode_label(d["vendor"]) or (display.platform_name(d.get("platform") or vendors.default_platform(d["vendor"]))
-                                                       if vendors.platform_keys(d["vendor"]) else "N/A")
+                                                       if vendors.platform_keys(d["vendor"]) else "")
+        state = self.health.get(d["name"]) if d["enabled"] else None
         return [d["name"], display.vendor_name(d["vendor"]), platform, d.get("location") or "", d["host"], site,
-                d.get("details") or "", d.get("tags") or "", self._status_word(d)]
+                d.get("details") or "", d.get("tags") or "", self._status_word(d), display.ago(state["at"]) if state else ""]
 
     def _status_word(self, d):
         """What the Status column says, in words as well as colour: OK, WARN, FAIL, ERROR, Not checked, or Disabled."""
@@ -921,12 +944,12 @@ class InventoryTab(QWidget):
         return state["status"] if state else "Not checked"
 
     def _empty_columns(self):
-        """Columns that say nothing for the devices shown: Site that is N/A everywhere, and Details and Tags that are blank everywhere."""
+        """Columns that say nothing for the devices shown: Platform, Site, Details and Tags that are blank everywhere."""
         devs = [d for k, d in self.payload.items() if k.startswith("device:")]
         if not devs:
             return set()
         vals = [self._device_values(d) for d in devs]
-        return {i for i in (5, 6, 7) if all(v[i] in ("", "N/A") for v in vals)}
+        return {i for i in (2, 5, 6, 7) if all(v[i] == "" for v in vals)}
 
     def _device_item(self, d):
         it = QTreeWidgetItem(self._device_values(d))
@@ -937,7 +960,7 @@ class InventoryTab(QWidget):
         it.setIcon(0, self._device_icon(state["status"]) if state and d["enabled"] else self._icon("device"))
         if state and d["enabled"]:
             bad = state["problems"]
-            lines = [f"{state['status']} as of {state['at']}"] + [f"  {c}: {m}" if m else f"  {c}" for c, _s, m in bad[:6]]
+            lines = [f"{state['status']} as of {state['at']}"] + ["  " + display.said(c, m) for c, _s, m in bad[:6]]
             if len(bad) > 6:
                 lines.append(f"  ... and {len(bad) - 6} more")
             it.setToolTip(0, "\n".join(lines))
@@ -946,16 +969,12 @@ class InventoryTab(QWidget):
         if db.normalize_checkopts(d.get("checkopts")):
             it.setToolTip(0, (it.toolTip(0) + "\n" if it.toolTip(0) else "") + "Has its own checks or thresholds (Edit > Checks)")
         it.setFlags((it.flags() | Qt.ItemFlag.ItemIsDragEnabled) & ~Qt.ItemFlag.ItemIsDropEnabled)
-        word = it.text(self.STATUS)
         if not d["enabled"]:                                      # left out of runs: the whole row is dimmed
             muted = QColor((theme.current() or {}).get("muted", "#888888"))
             for col in range(len(self.COLS)):
                 it.setForeground(col, muted)
-        elif word in self.DOTS:
-            f = it.font(self.STATUS)
-            f.setBold(True)
-            it.setFont(self.STATUS, f)
-            it.setForeground(self.STATUS, QColor(self.DOTS[word]))
+        if state and d["enabled"]:
+            it.setToolTip(self.CHECKED, state["at"])
         return it
 
     def _enter(self):
@@ -968,8 +987,21 @@ class InventoryTab(QWidget):
     def filtering(self):
         return bool(self.vendor_sel or self.location_sel or self.tag_sel or self._words())
 
+    def _empty_hint(self):
+        """'No devices yet' with the three ways to start, or 'nothing matches' when a search or filter hides everything."""
+        from ui.widgets import EmptyHint
+        if getattr(self, "hint", None) is None:
+            self.hint = EmptyHint(self.table, "No devices yet", "Add them one by one, import a list, or let Toner find them on the network")
+        if scope.keep(db.list_devices()) or (db.list_devices() and scope.current() is None):
+            self.hint.set_text("Nothing matches", "Clear the search box or the filter to see every device")
+            self.hint.set_actions([])
+        else:
+            self.hint.set_text("No devices yet", "Add them one by one, import a list (CSV, JSON or YAML), or let Toner find them on the network")
+            self.hint.set_actions([("Add device", self.add), ("Import...", self.import_file), ("Scan the network", self.scan_requested.emit)])
+        return self.hint
+
     def refresh(self):
-        devs = self._visible(db.list_devices())
+        devs = scope.keep(self._visible(db.list_devices()))
         try:
             self.health = db.device_health()
         except Exception:
@@ -991,6 +1023,7 @@ class InventoryTab(QWidget):
         self.table.setCurrentItem(None)
         self.table.blockSignals(False)
         self.update_buttons()
+        self._empty_hint().setVisible(self.table.topLevelItemCount() == 0)
         if hasattr(self, "fleet"):
             self._update_views()
             if self.stack.currentWidget() is self.fleet:
@@ -1005,9 +1038,25 @@ class InventoryTab(QWidget):
         for d in devs:
             fid = d.get("folder_id")
             by_folder.setdefault(fid if fid in known else None, []).append(d)
+        client = scope.current()
+        if client is not None:                    # one client: its folder is the only thing at the top
+            kids[None] = [f for f in folders if f["id"] == client]
+            by_folder[None] = []
 
         def count(fid):
             return len(by_folder.get(fid, [])) + sum(count(c["id"]) for c in kids.get(fid, []))
+
+        def roll(fid):
+            """{status: devices} for the enabled devices in a folder and the ones under it (what the folder's row says when it is closed)."""
+            out = {}
+            for d in by_folder.get(fid, []):
+                state = self.health.get(d["name"]) if d["enabled"] else None
+                if state and state["status"] != "OK":
+                    out[state["status"]] = out.get(state["status"], 0) + 1
+            for c in kids.get(fid, []):
+                for k, v in roll(c["id"]).items():
+                    out[k] = out.get(k, 0) + v
+            return out
 
         def fill(parent_item, fid):
             for f in sorted(kids.get(fid, []), key=lambda f: f["name"].lower()):
@@ -1018,11 +1067,18 @@ class InventoryTab(QWidget):
                 item.setData(0, ROLE, key)
                 self.payload[key] = f
                 item.setFont(0, bold)
+                bad = roll(f["id"])
+                if bad:                               # a closed folder still shows that something inside it is wrong
+                    worst = next(k for k in ("ERROR", "FAIL", "WARN") if k in bad)
+                    item.setText(self.STATUS, "  ".join(f"{bad[k]} {k}" for k in ("ERROR", "FAIL", "WARN") if k in bad))
+                    item.setForeground(self.STATUS, st.qink(worst))
+                    item.setFont(self.STATUS, bold)
+                    item.setToolTip(self.STATUS, "Devices in this folder, and the folders in it, that are not OK")
                 item.setIcon(0, self._icon("folder", True))
                 item.setFlags(item.flags() | Qt.ItemFlag.ItemIsDragEnabled | Qt.ItemFlag.ItemIsDropEnabled)
                 (parent_item.addChild if parent_item else self.table.addTopLevelItem)(item)
                 fill(item, f["id"])
-                item.setExpanded(f["id"] in self.expanded or self.filtering())
+                item.setExpanded(f["id"] in self.expanded or self.filtering() or f["id"] == client)
             for d in sorted(by_folder.get(fid, []), key=lambda d: d["name"].lower()):
                 (parent_item.addChild if parent_item else self.table.addTopLevelItem)(self._device_item(d))
 
@@ -1127,7 +1183,7 @@ class InventoryTab(QWidget):
     def add(self):
         dlg = DeviceDialog(parent=self, folder_id=self.current_folder() if self.folders_mode() else None)
         if dlg.exec():
-            self._save(dlg.values(), dlg.secret.text(), extra_secrets={**dlg.snmp_secrets(), **dlg.proxy_secrets()})
+            self._save(dlg.values(), dlg.secret.text(), extra_secrets={**dlg.snmp_secrets(), **dlg.proxy_secrets(), **dlg.ssh_secrets()})
 
     def edit(self):
         d = self.selected()
@@ -1137,7 +1193,7 @@ class InventoryTab(QWidget):
     def edit_device(self, d):
         dlg = DeviceDialog(d, self)
         if dlg.exec():
-            self._save(dlg.values(), dlg.secret.text(), old_name=d["name"], extra_secrets={**dlg.snmp_secrets(), **dlg.proxy_secrets()})
+            self._save(dlg.values(), dlg.secret.text(), old_name=d["name"], extra_secrets={**dlg.snmp_secrets(), **dlg.proxy_secrets(), **dlg.ssh_secrets()})
 
     def show_details(self):
         d = self.selected()
@@ -1169,10 +1225,7 @@ class InventoryTab(QWidget):
     def open_rdp(self):
         d = self.selected()
         if d:
-            try:
-                sessions.launch_rdp(sessions.rdp_for_device(d))
-            except OSError as e:
-                QMessageBox.warning(self, "Remote Desktop", str(e))
+            self.open_rdp_tab.emit(d)
 
     # ---------- folders ----------
     def _ask_name(self, title, label, text=""):

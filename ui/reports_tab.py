@@ -6,7 +6,7 @@ from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFileDialog, QHBoxLayout, QLabel,
                                QMessageBox, QPushButton, QTableWidget, QTableWidgetItem,
                                QVBoxLayout, QWidget)
-from core import alerts, db, display, reports, trends, vendors
+from core import alerts, db, display, reports, scope, trends, vendors
 from drivers.base import SEVERITY, Result
 from ui.widgets import FilterButton, StatusDelegate, flow
 from ui.toast import toast
@@ -90,6 +90,9 @@ class ReportsTab(QWidget):
         else:
             self.base = [Result(r["device"], r["check_name"], r["status"], r["value"] or "",
                                 r["message"] or "") for r in db.run_results(data)]
+        names = scope.names()
+        if names is not None:
+            self.base = [r for r in self.base if alerts.base(r.device) in names]
         self.base.sort(key=lambda r: (-SEVERITY[r.status], r.device, r.check))
         devices = {d["name"]: d for d in db.list_devices()}
         self._meta = {}

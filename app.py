@@ -8,7 +8,7 @@ from pathlib import Path
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence, QPainter, QPixmap, QShortcut
 from PySide6.QtWidgets import QApplication, QMainWindow, QMenu, QMessageBox, QSystemTrayIcon
-from core import agents, audit, checks, db, notify, paths, reports, sessionlog, sessions, trends
+from core import agents, audit, checks, db, display, notify, paths, reports, sessionlog, sessions, trends
 from ui import theme
 from ui.about import AboutTab
 from ui.configs import ConfigsTab
@@ -23,6 +23,7 @@ from ui.reports_tab import ReportsTab
 from ui.results import ResultsTab
 from ui.scheduler import BackupScheduler, Scheduler
 from ui.sessions import SessionsTab
+from ui.automation import AutomationTab
 from ui.settings import SettingsTab
 from ui.tools import ToolsTab
 
@@ -64,7 +65,8 @@ def app_icon(accent=None):
 
 def apply_look(app):
     """Theme, text size and status colours from Settings > Appearance."""
-    theme.apply(app, db.get_setting("theme"), int(db.get_setting("font_size")), db.get_setting("accent"))
+    theme.apply(app, db.get_setting("theme"), int(db.get_setting("font_size")), db.get_setting("accent"),
+                db.get_setting("ui_style"))
     reports.apply_colors(db.get_setting("color_preset"), db.get_setting("status_colors"))
     app.setWindowIcon(app_icon(theme.current().get("accent", "#2563eb")))
 
@@ -83,6 +85,7 @@ class Main(QMainWindow):
         self.reports = ReportsTab(lambda: self.results.results)
         self.tools = ToolsTab()
         self.sessions = SessionsTab()
+        self.automation = AutomationTab()
         self.configs = ConfigsTab()
         self.settings = SettingsTab()
         self.about = AboutTab()
@@ -118,16 +121,28 @@ class Main(QMainWindow):
         self.inventory.changed.connect(self.reports.refresh)
         self.inventory.changed.connect(self.settings.refresh_dynamic)
         self.inventory.open_ssh.connect(self.open_ssh_console)
+        self.inventory.open_rdp_tab.connect(self.open_rdp_console)
         self.inventory.open_details.connect(self.open_device_view)
         self.inventory.open_agent_settings.connect(self.open_agent_settings)
         self.results.open_device.connect(self.open_device_by_name)
         self.dashboard.open_device.connect(self.open_device_by_name)
         self.dashboard.goto.connect(self.go)
+        self.history.runs_hint.set_actions([("Run checks", lambda: (self.go("Results"), self.results.start()))])
+        self.inventory.scan_requested.connect(lambda: (self.go("Tools"), self.tools.tabs.setCurrentWidget(self.tools.discovery)))
+        self.dashboard.device_action.connect(self.on_device_action)
+        self.dashboard.show_results.connect(lambda what: (self.go("Results"), self.results.show_filter(what)))
         self.dashboard.action.connect(self.dashboard_action)
         self.dashboard.run_requested.connect(lambda: (self.go("Results"), self.results.start()))
         self.dashboard.backup_requested.connect(lambda: (self.go("Configs"), self.configs.start()))
         self.tools.inventory_changed.connect(self.inventory_reloaded)
         self.settings.changed.connect(self.settings_applied)
+        self.settings.changed.connect(self.automation.refresh)
+        self.inventory.changed.connect(self.automation.refresh)
+        self.automation.edit_requested.connect(self.edit_playbook)
+        self.automation.settings_requested.connect(self.open_ansible_settings)
+        self.tools.playbooks.run_requested.connect(self.run_playbook)
+        self.tools.playbooks.settings_requested.connect(self.open_ansible_settings)
+        self.tools.playbooks.library_changed.connect(self.automation.refresh)
         self.about.update_available.connect(self._update_available)
         self.about.update_cleared.connect(lambda: self.tabs.setBadge(self.about, False))
         self.about.quit_requested.connect(self.quit_for_real)           # the installer has been started
@@ -136,20 +151,37 @@ class Main(QMainWindow):
                                   (self.inventory, "Inventory", "inventory"), (self.configs, "Configs", "configs"),
                                   (self.history, "History", "history"), (self.reports, "Reports", "reports"),
                                   (self.tools, "Tools", "tools"), (self.sessions, "Sessions", "sessions"),
+                                  (self.automation, "Automation", "automation"),
                                   (self.settings, "Settings", "settings"),
                                   (self.about, "About", "about")):
             tabs.addTab(page, label, icon)
         self.setCentralWidget(tabs)
+        from ui.statusstrip import StatusStrip
+        self.strip = StatusStrip(self)
+        self.statusBar().addWidget(self.strip, 1)
+        self.statusBar().setSizeGripEnabled(False)
+        self.statusBar().setStyleSheet("QStatusBar { border: 0; padding: 0; } QStatusBar::item { border: 0; }")
+        self.strip.navigate.connect(self._strip_go)
+        self.results.progress.connect(self.strip.on_progress)
+        self.results.run_finished.connect(self.strip.refresh)
         self.palette = CommandPalette(self)
         QShortcut(QKeySequence("Ctrl+K"), self, activated=self.open_palette)
         for i in range(min(9, tabs.count())):
             QShortcut(QKeySequence(f"Ctrl+{i + 1}"), self, activated=lambda i=i: tabs.setCurrentIndex(i))
         tabs.search_requested.connect(self.open_palette)
+        self._add_headers()
+        tabs.client_changed.connect(self.set_client)
+        self.inventory.changed.connect(self.refresh_clients)
+        self.refresh_clients()
+        tabs.currentChanged.connect(lambda _i: self.update_headers())
+        self.results.run_finished.connect(self.update_headers)
+        self.inventory.changed.connect(self.update_headers)
         tabs.setCollapsed(bool(db.get_setting("sidebar_collapsed")))
         tabs.collapsed_changed.connect(lambda on: db.set_setting("sidebar_collapsed", on))
         QShortcut(QKeySequence("Ctrl+B"), self, activated=lambda: tabs.setCollapsed(not tabs.collapsed()))
         self.restore_layout()
         self.scheduler.apply(first=True)
+        QTimer.singleShot(0, self.strip.refresh)                      # once the schedules are armed
         self.backup_scheduler.apply(first=True)
         self.update_tray()
         agents.apply()                                  # the Windows agent receiver, if it is turned on
@@ -158,6 +190,64 @@ class Main(QMainWindow):
         self.housekeeping.timeout.connect(self.do_housekeeping)
         self.housekeeping.start()
         QTimer.singleShot(5000, self.do_housekeeping)
+
+    # ---------- section headers
+    HEADERS = (("inventory", "Inventory"), ("configs", "Configs"), ("history", "History"), ("reports", "Reports"), ("tools", "Tools"),
+               ("sessions", "Sessions"), ("automation", "Automation"), ("settings", "Settings"))
+
+    def _add_headers(self):
+        """The same top line on every section: its name and a line of context (Overview and Results make their own; About is its own page)."""
+        from ui.widgets import SectionHeader
+        self.headers = {}
+        for attr, title in self.HEADERS:
+            page = getattr(self, attr)
+            h = SectionHeader(title)
+            page.layout().insertWidget(0, h)
+            self.headers[attr] = h
+        self.update_headers()
+
+    def update_headers(self):
+        """Refill the context lines (cheap: read when a section is shown, after a run and when the inventory changes)."""
+        if not getattr(self, "headers", None):
+            return
+        try:
+            from core import scope
+            devs = scope.keep(db.list_devices())
+            health = db.device_health()
+        except Exception:
+            return
+        on = [d for d in devs if d["enabled"]]
+        bad = {s: sum(1 for d in on if (health.get(d["name"]) or {}).get("status") == s) for s in ("FAIL", "ERROR", "WARN")}
+        bits = [f"{len(devs)} device{'s' if len(devs) != 1 else ''}"]
+        if bad["FAIL"] + bad["ERROR"]:
+            bits.append(f"{bad['FAIL'] + bad['ERROR']} failing")
+        if bad["WARN"]:
+            bits.append(f"{bad['WARN']} with warnings")
+        if len(on) < len(devs):
+            bits.append(f"{len(devs) - len(on)} disabled")
+        self.headers["inventory"].set_context("  ·  ".join(bits))
+        try:
+            from core import backup
+            mine = {d["name"] for d in devs}
+            summ = {k: v for k, v in backup.summary().items() if k in mine}
+            last = max((v.get("last") or "" for v in summ.values()), default="")
+            n = sum(1 for v in summ.values() if v.get("versions"))
+            self.headers["configs"].set_context(f"{n} device{'s' if n != 1 else ''} backed up" + (f"  ·  last backup {display.ago(last)}" if last else ""))
+        except Exception:
+            pass
+        run = db.last_run()
+        self.headers["history"].set_context(f"Last run {display.ago(run['started_at'])}" if run else "No runs yet")
+        self.headers["reports"].set_context("Exports (CSV, HTML, PDF) and trend reports")
+        self.headers["tools"].set_context("Troubleshooting, discovery, SNMP, file transfer and certificates")
+        try:
+            saved = len(sessions.list_sessions())
+            live = self.sessions.count_open()
+            opened = self.sessions.tabs.count()
+            self.headers["sessions"].set_context(f"{saved} saved" + (f"  ·  {opened} open" if opened else "") + (f"  ·  {live} connected" if live else ""))
+        except Exception:
+            pass
+        self.headers["automation"].set_context("Run Ansible playbooks on your devices. Write them in Tools > Playbook Editor.")
+        self.headers["settings"].set_context("Checks, connections, alerts, look and data. Nothing changes until you press Save changes.")
 
     # ---------- window size and place, remembered between runs
     def restore_layout(self):
@@ -176,6 +266,19 @@ class Main(QMainWindow):
         except Exception:
             log.exception("could not save the window layout")
 
+    # ---------- Ansible: the editor (Tools) and the runner (Automation) hand over to each other
+    def edit_playbook(self, name):
+        self.go("Tools")
+        self.tools.edit_playbook(name)
+
+    def run_playbook(self, name):
+        self.go("Automation")
+        self.automation.select_playbook(name)
+
+    def open_ansible_settings(self):
+        self.go("Settings")
+        self.settings.select_page("Ansible")
+
     # ---------- navigation
     def go(self, section):
         for i in range(self.tabs.count()):
@@ -193,6 +296,59 @@ class Main(QMainWindow):
         self.inventory.refresh()
         self.inventory.changed.emit()
 
+    # ---------- the client being looked at
+    def refresh_clients(self):
+        """The sidebar's list of clients (top-level folders), after the folders changed."""
+        from core import scope
+        self.tabs.set_clients(scope.clients(), scope.current())
+        name = scope.name()
+        self.setWindowTitle(f"Toner - {name}" if name else "Toner")
+
+    def set_client(self, fid):
+        """Narrow every section to one client (or show all), and say so in the window title."""
+        from core import scope
+        scope.set_current(fid)
+        name = scope.name()
+        self.setWindowTitle(f"Toner - {name}" if name else "Toner")
+        self.dashboard.refresh()
+        self.results.load_stored() if self.results.stored else self.results.repopulate()
+        self.inventory.refresh()
+        self.configs.refresh()
+        self.history.refresh()
+        self.reports.refresh()
+        self.update_headers()
+
+    def _strip_go(self, section, page):
+        self.go(section)
+        if page:
+            self.settings.select_page(page)
+
+    def on_device_action(self, what, name):
+        """What the Overview's Needs attention asks for on one device."""
+        dev = next((d for d in db.list_devices() if d["name"] == name), None)
+        if dev is None:
+            return
+        if what == "open":
+            self.open_device_view(dev)
+        elif what == "run":
+            self.go("Results")
+            self.results.run_devices([name])
+        elif what == "ssh":
+            self.open_ssh_console(dev)
+        elif what == "rdp":
+            self.open_rdp_console(dev)
+
+    def open_rdp_console(self, dev):
+        """Inventory > Open Remote Desktop, the device window and the palette: a Remote Desktop tab in Sessions (or Windows' own client, per Settings > Terminal)."""
+        if sessions.use_embedded():
+            self.tabs.setCurrentWidget(self.sessions)
+            self.sessions.open_rdp_device(dev)
+            return
+        try:
+            sessions.launch_rdp(sessions.rdp_for_device(dev))
+        except OSError as e:
+            QMessageBox.warning(self, "Remote Desktop", str(e))
+
     def open_ssh_console(self, dev):
         """Inventory > right-click > Open SSH session, the device window and the palette: an SSH tab in Sessions."""
         self.tabs.setCurrentWidget(self.sessions)
@@ -202,6 +358,12 @@ class Main(QMainWindow):
         widget = {"ping": self.tools.liveping, "snmp": self.tools.snmp, "tls": self.tools.tls, "mtr": self.tools.mtr}[name]
         self.tabs.setCurrentWidget(self.tools)
         self.tools.show_tool(widget, dev)
+        if name == "ping":                                   # asked to ping this device: start pinging it, not just fill in the box
+            if widget.running():
+                widget.halt()
+            widget.start()
+        self.raise_()
+        self.activateWindow()
 
     def dashboard_action(self, name):
         """The steps of the Overview's getting-started card."""
@@ -228,8 +390,10 @@ class Main(QMainWindow):
         view = self.views.get(dev["name"])
         if view is None:
             view = DeviceView(dev, self)
-            view.ssh_requested.connect(self.open_ssh_console)
-            view.tool_requested.connect(self.open_tool)
+            # what these open takes over the main window, so the details page gets out of the way (it would otherwise stay in front)
+            view.ssh_requested.connect(lambda d, v=view: (v.close(), self.open_ssh_console(d)))
+            view.rdp_requested.connect(lambda d, v=view: (v.close(), self.open_rdp_console(d)))
+            view.tool_requested.connect(lambda name, d, v=view: (v.close(), self.open_tool(name, d)))
             view.edit_requested.connect(lambda d: self.inventory.edit_device(d))
             view.changed.connect(self._view_changed)
             view.finished.connect(lambda _=0, n=dev["name"]: self.views.pop(n, None))
@@ -259,6 +423,15 @@ class Main(QMainWindow):
         for i in range(self.tools.tabs.count()):
             entries.append((f"Tool: {self.tools.tabs.tabText(i)}", "",
                             lambda i=i: (self.go("Tools"), self.tools.tabs.setCurrentIndex(i))))
+        other = "Standard" if db.get_setting("ui_style") == theme.OPS else theme.OPS
+        entries.append((f"Style: {other}", "Settings > Appearance", lambda o=other: self.set_style(o)))
+        entries.append(("New playbook", "Tools > Playbook Editor", lambda: (self.go("Tools"), self.tools.playbooks.new_playbook())))
+        try:
+            from core import ansible
+            for pb in ansible.list_playbooks():
+                entries.append((f"Playbook: {pb['name']}", "edit in Tools > Playbook Editor", lambda n=pb["name"]: self.edit_playbook(n)))
+        except Exception:
+            log.exception("could not list the playbooks for the search")
         for s in sessions.list_sessions():
             entries.append((f"Session: {s['name']}", " - ".join(x for x in (sessions.NAMES[s["kind"]], sessions.path_of(s)) if x),
                             lambda s=s: (self.go("Sessions"), self.sessions.open_session(s["id"]))))
@@ -266,9 +439,13 @@ class Main(QMainWindow):
             entries.append((f"Device: {d['name']}", d["host"], lambda d=d: self.open_device_view(d)))
             if d["vendor"] in ("cisco", "juniper", "arista", "hpe", "mikrotik"):
                 entries.append((f"SSH to {d['name']}", d["host"], lambda d=d: self.open_ssh_console(d)))
+            if d["vendor"] == "windows":
+                entries.append((f"Remote Desktop to {d['name']}", d["host"], lambda d=d: self.open_rdp_console(d)))
         # found by typing, so they come after what the list shows first: sections, tools, sessions and devices
         for title in self.settings.page_titles():                       # any page of Settings by name
             entries.append((f"Settings: {title}", "", lambda t=title: (self.go("Settings"), self.settings.select_page(t))))
+        for tab, hint in (("Schedule", "when the checks run, and the certificate check"), ("Custom", "checks you write yourself")):
+            entries.append((f"Settings: Checks > {tab}", hint, lambda t=tab: (self.go("Settings"), self.settings.select_page("Checks", t))))
         for key, label in db.THRESHOLD_LABELS.items():
             entries.append((f"Threshold: {label}", "Settings > Thresholds", lambda: (self.go("Settings"), self.settings.select_page("Thresholds"))))
         shown = set()
@@ -333,6 +510,12 @@ class Main(QMainWindow):
         except Exception:
             log.exception("housekeeping failed")
 
+    def set_style(self, style):
+        """Switch between the Standard and Ops console looks (Ctrl+K); the same setting as Settings > Appearance."""
+        db.set_setting("ui_style", style)
+        self.settings.reload()
+        self.settings_applied()
+
     def settings_applied(self):
         """Make a saved (or imported) settings change take effect everywhere, without a restart."""
         apply_look(QApplication.instance())
@@ -346,6 +529,7 @@ class Main(QMainWindow):
         self.scheduler.apply()
         self.backup_scheduler.apply()
         agents.apply()
+        self.strip.restyle()
         self.results.refresh_groups()
         self.dashboard.refresh()
 
@@ -360,9 +544,18 @@ class Main(QMainWindow):
                 self.tray.showMessage("Toner is still running", "Scheduled checks and backups continue. "
                                       "Use the tray icon to open Toner or quit.", QSystemTrayIcon.MessageIcon.Information, 6000)
             return
+        if not self.tools.playbooks.leave():                 # an unsaved playbook: the person chose to keep editing
+            self._quitting = False
+            event.ignore()
+            return
+        if self.automation.running() and QMessageBox.question(self, "A playbook is running", "Ansible is still running a playbook. Stop it and quit?") != QMessageBox.StandardButton.Yes:
+            self._quitting = False
+            event.ignore()
+            return
         for v in list(self.views.values()):
             v.close()
         self.tools.shutdown()          # stop any running ping/scan/transfer before exiting
+        self.automation.shutdown()     # stop a playbook that is still running
         self.sessions.shutdown()       # close every open terminal and finish its log
         self.configs.shutdown()
         agents.stop()

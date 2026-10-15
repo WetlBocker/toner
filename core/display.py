@@ -47,6 +47,12 @@ def uptime(hours=None, seconds=None):
     return f"{days}:{hrs:02d}:{mins:02d}:{secs:02d}"
 
 
+def said(name, message):
+    """'Disk D: very high' as 'Disk D: very high' (and 'cpu' + 'high' as 'cpu: high'): a check name that already ends in a colon does not get a second one."""
+    name = (name or "").rstrip()
+    return (name if name.endswith(":") else name + ":") + " " + message if message else name
+
+
 def check_name(name):
     """'wan links' -> 'WAN Links'; 'channel util (ng)' -> 'Channel Util (NG)'; 'tx retries (2.4 GHz)' -> 'TX Retries (2.4 GHz)'; 'sd-wan' -> 'SD-WAN'."""
     base, sep, rest = (name or "").partition(" (")
@@ -61,3 +67,19 @@ def value(v):
     if v == "ok":
         return "OK"
     return v[:1].upper() + v[1:] if re.fullmatch(r"[a-z][a-z ]*", v) else v
+
+
+def ago(stamp, now=None):
+    """'just now', '12 min ago', '3 h ago' or '4 days ago' for a stored time such as '2026-10-12 16:06:37'. Unreadable: as it is."""
+    from datetime import datetime
+    try:
+        secs = ((now or datetime.now()) - datetime.strptime(str(stamp)[:19], "%Y-%m-%d %H:%M:%S")).total_seconds()
+    except (TypeError, ValueError):
+        return stamp or ""
+    if secs < 90:
+        return "just now"
+    if secs < 5400:
+        return f"{secs / 60:.0f} min ago"
+    if secs < 129600:
+        return f"{secs / 3600:.0f} h ago"
+    return f"{secs / 86400:.0f} days ago"

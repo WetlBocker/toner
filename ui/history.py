@@ -5,10 +5,11 @@ from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QHBoxLayout, QLabel, QScrollArea, QSizePolicy, QSplitter,
                                QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
-from core import db, display
+from core import db, display, scope
 from core.reports import COLORS, fg_for
 from ui import theme
 from ui.widgets import EmptyHint, GroupPicker, StatusDelegate, flow
+from ui import status as st
 
 PCT_CHECKS = ("cpu", "memory")
 
@@ -205,7 +206,7 @@ class TrendChart(QWidget):
             p.setPen(muted)
             p.drawText(QRectF(0, y(value) - 9, 46, 18), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, label)
         if only_uptime:                                           # a drop in uptime is a restart: mark where, behind the lines
-            red = QColor("#ef4444")
+            red = st.qink("FAIL")
             for _c, points, color in self.series:
                 for stamp, _before, _after in restarts(points):
                     red.setAlpha(150)
@@ -215,7 +216,7 @@ class TrendChart(QWidget):
                         p.setPen(red)
                         p.drawText(QPointF(min(x(stamp) + 5, r.right() - fm.horizontalAdvance("restart") - 2), r.top() + 13), "restart")
         if self.th and allpct:
-            for key, c in (("warn", "#e6b800"), ("fail", "#d32f2f")):
+            for key, c in (("warn", st.ink("WARN")), ("fail", st.ink("FAIL"))):
                 p.setPen(QPen(QColor(c), 1.2, Qt.PenStyle.DashLine))
                 p.drawLine(QPointF(r.left(), y(self.th[key])), QPointF(r.right(), y(self.th[key])))
 
@@ -268,7 +269,7 @@ class TrendChart(QWidget):
                 for c, pts, color in self.series if stamp in dict(pts)]
         for c, pts, _color in self.series:                         # say so when the device restarted since the previous run
             if is_uptime(c) and any(s == stamp for s, _b, _a in restarts(pts)):
-                rows.append(("Restarted", "since the run before", QColor("#ef4444")))
+                rows.append(("Restarted", "since the run before", st.qink("FAIL")))
         return rows
 
     def _tooltip(self, p, stamp, rows, fm):
@@ -404,11 +405,14 @@ class HistoryTab(QWidget):
         split.addWidget(right)
         split.setSizes([450, 450])
         lay = QVBoxLayout(self)
-        lay.addWidget(split)
+        lay.addWidget(split, 1)                 # the page takes all the height: without the stretch the header drifts down the window
         self.refresh()
 
     def _group_names(self):
-        return db.group_device_names(self.group.selected())
+        names, client = db.group_device_names(self.group.selected()), scope.names()
+        if client is None:
+            return names
+        return client if names is None else set(names) & client
 
     @staticmethod
     def _base(device):

@@ -87,9 +87,9 @@ check("last run shown", "Last run" in dash.when.text() and dash.hint.isHidden())
 check("availability bars: worst first", dash.bars.rows[0][0] == "dead" and dash.bars.rows[0][1] == 0.0 and dash.bars.rows[-1][1] == 100.0, dash.bars.rows)
 check("recent runs listed (without a second heading repeating the panel title)", "Recent runs" not in dash.recent.text() and "OK 1" in dash.recent.text())
 got = []
-dash.open_device.connect(got.append); dash.goto.connect(got.append)
+dash.open_device.connect(got.append); dash.goto.connect(got.append); dash.show_results.connect(lambda w: got.append("Results:" + w))
 dash.attention.selectRow(1); dash._open(); dash.cards["fail"].clicked.emit(); dash.cards["changes"].clicked.emit()
-check("double-clicking a problem opens the device; cards navigate", got == ["edge-fw", "Results", "Configs"], got)
+check("double-clicking a problem opens the device; cards navigate (Failing to Results, showing what fails)", got == ["edge-fw", "Results:fail", "Configs"], got)
 dash.period.setCurrentIndex(0); check("changing the period refreshes", dash.bars.rows is not None)
 dash.grab().save(SP + r"\dashboard.png")
 for n in [x["name"] for x in db.list_devices()]: pass
@@ -115,7 +115,7 @@ for n in ("core1", "edge-fw"): dev(n, "fortinet" if n == "edge-fw" else "cisco")
 db.save_run([Result("core1", "cpu", "WARN", "85%", numeric=85.0), Result("edge-fw", "wan links", "OK", "2/2")])
 w = A.Main(); w.show()
 w.inventory.edit_device = lambda d: None            # the real one opens a modal dialog
-check("sections, with the overview first", [w.tabs.tabText(i) for i in range(w.tabs.count())] == ["Overview", "Results", "Inventory", "Configs", "History", "Reports", "Tools", "Sessions", "Settings", "About"])
+check("sections, with the overview first", [w.tabs.tabText(i) for i in range(w.tabs.count())] == ["Overview", "Results", "Inventory", "Configs", "History", "Reports", "Tools", "Sessions", "Automation", "Settings", "About"])
 check("the overview is filled from stored results at startup", w.dashboard.cards["warn"].value.text() == "1")
 db.save_run([Result("core1", "cpu", "WARN", "85%", numeric=85.0), Result("core1", "events", "FAIL", "295", "errors"), Result("edge-fw", "wan links", "OK", "2/2")])
 w.dashboard.refresh()
@@ -185,7 +185,7 @@ class FakeMenu:
     def exec(self, *a): pass
 import PySide6.QtWidgets as QW
 orig = QW.QMenu; QW.QMenu = FakeMenu
-tr = w.results.table; item = tr.topLevelItem(0).child(0)
+tr = w.results.table; item = tr.topLevelItem(0).child(0) or tr.topLevelItem(0)
 tr.itemAt = lambda pos: item
 w.results.show_menu(tr.rect().center())
 QW.QMenu = orig
