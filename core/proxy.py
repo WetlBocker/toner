@@ -33,8 +33,10 @@ from core import db
 
 GLOBAL_SECRET = "service:proxy"
 GLOBAL_OTP = "service:proxy-otp"
-KINDS = [("http", "HTTP proxy (CONNECT)"), ("socks5", "SOCKS5"), ("socks4", "SOCKS4"), ("tunnel", "SSH tunnel")]
-DEFAULT_PORTS = {"http": 8080, "socks5": 1080, "socks4": 1080, "tunnel": 22}
+KINDS = [("http", "HTTP proxy (CONNECT)"), ("socks5", "SOCKS5"), ("socks4", "SOCKS4")]
+DEFAULT_PORTS = {"http": 8080, "socks5": 1080, "socks4": 1080}
+# An SSH tunnel is set up on its own (core/tunnel.py) and used as SOCKS5 127.0.0.1:<its port>. A device or setting saved
+# by 1.5.2 to 1.5.5 with the kind "tunnel" still works: it is sent through that tunnel.
 OTP_MODES = [("", "None"), ("ask", "Ask me for it when connecting"), ("totp", "Make it from a secret key")]
 MODES = [("none", "No proxy (connect directly)"),
          ("system", "Use the Windows proxy settings (web connections only)"),
@@ -65,7 +67,8 @@ class Config:
     key_file: str = ""               # SSH tunnel: a private key to sign in with (the password is its passphrase)
 
     def label(self):
-        return f"{dict(KINDS).get(self.kind, self.kind).split(' (')[0]} {self.host}:{self.port}"
+        name = {**dict(KINDS), "tunnel": "SSH tunnel"}.get(self.kind, self.kind)
+        return f"{name.split(' (')[0]} {self.host}:{self.port}"
 
     def url(self):
         scheme = {"http": "http", "socks5": "socks5h", "socks4": "socks4a"}[self.kind]
@@ -167,7 +170,7 @@ def requests_kwargs(dev=None, host=None):
     """Extra arguments for requests.get/post: the proxies to use. Pass dev=None for app-wide connections."""
     how, cfg = resolve(dev, host, "web")
     if how == "proxy":
-        url = (effective(cfg) if cfg.kind == "tunnel" else with_code(cfg)).url()
+        url = effective(cfg).url()
         return {"proxies": {"http": url, "https": url}}
     return {"proxies": dict(DIRECT)} if how == "direct" else {}
 
@@ -413,13 +416,14 @@ def with_code(cfg):
 
 
 def effective(cfg):
-    """What to connect to for this proxy: itself, or for an SSH tunnel the local SOCKS5 end of the open tunnel, signing in
-    first if it is not open."""
-    if cfg.kind != "tunnel":
-        return cfg
+    """What to connect to for this proxy. SOCKS5 to the SSH tunnel's port signs in to the tunnel first if it is not open;
+    an older 'tunnel' setting becomes SOCKS5 to that tunnel's port."""
     from core import tunnel
-    t = tunnel.get(cfg)
-    return Config("socks5", "127.0.0.1", t.port, t.user, t.password)
+    if cfg.kind == "tunnel":
+        t = tunnel.get(cfg)
+        return Config("socks5", "127.0.0.1", t.port)
+    tunnel.ensure_for(cfg)
+    return with_code(cfg)
 
 
 LAST = {}                     # "host:port" of a proxy -> (worked, time, message) of the latest real connection through it
@@ -446,9 +450,11 @@ def connect(cfg, host, port, timeout=15):
 def probe(cfg, timeout=3):
     """(reachable, message): does something answer as this kind of proxy? Nothing is sent that signs in, so it cannot use up
     a one-time code or count as a wrong password. For an SSH tunnel: is it open now?"""
+    from core import tunnel
     if cfg.kind == "tunnel":
-        from core import tunnel
         return (True, f"{cfg.label()} is open") if tunnel.is_open(cfg) else (False, f"{cfg.label()} is not open")
+    if tunnel.serves(cfg) and not tunnel.is_open():
+        return False, f"{cfg.label()} is the SSH tunnel's port, and the tunnel ({tunnel.status()['label']}) is not open"
     try:
         s = socket.create_connection((cfg.host, cfg.port), timeout=timeout)
     except OSError as e:
@@ -471,7 +477,7 @@ def probe(cfg, timeout=3):
 def _connect(cfg, host, port, timeout=15):
     port = int(port)
     try:
-        used = effective(cfg) if cfg.kind == "tunnel" else with_code(cfg)
+        used = effective(cfg)
         try:
             if used.kind == "http":
                 return _http_connect(used, host, port, timeout)

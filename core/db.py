@@ -116,6 +116,9 @@ DEFAULT_SETTINGS = {
     "update_check": True, "update_auto_install": False, "update_last_check": "", "update_skip": "", "update_pending": {},
     "proxy": {"mode": "system", "kind": "http", "host": "", "port": 8080, "username": "",
               "bypass": "localhost, 127.0.0.1"},
+    # Settings > Proxy > SSH Tunnel (see core/tunnel.py): PuTTY-style dynamic forwarding on a local SOCKS5 port
+    "ssh_tunnel": {"enabled": False, "host": "", "port": 22, "username": "", "key_file": "", "otp": "", "local_port": 1080,
+                   "autostart": False},
     # Windows agents (see core/agents.py): Toner listens for their reports while this is on
     "agent_cert_warned": "", "trend_schedule": "", "trend_last": "", "tls_sweep": False, "tls_sweep_ports": "443", "agent_enabled": False, "agent_enroll": False, "agent_token_days": 0, "agent_port": 8750, "agent_minutes": 5, "agent_push_minutes": False, "agent_bind": "0.0.0.0", "agent_address": "",
 }

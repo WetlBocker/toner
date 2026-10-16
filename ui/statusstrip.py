@@ -89,17 +89,22 @@ class StatusStrip(QWidget):
         """Ask the proxy chosen in Settings whether it answers, off the main thread. A proxy is not a standing connection (each
         check opens its own), so this is: does it answer now, and did the last real connection through it work."""
         cfg = proxy.global_config()
-        if cfg is None or self._probing or cfg.kind == "tunnel":           # a tunnel is open or not: nothing to ask it
+        if cfg is None or self._probing or tunnel.enabled():                # a tunnel is open or not: nothing to ask it
             return
         self._probing = True
         key = f"{cfg.host}:{cfg.port}"
         threading.Thread(target=lambda: self.probed.emit((key, *proxy.probe(cfg))), daemon=True).start()
 
     def _proxy_clicked(self):
-        """A tunnel that is down is signed in to from here (it may ask for a code); anything else opens its settings."""
-        cfg = proxy.global_config(full=True)
-        if cfg is None or cfg.kind != "tunnel" or tunnel.is_open(cfg) or self.opening:
+        """An SSH tunnel that is down is signed in to from here (it may ask for a code); anything else opens its settings."""
+        if not tunnel.enabled() or tunnel.is_open() or self.opening:
             self.navigate.emit("Settings", "Proxy")
+            return
+        self.connect_tunnel()
+
+    def connect_tunnel(self):
+        """Sign in to the SSH tunnel on a worker thread; the questions it asks appear as boxes on the window's thread."""
+        if self.opening or tunnel.is_open() or not tunnel.enabled():
             return
         self.opening, self.tunnel_error = True, ""
         self.refresh()
@@ -107,7 +112,7 @@ class StatusStrip(QWidget):
         def work():
             err = ""
             try:
-                tunnel.get(cfg)
+                tunnel.get()
             except OSError as e:
                 err = str(e)
             self.tunnel_done.emit(err)
@@ -126,7 +131,18 @@ class StatusStrip(QWidget):
         self.refresh()
 
     def _proxy_part(self):
-        """(text, tooltip) for the proxy indicator."""
+        """(text, tooltip) for the proxy indicator. With an SSH tunnel set up, it shows the tunnel: that is the connection that
+        is really up or down, whatever proxy settings point at it."""
+        dot = lambda word: f"<span style='color:{st.ink(word)}'>&#9679;</span>"
+        if tunnel.enabled():
+            s = tunnel.status()
+            if self.opening:
+                return "Proxy: signing in...", f"Signing in to {s['label']}. Answer the box, or approve the Duo push, if one comes."
+            if s["open"]:
+                return (f"{dot('OK')} Proxy connected",
+                        f"{s['label']} is open; SOCKS5 is on 127.0.0.1:{s['port']}. Click to open Settings > Proxy.")
+            why = f" The last try failed: {self.tunnel_error}." if self.tunnel_error else ""
+            return f"{dot('FAIL')} Proxy disconnected", f"{s['label']} is not open.{why} Click to sign in."
         cfg = proxy.global_config()
         if cfg is None:
             how = db.get_setting("proxy").get("mode") if isinstance(db.get_setting("proxy"), dict) else "none"
@@ -134,15 +150,7 @@ class StatusStrip(QWidget):
                 return "Proxy: Windows settings", f"{proxy.system_text()}. Web connections follow the Windows proxy. Settings > Proxy"
             return "No proxy", "Connections go directly. Settings > Proxy"
         key = f"{cfg.host}:{cfg.port}"
-        dot = lambda word: f"<span style='color:{st.ink(word)}'>&#9679;</span>"
-        if cfg.kind == "tunnel":
-            if self.opening:
-                return "Proxy: signing in...", f"Signing in to {cfg.label()}"
-            if tunnel.is_open(cfg):
-                return f"{dot('OK')} Proxy connected", f"{cfg.label()} is open. Click to open Settings > Proxy."
-            why = f" The last try failed: {self.tunnel_error}." if self.tunnel_error else ""
-            return f"{dot('FAIL')} Proxy disconnected", f"{cfg.label()} is not open.{why} Click to sign in."
-        st_ = self.probe_state if self.probe_state and self.probe_state[0] == key else None
+        st_ =self.probe_state if self.probe_state and self.probe_state[0] == key else None
         if st_ is None:
             return "Proxy: checking...", f"Asking {cfg.label()} whether it answers"
         _k, answers, msg, at = st_

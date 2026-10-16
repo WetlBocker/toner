@@ -75,6 +75,7 @@ class Auth(paramiko.ServerInterface):
     def check_auth_password(self, u, p):
         self.box.log.append(("password", u, p))
         if "password" not in self.now: return paramiko.AUTH_FAILED                   # what a real server does
+        if self.box.duo: time.sleep(0.3); return paramiko.AUTH_FAILED                 # PAM with Duo cannot ask its question here
         if self.box.pw is not None and p == self.box.pw:
             if self.box.code is None: return paramiko.AUTH_SUCCESSFUL
             self.now = "keyboard-interactive"; return paramiko.AUTH_PARTIALLY_SUCCESSFUL
@@ -169,9 +170,10 @@ check("the next connection uses the open tunnel without asking again", good and 
 check("the probe says it is open", proxy.probe(c1) == (True, "SSH tunnel 127.0.0.1:%d is open" % box.port), proxy.probe(c1))
 t = tunnel.get(c1, connect=False)
 s = socket.create_connection(("127.0.0.1", t.port), 3); s.sendall(b"\x05\x01\x00"); got = s.recv(2); s.close()
-check("its local end refuses anyone who has no password", got == b"\x05\xff", got)
-s = socket.create_connection(("127.0.0.1", t.port), 3); s.sendall(b"\x05\x01\x02"); s.recv(2); s.sendall(b"\x01\x05toner\x05wrong"); got = s.recv(2); s.close()
-check("and a wrong one", got == b"\x01\x01", got)
+check("its local end is SOCKS5 with no sign-in of its own, like PuTTY's dynamic port", got == b"\x05\x00", got)
+s = socket.create_connection(("127.0.0.1", t.port), 3); s.sendall(b"\x05\x01\x02"); s.recv(2); s.sendall(b"\x01\x03any\x03any"); got = s.recv(2); s.close()
+check("a client set up with a user name is let in too", got == b"\x01\x00", got)
+check("and it listens on this computer only", t.listener.getsockname()[0] == "127.0.0.1")
 tunnel.close(c1)
 check("closing it closes it", not tunnel.is_open(c1) and proxy.probe(c1)[0] is False)
 
@@ -224,13 +226,11 @@ check("the refusal is described and does not count against the tunnel", not good
 check("and the tunnel stays open", tunnel.is_open(c6))
 
 print("== web requests go through it too")
-kw = proxy.requests_kwargs(None) if False else {"proxies": {"http": proxy.effective(c6).url(), "https": proxy.effective(c6).url()}}
+url6 = proxy.effective(c6).url()
+kw = {"proxies": {"http": url6, "https": url6}}
 r = requests.get(f"http://127.0.0.1:{web.server_address[1]}/x", timeout=8, **kw)
-check("an address for web requests is the tunnel's local end, with its password", kw["proxies"]["http"].startswith("socks5h://toner:") and "@127.0.0.1:" in kw["proxies"]["http"])
+check("an address for web requests is the tunnel's local end", url6 == f"socks5h://127.0.0.1:{tunnel.get(c6, connect=False).port}", url6)
 check("and a request through it arrives", r.text == "via-ssh" and hits == ["/x"] and ("channel", "127.0.0.1", web.server_address[1]) in box6.log, (r.text, hits))
-db.set_setting("proxy", {**proxy.DEFAULTS, "mode": "manual", "kind": "tunnel", "host": "127.0.0.1", "port": box6.port, "username": "joe", "otp": "ask"})
-global_kw = proxy.requests_kwargs({"name": "x", "host": "10.9.9.9"})
-check("the global setting produces the same through requests_kwargs", global_kw["proxies"]["https"].startswith("socks5h://toner:"), global_kw)
 tunnel.close(c6)
 
 print("== a server that is not there")
@@ -246,78 +246,138 @@ box7 = SshBox(); good, msg = reach(cfg_for(box7, otp="ask"))
 check("a run with no one to ask says so", not good and "can only ask for it while you are at the window" in msg, msg)
 proxy.set_code_prompt(hook)
 
-print("== the Settings page")
+print("== the Settings page: a Proxy section and an SSH Tunnel section")
+import json, types
 import ui.settings_pages.network as N
-box8 = SshBox()
-db.set_setting("proxy", dict(proxy.DEFAULTS))
+def free_port():
+    s = socket.socket(); s.bind(("127.0.0.1", 0)); p = s.getsockname()[1]; s.close(); return p
+box8 = SshBox(); LP = free_port()
+db.set_setting("proxy", dict(proxy.DEFAULTS)); db.set_setting("ssh_tunnel", dict(tunnel.DEFAULTS))
 page = N.ProxyPage(); page.load()
-page.mode.setCurrentIndex(page.mode.findData("manual")); page.adapt()
-check("the type list has the tunnel", page.kind.findData("tunnel") >= 0 and "SSH tunnel" in page.kind.itemText(page.kind.findData("tunnel")))
-check("by default the port is the HTTP one", page.port.value() == 8080)
-page.kind.setCurrentIndex(page.kind.findData("tunnel"))
-check("choosing the tunnel brings port 22 and an explanation", page.port.value() == 22 and page.form.isRowVisible(page.tunnel_note) and page.form.isRowVisible(page.tunnel_close_row))
-page.kind.setCurrentIndex(page.kind.findData("socks5"))
-check("choosing SOCKS5 brings 1080 and hides it", page.port.value() == 1080 and not page.form.isRowVisible(page.tunnel_note))
-page.kind.setCurrentIndex(page.kind.findData("tunnel")); page.port.setValue(2222); page.kind.setCurrentIndex(page.kind.findData("socks4"))
-check("a port set by hand is left alone", page.port.value() == 2222)
-page.kind.setCurrentIndex(page.kind.findData("tunnel")); page.port.setValue(box8.port); page.host.setText("127.0.0.1"); page.user.setText("joe")
-page.otp.setCurrentIndex(page.otp.findData("ask")); page.adapt()
-check("the one-time code note speaks of the server's question", "server's question" in page.otp_note.text(), page.otp_note.text())
+check("the page has the two sections", page.proxy_box.title() == "Proxy" and page.tunnel_box.title() == "SSH Tunnel")
+check("the proxy types are HTTP, SOCKS5 and SOCKS4 (the tunnel is not one of them any more)",
+      [page.kind.itemData(i) for i in range(page.kind.count())] == ["http", "socks5", "socks4"])
+check("the tunnel is off to begin with, its fields greyed, port 22 and local port 1080",
+      not page.t_enabled.isChecked() and not page.t_host.isEnabled() and page.t_port.value() == 22 and page.t_local.value() == 1080)
+page.t_enabled.setChecked(True)
+check("ticking it opens the fields", page.t_host.isEnabled() and page.t_local.isEnabled() and page.t_connect.isEnabled())
+check("an empty server is refused on save", any("SSH Tunnel: enter the SSH server" in m for m in page.validate()), page.validate())
+page.t_host.setText("127.0.0.1"); page.t_port.setValue(box8.port); page.t_user.setText("joe"); page.t_password.setText("s3cret"); page.t_local.setValue(LP)
+page.t_use.click()
+check("'Use it for the proxy above' points the proxy at SOCKS5 127.0.0.1 and the local port",
+      page.mode.currentData() == "manual" and page.kind.currentData() == "socks5" and page.host.text() == "127.0.0.1" and page.port.value() == LP
+      and page.user.text() == "" and "Save to keep it" in page.test_out.text())
+check("and nothing is wrong with it", page.validate() == [], page.validate())
 page.save()
+saved_t = db.get_setting("ssh_tunnel")
+check("saved: the tunnel in its own setting, its password only in Credential Manager",
+      saved_t["host"] == "127.0.0.1" and saved_t["local_port"] == LP and saved_t["enabled"] and saved_t["otp"] == "ask"
+      and STORE.get(("netcheck", tunnel.SECRET)) == "s3cret" and "s3cret" not in json.dumps(saved_t), saved_t)
+check("and the proxy as SOCKS5 to it", proxy.settings()["kind"] == "socks5" and proxy.settings()["port"] == LP and proxy.settings()["host"] == "127.0.0.1")
+check("the page says it is not connected yet", "Not connected" in page.t_status.text() and page.t_connect.isEnabled() and not page.t_disconnect.isEnabled())
 answers[:] = ["482913"]; asked.clear()
 page.test_to.setText(f"127.0.0.1:{echo.port}"); page.test()
-check("the Test button signs in and tries a connection", page.test_out.text().startswith("OK:") and len(asked) == 1, (page.test_out.text(), asked))
-cfg_page = proxy.global_config()
-check("the tunnel stays open afterwards", tunnel.is_open(cfg_page))
+check("Test through the proxy signs in to the tunnel first, then connects through it", page.test_out.text().startswith("OK:") and len(asked) == 1
+      and tunnel.is_open(), (page.test_out.text(), asked))
+check("the tunnel listens on the chosen local port, and the page says so", tunnel.status()["port"] == LP
+      and f"SOCKS5 is on 127.0.0.1:{LP}" in page.t_status.text() and page.t_disconnect.isEnabled(), page.t_status.text())
+s = socket.create_connection(("127.0.0.1", LP), 3); s.sendall(b"\x05\x01\x00"); got = s.recv(2); s.close()
+check("so 127.0.0.1:port works as a plain SOCKS5 proxy, as PuTTY's does", got == b"\x05\x00", got)
 page.save()
-check("saving with nothing changed keeps it open", tunnel.is_open(cfg_page))
-page.host.setText("localhost"); page.save()
-check("saving a different server closes it", not tunnel.is_open(cfg_page))
-page.host.setText("127.0.0.1"); page.save()
-page._close_tunnel()
-check("the button closes the tunnel and says so", "tunnel is closed" in page.test_out.text())
+check("saving with nothing changed keeps it open", tunnel.is_open())
+page.disconnect_tunnel()
+check("Disconnect closes it and says so", not tunnel.is_open() and "Disconnected" in page.t_status.text())
+answers[:] = ["482913"]; asked.clear(); page.connect_tunnel()
+check("Connect signs in again", tunnel.is_open() and len(asked) == 1 and "Connected to" in page.t_status.text(), page.t_status.text())
+page.t_host.setText("localhost"); page.save()
+check("saving a different server closes it", not tunnel.is_open())
+page.t_host.setText("127.0.0.1"); page.save()
+blocker = socket.socket(); blocker.bind(("127.0.0.1", LP)); blocker.listen(1)
+asked.clear(); page.connect_tunnel()
+check("a local port already in use (PuTTY open on it) is said so, before anyone is asked for a code",
+      not tunnel.is_open() and "already in use" in page.t_status.text() and not asked, page.t_status.text())
+blocker.close()
+
+print("== SOCKS5 to the tunnel's port, from anywhere in Toner")
+c_sock = proxy.Config("socks5", "127.0.0.1", LP)
+tunnel.close_all(); answers[:] = ["482913"]; asked.clear()
+good, msg = reach(c_sock)
+check("a connection through SOCKS5 127.0.0.1:port signs in to the tunnel first", good and len(asked) == 1 and tunnel.is_open(), (msg, asked))
+check("its probe says it answers", proxy.probe(c_sock)[0] is True)
+url = proxy.requests_kwargs({"name": "x", "host": "10.9.9.9"})["proxies"]["https"]
+check("web requests use it as SOCKS5", url == f"socks5h://127.0.0.1:{LP}", url)
+dev_own = {"name": "branch", "host": "127.0.0.1", "proxy": json.dumps({"mode": "custom", "kind": "socks5", "host": "127.0.0.1", "port": LP, "username": ""})}
+good, msg = reach(proxy.for_device(dev_own))
+check("a device whose own proxy points at it goes through it", good)
+tunnel.close_all()
+p = proxy.probe(c_sock)
+check("closed, its probe says the tunnel is not open (rather than 'did not answer')", p[0] is False and "is not open" in p[1], p)
+db.set_setting("ssh_tunnel", {**tunnel.settings(), "enabled": False})
+good, msg = reach(c_sock)
+check("with the tunnel turned off, nothing signs in and the port is simply not there", not good and "could not reach the proxy" in msg and len(asked) == 1, msg)
+db.set_setting("ssh_tunnel", {**tunnel.settings(), "enabled": True})
 
 print("== the indicator along the bottom")
-import types
 from ui.statusstrip import StatusStrip
 strip = StatusStrip(types.SimpleNamespace())
-db.set_setting("proxy", {**proxy.DEFAULTS, "mode": "manual", "kind": "tunnel", "host": "127.0.0.1", "port": box8.port, "username": "joe", "otp": "ask"})
-tunnel.close_all(); strip.restyle()
-check("a tunnel that is not open is disconnected, and says to click", "Proxy disconnected" in strip.proxy.text() and "Click to sign in" in strip.proxy.toolTip(), (strip.proxy.text(), strip.proxy.toolTip()))
+tunnel.close_all(); answers[:] = []; strip.restyle()
+check("a tunnel that is set up but not open is 'disconnected', and says to click", "Proxy disconnected" in strip.proxy.text()
+      and "Click to sign in" in strip.proxy.toolTip(), (strip.proxy.text(), strip.proxy.toolTip()))
 answers[:] = ["482913"]; asked.clear()
 strip._proxy_clicked()
 check("clicking shows that it is signing in", "signing in" in strip.proxy.text())
 end = time.time() + 15
 while strip.opening and time.time() < end: app.processEvents(); time.sleep(0.02)
 app.processEvents()
-check("then it is connected", "Proxy connected" in strip.proxy.text() and "is open" in strip.proxy.toolTip() and len(asked) == 1, (strip.proxy.text(), strip.proxy.toolTip(), asked))
+check("then it is connected, and says where SOCKS5 is", "Proxy connected" in strip.proxy.text() and f"127.0.0.1:{LP}" in strip.proxy.toolTip()
+      and len(asked) == 1, (strip.proxy.text(), strip.proxy.toolTip(), asked))
 seen = []; strip.navigate.connect(lambda a, b: seen.append((a, b))); strip._proxy_clicked()
 check("clicking it when it is open opens Settings > Proxy", seen == [("Settings", "Proxy")])
 tunnel.close_all(); proxy.set_code_prompt(lambda *a, **k: "000000")
-strip._proxy_clicked()
+strip.connect_tunnel()
 end = time.time() + 15
 while strip.opening and time.time() < end: app.processEvents(); time.sleep(0.02)
 app.processEvents()
 check("a sign-in that fails says why in the tooltip", "Proxy disconnected" in strip.proxy.text() and "rejected the sign-in" in strip.proxy.toolTip(), strip.proxy.toolTip())
+proxy.set_code_prompt(hook)
+db.set_setting("ssh_tunnel", {**tunnel.settings(), "enabled": False}); strip.restyle()
+check("with the tunnel turned off, the indicator is about the proxy again", "Click to sign in" not in strip.proxy.toolTip())
+db.set_setting("ssh_tunnel", {**tunnel.settings(), "enabled": True})
 tunnel.close_all()
 
 print("== the device's own proxy")
 from ui.inventory import DeviceDialog
 dd = DeviceDialog()
 dd.proxy_mode.setCurrentIndex(dd.proxy_mode.findData("custom"))
-check("a device can use a tunnel too, with 22 as its port", dd.proxy_kind.findData("tunnel") >= 0 and (dd.proxy_kind.setCurrentIndex(dd.proxy_kind.findData("tunnel")), dd.proxy_port.value())[1] == 22)
-dd.name.setText("branch"); dd.host.setText("10.2.2.2"); dd.proxy_host.setText("127.0.0.1"); dd.proxy_user.setText("joe")
-dd.proxy_otp.setCurrentIndex(dd.proxy_otp.findData("totp")); dd.proxy_otp_key.setText("gezd gnbv")
-v = dd.values()
-check("it is saved as a tunnel, with the key kept apart", v["proxy"]["kind"] == "tunnel" and v["proxy"]["port"] == 22 and v["proxy"]["otp"] == "totp" and dd.proxy_secrets() == {"proxy_otp": "GEZDGNBV"}, (v["proxy"], dd.proxy_secrets()))
-imp = __import__("core.importer", fromlist=["x"])
-check("the import file may say tunnel", "tunnel" in dict(proxy.KINDS))
-check("the key file row shows only for a tunnel", dd.access.isRowVisible(dd.proxy_key_row) and
-      (dd.proxy_kind.setCurrentIndex(dd.proxy_kind.findData("socks5")), not dd.access.isRowVisible(dd.proxy_key_row))[1])
-dd.proxy_kind.setCurrentIndex(dd.proxy_kind.findData("tunnel")); dd.proxy_key.setText(r"C:\keys\id_ed25519")
-check("a device keeps its key file path with its proxy", dd.values()["proxy"]["key_file"] == r"C:\keys\id_ed25519")
-dd.proxy_kind.setCurrentIndex(dd.proxy_kind.findData("socks5"))
-check("but not for another type", "key_file" not in dd.values()["proxy"])
+check("a device's proxy types do not include the tunnel; it uses SOCKS5 127.0.0.1:1080 instead", dd.proxy_kind.findData("tunnel") < 0)
+def devrow(name, own):
+    return dict(name=name, vendor="cisco", host="10.3.3.3", port=0, platform="", username="", site="default", verify_ssl=0, ha_expected=0,
+                enabled=1, location="", details="", folder_id=None, tags="", fields="", proxy=json.dumps(own))
+db.save_device(devrow("legacy1", {"mode": "custom", "kind": "tunnel", "host": "b.example.com", "port": 22, "username": "jw", "otp": "ask"}))
+legacy = next(d for d in db.list_devices() if d["name"] == "legacy1")
+dl = DeviceDialog(legacy)
+check("a device saved with the old tunnel type opens as SOCKS5 to the tunnel's port",
+      dl.proxy_kind.currentData() == "socks5" and dl.proxy_host.text() == "127.0.0.1" and dl.proxy_port.value() == LP
+      and dl.proxy_otp.currentData() == "", (dl.proxy_kind.currentData(), dl.proxy_host.text(), dl.proxy_port.value()))
+
+print("== moving 1.5.2-1.5.5 settings over")
+db.set_setting("ssh_tunnel", dict(tunnel.DEFAULTS))
+db.set_setting("proxy", {**proxy.DEFAULTS, "mode": "manual", "kind": "tunnel", "host": "bastion.example.com", "port": 2222, "username": "jw",
+                         "otp": "ask", "key_file": ""})
+STORE[("netcheck", proxy.GLOBAL_SECRET)] = "pw1"
+moved = tunnel.migrate()
+ts = tunnel.settings()
+check("a proxy set to the old tunnel type becomes the SSH Tunnel section, with its password",
+      moved and ts["enabled"] and ts["host"] == "bastion.example.com" and ts["port"] == 2222 and ts["username"] == "jw" and ts["otp"] == "ask"
+      and STORE.get(("netcheck", tunnel.SECRET)) == "pw1" and ("netcheck", proxy.GLOBAL_SECRET) not in STORE, (ts, STORE))
+ps = proxy.settings()
+check("and the proxy becomes SOCKS5 127.0.0.1:1080", ps["mode"] == "manual" and ps["kind"] == "socks5" and ps["host"] == "127.0.0.1" and ps["port"] == 1080, ps)
+legacy = next(d for d in db.list_devices() if d["name"] == "legacy1")
+check("a device with the old type now points at the tunnel's port", proxy.device_settings(legacy) == {"mode": "custom", "kind": "socks5",
+      "host": "127.0.0.1", "port": 1080, "username": ""}, proxy.device_settings(legacy))
+check("a second run changes nothing", tunnel.migrate() is False)
+db.delete_device(legacy["id"])
+db.set_setting("ssh_tunnel", dict(tunnel.DEFAULTS)); db.set_setting("proxy", dict(proxy.DEFAULTS)); STORE.pop(("netcheck", tunnel.SECRET), None)
 
 print("== signing in with a key file")
 from cryptography.hazmat.primitives import serialization
@@ -387,29 +447,24 @@ with open(junk, "w") as f: f.write("hello")
 good, msg = reach(cfg_for(kb1, key_file=junk))
 check("a file that is not a key is explained", not good and "not a private key Toner can read" in msg, msg)
 
-print("== the key file in Settings")
-db.set_setting("proxy", dict(proxy.DEFAULTS))
-page = N.ProxyPage(); page.load()
-page.mode.setCurrentIndex(page.mode.findData("manual")); page.kind.setCurrentIndex(page.kind.findData("socks5")); page.adapt()
-check("the key file row is hidden for other types", not page.form.isRowVisible(page.key_row))
-page.kind.setCurrentIndex(page.kind.findData("tunnel"))
-check("and shown for a tunnel, its note only once a file is chosen", page.form.isRowVisible(page.key_row) and not page.form.isRowVisible(page.key_note))
-page.key_file.setText(os.path.join(KEYDIR, "missing")); page.host.setText("127.0.0.1"); page.port.setValue(kb1.port); page.user.setText("joe")
+print("== the key file in the SSH Tunnel section")
+db.set_setting("ssh_tunnel", dict(tunnel.DEFAULTS)); STORE.pop(("netcheck", tunnel.SECRET), None)
+page = N.ProxyPage(); page.load(); page.t_enabled.setChecked(True)
+page.t_host.setText("127.0.0.1"); page.t_port.setValue(kb1.port); page.t_user.setText("joe"); page.t_local.setValue(free_port())
+check("without a key file the password box is the server's password", "PuTTY" in page.t_password.placeholderText(), page.t_password.placeholderText())
+page.t_key.setText(os.path.join(KEYDIR, "missing"))
 check("a key file that is not there is refused on save", any("was not found" in m for m in page.validate()), page.validate())
-page.key_file.setText(plain_path)
-check("a real one passes, and the note says the password is its passphrase",
-      page.validate() == [] and page.form.isRowVisible(page.key_note) and "passphrase" in page.password.placeholderText())
+page.t_key.setText(plain_path)
+check("a real one passes, and the password box becomes its passphrase", page.validate() == [] and "passphrase" in page.t_password.placeholderText())
 page.save()
-check("it is saved with the proxy setting", proxy.settings()["key_file"] == plain_path and proxy.global_config(full=True).key_file == plain_path)
-page.test_to.setText(f"127.0.0.1:{echo.port}"); asked.clear(); page.test()
-check("the Test button signs in with it", page.test_out.text().startswith("OK:") and not asked, page.test_out.text())
-gc = proxy.global_config()
-check("the tunnel stays open", tunnel.is_open(gc))
+check("it is saved with the tunnel", tunnel.settings()["key_file"] == plain_path and tunnel.config().key_file == plain_path)
+asked.clear(); page.connect_tunnel()
+check("Connect signs in with it, with nothing asked", tunnel.is_open() and not asked, page.t_status.text())
 page.save()
-check("saving with nothing changed keeps it open", tunnel.is_open(gc))
-page.key_file.setText(other_path); page.save()
-check("choosing another key file closes it", not tunnel.is_open(gc))
-check("a key file is ignored for the other types", proxy._config({"kind": "socks5", "host": "h", "port": 1, "key_file": plain_path}, "").key_file == "")
+check("saving with nothing changed keeps it open", tunnel.is_open())
+page.t_key.setText(other_path); page.save()
+check("choosing another key file closes it", not tunnel.is_open())
+check("a key file is ignored for the proxy types", proxy._config({"kind": "socks5", "host": "h", "port": 1, "key_file": plain_path}, "").key_file == "")
 tunnel.close_all()
 
 print("== a server that hangs up after a wrong answer (\"No existing session\")")
@@ -479,7 +534,29 @@ good, msg = reach(cfg_for(d3, otp="ask"))
 check("with no saved password, it asks for the password (hidden), then Duo", good and [a[0] for a in asked] == ["Password", "One-time code"] and asked[0][2] is True, (msg, asked))
 tunnel.close_all()
 
-print("== the Test button, with the real question box")
+print("== the server from the log: OpenSSH that offers password and keyboard-interactive, with Duo in PAM")
+d4 = SshBox(duo=True, pw="Domain#pw", first="password,keyboard-interactive"); answers[:] = ["1"]; asked.clear()
+good, msg = reach(cfg_for(d4, password="Domain#pw", otp="ask"))
+check("keyboard-interactive is used first, as PuTTY and ssh do, so Duo can ask its question", good and len(asked) == 1
+      and not [l for l in d4.log if l[0] == "password"], (msg, d4.log, asked))
+log4 = tunnel.log_path().read_text(encoding="utf-8")
+check("the log shows that order", log4.index("trying keyboard-interactive") < log4.index("keyboard-interactive accepted") and "trying password" not in log4)
+tunnel.close_all()
+d5 = SshBox(code="s3cret", pw="s3cret", first="password,keyboard-interactive", prompt="Password: ")   # its question is the password
+answers[:] = []; asked.clear()
+good, msg = reach(cfg_for(d5, password="s3cret", otp="ask"))
+check("a plain server's 'Password:' question is answered with the saved password, nothing asked", good and not asked, (msg, asked))
+tunnel.close_all()
+d6 = SshBox(code="999999", pw="s3cret", first="password,keyboard-interactive", prompt="Verification code: ")
+answers[:] = ["000000"]; asked.clear()
+good, msg = reach(cfg_for(d6, password="s3cret", otp="ask"))
+check("a wrong answer to the question is not followed by more tries", not good and "rejected the sign-in" in msg and len(asked) == 1, (msg, asked))
+d7 = SshBox(duo=True, pw="Domain#pw", first="password,keyboard-interactive")
+good, msg = reach(proxy.Config("tunnel", "127.0.0.1", d7.port, "jwetlesen@sentinel.com", "wrong", otp="ask"))
+check("a refused sign-in with an e-mail style user name suggests checking it", not good and "Check the user name" in msg and "jwetlesen@sentinel.com" in msg, msg)
+tunnel.close_all()
+
+print("== the Test and Connect buttons, with the real question box")
 from ui import otpprompt
 shown = []
 class CodeDialog:
@@ -493,15 +570,20 @@ class CodeDialog:
 real_dialog = otpprompt.QInputDialog
 otpprompt.QInputDialog = CodeDialog
 otpprompt.install()
-st4 = SshBox(strict=True)
-db.set_setting("proxy", {**proxy.DEFAULTS, "mode": "manual", "kind": "tunnel", "host": "127.0.0.1", "port": st4.port, "username": "joe", "otp": "ask"})
-STORE[("netcheck", proxy.GLOBAL_SECRET)] = "s3cret"
+st4 = SshBox(strict=True); LP4 = free_port()
+db.set_setting("ssh_tunnel", {**tunnel.DEFAULTS, "enabled": True, "host": "127.0.0.1", "port": st4.port, "username": "joe", "otp": "ask", "local_port": LP4})
+db.set_setting("proxy", {**proxy.DEFAULTS, "mode": "manual", "kind": "socks5", "host": "127.0.0.1", "port": LP4})
+STORE[("netcheck", tunnel.SECRET)] = "s3cret"
 page4 = N.ProxyPage(); page4.load(); page4.test_to.setText(f"127.0.0.1:{echo.port}")
 t0 = time.time(); page4.test(); took = time.time() - t0
-check("clicked on the window's own thread, the code box still appears and the sign-in works", page4.test_out.text().startswith("OK:") and shown == ["One-time code"], (page4.test_out.text(), shown))
+check("Test, clicked on the window's own thread: the code box still appears and the sign-in works",
+      page4.test_out.text().startswith("OK:") and shown == ["One-time code"], (page4.test_out.text(), shown))
 check("without waiting for a time-out", took < 20, took)
+page4.disconnect_tunnel(); shown.clear()
+page4.connect_tunnel()
+check("Connect does the same", tunnel.is_open() and shown == ["One-time code"] and "Connected to" in page4.t_status.text(), (shown, page4.t_status.text()))
 otpprompt.QInputDialog = real_dialog
-STORE.pop(("netcheck", proxy.GLOBAL_SECRET), None)
+STORE.pop(("netcheck", tunnel.SECRET), None)
 tunnel.close_all()
 
 print(f"\n{ok} passed, {bad} failed")

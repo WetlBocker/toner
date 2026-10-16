@@ -119,16 +119,6 @@ class DeviceDialog(QDialog):
             if hasattr(self, "access"):
                 self._proxy_rows()
         self.proxy_kind.currentIndexChanged.connect(kind_changed)
-        self.proxy_key = QLineEdit()
-        self.proxy_key.setPlaceholderText("optional: private key file; the proxy password is its passphrase")
-        self.proxy_key_browse = QPushButton("Browse...")
-        self.proxy_key_browse.setAutoDefault(False)
-        self.proxy_key_browse.clicked.connect(self._browse_proxy_key)
-        self.proxy_key_row = QWidget()
-        kr = QHBoxLayout(self.proxy_key_row)
-        kr.setContentsMargins(0, 0, 0, 0)
-        kr.addWidget(self.proxy_key, 1)
-        kr.addWidget(self.proxy_key_browse)
         self.win_auth = QComboBox()
         for k, label in winmon.AUTHS:
             self.win_auth.addItem(label, k)
@@ -177,8 +167,7 @@ class DeviceDialog(QDialog):
                                               ("Password", self.secret), ("", self.get_key), ("Site", self.site),
                                               ("Jump host", self.jump), ("Proxy", self.proxy_mode), ("Proxy Type", self.proxy_kind),
                                               ("Proxy Address", self.proxy_host), ("Proxy Port", self.proxy_port),
-                                              ("Proxy User", self.proxy_user), ("Proxy Key File", self.proxy_key_row),
-                                              ("Proxy Password", self.proxy_pw),
+                                              ("Proxy User", self.proxy_user), ("Proxy Password", self.proxy_pw),
                                               ("One-Time Code", self.proxy_otp), ("Secret Key", self.proxy_otp_key),
                                               ("", self.verify), ("", self.ha)))
         self.page_snmp = QWidget()
@@ -238,13 +227,16 @@ class DeviceDialog(QDialog):
                 jump = {}
             self.jump.setCurrentIndex(max(0, self.jump.findData(jump.get("device", ""))))
             own_proxy = proxy.device_settings(dev)
+            if own_proxy.get("kind") == "tunnel":            # saved by 1.5.2-1.5.5: it is the SSH tunnel's SOCKS5 port now
+                from core import tunnel
+                own_proxy = {**own_proxy, "kind": "socks5", "host": "127.0.0.1", "port": tunnel.settings()["local_port"],
+                             "username": "", "otp": ""}
             self.proxy_mode.setCurrentIndex(max(0, self.proxy_mode.findData(own_proxy.get("mode", "default"))))
             self.proxy_kind.setCurrentIndex(max(0, self.proxy_kind.findData(own_proxy.get("kind", "http"))))
             self.proxy_host.setText(own_proxy.get("host", ""))
             self.proxy_port.setValue(int(own_proxy.get("port") or 8080))
             self.proxy_user.setText(own_proxy.get("username", ""))
             self.proxy_otp.setCurrentIndex(max(0, self.proxy_otp.findData(own_proxy.get("otp", ""))))
-            self.proxy_key.setText(own_proxy.get("key_file", ""))
             if keyring.get_password(db.SERVICE, db.secret_name(dev["name"], "proxy_otp")):
                 self.proxy_otp_key.setPlaceholderText("saved; leave blank to keep")
             self.checks_tab.load(dev.get("checkopts"))
@@ -378,14 +370,6 @@ class DeviceDialog(QDialog):
         for w in (self.proxy_kind, self.proxy_host, self.proxy_port, self.proxy_user, self.proxy_pw, self.proxy_otp):
             self.access.setRowVisible(w, custom)
         self.access.setRowVisible(self.proxy_otp_key, custom and self.proxy_otp.currentData() == "totp")
-        self.access.setRowVisible(self.proxy_key_row, custom and self.proxy_kind.currentData() == "tunnel")
-
-    def _browse_proxy_key(self):
-        import os
-        start = self.proxy_key.text().strip() or os.path.join(os.path.expanduser("~"), ".ssh")
-        path, _ = QFileDialog.getOpenFileName(self, "Private key file", start)
-        if path:
-            self.proxy_key.setText(os.path.normpath(path))
 
     def _proxy_values(self):
         if vendors.get(self._vendor()).get("kind") not in ("ssh", "api", "status"):
@@ -398,8 +382,6 @@ class DeviceDialog(QDialog):
                     "port": self.proxy_port.value(), "username": self.proxy_user.text().strip()}
             if self.proxy_otp.currentData():
                 vals["otp"] = self.proxy_otp.currentData()
-            if self.proxy_kind.currentData() == "tunnel" and self.proxy_key.text().strip():
-                vals["key_file"] = self.proxy_key.text().strip()
             return vals
         return ""
 

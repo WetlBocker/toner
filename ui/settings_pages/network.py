@@ -8,26 +8,32 @@ from datetime import datetime
 from PySide6.QtCore import QDateTime, QTime
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QDateTimeEdit, QDialog, QDialogButtonBox,
-                               QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QTableWidget,
+                               QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QTableWidget,
                                QTableWidgetItem, QTimeEdit, QVBoxLayout, QWidget)
-from core import agents, audit, db, maintenance, proxy
+from core import agents, audit, db, maintenance, proxy, tunnel
 from ui.widgets import GroupPicker
 from ui.settings_base import Collapsible, Page, compact_row, note, row_of, spin
 
 
 # ------------------------------------------------------------------ Proxy
+TUNNEL_OTP = [("ask", "Ask me when the server asks (Duo, a code, a YubiKey)"), ("totp", "Make it from a secret key")]
+
+
 class ProxyPage(Page):
+    """Two sections: the proxy Toner's connections use, and an SSH tunnel (PuTTY's Dynamic port forwarding) that the proxy
+    can point at, as SOCKS5 127.0.0.1:1080."""
     title = "Proxy"
 
     def __init__(self):
         super().__init__()
+        # ---------------------------------------------------------------- the proxy
         self.mode, self.kind = QComboBox(), QComboBox()
         for k, label in proxy.MODES:
             self.mode.addItem(label, k)
         for k, label in proxy.KINDS:
             self.kind.addItem(label, k)
         self.host, self.user, self.bypass = QLineEdit(), QLineEdit(), QLineEdit()
-        self.host.setPlaceholderText("proxy.example.com")
+        self.host.setPlaceholderText("proxy.example.com, or 127.0.0.1 for the SSH tunnel below")
         self.user.setPlaceholderText("optional")
         self.bypass.setPlaceholderText("localhost, 127.0.0.1, *.corp.example.com, 10.0.0.0/8")
         self.port = spin(1, 65535)
@@ -42,21 +48,6 @@ class ProxyPage(Page):
         self.otp.setToolTip("For a proxy with two-step sign-in: the current code from an authenticator app is added to the end of the password.")
         self.otp_key.setEchoMode(QLineEdit.EchoMode.Password)
         self.otp_note = note("")
-        self.tunnel_note = note("An SSH tunnel does what ssh -D does: Toner signs in to this SSH server and sends its connections through "
-                                "it, like PuTTY's Dynamic port forwarding (no PuTTY needed). The user name and password are the "
-                                "ones you use with PuTTY. When the server asks for a one-time code, a Duo option (type 1 for a "
-                                "push, then approve it) or a YubiKey touch, a box appears; a server that sends a Duo push by itself "
-                                "just waits for you to approve it. Checks that run by themselves cannot approve a push or touch a "
-                                "YubiKey, so they use the tunnel while it is open.")
-        self.tunnel_close = QPushButton("Close the tunnel")
-        self.tunnel_close.setToolTip("Disconnect the SSH session; the next connection signs in again")
-        self.key_file = QLineEdit()
-        self.key_file.setPlaceholderText("optional: a private key file (OpenSSH or PEM)")
-        self.browse_key = QPushButton("Browse...")
-        self.browse_key.setAutoDefault(False)
-        self.key_row = row_of(self.key_file, self.browse_key)
-        self.key_note = note("With a key file, the Password box is the key's passphrase (leave it empty if the key has none; "
-                             "Toner asks if it needs one). A server that also wants a password or a code still gets asked.")
         self.system = note("")
         self.test_to = QLineEdit("www.githubstatus.com:443")
         self.test_btn = QPushButton("Test")
@@ -64,21 +55,16 @@ class ProxyPage(Page):
         self.test_out.setWordWrap(True)
         self._forget = False
         self._have_key = False
-        self.manual = [self.kind, self.host, self.port, self.user, self.password, self.forget, self.bypass, self.otp, self.otp_key,
-                       self.key_file, self.browse_key]
+        self.manual = [self.kind, self.host, self.port, self.user, self.password, self.forget, self.bypass, self.otp, self.otp_key]
         self.form.addRow("Connections Go", self.mode)
         self.form.addRow("", self.system)
         self.form.addRow("Proxy Type", self.kind)
-        self.form.addRow("", self.tunnel_note)
-        self.tunnel_close_row = row_of(self.tunnel_close)
-        self.form.addRow("", self.tunnel_close_row)
         self.form.addRow("Address", self.host)
         self.form.addRow("Port", self.port)
         self.form.addRow("User Name", self.user)
-        self.form.addRow("Key File", self.key_row)
-        self.form.addRow("", self.key_note)
         self.form.addRow("Password", self.password)
-        self.form.addRow("", row_of(self.forget))
+        self.forget_row = row_of(self.forget)
+        self.form.addRow("", self.forget_row)
         self.form.addRow("", self.pw_note)
         self.form.addRow("One-Time Code", self.otp)
         self.form.addRow("Secret Key", self.otp_key)
@@ -86,6 +72,74 @@ class ProxyPage(Page):
         self.form.addRow("Do Not Use It For", self.bypass)
         self.form.addRow("Try a Connection To", row_of(self.test_to, self.test_btn))
         self.form.addRow("", self.test_out)
+
+        # ---------------------------------------------------------------- the SSH tunnel
+        self.t_enabled = QCheckBox("Use an SSH tunnel (like PuTTY's Dynamic port forwarding)")
+        self.t_host, self.t_user, self.t_key = QLineEdit(), QLineEdit(), QLineEdit()
+        self.t_host.setPlaceholderText("the SSH server, e.g. bastion.example.com")
+        self.t_user.setPlaceholderText("as in PuTTY's 'login as'")
+        self.t_key.setPlaceholderText("optional: a private key file (OpenSSH or PEM)")
+        self.t_port = spin(1, 65535)
+        self.t_port.setValue(22)
+        self.t_browse = QPushButton("Browse...")
+        self.t_browse.setAutoDefault(False)
+        self.t_key_row = row_of(self.t_key, self.t_browse)
+        self.t_password = QLineEdit()
+        self.t_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.t_forget = QPushButton("Remove saved password")
+        self.t_pw_note = note("")
+        self.t_otp, self.t_otp_key = QComboBox(), QLineEdit()
+        for k, label in TUNNEL_OTP:
+            self.t_otp.addItem(label, k)
+        self.t_otp_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self.t_otp_note = note("")
+        self.t_local = spin(1, 65535)
+        self.t_local.setValue(1080)
+        self.t_autostart = QCheckBox("Connect when Toner starts")
+        self.t_connect, self.t_disconnect, self.t_use = QPushButton("Connect"), QPushButton("Disconnect"), QPushButton("Use it for the proxy above")
+        for b in (self.t_connect, self.t_disconnect, self.t_use):
+            b.setAutoDefault(False)
+        self.t_use.setToolTip("Sets the proxy above to SOCKS5 127.0.0.1 and this Local SOCKS Port")
+        self.t_status = QLabel("")
+        self.t_status.setWordWrap(True)
+        self._t_forget = False
+        self._t_have_pw = self._t_have_key = False
+        self.tform = QFormLayout()
+        self.tform.addRow("", self.t_enabled)
+        self.tform.addRow("Server", self.t_host)
+        self.tform.addRow("Port", self.t_port)
+        self.tform.addRow("User Name", self.t_user)
+        self.tform.addRow("Key File", self.t_key_row)
+        self.tform.addRow("Password", self.t_password)
+        self.t_forget_row = row_of(self.t_forget)
+        self.tform.addRow("", self.t_forget_row)
+        self.tform.addRow("", self.t_pw_note)
+        self.tform.addRow("Second Step", self.t_otp)
+        self.tform.addRow("Secret Key", self.t_otp_key)
+        self.tform.addRow("", self.t_otp_note)
+        self.tform.addRow("Local SOCKS Port", self.t_local)
+        self.tform.addRow("", self.t_autostart)
+        self.t_buttons = row_of(self.t_connect, self.t_disconnect, self.t_use)
+        self.tform.addRow("", self.t_buttons)
+        self.tform.addRow("Status", self.t_status)
+        self.t_fields = [self.t_host, self.t_port, self.t_user, self.t_key, self.t_browse, self.t_password, self.t_forget, self.t_otp,
+                         self.t_otp_key, self.t_local, self.t_autostart, self.t_connect, self.t_disconnect, self.t_use]
+
+        # ---------------------------------------------------------------- the two sections
+        self.lay.removeItem(self.form)
+        self.proxy_box, self.tunnel_box = QGroupBox("Proxy"), QGroupBox("SSH Tunnel")
+        self.proxy_box.setLayout(self.form)
+        tl = QVBoxLayout(self.tunnel_box)
+        tl.addWidget(note(
+            "Sign in to an SSH server and open a SOCKS5 port on this computer, as PuTTY's Dynamic port forwarding does (no PuTTY "
+            "needed). Then point the proxy above at it: SOCKS5, address 127.0.0.1, port 1080 (the button below fills that in), "
+            "or set it on just the devices that need it in their Access tab. Use the same server, user name and password as with "
+            "PuTTY. When the server asks for a Duo option (type 1 for a push, then approve it), a code or a YubiKey touch, a box "
+            "appears. A connection through the port while the tunnel is closed signs in first. Like PuTTY's, the port is on this "
+            "computer only."))
+        tl.addLayout(self.tform)
+        self.lay.insertWidget(0, self.proxy_box)
+        self.lay.insertWidget(1, self.tunnel_box)
         self.lay.insertWidget(0, note(
             "Send Toner's connections through a proxy. This is the setting for every connection; a device can override it "
             "in its own Access tab. It covers SSH (checks, backups, the console), the web APIs of Fortinet, Palo Alto, "
@@ -93,38 +147,63 @@ class ProxyPage(Page):
             "traceroute and the listeners use UDP or ICMP, which a proxy does not carry, so they always connect directly. "
             "'Windows proxy settings' covers web connections only, as a browser would; choose 'Use the proxy below' to "
             "send SSH and port checks through a proxy as well."))
+
         self.mode.currentIndexChanged.connect(self.adapt)
         self.otp.currentIndexChanged.connect(self.adapt)
         self._kind_was = self.kind.currentData()
         self.kind.currentIndexChanged.connect(self._kind_changed)
-        self.tunnel_close.clicked.connect(self._close_tunnel)
-        self.browse_key.clicked.connect(self._browse_key)
-        self.key_file.textChanged.connect(self.adapt)
         self.forget.clicked.connect(self._clear_password)
         self.test_btn.clicked.connect(self.test)
+        self.t_enabled.toggled.connect(self.adapt)
+        self.t_otp.currentIndexChanged.connect(self.adapt)
+        self.t_key.textChanged.connect(self.adapt)
+        self.t_browse.clicked.connect(self._browse_key)
+        self.t_forget.clicked.connect(self._clear_tunnel_password)
+        self.t_connect.clicked.connect(self.connect_tunnel)
+        self.t_disconnect.clicked.connect(self.disconnect_tunnel)
+        self.t_use.clicked.connect(self.use_tunnel)
 
+    # ---------------------------------------------------------------- showing the right rows
     def adapt(self, *_):
         manual = self.mode.currentData() == "manual"
         for w in self.manual:
             w.setEnabled(manual)
         self.form.setRowVisible(self.system, self.mode.currentData() == "system")
-        tunnel = self.kind.currentData() == "tunnel"
-        self.form.setRowVisible(self.tunnel_note, tunnel and manual)
-        self.form.setRowVisible(self.tunnel_close_row, tunnel and manual)
-        self.form.setRowVisible(self.key_row, tunnel)
-        self.form.setRowVisible(self.key_note, tunnel and bool(self.key_file.text().strip()))
-        self.password.setPlaceholderText("the key's passphrase, if it has one" if tunnel and self.key_file.text().strip() else "")
         code = self.otp.currentData()
         self.form.setRowVisible(self.otp_key, code == "totp")
         self.form.setRowVisible(self.otp_note, bool(code))
-        where = ("It answers the server's question for a code." if tunnel else
-                 "The code is added to the end of the password (or used alone if there is no password).")
+        where = "The code is added to the end of the password (or used alone if there is no password)."
         self.otp_note.setText(
             f"When the proxy asks for a second step, type the code from your authenticator app (or touch your YubiKey) when Toner "
             f"connects. {where} Checks that run by themselves cannot ask you, so use a secret key for those." if code == "ask" else
             f"Toner works out the current code itself from the secret key (the text shown beside the QR code when the account was "
             f"set up). {where} The key is kept in Credential Manager."
             + (" A key is saved; leave the box empty to keep it." if self._have_key else "") if code == "totp" else "")
+        on = self.t_enabled.isChecked()
+        for w in self.t_fields:
+            w.setEnabled(on)
+        has_key = bool(self.t_key.text().strip())
+        self.t_password.setPlaceholderText("the key's passphrase, if it has one" if has_key else "the password you use with PuTTY")
+        self.tform.setRowVisible(self.t_otp_key, self.t_otp.currentData() == "totp")
+        self.t_otp_note.setText(
+            "Toner works out the code from the secret key and answers the server's question with it, so the tunnel can sign in "
+            "again by itself." + (" A key is saved; leave the box empty to keep it." if self._t_have_key else "")
+            if self.t_otp.currentData() == "totp" else
+            "A box appears for the server's question. A Duo push or a YubiKey touch needs you, so checks that run by themselves "
+            "use the tunnel while it is open and cannot sign it in again.")
+        self.refresh_tunnel()
+
+    def refresh_tunnel(self, message=""):
+        s = tunnel.status()
+        if s["open"]:
+            since = datetime.fromtimestamp(s["since"]).strftime("%H:%M") if s["since"] else ""
+            text = f"Connected to {s['label'].replace('SSH tunnel ', '')} since {since}; SOCKS5 is on 127.0.0.1:{s['port']}."
+        else:
+            text = "Not connected." + ("" if s["enabled"] else " Save to set it up (Connect tries it now)." if self.t_enabled.isChecked()
+                                       else " Tick 'Use an SSH tunnel' to set it up.")
+        self.t_status.setText((message + " " if message else "") + text)
+        self.t_connect.setEnabled(self.t_enabled.isChecked() and not s["open"])
+        self.t_disconnect.setEnabled(s["open"])
 
     def _kind_changed(self, *_):
         """A new type brings its usual port, unless the port was changed by hand."""
@@ -135,21 +214,63 @@ class ProxyPage(Page):
         self.adapt()
 
     def _browse_key(self):
-        start = self.key_file.text().strip() or os.path.join(os.path.expanduser("~"), ".ssh")
+        start = self.t_key.text().strip() or os.path.join(os.path.expanduser("~"), ".ssh")
         path, _ = QFileDialog.getOpenFileName(self, "Private key file", start)
         if path:
-            self.key_file.setText(os.path.normpath(path))
-
-    def _close_tunnel(self):
-        from core import tunnel
-        tunnel.close_all()
-        self.test_out.setText("The tunnel is closed. The next connection signs in again.")
+            self.t_key.setText(os.path.normpath(path))
 
     def _clear_password(self):
         self._forget = True
         self.password.clear()
         self.pw_note.setText("The saved password will be removed when you save.")
+        self.form.setRowVisible(self.pw_note, True)
 
+    def _clear_tunnel_password(self):
+        self._t_forget = True
+        self.t_password.clear()
+        self.t_pw_note.setText("The saved password will be removed when you save.")
+        self.tform.setRowVisible(self.t_pw_note, True)
+
+    # ---------------------------------------------------------------- the tunnel's buttons
+    def _tunnel_values(self):
+        return {"enabled": self.t_enabled.isChecked(), "host": self.t_host.text().strip(), "port": self.t_port.value(),
+                "username": self.t_user.text().strip(), "key_file": self.t_key.text().strip(), "otp": self.t_otp.currentData(),
+                "local_port": self.t_local.value(), "autostart": self.t_autostart.isChecked()}
+
+    def _tunnel_config(self):
+        """The tunnel as shown on the page (saved or not), with the typed password and key, or the saved ones."""
+        return tunnel.config(self._tunnel_values(),
+                             self.t_password.text() or ("" if self._t_forget else keyring.get_password(db.SERVICE, tunnel.SECRET) or ""),
+                             proxy.clean_key(self.t_otp_key.text()) or keyring.get_password(db.SERVICE, tunnel.OTP_SECRET) or "")
+
+    def connect_tunnel(self):
+        cfg = self._tunnel_config()
+        if cfg is None:
+            self.refresh_tunnel("Enter the SSH server first.")
+            return
+        self.t_status.setText(f"Signing in to {cfg.host}... answer the box, or approve the Duo push, if one comes.")
+        self.t_connect.setEnabled(False)
+        try:
+            tunnel.get(cfg, local_port=self.t_local.value())         # the window stays usable while it signs in
+            self.refresh_tunnel()
+        except OSError as e:
+            self.refresh_tunnel(f"Failed: {e}.")
+
+    def disconnect_tunnel(self):
+        tunnel.close_all()
+        self.refresh_tunnel("Disconnected; the next connection through it signs in again.")
+
+    def use_tunnel(self):
+        self.mode.setCurrentIndex(self.mode.findData("manual"))
+        self.kind.setCurrentIndex(self.kind.findData("socks5"))
+        self.host.setText("127.0.0.1")
+        self.port.setValue(self.t_local.value())
+        self.user.clear()
+        self.otp.setCurrentIndex(self.otp.findData(""))
+        self.adapt()
+        self.test_out.setText(f"The proxy now points at the SSH tunnel (SOCKS5 127.0.0.1:{self.t_local.value()}). Save to keep it.")
+
+    # ---------------------------------------------------------------- load, check, save
     def load(self):
         s = proxy.settings()
         self.mode.setCurrentIndex(max(0, self.mode.findData(s["mode"])))
@@ -157,13 +278,13 @@ class ProxyPage(Page):
         self.host.setText(s["host"])
         self.port.setValue(int(s["port"] or 8080))
         self.user.setText(s["username"])
-        self.key_file.setText(s.get("key_file") or "")
         self.bypass.setText(s["bypass"])
         self.password.clear()
         self._forget = False
         have = bool(keyring.get_password(db.SERVICE, proxy.GLOBAL_SECRET))
         self.pw_note.setText("A password is saved in Credential Manager. Leave the box empty to keep it." if have else "")
-        self.forget.setVisible(have)
+        self.form.setRowVisible(self.forget_row, have)                    # no empty rows when nothing is saved
+        self.form.setRowVisible(self.pw_note, have)
         self.otp.setCurrentIndex(max(0, self.otp.findData(s.get("otp") or "")))
         self.otp_key.clear()
         self._have_key = bool(keyring.get_password(db.SERVICE, proxy.GLOBAL_OTP))
@@ -171,14 +292,28 @@ class ProxyPage(Page):
         self.system.setText(f"Windows is set to use: {sys_text}" if sys_text else
                             "Windows has no proxy configured, so connections go directly.")
         self.test_out.setText("")
+        t = tunnel.settings()
+        self.t_enabled.setChecked(bool(t["enabled"]))
+        self.t_host.setText(t["host"])
+        self.t_port.setValue(int(t["port"] or 22))
+        self.t_user.setText(t["username"])
+        self.t_key.setText(t["key_file"])
+        self.t_otp.setCurrentIndex(max(0, self.t_otp.findData(t["otp"] or "ask")))
+        self.t_local.setValue(int(t["local_port"] or 1080))
+        self.t_autostart.setChecked(bool(t["autostart"]))
+        self.t_password.clear()
+        self.t_otp_key.clear()
+        self._t_forget = False
+        self._t_have_pw = bool(keyring.get_password(db.SERVICE, tunnel.SECRET))
+        self._t_have_key = bool(keyring.get_password(db.SERVICE, tunnel.OTP_SECRET))
+        self.t_pw_note.setText("A password is saved in Credential Manager. Leave the box empty to keep it." if self._t_have_pw else "")
+        self.tform.setRowVisible(self.t_forget_row, self._t_have_pw)
+        self.tform.setRowVisible(self.t_pw_note, self._t_have_pw)
         self.adapt()
 
     def validate(self):
         if self.mode.currentData() == "manual" and not self.host.text().strip():
             return ["Proxy: enter the proxy's address, or choose another option."]
-        key = os.path.expandvars(os.path.expanduser(self.key_file.text().strip().strip('"')))
-        if self.mode.currentData() == "manual" and self.kind.currentData() == "tunnel" and key and not os.path.isfile(key):
-            return [f"Proxy: the key file {key} was not found."]
         if self.mode.currentData() == "manual" and self.otp.currentData() == "totp":
             if not self.otp_key.text().strip() and not self._have_key:
                 return ["Proxy: enter the secret key for the one-time code, or choose 'Ask me for it when connecting'."]
@@ -187,19 +322,27 @@ class ProxyPage(Page):
                     proxy.totp(self.otp_key.text())
                 except proxy.ProxyError as e:
                     return [f"Proxy: {e}."]
+        if self.t_enabled.isChecked():
+            if not self.t_host.text().strip():
+                return ["SSH Tunnel: enter the SSH server, or untick 'Use an SSH tunnel'."]
+            key = os.path.expandvars(os.path.expanduser(self.t_key.text().strip().strip('"')))
+            if key and not os.path.isfile(key):
+                return [f"SSH Tunnel: the key file {key} was not found."]
+            if self.t_otp.currentData() == "totp":
+                if not self.t_otp_key.text().strip() and not self._t_have_key:
+                    return ["SSH Tunnel: enter the secret key for the second step, or choose to be asked."]
+                if self.t_otp_key.text().strip():
+                    try:
+                        proxy.totp(self.t_otp_key.text())
+                    except proxy.ProxyError as e:
+                        return [f"SSH Tunnel: {e}."]
         return []
 
     def save(self):
-        before = proxy.settings()
-        if any(before.get(k) != v for k, v in (("kind", self.kind.currentData()), ("host", self.host.text().strip()),
-                                                ("port", self.port.value()), ("username", self.user.text().strip()),
-                                                ("key_file", self.key_file.text().strip()))) or self.password.text():
-            from core import tunnel
-            tunnel.close_all()                       # a tunnel signed in with the old settings is not kept
         db.set_setting("proxy", {"mode": self.mode.currentData(), "kind": self.kind.currentData(),
                                  "host": self.host.text().strip(), "port": self.port.value(),
                                  "username": self.user.text().strip(), "bypass": self.bypass.text().strip(),
-                                 "otp": self.otp.currentData(), "key_file": self.key_file.text().strip()})
+                                 "otp": self.otp.currentData(), "key_file": ""})
         if self.password.text():
             db.set_secret(proxy.GLOBAL_SECRET, self.password.text())
         elif self._forget:
@@ -209,8 +352,23 @@ class ProxyPage(Page):
                 db.delete_secret(proxy.GLOBAL_OTP)
         elif self.otp_key.text().strip():
             db.set_secret(proxy.GLOBAL_OTP, proxy.clean_key(self.otp_key.text()))
-        audit.log("proxy settings changed", f"{self.mode.currentData()} {self.host.text().strip()}:{self.port.value()}"
-                  if self.mode.currentData() == "manual" else self.mode.currentData())
+        before, after = tunnel.settings(), self._tunnel_values()
+        if (any(before.get(k) != after[k] for k in ("enabled", "host", "port", "username", "key_file", "local_port"))
+                or self.t_password.text() or self._t_forget):
+            tunnel.close_all()                       # a tunnel signed in with the old settings is not kept
+        db.set_setting("ssh_tunnel", after)
+        if self.t_password.text():
+            db.set_secret(tunnel.SECRET, self.t_password.text())
+        elif self._t_forget:
+            db.delete_secret(tunnel.SECRET)
+        if self.t_otp.currentData() != "totp":
+            if self._t_have_key:
+                db.delete_secret(tunnel.OTP_SECRET)
+        elif self.t_otp_key.text().strip():
+            db.set_secret(tunnel.OTP_SECRET, proxy.clean_key(self.t_otp_key.text()))
+        audit.log("proxy settings changed", (f"{self.mode.currentData()} {self.host.text().strip()}:{self.port.value()}"
+                                             if self.mode.currentData() == "manual" else self.mode.currentData())
+                  + (f"; SSH tunnel {after['host']}:{after['port']} on local port {after['local_port']}" if after["enabled"] else ""))
         self.load()
 
     def test(self):
@@ -224,7 +382,7 @@ class ProxyPage(Page):
         try:
             if mode == "manual":
                 cfg = proxy._config({"kind": self.kind.currentData(), "host": self.host.text(), "port": self.port.value(),
-                                     "username": self.user.text(), "otp": self.otp.currentData(), "key_file": self.key_file.text()},
+                                     "username": self.user.text(), "otp": self.otp.currentData()},
                                     self.password.text() or ("" if self._forget else
                                                              keyring.get_password(db.SERVICE, proxy.GLOBAL_SECRET) or ""),
                                     proxy.clean_key(self.otp_key.text()) or keyring.get_password(db.SERVICE, proxy.GLOBAL_OTP) or "")
@@ -234,6 +392,7 @@ class ProxyPage(Page):
         finally:
             QApplication.restoreOverrideCursor()
         self.test_out.setText(("OK: " if ok else "Failed: ") + msg)
+        self.refresh_tunnel()
 
 
 # ------------------------------------------------------------------ Agents

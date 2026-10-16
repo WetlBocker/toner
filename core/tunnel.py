@@ -1,12 +1,13 @@
-"""An SSH tunnel used as a proxy (Settings > Proxy > SSH tunnel), what `ssh -D` does.
+"""The SSH tunnel (Settings > Proxy > SSH Tunnel): what PuTTY's Dynamic port forwarding and `ssh -D` do.
 
-Toner signs in to an SSH server (a bastion that may ask for a password, a one-time code or a YubiKey touch), keeps that
-session open, and forwards connections through it. Everything else in Toner talks to a SOCKS5 listener on this computer
-that belongs to the tunnel, so SSH, web requests and notifications all go through it the same way as through any proxy.
-The listener is on 127.0.0.1 only and wants a random user name and password, so no other program can use the tunnel.
+Toner signs in to an SSH server (a bastion that may ask for a password, a Duo option, a one-time code or a YubiKey touch),
+keeps that session open, and listens on a SOCKS5 port on this computer (1080 unless changed). The proxy settings, for every
+connection or for one device, then point at SOCKS5 127.0.0.1:1080, exactly as they would at PuTTY's port. A connection
+through that port while the tunnel is closed signs in first. Like PuTTY's, the port is on 127.0.0.1 only and asks for no
+sign-in of its own, so programs on this computer can use it while it is open.
 """
+import json
 import logging
-import secrets
 import socket
 import struct
 import threading
@@ -21,7 +22,6 @@ from core.version import VERSION
 
 OTP_WORDS = ("otp", "one-time", "one time", "verification", "passcode", "yubi", "token", "code", "authenticator", "duo", "press", "touch")
 
-_tunnels = {}                       # (host, port, user) -> Tunnel
 _open_lock = threading.Lock()       # one sign-in at a time, so two checks do not both ask for a code
 
 
@@ -130,8 +130,10 @@ def _login(t, cfg):
     pkey = load_key(cfg) if cfg.key_file else None
     plain = replace(cfg, password="") if pkey else cfg
     handler = _handler(plain, errors)
-    wanted = (["publickey"] if pkey else []) + (["password", "keyboard-interactive"] if plain.password
-                                                 else ["keyboard-interactive", "password"])
+    # OpenSSH's and PuTTY's order: the server's questions before a bare password. Duo and other second steps live in
+    # keyboard-interactive (the saved password answers its "Password:" question); the password method cannot ask for them,
+    # so on such a server it fails even with the right password.
+    wanted = (["publickey"] if pkey else []) + ["keyboard-interactive", "password"]
     done, remaining, key_refused = set(), None, False
     try:
         remaining = t.auth_none(cfg.username)              # 'none' is how a client asks; it is not a failed try
@@ -168,14 +170,21 @@ def _login(t, cfg):
                 done.add(kind)
             continue
         except paramiko.AuthenticationException:
-            if kind == "publickey" and t.is_active():
-                key_refused, remaining = True, None           # as ssh does: try the other ways the server takes
-                continue
+            untried = [k for k in wanted if k not in done and (remaining is None or k in remaining)]
+            if kind in ("publickey", "password") and t.is_active() and untried and not errors:
+                _note(f"{kind} was refused; trying {untried[0]} next, as ssh does")
+                key_refused = key_refused or kind == "publickey"
+                continue                                      # (remaining stays what the server last said it takes)
             if errors:
                 raise errors[0] from None
+            if kind == "publickey" and t.is_active():
+                key_refused = True
+                break
             if not t.is_active() and kind != "password":
                 raise _closed(t, cfg, kind) from None
-            raise proxy.ProxyError(f"{cfg.label()} rejected the sign-in (user name, password or one-time code)") from None
+            raise proxy.ProxyError(f"{cfg.label()} rejected the sign-in (user name, password or one-time code)"
+                                   + (f". Check the user name: the server was given '{cfg.username}' (PuTTY's 'login as')"
+                                      if "@" in cfg.username or "\\" in cfg.username else "")) from None
         except paramiko.SSHException as e:
             if not t.is_active():
                 raise _closed(t, cfg, kind, errors) from None
@@ -300,15 +309,41 @@ def _pipe(sock, chan):
 
 
 class Tunnel:
-    def __init__(self, cfg):
+    def __init__(self, cfg, local_port=0):
         self.cfg = cfg
-        self.user, self.password = "toner", secrets.token_urlsafe(18)      # for the local listener only
+        self.local_port = int(local_port or 0)            # 0: any free port (used by the tests)
         self.client = self.listener = None
         self.port = 0
         self.since = None
 
     # ------------------------------------------------------------ open and close
+    def _listen(self):
+        """The local SOCKS5 port, taken before signing in, so a port that is in use is found before anyone is asked for a code."""
+        ls = socket.socket()
+        try:
+            ls.bind(("127.0.0.1", self.local_port))
+        except OSError:
+            ls.close()
+            raise proxy.ProxyError(f"port {self.local_port} on this computer is already in use (PuTTY or another tunnel may be "
+                                   f"open with it). Close that, or choose another Local SOCKS Port") from None
+        ls.listen(32)
+        return ls
+
     def open(self, timeout=30):
+        cfg = self.cfg
+        ls = self._listen()
+        try:
+            self._sign_in(timeout)
+        except BaseException:
+            ls.close()
+            raise
+        self.client.get_transport().set_keepalive(30)
+        self.listener, self.port, self.since = ls, ls.getsockname()[1], time.time()
+        threading.Thread(target=self._accept, daemon=True).start()
+        _note(f"SOCKS5 is on 127.0.0.1:{self.port}")
+        return self
+
+    def _sign_in(self, timeout):
         cfg = self.cfg
         client = _Client()
         nettools.configure_hostkeys(client, db.get_setting("hostkey_mode"))
@@ -332,13 +367,7 @@ class Tunnel:
                 client.close()
                 raise proxy.ProxyError(f"could not reach the proxy {cfg.label()}: {str(e) or type(e).__name__}") from None
             trail.note("signed in; the tunnel is open")
-        t = client.get_transport()
-        t.set_keepalive(30)
-        ls = socket.socket()
-        ls.bind(("127.0.0.1", 0))
-        ls.listen(32)
-        self.client, self.listener, self.port, self.since = client, ls, ls.getsockname()[1], time.time()
-        threading.Thread(target=self._accept, daemon=True).start()
+        self.client = client
 
     def alive(self):
         t = self.client.get_transport() if self.client else None
@@ -368,17 +397,17 @@ class Tunnel:
             c.settimeout(15)
             ver, n = _recvn(c, 2)
             methods = _recvn(c, n)
-            if ver != 5 or 2 not in methods:
+            if ver != 5 or not ({0, 2} & set(methods)):
                 c.sendall(b"\x05\xff")
                 return
-            c.sendall(b"\x05\x02")
-            _recvn(c, 1)
-            user = _recvn(c, _recvn(c, 1)[0]).decode("utf-8", "replace")
-            pw = _recvn(c, _recvn(c, 1)[0]).decode("utf-8", "replace")
-            if not (secrets.compare_digest(user, self.user) and secrets.compare_digest(pw, self.password)):
-                c.sendall(b"\x01\x01")
-                return
-            c.sendall(b"\x01\x00")
+            if 0 in methods:                                  # like PuTTY's dynamic port: no sign-in on this computer's own port
+                c.sendall(b"\x05\x00")
+            else:                                             # a client set up with a user name: any is fine
+                c.sendall(b"\x05\x02")
+                _recvn(c, 1)
+                _recvn(c, _recvn(c, 1)[0])
+                _recvn(c, _recvn(c, 1)[0])
+                c.sendall(b"\x01\x00")
             _ver, cmd, _rsv, atyp = _recvn(c, 4)
             if atyp == 1:
                 host = socket.inet_ntoa(_recvn(c, 4))
@@ -410,39 +439,136 @@ class Tunnel:
                 quiet.ignored()
 
 
-# ---------------------------------------------------------------- the open tunnels
-def get(cfg, connect=True):
-    """The open tunnel for this proxy, signing in first (and asking for a code, if it wants one) when there is none."""
-    t = _tunnels.get(_key(cfg))
-    if t is not None and t.alive():
+# ---------------------------------------------------------------- the settings (Settings > Proxy > SSH Tunnel)
+SECRET = "service:ssh-tunnel"
+OTP_SECRET = "service:ssh-tunnel-otp"
+DEFAULTS = {"enabled": False, "host": "", "port": 22, "username": "", "key_file": "", "otp": "", "local_port": 1080,
+            "autostart": False}
+LOOPBACK = ("127.0.0.1", "localhost", "::1")
+
+
+def settings():
+    s = db.get_setting("ssh_tunnel")
+    return {**DEFAULTS, **(s if isinstance(s, dict) else {})}
+
+
+def config(s=None, password=None, otp_key=None):
+    """The tunnel set up in Settings, as a Config (kind 'tunnel'), or None when it has no server."""
+    s = s or settings()
+    if not str(s.get("host") or "").strip():
+        return None
+    otp = s.get("otp") if s.get("otp") in ("ask", "totp") else ""
+    return proxy.Config("tunnel", s["host"].strip(), int(s.get("port") or 22), (s.get("username") or "").strip(),
+                        proxy._secret(SECRET) if password is None else password, otp,
+                        (proxy._secret(OTP_SECRET) if otp == "totp" else "") if otp_key is None else otp_key,
+                        str(s.get("key_file") or "").strip())
+
+
+def enabled():
+    s = settings()
+    return bool(s["enabled"] and str(s["host"]).strip())
+
+
+def serves(cfg):
+    """Is this proxy setting (SOCKS5 to this computer's tunnel port) the SSH tunnel's local end?"""
+    s = settings()
+    return bool(cfg and cfg.kind == "socks5" and cfg.host.strip().lower() in LOOPBACK
+                and int(cfg.port) == int(s["local_port"]) and enabled())
+
+
+def ensure_for(cfg):
+    """Before a connection through 127.0.0.1:<the tunnel's port>: sign in to the tunnel if it is set up but not open, the
+    way a connection through any other proxy would reach it."""
+    if serves(cfg) and not is_open():
+        get()
+
+
+def migrate():
+    """1.5.2 to 1.5.5 had the SSH tunnel as a proxy type, globally or per device. It is now its own section: move it there
+    and point those proxies at its SOCKS5 port, as it would be set up by hand. Returns True if anything changed."""
+    changed = False
+    s = db.get_setting("proxy")
+    if isinstance(s, dict) and s.get("kind") == "tunnel":
+        db.set_setting("ssh_tunnel", {**DEFAULTS, "enabled": True, "host": s.get("host", ""), "port": int(s.get("port") or 22),
+                                      "username": s.get("username", ""), "key_file": s.get("key_file", ""),
+                                      "otp": s.get("otp", "")})
+        for old, new in ((proxy.GLOBAL_SECRET, SECRET), (proxy.GLOBAL_OTP, OTP_SECRET)):
+            db.move_secret(old, new)
+        db.set_setting("proxy", {**s, "kind": "socks5", "host": "127.0.0.1", "port": DEFAULTS["local_port"], "username": "",
+                                 "otp": "", "key_file": ""})
+        changed = True
+    for d in db.list_devices():
+        own = proxy.device_settings(d)
+        if own.get("mode") != "custom" or own.get("kind") != "tunnel":
+            continue
+        if not settings()["host"]:                    # the first one becomes the SSH tunnel, with its password
+            db.set_setting("ssh_tunnel", {**DEFAULTS, "enabled": True, "host": own.get("host", ""),
+                                          "port": int(own.get("port") or 22), "username": own.get("username", ""),
+                                          "key_file": own.get("key_file", ""), "otp": own.get("otp", "")})
+            db.move_secret(db.secret_name(d["name"], "proxy"), SECRET)
+            db.move_secret(db.secret_name(d["name"], "proxy_otp"), OTP_SECRET)
+        d = {**d, "proxy": json.dumps({"mode": "custom", "kind": "socks5", "host": "127.0.0.1",
+                                       "port": settings()["local_port"], "username": ""})}
+        db.save_device(d)
+        changed = True
+    return changed
+
+
+# ---------------------------------------------------------------- the open tunnel
+_current = None
+
+
+def _same(a, b):
+    return a is not None and b is not None and _key(a) == _key(b)
+
+
+def get(cfg=None, connect=True, local_port=None):
+    """The open tunnel, signing in first (and asking for a code, if the server wants one) when it is not open. cfg None:
+    the one set up in Settings, on its Local SOCKS Port; another cfg (an older device setting, the tests) gets any free port."""
+    global _current
+    if cfg is None:
+        cfg = config()
+        if cfg is None:
+            raise proxy.ProxyError("no SSH tunnel is set up: fill in Settings > Proxy > SSH Tunnel")
+    t = _current
+    if t is not None and t.alive() and _same(t.cfg, cfg):
         return t
     if not connect:
         return None
     with _open_lock:
-        t = _tunnels.get(_key(cfg))
-        if t is not None and t.alive():
+        t = _current
+        if t is not None and t.alive() and _same(t.cfg, cfg):
             return t
         if t is not None:
             t.close()
-        t = Tunnel(cfg)
+            _current = None
+        port = local_port if local_port is not None else (settings()["local_port"] if _same(cfg, config()) else 0)
+        t = Tunnel(cfg, port)
         proxy.run_waiting(t.open)
-        _tunnels[_key(cfg)] = t
+        _current = t
         return t
 
 
-def is_open(cfg):
-    t = _tunnels.get(_key(cfg))
-    return bool(t and t.alive())
+def is_open(cfg=None):
+    t = _current
+    return bool(t and t.alive() and (cfg is None or _same(t.cfg, cfg)))
 
 
-def close(cfg):
-    t = _tunnels.pop(_key(cfg), None)
-    if t:
+def status():
+    """What the Settings page and the status strip show."""
+    t = _current
+    up = bool(t and t.alive())
+    return {"enabled": enabled(), "open": up, "since": t.since if up else None, "port": t.port if up else settings()["local_port"],
+            "label": (t.cfg if up else config() or proxy.Config("tunnel", "", 22)).label()}
+
+
+def close(cfg=None):
+    global _current
+    t = _current
+    if t is not None and (cfg is None or _same(t.cfg, cfg)):
+        _current = None
         t.close()
 
 
 def close_all():
-    for k in list(_tunnels):
-        t = _tunnels.pop(k, None)
-        if t:
-            t.close()
+    close()
