@@ -17,6 +17,7 @@ from ui.device_view import DeviceView
 from ui.history import HistoryTab
 from ui.nav import NavStack
 from ui.inventory import InventoryTab
+from ui import otpprompt
 from ui.notifier import Notifier
 from ui.palette import CommandPalette
 from ui.reports_tab import ReportsTab
@@ -602,6 +603,7 @@ def main():
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(True)
     apply_look(app)
+    otpprompt.install()
     win = Main()
     if "--minimized" in sys.argv and win.background_mode():
         win.update_tray()                          # started with Windows: wait in the tray

@@ -2,12 +2,14 @@
 
 Last run (or the progress of the one going now), the next scheduled run and backup, the agent receiver, and whether notifications go
 out. Each part opens the place where it is set."""
+import threading
+import time
 from datetime import datetime
 
 from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QProgressBar, QWidget
 
-from core import agents, db, display, notify
+from core import agents, db, display, notify, proxy
 from ui import status as st
 from ui import theme
 
@@ -28,11 +30,15 @@ class Part(QLabel):
 
 class StatusStrip(QWidget):
     navigate = Signal(str, str)                 # (section, settings page or "")
+    probed = Signal(object)                     # (proxy "host:port", answers, message), from the thread that asked it
 
     def __init__(self, main):
         super().__init__()
         self.main = main
         self.setObjectName("statusStrip")
+        self.probe_state, self._probing = None, False
+        self.proxy = Part()
+        self.probed.connect(self._on_probe)
         self.run, self.schedule, self.backups, self.receiver, self.notify = Part(), Part(), Part(), Part(), Part()
         self.progress = QProgressBar()
         self.progress.setMaximumWidth(160)
@@ -45,12 +51,13 @@ class StatusStrip(QWidget):
         lay.addWidget(self.run)
         lay.addWidget(self.progress)
         lay.addStretch()
-        for i, w in enumerate((self.schedule, self.backups, self.receiver, self.notify)):
+        for i, w in enumerate((self.proxy, self.schedule, self.backups, self.receiver, self.notify)):
             if i:
                 dot = QLabel("·")
                 dot.setProperty("muted", True)
                 lay.addWidget(dot)
             lay.addWidget(w)
+        self.proxy.clicked.connect(lambda: self.navigate.emit("Settings", "Proxy"))
         self.run.clicked.connect(lambda: self.navigate.emit("Results", ""))
         self.schedule.clicked.connect(lambda: self.navigate.emit("Settings", "Checks/Schedule"))
         self.backups.clicked.connect(lambda: self.navigate.emit("Settings", "Config backups"))
@@ -59,15 +66,61 @@ class StatusStrip(QWidget):
         self.running = None                       # (done, total) while a run is going
         self.timer = QTimer(self)                 # "12 min ago" moves on, and schedules change
         self.timer.setInterval(30_000)
-        self.timer.timeout.connect(self.refresh)
+        self.timer.timeout.connect(self._tick)
         self.timer.start()
         self.restyle()
+
+    def _tick(self):
+        self.check_proxy()
+        self.refresh()
 
     def restyle(self):
         t = theme.current() or {}
         self.setStyleSheet(f"QWidget#statusStrip {{ background: {t.get('surface', '#ffffff')}; border-top: 1px solid {t.get('border', '#dddddd')}; }}"
                            f"QWidget#statusStrip QLabel {{ color: {t.get('muted', '#666666')}; font-size: 8.5pt; background: transparent; }}")
+        self.check_proxy()                         # also runs when Settings are saved, so a new proxy is looked at at once
         self.refresh()
+
+    # ---------------------------------------------------------------- the proxy
+    def check_proxy(self):
+        """Ask the proxy chosen in Settings whether it answers, off the main thread. A proxy is not a standing connection (each
+        check opens its own), so this is: does it answer now, and did the last real connection through it work."""
+        cfg = proxy.global_config()
+        if cfg is None or self._probing:
+            return
+        self._probing = True
+        key = f"{cfg.host}:{cfg.port}"
+        threading.Thread(target=lambda: self.probed.emit((key, *proxy.probe(cfg))), daemon=True).start()
+
+    def _on_probe(self, result):
+        self._probing = False
+        self.probe_state = (*result, time.time())
+        cfg = proxy.global_config()
+        if cfg is not None and f"{cfg.host}:{cfg.port}" != result[0]:
+            self.check_proxy()                    # the setting changed while it was asking
+        self.refresh()
+
+    def _proxy_part(self):
+        """(text, tooltip) for the proxy indicator."""
+        cfg = proxy.global_config()
+        if cfg is None:
+            how = db.get_setting("proxy").get("mode") if isinstance(db.get_setting("proxy"), dict) else "none"
+            if how == "system" and proxy.system_text():
+                return "Proxy: Windows settings", f"{proxy.system_text()}. Web connections follow the Windows proxy. Settings > Proxy"
+            return "No proxy", "Connections go directly. Settings > Proxy"
+        key = f"{cfg.host}:{cfg.port}"
+        st_ = self.probe_state if self.probe_state and self.probe_state[0] == key else None
+        if st_ is None:
+            return "Proxy: checking...", f"Asking {cfg.label()} whether it answers"
+        _k, answers, msg, at = st_
+        dot = lambda word: f"<span style='color:{st.ink(word)}'>&#9679;</span>"
+        if not answers:
+            return f"{dot('FAIL')} Proxy disconnected", f"{msg}. Settings > Proxy"
+        last = proxy.last_result(cfg)
+        if last and not last[0] and last[1] > at - 1:
+            return f"{dot('WARN')} Proxy connected, but refused the last connection", f"{cfg.label()} answers, but the last connection through it failed: {last[2]}"
+        worked = f" The last connection through it worked {display.ago(datetime.fromtimestamp(last[1]).strftime('%Y-%m-%d %H:%M:%S'))}." if last and last[0] else ""
+        return f"{dot('OK')} Proxy connected", f"{cfg.label()} answers. The sign-in is checked each time a connection is made.{worked} Settings > Proxy"
 
     # ---------------------------------------------------------------- the run going now
     def on_progress(self, done, total):
@@ -100,6 +153,9 @@ class StatusStrip(QWidget):
                 run = None
             self.run.setText(f"Last run {display.ago(run['started_at'])}: {self._counts(run)}" if run else "No checks run yet")
             self.run.setToolTip(f"{run['started_at']}. Open Results." if run else "Open Results to run the checks")
+        text, tip = self._proxy_part()
+        self.proxy.setText(text)
+        self.proxy.setToolTip(tip)
         nxt = getattr(getattr(self.main, "scheduler", None), "next_at", None)
         self.schedule.setText(f"Next run {self._when(nxt)}" if nxt else "Scheduled runs off")
         self.schedule.setToolTip("Settings > Checks > Schedule")

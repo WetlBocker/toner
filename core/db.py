@@ -323,7 +323,7 @@ def move_secret(old, new):
 
 # A device can hold up to four secrets: its password/token, and an SNMP community or v3 auth/privacy passwords.
 SECRET_KINDS = {"main": "", "snmp": ":snmp", "snmp_auth": ":snmp-auth", "snmp_priv": ":snmp-priv", "proxy": ":proxy",
-                "agent": ":agent", "ssh": ":ssh"}
+                "agent": ":agent", "ssh": ":ssh", "proxy_otp": ":proxy-otp"}
 
 def secret_name(owner, kind="main"):
     return owner + SECRET_KINDS[kind]

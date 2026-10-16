@@ -35,13 +35,20 @@ class ProxyPage(Page):
         self.password.setEchoMode(QLineEdit.EchoMode.Password)
         self.forget = QPushButton("Remove saved password")
         self.pw_note = note("")
+        self.otp, self.otp_key = QComboBox(), QLineEdit()
+        for k, label in proxy.OTP_MODES:
+            self.otp.addItem(label, k)
+        self.otp.setToolTip("For a proxy with two-step sign-in: the current code from an authenticator app is added to the end of the password.")
+        self.otp_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self.otp_note = note("")
         self.system = note("")
         self.test_to = QLineEdit("www.githubstatus.com:443")
         self.test_btn = QPushButton("Test")
         self.test_out = QLabel("")
         self.test_out.setWordWrap(True)
         self._forget = False
-        self.manual = [self.kind, self.host, self.port, self.user, self.password, self.forget, self.bypass]
+        self._have_key = False
+        self.manual = [self.kind, self.host, self.port, self.user, self.password, self.forget, self.bypass, self.otp, self.otp_key]
         self.form.addRow("Connections go", self.mode)
         self.form.addRow("", self.system)
         self.form.addRow("Proxy type", self.kind)
@@ -51,6 +58,9 @@ class ProxyPage(Page):
         self.form.addRow("Password", self.password)
         self.form.addRow("", row_of(self.forget))
         self.form.addRow("", self.pw_note)
+        self.form.addRow("One-time code", self.otp)
+        self.form.addRow("Secret key", self.otp_key)
+        self.form.addRow("", self.otp_note)
         self.form.addRow("Do not use it for", self.bypass)
         self.form.addRow("Try a connection to", row_of(self.test_to, self.test_btn))
         self.form.addRow("", self.test_out)
@@ -62,6 +72,7 @@ class ProxyPage(Page):
             "'Windows proxy settings' covers web connections only, as a browser would; choose 'Use the proxy below' to "
             "send SSH and port checks through a proxy as well."))
         self.mode.currentIndexChanged.connect(self.adapt)
+        self.otp.currentIndexChanged.connect(self.adapt)
         self.forget.clicked.connect(self._clear_password)
         self.test_btn.clicked.connect(self.test)
 
@@ -70,6 +81,16 @@ class ProxyPage(Page):
         for w in self.manual:
             w.setEnabled(manual)
         self.form.setRowVisible(self.system, self.mode.currentData() == "system")
+        code = self.otp.currentData()
+        self.form.setRowVisible(self.otp_key, code == "totp")
+        self.form.setRowVisible(self.otp_note, bool(code))
+        self.otp_note.setText(
+            "When the proxy asks for a second step, type the code from your authenticator app when Toner connects. The code is added "
+            "to the end of the password (or used alone if there is no password). Checks that run by themselves cannot ask you, so "
+            "use a secret key for those." if code == "ask" else
+            "Toner works out the current code itself from the secret key (the text shown beside the QR code when the account was "
+            "set up). The code is added to the end of the password (or used alone if there is no password). The key is kept in "
+            "Credential Manager." + (" A key is saved; leave the box empty to keep it." if self._have_key else "") if code == "totp" else "")
 
     def _clear_password(self):
         self._forget = True
@@ -89,6 +110,9 @@ class ProxyPage(Page):
         have = bool(keyring.get_password(db.SERVICE, proxy.GLOBAL_SECRET))
         self.pw_note.setText("A password is saved in Credential Manager. Leave the box empty to keep it." if have else "")
         self.forget.setVisible(have)
+        self.otp.setCurrentIndex(max(0, self.otp.findData(s.get("otp") or "")))
+        self.otp_key.clear()
+        self._have_key = bool(keyring.get_password(db.SERVICE, proxy.GLOBAL_OTP))
         sys_text = proxy.system_text()
         self.system.setText(f"Windows is set to use: {sys_text}" if sys_text else
                             "Windows has no proxy configured, so connections go directly.")
@@ -98,16 +122,30 @@ class ProxyPage(Page):
     def validate(self):
         if self.mode.currentData() == "manual" and not self.host.text().strip():
             return ["Proxy: enter the proxy's address, or choose another option."]
+        if self.mode.currentData() == "manual" and self.otp.currentData() == "totp":
+            if not self.otp_key.text().strip() and not self._have_key:
+                return ["Proxy: enter the secret key for the one-time code, or choose 'Ask me for it when connecting'."]
+            if self.otp_key.text().strip():
+                try:
+                    proxy.totp(self.otp_key.text())
+                except proxy.ProxyError as e:
+                    return [f"Proxy: {e}."]
         return []
 
     def save(self):
         db.set_setting("proxy", {"mode": self.mode.currentData(), "kind": self.kind.currentData(),
                                  "host": self.host.text().strip(), "port": self.port.value(),
-                                 "username": self.user.text().strip(), "bypass": self.bypass.text().strip()})
+                                 "username": self.user.text().strip(), "bypass": self.bypass.text().strip(),
+                                 "otp": self.otp.currentData()})
         if self.password.text():
             db.set_secret(proxy.GLOBAL_SECRET, self.password.text())
         elif self._forget:
             db.delete_secret(proxy.GLOBAL_SECRET)
+        if self.otp.currentData() != "totp":
+            if self._have_key:
+                db.delete_secret(proxy.GLOBAL_OTP)
+        elif self.otp_key.text().strip():
+            db.set_secret(proxy.GLOBAL_OTP, proxy.clean_key(self.otp_key.text()))
         audit.log("proxy settings changed", f"{self.mode.currentData()} {self.host.text().strip()}:{self.port.value()}"
                   if self.mode.currentData() == "manual" else self.mode.currentData())
         self.load()
@@ -123,9 +161,10 @@ class ProxyPage(Page):
         try:
             if mode == "manual":
                 cfg = proxy._config({"kind": self.kind.currentData(), "host": self.host.text(), "port": self.port.value(),
-                                     "username": self.user.text()},
+                                     "username": self.user.text(), "otp": self.otp.currentData()},
                                     self.password.text() or ("" if self._forget else
-                                                             keyring.get_password(db.SERVICE, proxy.GLOBAL_SECRET) or ""))
+                                                             keyring.get_password(db.SERVICE, proxy.GLOBAL_SECRET) or ""),
+                                    proxy.clean_key(self.otp_key.text()) or keyring.get_password(db.SERVICE, proxy.GLOBAL_OTP) or "")
                 ok, msg = (False, "Enter the proxy's address first.") if cfg is None else proxy.test_tunnel(cfg, host, int(port))
             else:
                 ok, msg = proxy.test_web(host, int(port), direct=(mode == "none"))

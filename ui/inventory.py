@@ -98,6 +98,13 @@ class DeviceDialog(QDialog):
         self.proxy_host.setPlaceholderText("proxy.example.com")
         self.proxy_user.setPlaceholderText("optional")
         self.proxy_pw.setEchoMode(QLineEdit.EchoMode.Password)
+        self.proxy_otp, self.proxy_otp_key = QComboBox(), QLineEdit()
+        for k, label in proxy.OTP_MODES:
+            self.proxy_otp.addItem(label, k)
+        self.proxy_otp.setToolTip("For a proxy with two-step sign-in: the current code from an authenticator app is added to the end of the password.")
+        self.proxy_otp_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self.proxy_otp_key.setPlaceholderText("secret key from the authenticator setup")
+        self.proxy_otp.currentIndexChanged.connect(lambda *_: self._proxy_rows())
         self.proxy_port = QSpinBox()
         self.proxy_port.setRange(1, 65535)
         self.proxy_port.setValue(8080)
@@ -151,6 +158,7 @@ class DeviceDialog(QDialog):
                                               ("Jump host", self.jump), ("Proxy", self.proxy_mode), ("Proxy type", self.proxy_kind),
                                               ("Proxy address", self.proxy_host), ("Proxy port", self.proxy_port),
                                               ("Proxy user", self.proxy_user), ("Proxy password", self.proxy_pw),
+                                              ("One-time code", self.proxy_otp), ("Secret key", self.proxy_otp_key),
                                               ("", self.verify), ("", self.ha)))
         self.page_snmp = QWidget()
         sl = QVBoxLayout(self.page_snmp)
@@ -214,6 +222,9 @@ class DeviceDialog(QDialog):
             self.proxy_host.setText(own_proxy.get("host", ""))
             self.proxy_port.setValue(int(own_proxy.get("port") or 8080))
             self.proxy_user.setText(own_proxy.get("username", ""))
+            self.proxy_otp.setCurrentIndex(max(0, self.proxy_otp.findData(own_proxy.get("otp", ""))))
+            if keyring.get_password(db.SERVICE, db.secret_name(dev["name"], "proxy_otp")):
+                self.proxy_otp_key.setPlaceholderText("saved; leave blank to keep")
             self.checks_tab.load(dev.get("checkopts"))
             wo = winmon.options(dev)
             self.win_auth.setCurrentIndex(max(0, self.win_auth.findData(wo["auth"])))
@@ -342,8 +353,9 @@ class DeviceDialog(QDialog):
         able = vendors.get(self._vendor()).get("kind") in ("ssh", "api", "status")     # not SNMP / UDP / local
         self.access.setRowVisible(self.proxy_mode, able)
         custom = able and self.proxy_mode.currentData() == "custom"
-        for w in (self.proxy_kind, self.proxy_host, self.proxy_port, self.proxy_user, self.proxy_pw):
+        for w in (self.proxy_kind, self.proxy_host, self.proxy_port, self.proxy_user, self.proxy_pw, self.proxy_otp):
             self.access.setRowVisible(w, custom)
+        self.access.setRowVisible(self.proxy_otp_key, custom and self.proxy_otp.currentData() == "totp")
 
     def _proxy_values(self):
         if vendors.get(self._vendor()).get("kind") not in ("ssh", "api", "status"):
@@ -352,8 +364,11 @@ class DeviceDialog(QDialog):
         if mode == "none":
             return {"mode": "none"}
         if mode == "custom":
-            return {"mode": "custom", "kind": self.proxy_kind.currentData(), "host": self.proxy_host.text().strip(),
+            vals = {"mode": "custom", "kind": self.proxy_kind.currentData(), "host": self.proxy_host.text().strip(),
                     "port": self.proxy_port.value(), "username": self.proxy_user.text().strip()}
+            if self.proxy_otp.currentData():
+                vals["otp"] = self.proxy_otp.currentData()
+            return vals
         return ""
 
     def ssh_secrets(self):
@@ -362,7 +377,10 @@ class DeviceDialog(QDialog):
 
     def proxy_secrets(self):
         v = self._proxy_values()
-        return {"proxy": self.proxy_pw.text()} if v and v["mode"] == "custom" and self.proxy_pw.text() else {}
+        out = {"proxy": self.proxy_pw.text()} if v and v["mode"] == "custom" and self.proxy_pw.text() else {}
+        if v and v["mode"] == "custom" and v.get("otp") == "totp" and self.proxy_otp_key.text().strip():
+            out["proxy_otp"] = proxy.clean_key(self.proxy_otp_key.text())
+        return out
 
     def _preset(self, *_):
         picked = self.preset.currentData()
@@ -393,7 +411,7 @@ class DeviceDialog(QDialog):
 
     def _snapshot(self):
         try:
-            return json.dumps([self.values(), self.secret.text(), self.proxy_pw.text(), self.snmp_secrets(), self.ssh_pw.text()], sort_keys=True, default=str)
+            return json.dumps([self.values(), self.secret.text(), self.proxy_pw.text(), self.proxy_otp_key.text(), self.snmp_secrets(), self.ssh_pw.text()], sort_keys=True, default=str)
         except Exception:
             return ""
 
@@ -453,6 +471,8 @@ class DeviceDialog(QDialog):
             dev["proxy"] = json.dumps(dev["proxy"])
         if self.proxy_pw.text():
             dev["_proxy_secret"] = self.proxy_pw.text()
+        if self.proxy_otp_key.text().strip():
+            dev["_proxy_otp_secret"] = proxy.clean_key(self.proxy_otp_key.text())
         dlg = KeyDialog(dev, kind, self)
         if dlg.exec() and dlg.key:
             self.secret.setText(dlg.key)
@@ -539,6 +559,8 @@ class DeviceDialog(QDialog):
         dev["checkopts"] = json.dumps(dev["checkopts"]) if dev["checkopts"] else ""
         if self.proxy_pw.text():
             dev["_proxy_secret"] = self.proxy_pw.text()
+        if self.proxy_otp_key.text().strip():
+            dev["_proxy_otp_secret"] = proxy.clean_key(self.proxy_otp_key.text())
         dev["_secrets"] = {k: s for k, s in self.snmp_secrets().items() if s}        # typed but not saved yet
         QApplication.setOverrideCursor(self.cursor())
         try:

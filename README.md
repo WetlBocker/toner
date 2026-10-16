@@ -218,6 +218,12 @@ settings (web connections only), or one you enter; a **Test** button tries it. A
 the vendor APIs, status pages, web / port / certificate checks and notifications use it; SNMP, ping, traceroute, the listeners and
 the file servers use UDP or ICMP or listen for connections, so they never do.
 
+For a proxy with two-step sign-in, set **One-time code**: Toner adds the current code to the end of the password (or sends it alone
+when there is no password). **Ask me for it when connecting** shows a box for the code; **Make it from a secret key** works the
+code out itself from the authenticator's secret key (kept in Credential Manager), which is what checks that run by themselves
+need. When a proxy answers in a way Toner does not understand, the error says what it sent (for example an SSH banner or a sign-in
+method Toner cannot do) instead of "invalid response".
+
 ### Wi-Fi and cloud status pages
 
 - **Wi-Fi**: Tools > Wi-Fi Scanner lists the networks this computer can hear (signal, channel, band, security, maker) and suggests the

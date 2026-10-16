@@ -16,11 +16,15 @@ status pages, web / TCP / certificate checks, and notifications. SNMP, ping, tra
 ICMP, which ordinary proxies do not carry, so they always connect directly.
 """
 import base64
+import hashlib
+import hmac
 import ipaddress
 import json
 import socket
+import struct
+import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from urllib.parse import quote
 
 import keyring
@@ -28,7 +32,9 @@ import keyring
 from core import db
 
 GLOBAL_SECRET = "service:proxy"
+GLOBAL_OTP = "service:proxy-otp"
 KINDS = [("http", "HTTP proxy (CONNECT)"), ("socks5", "SOCKS5"), ("socks4", "SOCKS4")]
+OTP_MODES = [("", "None"), ("ask", "Ask me for it when connecting"), ("totp", "Make it from a secret key")]
 MODES = [("none", "No proxy (connect directly)"),
          ("system", "Use the Windows proxy settings (web connections only)"),
          ("manual", "Use the proxy below")]
@@ -41,6 +47,10 @@ class ProxyError(OSError):
     does not retry it: repeating a wrong proxy password is how accounts get locked out."""
 
 
+class TargetRefused(ProxyError):
+    """The proxy is fine and signed us in, but would not open the connection to that address (down, or not allowed)."""
+
+
 @dataclass
 class Config:
     kind: str
@@ -48,6 +58,8 @@ class Config:
     port: int
     username: str = ""
     password: str = ""
+    otp: str = ""                    # "" none, "ask" ask for a code each time, "totp" make it from otp_key
+    otp_key: str = ""
 
     def label(self):
         return f"{dict(KINDS).get(self.kind, self.kind).split(' (')[0]} {self.host}:{self.port}"
@@ -71,11 +83,18 @@ def _secret(name):
         return ""
 
 
-def _config(s, password):
+def _config(s, password, otp_key=""):
     if not str(s.get("host") or "").strip():
         return None
+    otp = s.get("otp") if s.get("otp") in ("ask", "totp") else ""
     return Config(s.get("kind") or "http", s["host"].strip(), int(s.get("port") or 8080), (s.get("username") or "").strip(),
-                  password or "")
+                  password or "", otp, otp_key or "")
+
+
+def global_config():
+    """The proxy chosen in Settings > Proxy ('Use the proxy below'), without its password, or None."""
+    s = settings()
+    return _config(s, "") if s["mode"] == "manual" else None
 
 
 def device_settings(dev):
@@ -118,11 +137,12 @@ def resolve(dev=None, host=None, purpose="socket"):
         return "direct", None
     if mode == "custom":
         pw = (dev or {}).get("_proxy_secret") or _secret(db.secret_name(dev["name"], "proxy"))
-        cfg = _config(own, pw)
+        key = (dev or {}).get("_proxy_otp_secret") or (_secret(db.secret_name(dev["name"], "proxy_otp")) if own.get("otp") == "totp" else "")
+        cfg = _config(own, pw, key)
         return ("proxy", cfg) if cfg else ("direct", None)
     s = settings()
     if s["mode"] == "manual":
-        cfg = _config(s, _secret(GLOBAL_SECRET))
+        cfg = _config(s, _secret(GLOBAL_SECRET), _secret(GLOBAL_OTP) if s.get("otp") == "totp" else "")
         return ("proxy", cfg) if cfg and not bypassed(host, s.get("bypass")) else ("direct", None)
     if s["mode"] == "system" and purpose == "web":
         return "system", None
@@ -139,7 +159,8 @@ def requests_kwargs(dev=None, host=None):
     """Extra arguments for requests.get/post: the proxies to use. Pass dev=None for app-wide connections."""
     how, cfg = resolve(dev, host, "web")
     if how == "proxy":
-        return {"proxies": {"http": cfg.url(), "https": cfg.url()}}
+        url = with_code(cfg).url()
+        return {"proxies": {"http": url, "https": url}}
     return {"proxies": dict(DIRECT)} if how == "direct" else {}
 
 
@@ -178,24 +199,244 @@ def _http_connect(cfg, host, port, timeout):
             raise ProxyError(f"{cfg.label()} needs a user name and password" if not cfg.username
                              else f"{cfg.label()} rejected the user name or password")
         if code != 200:
-            raise ProxyError(f"{cfg.label()} would not connect to {host}:{port} ({status.strip()[:80]})")
+            raise TargetRefused(f"{cfg.label()} would not connect to {host}:{port} ({status.strip()[:80]})")
         return s
     except BaseException:
         s.close()
         raise
 
 
+SOCKS5_METHODS = {0: "no authentication", 1: "GSSAPI (Kerberos)", 2: "user name and password", 3: "CHAP", 5: "CRAM",
+                  6: "SSL", 7: "NDS", 8: "a multi-authentication framework", 9: "a JSON parameter block"}
+SOCKS5_REFUSALS = {1: "general failure", 2: "not allowed by the proxy's rules", 3: "network unreachable", 4: "host unreachable",
+                   5: "refused by the target", 6: "TTL expired", 7: "command not supported", 8: "address type not supported"}
+
+
+def _shown(data):
+    """What a proxy sent, for an error message: text when it is text, hex when it is not."""
+    data = bytes(data)[:24]
+    text = data.decode("latin-1")
+    if text and all(32 <= ord(c) < 127 or c in "\r\n" for c in text):
+        return repr(text.strip())
+    return " ".join("0x%02x" % b for b in data)
+
+
+def _take(s, n, cfg, what):
+    """Exactly n bytes from the proxy, or a ProxyError that says it stopped talking. `what` is what it was asked."""
+    out = b""
+    try:
+        while len(out) < n:
+            chunk = s.recv(n - len(out))
+            if not chunk:
+                break
+            out += chunk
+    except OSError as e:
+        raise ProxyError(f"{cfg.label()} did not answer {what} ({e.__class__.__name__})") from None
+    if len(out) < n:
+        raise ProxyError(f"{cfg.label()} closed the connection instead of answering {what}"
+                         + (f" (it sent {_shown(out)})" if out else ""))
+    return out
+
+
+def clean_key(text):
+    """An authenticator secret key as typed (lower case, spaces, dashes) in the form it is kept."""
+    return "".join(str(text).split()).replace("-", "").upper()
+
+
+def _socks5_connect(cfg, host, port, timeout):
+    """SOCKS5 (RFC 1928) with user name and password (RFC 1929). Written out here, not left to a library, so that an
+    unexpected answer can be reported as what it was: a proxy that wants a second step says which one."""
+    s = socket.create_connection((cfg.host, cfg.port), timeout=timeout)
+    try:
+        s.settimeout(timeout)
+        s.sendall(b"\x05\x02\x00\x02" if cfg.username else b"\x05\x01\x00")
+        head = _take(s, 2, cfg, "the greeting")
+        if head[0] != 5:
+            raise ProxyError(_not_socks5(cfg, head, s))
+        method = head[1]
+        if method == 2:
+            user, pw = cfg.username.encode(), cfg.password.encode()
+            if not user or len(user) > 255 or len(pw) > 255:
+                raise ProxyError(f"{cfg.label()} wants a user name and password" + (" (they must be under 255 bytes)" if user else
+                                 ": enter them in the proxy settings"))
+            s.sendall(b"\x01" + bytes([len(user)]) + user + bytes([len(pw)]) + pw)
+            ans = _take(s, 2, cfg, "the login")
+            if ans[0] != 1:
+                raise ProxyError(f"{cfg.label()} answered the login with {_shown(ans)} where SOCKS5 has 0x01 0x00. "
+                                 f"It may use its own second step after the password, which Toner cannot do")
+            if ans[1] != 0:
+                raise ProxyError(f"{cfg.label()} rejected the user name or password"
+                                 + (" or the one-time code" if cfg.otp else ""))
+        elif method == 0xFF:
+            raise ProxyError(f"{cfg.label()} accepts none of the sign-in methods Toner offers (no sign-in, user name and "
+                             f"password)" + ("" if cfg.username else "; enter a user name and password"))
+        elif method != 0:
+            what = SOCKS5_METHODS.get(method) or ("a method of its own (0x%02x)" % method if method >= 0x80 else "method 0x%02x" % method)
+            raise ProxyError(f"{cfg.label()} asked to sign in with {what}, which Toner does not support. Toner can do "
+                             f"'no sign-in' and 'user name and password' (with a one-time code added to the password)")
+        try:
+            addr = b"\x01" + ipaddress.IPv4Address(host).packed
+        except ValueError:
+            try:
+                addr = b"\x04" + ipaddress.IPv6Address(host.strip("[]")).packed
+            except ValueError:
+                name = host.encode("idna") if host.isascii() is False else host.encode()
+                if len(name) > 255:
+                    raise ProxyError(f"the name {host[:40]}... is too long for SOCKS5") from None
+                addr = b"\x03" + bytes([len(name)]) + name
+        s.sendall(b"\x05\x01\x00" + addr + struct.pack(">H", port))
+        rep = _take(s, 4, cfg, "the connection request")
+        if rep[0] != 5:
+            raise ProxyError(f"{cfg.label()} answered the request with {_shown(rep)}, which is not SOCKS5")
+        if rep[1] != 0:
+            raise TargetRefused(f"{cfg.label()} would not connect to {host}:{port} ({SOCKS5_REFUSALS.get(rep[1], 'error 0x%02x' % rep[1])})")
+        tail = {1: 4, 4: 16}.get(rep[3])
+        if tail is None and rep[3] == 3:
+            tail = _take(s, 1, cfg, "the connection request")[0]
+        _take(s, (tail or 0) + 2, cfg, "the connection request")
+        s.settimeout(None)
+        return s
+    except BaseException:
+        s.close()
+        raise
+
+
+def _not_socks5(cfg, head, s):
+    """The first two bytes were not a SOCKS5 answer. Say what the proxy is instead, if that can be told."""
+    try:
+        s.settimeout(1)
+        head += s.recv(40)
+    except OSError:
+        pass
+    text = bytes(head).decode("latin-1", "replace")
+    if text.startswith("SSH-"):
+        return (f"{cfg.label()} is an SSH server ({_shown(head)}), not a SOCKS proxy. Use the port of its SOCKS service, "
+                f"or open an SSH tunnel (ssh -D) first and point Toner at that")
+    if text.startswith("HTTP/") or text[:2].isalpha():
+        return f"{cfg.label()} answered {_shown(head)}: it looks like an HTTP proxy. Change the proxy type to HTTP proxy"
+    if head[:1] == b"\x00" and len(head) >= 2:
+        return f"{cfg.label()} answered as SOCKS4 ({_shown(head)}). Change the proxy type to SOCKS4"
+    return f"{cfg.label()} sent {_shown(head)}, which is not a SOCKS5 answer"
+
+
+# ---------------------------------------------------------------- one-time codes (2-step sign-in at the proxy)
+def totp(key, now=None, digits=6, step=30):
+    """The current code from an authenticator key (RFC 6238: HMAC-SHA1, 30 s, 6 digits)."""
+    raw = clean_key(key)
+    try:
+        secret = base64.b32decode(raw + "=" * (-len(raw) % 8))
+    except ValueError:
+        raise ProxyError("the secret key for the one-time code is not valid (it is the letters and digits from the QR code setup)") from None
+    n = int((time.time() if now is None else now) // step)
+    h = hmac.new(secret, struct.pack(">Q", n), hashlib.sha1).digest()
+    o = h[-1] & 15
+    return str((struct.unpack(">I", h[o:o + 4])[0] & 0x7FFFFFFF) % 10 ** digits).zfill(digits)
+
+
+CODE_PROMPT = None            # set by the app: fn(title, text) -> the code typed, or "" / None if cancelled
+_codes = {}                   # (proxy, user) -> (code, time) of the last code asked for
+_ask_lock = threading.Lock()
+CODE_REUSE_SECONDS = 25
+
+
+def set_code_prompt(fn):
+    global CODE_PROMPT
+    CODE_PROMPT = fn
+
+
+def forget_code(cfg):
+    _codes.pop((cfg.host, cfg.port, cfg.username), None)
+
+
+def one_time_code(cfg):
+    if cfg.otp == "totp":
+        if not cfg.otp_key:
+            raise ProxyError(f"{cfg.label()} needs a one-time code, but no secret key is saved for it")
+        if 30 - time.time() % 30 < 1.5:                # one that is about to expire would be old by the time it arrives
+            time.sleep(1.6)
+        return totp(cfg.otp_key)
+    key = (cfg.host, cfg.port, cfg.username)
+    with _ask_lock:
+        hit = _codes.get(key)
+        if hit and time.time() - hit[1] < CODE_REUSE_SECONDS:
+            return hit[0]
+        if CODE_PROMPT is None:
+            raise ProxyError(f"{cfg.label()} needs a one-time code, and Toner can only ask for it while you are at the window. "
+                             f"For checks that run by themselves, set the code to 'Make it from a secret key'")
+        code = "".join((CODE_PROMPT("One-time code", f"The proxy {cfg.label()} asks for a one-time code"
+                                    + (f" for {cfg.username}" if cfg.username else "") + ".") or "").split())
+        if not code:
+            raise ProxyError(f"{cfg.label()}: no one-time code was entered")
+        _codes[key] = (code, time.time())
+        return code
+
+
+def with_code(cfg):
+    """cfg with the one-time code added to the end of its password (or in its place, when there is no password)."""
+    return replace(cfg, password=cfg.password + one_time_code(cfg)) if cfg.otp else cfg
+
+
+LAST = {}                     # "host:port" of a proxy -> (worked, time, message) of the latest real connection through it
+
+
+def last_result(cfg):
+    return LAST.get(f"{cfg.host}:{cfg.port}")
+
+
 def connect(cfg, host, port, timeout=15):
     """A TCP socket to host:port through the proxy. Raises ProxyError with a message that says what went wrong."""
+    try:
+        s = _connect(cfg, host, port, timeout)
+    except TargetRefused:
+        LAST[f"{cfg.host}:{cfg.port}"] = (True, time.time(), "")           # the proxy itself did its part
+        raise
+    except OSError as e:
+        LAST[f"{cfg.host}:{cfg.port}"] = (False, time.time(), str(e))
+        raise
+    LAST[f"{cfg.host}:{cfg.port}"] = (True, time.time(), "")
+    return s
+
+
+def probe(cfg, timeout=3):
+    """(reachable, message): does something answer as this kind of proxy? Nothing is sent that signs in, so it cannot use up
+    a one-time code or count as a wrong password."""
+    try:
+        s = socket.create_connection((cfg.host, cfg.port), timeout=timeout)
+    except OSError as e:
+        return False, f"{cfg.label()} did not answer ({str(e) or type(e).__name__})"
+    try:
+        if cfg.kind == "socks5":
+            s.settimeout(timeout)
+            s.sendall(b"\x05\x01\x00")
+            try:
+                head = s.recv(2)
+            except OSError:
+                head = b""
+            if len(head) < 2 or head[0] != 5:
+                return False, (_not_socks5(cfg, head, s) if head else f"{cfg.label()} did not answer as a SOCKS5 proxy")
+        return True, f"{cfg.label()} answers"
+    finally:
+        s.close()
+
+
+def _connect(cfg, host, port, timeout=15):
     port = int(port)
     try:
-        if cfg.kind == "http":
-            return _http_connect(cfg, host, port, timeout)
+        used = with_code(cfg)
+        try:
+            if used.kind == "http":
+                return _http_connect(used, host, port, timeout)
+            if used.kind == "socks5":
+                return _socks5_connect(used, host, port, timeout)
+        except TargetRefused:
+            raise
+        except ProxyError:
+            if cfg.otp:
+                forget_code(cfg)                     # a refused code is not tried again, and not asked about twice in a row
+            raise
         import socks
-        kind = {"socks5": socks.SOCKS5, "socks4": socks.SOCKS4}[cfg.kind]
-        return socks.create_connection((host, port), timeout=timeout, proxy_type=kind, proxy_addr=cfg.host,
-                                       proxy_port=cfg.port, proxy_rdns=True, proxy_username=cfg.username or None,
-                                       proxy_password=cfg.password or None)
+        return socks.create_connection((host, port), timeout=timeout, proxy_type=socks.SOCKS4, proxy_addr=cfg.host,
+                                       proxy_port=cfg.port, proxy_rdns=True, proxy_username=cfg.username or None)
     except ProxyError:
         raise
     except OSError as e:
