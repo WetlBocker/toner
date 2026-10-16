@@ -95,7 +95,7 @@ def has_colour(widget, hexcol):
 w.results.results = [Result("d", "cpu", "FAIL", "99%")]; w.results.last_ran = ["d"]; w.results.repopulate(); w.results.resize(900, 400); w.results.show()
 check("status pill in the results table uses the custom colour", w.results.table.topLevelItem(0).text(2) == "FAIL" and has_colour(w.results.table, "#112233"))
 w.results.chips.set_counts({"FAIL": 1}); check("status chips use it too", has_colour(w.results.chips, "#112233") or "#112233" in w.results.chips.labels["FAIL"].styleSheet())
-Ap.preset.setCurrentText("Default"); Ap.colors = dict(RP.DEFAULT_COLORS); Ap.paint(); S.save(); check("back to defaults", RP.COLORS == RP.DEFAULT_COLORS)
+Ap.preset.setCurrentText("Default"); Ap.colors = dict(RP.DEFAULT_COLORS); Ap.paint(); S.save(); check("back to defaults (and N/A stays grey)", RP.COLORS == {**RP.DEFAULT_COLORS, "N/A": RP.NA_COLOR})
 
 print("== terminal settings")
 Tm = P["Terminal"]; Tm.scheme.setCurrentText("Light"); Tm.size.setValue(14); Tm.scrollback.setValue(777); Tm.paging.setText("terminal length 0"); S.save()

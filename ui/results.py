@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QHBoxLayout, QLabel
 from core import db, display, reports, scope
 from core.alerts import base as device_of
 from core.runner import run_all
-from drivers.base import SEVERITY, Result
+from drivers.base import SEVERITY, Result, is_problem
 from ui.columns import ColumnChooser
 from ui.widgets import EmptyHint, GroupPicker, SectionHeader, StatChips, StatusDelegate, flow
 from ui.toast import toast
@@ -55,7 +55,7 @@ class ResultsTab(QWidget):
         self.table.setAlternatingRowColors(False)
         self.hint = EmptyHint(self.table, "No results yet", "Choose devices and press Run checks", actions=[("Run checks", lambda: self.start())])
         for key in ("Return", "Enter"):                          # Enter opens the selected device's window
-            QShortcut(QKeySequence(key), self.table, activated=self._enter)
+            QShortcut(QKeySequence(key), self.table, activated=self._enter, context=Qt.ShortcutContext.WidgetWithChildrenShortcut)
         self.table.itemExpanded.connect(lambda it: self._remember(it, True))
         self.table.itemCollapsed.connect(lambda it: self._remember(it, False))
         self.run_btn = QPushButton("Run checks")
@@ -112,7 +112,7 @@ class ResultsTab(QWidget):
             n = len([g for g in self._group().values() if g])
             self.summary.setText(f"Latest results for {n} device{'s' if n != 1 else ''}, from {at[:16]} ({display.ago(at)}). Run checks for fresh ones.")
             self.summary.setToolTip("Each device shows the newest run that included it.")
-            worst_first = list(dict.fromkeys(device_of(r.device) for r in self.results if r.status != "OK"))
+            worst_first = list(dict.fromkeys(device_of(r.device) for r in self.results if is_problem(r.status)))
             self.expanded = set(worst_first[:AUTO_OPEN])
         self.repopulate()
 
@@ -131,7 +131,7 @@ class ResultsTab(QWidget):
         self.group.set_labels(db.group_labels()[1:])      # [0] is 'All devices' = nothing ticked
 
     def _show(self, r):
-        return self.filter.currentIndex() == 0 or r.status != "OK"
+        return self.filter.currentIndex() == 0 or is_problem(r.status)
 
     def show_filter(self, key):
         """Show only what an Overview card counted: 'warn', 'fail', 'healthy', 'problems' or 'all'."""
@@ -143,7 +143,7 @@ class ResultsTab(QWidget):
         if mode == 0:
             return True, rows
         if mode == 4:                                           # healthy devices: nothing worse than OK, every check listed
-            return bool(rows) and all(r.status == "OK" for r in rows), rows
+            return bool(rows) and not any(is_problem(r.status) for r in rows), rows
         want = {1: ("WARN", "FAIL", "ERROR"), 2: ("WARN",), 3: ("FAIL", "ERROR")}[mode]
         shown = [r for r in rows if r.status in want]
         return bool(shown), shown
@@ -217,7 +217,7 @@ class ResultsTab(QWidget):
 
     def repopulate(self):
         groups = self._group()
-        worst = lambda rs: max((SEVERITY[r.status] for r in rs), default=-1)
+        worst = lambda rs: max((SEVERITY.get(r.status, 0) for r in rs), default=-1)
         order = list(groups) if self._active else sorted(groups, key=lambda n: (-worst(groups[n]), n.lower()))
         bold = QFont()
         bold.setBold(True)
@@ -225,8 +225,8 @@ class ResultsTab(QWidget):
         self.table.setUpdatesEnabled(False)
         self.table.clear()
         for name in order:
-            rows = sorted(groups[name], key=lambda r: (-SEVERITY[r.status], r.device, r.check))
-            bad = [r for r in rows if r.status != "OK"]
+            rows = sorted(groups[name], key=lambda r: (-SEVERITY.get(r.status, 0), r.status == "N/A", r.device, r.check))
+            bad = [r for r in rows if is_problem(r.status)]
             include, listed = self._rows_for(rows)
             if not include and not (self._active and not rows):
                 continue
@@ -234,7 +234,7 @@ class ResultsTab(QWidget):
             top.setData(0, ROLE, name)
             top.setFont(0, bold)
             if rows:
-                status = next(r.status for r in rows if SEVERITY[r.status] == worst(rows))
+                status = max(rows, key=lambda r: (SEVERITY.get(r.status, 0), r.status != "N/A")).status    # OK over N/A
                 counts = {}
                 for r in rows:
                     counts[r.status] = counts.get(r.status, 0) + 1
@@ -258,7 +258,7 @@ class ResultsTab(QWidget):
                 top.setText(1, only.check if device_of(only.device) == only.device else f"{only.device.split(' / ', 1)[1]}: {only.check}")
                 top.setData(1, ROLE, "check")                  # the right-click menu treats this row as the check it carries
                 top.setText(3, only.value)
-                top.setText(4, only.message if only.message else ("" if only.status == "OK" else only.value))
+                top.setText(4, only.message if only.message else ("" if only.status in ("OK", "N/A") else only.value))
                 listed = []
             for r in listed:
                 label = r.check if device_of(r.device) == r.device else \
@@ -339,7 +339,7 @@ class ResultsTab(QWidget):
     def done(self):
         self._active = False
         self.results.sort(key=lambda r: (-SEVERITY[r.status], r.device, r.check))
-        worst_first = list(dict.fromkeys(device_of(r.device) for r in self.results if r.status != "OK"))
+        worst_first = list(dict.fromkeys(device_of(r.device) for r in self.results if is_problem(r.status)))
         self.expanded |= set(worst_first[:AUTO_OPEN])      # what needs a look is already open (not hundreds of rows at once)
         self.repopulate()
         db.save_run(self.results)

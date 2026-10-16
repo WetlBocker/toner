@@ -164,7 +164,7 @@ class Daemon:
             if groups is not None:
                 res = run_checks(groups)
                 did.append(("checks", len(res)))
-                self.log(f"{now:%Y-%m-%d %H:%M:%S} checks: {len(res)} result(s), {sum(1 for r in res if r.status != 'OK')} not OK")
+                self.log(f"{now:%Y-%m-%d %H:%M:%S} checks: {len(res)} result(s), {sum(1 for r in res if r.status not in ('OK', 'N/A'))} not OK")
             self.next_checks = now + timedelta(minutes=max(1, int(db.get_setting("schedule_minutes"))))
         if self.next_backup and now >= self.next_backup:
             groups = _groups_alive(db.get_setting("backup_groups"))

@@ -12,8 +12,9 @@ COLOR_PRESETS = {
     # for red-green colour blindness. The status word is always shown too.
     "Color-blind safe": {"OK": "#b3d9ff", "WARN": "#ffe08a", "FAIL": "#ffab76", "ERROR": "#cdb4f0"},
 }
-COLORS = dict(DEFAULT_COLORS)        # the colours currently in use; modified in place by apply_colors()
-ORDER = {"ERROR": 0, "FAIL": 1, "WARN": 2, "OK": 3}
+NA_COLOR = "#e0e0e0"                 # N/A (a check that does not apply): a quiet grey in every preset
+COLORS = {**DEFAULT_COLORS, "N/A": NA_COLOR}   # the colours currently in use; modified in place by apply_colors()
+ORDER = {"ERROR": 0, "FAIL": 1, "WARN": 2, "OK": 3, "N/A": 4}
 COLS = ["Device", "Check", "Status", "Value", "Message"]
 
 def apply_colors(preset="Default", custom=None):
@@ -21,6 +22,7 @@ def apply_colors(preset="Default", custom=None):
     COLORS.clear()
     COLORS.update(COLOR_PRESETS.get(preset, DEFAULT_COLORS))
     COLORS.update({k: v for k, v in (custom or {}).items() if k in DEFAULT_COLORS})
+    COLORS["N/A"] = NA_COLOR
 
 def fg_for(bg_hex):
     """Dark text on light backgrounds, white on dark ones (WCAG relative luminance)."""
@@ -59,7 +61,7 @@ def to_html(results, when=None, scope=""):
     summary = " &nbsp; ".join(
         f'<span style="background:{COLORS[s]};color:{fg_for(COLORS[s])};padding:2px 8px">{s}: {n}</span>'
         for s, n in counts.items())
-    problems = sorted((r for r in results if r.status != "OK"),
+    problems = sorted((r for r in results if r.status not in ("OK", "N/A")),
                       key=lambda r: (ORDER[r.status], r.device, r.check))
     title = db.get_setting("report_title").strip() or "Toner Health Report"
     org = db.get_setting("report_org").strip()

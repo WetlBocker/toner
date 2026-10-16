@@ -138,14 +138,16 @@ class JuniperDriver(CliRows, SshDriver):
     def bgp(self, c):
         out = self.cmd(c, "show bgp summary")
         if "not running" in out.lower():
-            return []
+            return self.peers_row("bgp", 0, 0, [], protocol="BGP")
         peers = re.findall(r"(?m)^(\S+)\s+\d+\s+\d+\s+\d+\s+\d+\s+\d+\s+.*?\s+(Establ|Active|Connect|Idle|OpenSent|"
                            r"OpenConfirm|\d+/\d+/\d+/\d+)\s*$", out)
         down = [p for p, st in peers if st not in ("Establ",) and "/" not in st]
-        return self.peers_row("bgp", len(peers) - len(down), len(peers), down)
+        running = bool(re.search(r"Groups:\s*\d+\s+Peers:", out))
+        return self.peers_row("bgp", len(peers) - len(down), len(peers), down, protocol="BGP", running=running)
 
     def ospf(self, c):
         out = self.cmd(c, "show ospf neighbor")
         nbrs = re.findall(r"(?m)^(\d+\.\d+\.\d+\.\d+)\s+\S+\s+(\w+)\s+\d+\.\d+\.\d+\.\d+\s+\d+\s+\d+", out)
         bad = [f"{a} ({s})" for a, s in nbrs if s.lower() not in ("full", "2way")]
-        return self.peers_row("ospf", len(nbrs) - len(bad), len(nbrs), bad)
+        running = bool(nbrs) or bool(re.search(r"Router ID:", self.cmd(c, "show ospf overview")))
+        return self.peers_row("ospf", len(nbrs) - len(bad), len(nbrs), bad, protocol="OSPF", running=running)

@@ -4,7 +4,13 @@ from core import checks, db, profiles
 from core import quiet
 
 OK, WARN, FAIL, ERROR = "OK", "WARN", "FAIL", "ERROR"
-SEVERITY = {OK: 0, WARN: 1, FAIL: 2, ERROR: 3}
+NA = "N/A"                  # the check ran and does not apply here (BGP not configured, no sensors): never a problem, never an alert
+SEVERITY = {NA: 0, OK: 0, WARN: 1, FAIL: 2, ERROR: 3}
+
+
+def is_problem(status):
+    """WARN, FAIL or ERROR: what needs a look (OK and N/A do not)."""
+    return SEVERITY.get(status, 0) > 0
 
 # Used when a driver is built without explicit options (the run normally passes db.runtime_options()).
 DEFAULT_OPTS = {"ssh_timeout": 20, "http_timeout": 15, "retries": 0, "retry_delay": 3,
@@ -65,6 +71,13 @@ class Driver:
         if prev is None:
             return None
         return value if value < prev else value - prev
+
+    def previous(self, key, value):
+        """The value stored for `key` by the previous run (None on the first), keeping `value` for the next run."""
+        if self._baseline is None:
+            self._baseline = db.get_baselines(self.name)
+        self._new_baseline[key] = value
+        return self._baseline.get(key)
 
     def flush_baselines(self):
         if self._new_baseline:
@@ -135,6 +148,20 @@ class Driver:
 
     def result(self, check, status, value="", message="", numeric=None):
         return Result(self.name, check, status, str(value), message, numeric)
+
+    def not_applicable(self, check, value, message=""):
+        """A row saying the check ran and does not apply to this device, so a chosen check never just goes missing."""
+        return self.result(check, NA, value, message)
+
+    def neighbors_row(self, check, protocol, running, total, down, fail=True, value=None, message=None):
+        """BGP, OSPF or EIGRP: N/A when the protocol is not configured, WARN when it runs with no neighbors, else up/down."""
+        if not total:
+            if not running:
+                return self.not_applicable(check, "not configured", f"{protocol} is not configured on this device")
+            return self.result(check, WARN, "no neighbors", f"{protocol} is running but has no neighbors", numeric=0.0)
+        status = (FAIL if fail else WARN) if down else OK
+        return self.result(check, status, value or "", message if message is not None else ("down: " + ", ".join(down[:5]) if down else ""),
+                           numeric=float(total - len(down)))
 
     def level_check(self, check, value, th_key=None, unit="%"):
         t = self.th[th_key or check]

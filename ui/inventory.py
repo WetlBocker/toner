@@ -755,10 +755,11 @@ class InventoryTab(QWidget):
         self.table.itemExpanded.connect(lambda it: (self.remember(it, True), self._autosize()))
         self.table.itemCollapsed.connect(lambda it: (self.remember(it, False), self._autosize()))
         self.table.moved.connect(self.handle_moves)
+        here = Qt.ShortcutContext.WidgetWithChildrenShortcut    # only while the list has the focus, not in the search box
         for key in ("Return", "Enter"):                          # Enter opens the selected device, as a double-click does
-            QShortcut(QKeySequence(key), self.table, activated=self._enter)
-        QShortcut(QKeySequence("F2"), self.table, activated=self.rename_folder)
-        QShortcut(QKeySequence("Delete"), self.table, activated=self.delete)
+            QShortcut(QKeySequence(key), self.table, activated=self._enter, context=here)
+        QShortcut(QKeySequence("F2"), self.table, activated=self.rename_folder, context=here)
+        QShortcut(QKeySequence("Delete"), self.table, activated=self.delete, context=here)
 
         bar = QHBoxLayout()
         self.buttons = {}

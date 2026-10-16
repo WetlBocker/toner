@@ -5,7 +5,7 @@ from core.vendors import VENDORS
 
 VENDOR_NAMES = {k: v["name"] for k, v in VENDORS.items()}
 PLATFORM_NAMES = {k: label for v in VENDORS.values() for k, label in v["platforms"]}
-ACRONYMS = {"cpu": "CPU", "bgp": "BGP", "ospf": "OSPF", "ha": "HA", "vpn": "VPN", "ipsec": "IPsec",
+ACRONYMS = {"cpu": "CPU", "bgp": "BGP", "ospf": "OSPF", "eigrp": "EIGRP", "ha": "HA", "vpn": "VPN", "ipsec": "IPsec",
             "wan": "WAN", "lan": "LAN", "wlan": "WLAN", "www": "WWW", "ap": "AP", "ssl": "SSL",
             "tx": "TX", "rx": "RX", "isp": "ISP", "nvr": "NVR", "sd": "SD", "dns": "DNS", "tls": "TLS", "ip": "IP", "ssid": "SSID", "poe": "PoE"}
 

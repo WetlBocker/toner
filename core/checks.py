@@ -4,7 +4,7 @@
 CATALOG = {
     "cisco": [("cpu", "CPU"), ("memory", "Memory"), ("uptime", "Uptime and recent reboots"),
               ("interfaces", "Interfaces and error counters"), ("bgp", "BGP peers"),
-              ("ospf", "OSPF adjacencies"),
+              ("ospf", "OSPF adjacencies"), ("eigrp", "EIGRP neighbors"),
               ("environment", "Fans, power supplies and temperature"), ("ntp", "Clock synchronised with NTP"), ("unsaved config", "Running configuration not saved"),
               ("flash", "Flash space"), ("stack", "Switch stack members"), ("hsrp", "HSRP / VRRP state"), ("port-channels", "Port-channels and their members"),
               ("failover", "ASA failover state")],

@@ -122,10 +122,114 @@ check("Cisco IOS: flash 90% full, a stack member with a version mismatch, an HSR
 check("Cisco IOS: no failover row (that is the ASA's)", "failover" not in r)
 r = run("cisco", {"show failover": fo.replace("Standby Ready", "Failed"), "show environment": ""}, platform="cisco_asa")
 check("Cisco ASA: a failed peer fails the failover row", r["failover"].status == "FAIL" and "Failed" in r["failover"].message and "stack" not in r and "unsaved config" not in r)
+ASA_IF = ('Interface Management0/0 "management", is up, line protocol is up\n'
+          '  Hardware is net_vmxnet3, BW 10000 Mbps, DLY 10 usec\n'
+          '\tAuto-Duplex(Full-duplex), Auto-Speed(10000 Mbps)\n'
+          '\tAccelerated networking: enabled\n'                       # a line the ntc-templates reading stops at
+          '\tMAC address 000d.3a2b.1c4d, MTU 1500\n\tIP address 10.196.171.197, subnet mask 255.255.255.0\n'
+          '\t123456 packets input, 98765432 bytes, 0 no buffer\n\t0 input errors, 0 CRC, 0 frame, 0 overrun, 0 ignored, 0 abort\n'
+          '  Traffic Statistics for "management":\n\t123456 packets input, 98765432 bytes\n'
+          'Interface GigabitEthernet0/0 "outside", is up, line protocol is up\n'
+          '  Hardware is net_vmxnet3, BW 10000 Mbps, DLY 10 usec\n\t5 input errors, 2 CRC, 0 frame, 0 overrun, 0 ignored, 0 abort\n'
+          'Interface GigabitEthernet0/1 "inside", is down, line protocol is down\n\t0 input errors, 0 CRC, 0 frame, 0 overrun, 0 ignored, 0 abort\n'
+          'Interface GigabitEthernet0/2 "", is administratively down, line protocol is down\n  Available but not configured via nameif\n')
+ASA = {"show cpu usage": "CPU utilization for 5 seconds = 4%; 1 minute: 6%; 5 minutes: 85%\n",
+       "show memory": "Free memory:        5045604352 bytes (59%)\nUsed memory:        3544279040 bytes (41%)\n-------------     ------------------\nTotal memory:       8589883392 bytes (100%)\n",
+       "show version": "Cisco Adaptive Security Appliance Software Version 9.18(3)\nDevice Manager Version 7.18(1)\n\n"
+                       "Compiled on Thu 19-Jan-23 by builders\nSystem image file is \"disk0:/asa9-18-3-smp-k8.bin\"\n"
+                       "Config file at boot was \"startup-config\"\n\nAZ-PROD-NEU-VASA-01 up 2 days 3 hours 14 mins\n"
+                       "failover cluster up 2 years 10 days\n",
+       "show interface": ASA_IF, "show ntp status": "Clock is synchronized, stratum 3, reference is 10.0.0.1",
+       "dir disk0:": "Directory of disk0:/\n\n8571076608 bytes total (6857661286 bytes free)\n",
+       "show bgp summary": "BGP router identifier 10.0.0.2, local AS number 65010\nNeighbor        V           AS MsgRcvd MsgSent   TblVer  InQ OutQ Up/Down  State/PfxRcd\n"
+                           "10.0.0.1        4        65001    1200    1201       42    0    0 2d03h          12\n10.0.0.9        4        65002       0       0        1    0    0 never    Active\n",
+       "show ospf neighbor": "Neighbor ID     Pri   State           Dead Time   Address         Interface\n10.1.1.1          1   FULL/DR         0:00:33     10.0.0.5        inside\n",
+       "show environment": "ERROR: % Invalid input detected at '^' marker.\n", "show failover": "Failover Off\n"}
+check("ASA parsers: CPU over 5 minutes, memory used, its own uptime line (not the failover cluster's)",
+      C.asa_cpu(ASA["show cpu usage"]) == 85 and C.asa_memory(ASA["show memory"]) == 41.0 and C.asa_uptime(ASA["show version"]) == "2 days 3 hours 14 mins"
+      and C.asa_cpu("") is None and C.asa_memory("nothing") is None and C.asa_uptime("Cisco Adaptive Security Appliance") is None)
+check("ASA interfaces: every interface, its state and its error counters, through lines a template would stop at",
+      [(i["interface"], i["nameif"], i["link_status"], i["input_errors"], i["crc"]) for i in C.asa_interfaces(ASA_IF)]
+      == [("Management0/0", "management", "up", 0, 0), ("GigabitEthernet0/0", "outside", "up", 5, 2), ("GigabitEthernet0/1", "inside", "down", 0, 0),
+          ("GigabitEthernet0/2", "", "administratively down", 0, 0)], C.asa_interfaces(ASA_IF))
+r = run("cisco", ASA, platform="cisco_asa")
+rows = {k: (v.status, v.value) for k, v in r.items()}
+check("Cisco ASAv: CPU, memory, uptime, interfaces, interface errors, NTP, disk, BGP and OSPF all have rows", all(k in r for k in
+      ("cpu", "memory", "uptime", "interfaces", "interface errors", "ntp", "flash", "bgp", "ospf")) and not [k for k, v in r.items() if v.status == "ERROR"], rows)
+check("Cisco ASAv: the values are read right", r["cpu"].status == "WARN" and r["cpu"].value == "85%" and r["memory"].status == "OK" and abs(r["uptime"].numeric - (51 + 14 / 60)) < 0.01
+      and r["interfaces"].status == "FAIL" and "GigabitEthernet0/1" in r["interfaces"].message and "GigabitEthernet0/2" not in r["interfaces"].message
+      and r["interface errors"].status == "WARN" and "GigabitEthernet0/0" in r["interface errors"].message
+      and r["flash"].value == "20%" and r["bgp"].status == "FAIL" and "10.0.0.9" in r["bgp"].message and r["ospf"].status == "OK", rows)
+na = lambda k: (r[k].status, r[k].value, r[k].message) if k in r else None
+check("Cisco ASAv: N/A rows for the environment (no sensors), failover (off) and EIGRP (not configured)",
+      na("environment") == ("N/A", "no sensors", "this device reports no fans, power supplies or temperature") and na("failover") == ("N/A", "off", "failover is not configured")
+      and na("eigrp") == ("N/A", "not configured", "EIGRP is not configured on this device"), {k: na(k) for k in ("environment", "failover", "eigrp")})
+r = run("cisco", {**ASA, "show cpu usage": "something else", "show interface": "nothing here"}, platform="cisco_asa")
+check("Cisco ASA: output that cannot be read is an error row that says which command, not a missing row",
+      r["cpu"].status == "ERROR" and "show cpu usage" in r["cpu"].message and r["interfaces"].status == "ERROR" and "show interface" in r["interfaces"].message,
+      {k: (v.status, v.message) for k, v in r.items() if v.status == "ERROR"})
+drv = DRIVERS["cisco"]({"name": "t", "vendor": "cisco", "host": "10.0.0.1", "username": "u", "platform": "cisco_asa", "password": "p"}, TH, OPTS)
+drv.connect = lambda: Conn(ASA)
+check("Cisco: the interfaces for Choose interfaces (an ASA's too)", drv.list_interfaces() == [("Management0/0", "up"), ("GigabitEthernet0/0", "up"),
+      ("GigabitEthernet0/1", "down"), ("GigabitEthernet0/2", "off")], drv.list_interfaces())
 r = run("cisco", {"show environment": nx}, platform="cisco_nxos")
 check("Cisco NX-OS: environment from the tables", r["environment"].status == "FAIL" and "Failure" in r["environment"].message)
 r = run("cisco", {})
-check("a device that answers none of them adds no rows and no errors", not ({"environment", "ntp", "unsaved config", "flash", "stack", "hsrp", "port-channels", "failover"} & set(r)) and not [k for k, v in r.items() if v.status == "ERROR" and k in ("environment", "ntp")])
+check("a device that answers none of them: N/A for the environment, BGP, OSPF and EIGRP, no other rows, no errors",
+      not ({"ntp", "unsaved config", "flash", "stack", "hsrp", "port-channels", "failover"} & set(r)) and all(r[k].status == "N/A" for k in ("environment", "bgp", "ospf", "eigrp"))
+      and not [k for k, v in r.items() if v.status == "ERROR" and k in ("environment", "ntp", "bgp", "ospf", "eigrp")], {k: v.status for k, v in r.items()})
+
+print("== BGP, OSPF and EIGRP on Cisco: not configured, running with no neighbors, neighbors")
+from drivers.base import NA, is_problem
+r = run("cisco", {"show ip bgp summary": "% BGP not active\n", "show ip ospf neighbor": "", "show ip ospf": "", "show ip eigrp neighbors": ""})
+check("not configured: N/A rows that say so", [(r[k].status, r[k].value, r[k].message) for k in ("bgp", "ospf", "eigrp")] ==
+      [("N/A", "not configured", f"{p} is not configured on this device") for p in ("BGP", "OSPF", "EIGRP")], [(r[k].status, r[k].message) for k in ("bgp", "ospf", "eigrp")])
+r = run("cisco", {"show ip bgp summary": "BGP router identifier 10.0.0.1, local AS number 65000\nBGP table version is 1, main routing table version 1\n",
+                  "show ip ospf neighbor": "", "show ip ospf": ' Routing Process "ospf 1" with ID 10.0.0.1\n Start time: 00:00:12.345, Time elapsed: 1d02h\n',
+                  "show ip eigrp neighbors": "EIGRP-IPv4 Neighbors for AS(100)\n"})
+check("running with no neighbors: WARN rows that say so", [(r[k].status, r[k].value, r[k].message) for k in ("bgp", "ospf", "eigrp")] ==
+      [("WARN", "no neighbors", f"{p} is running but has no neighbors") for p in ("BGP", "OSPF", "EIGRP")], [(r[k].status, r[k].message) for k in ("bgp", "ospf", "eigrp")])
+IOS_EIGRP = ("EIGRP-IPv4 Neighbors for AS(100)\nH   Address                 Interface              Hold Uptime   SRTT   RTO  Q  Seq\n"
+             "                                                   (sec)         (ms)       Cnt Num\n"
+             "1   10.1.1.3                Gi0/2                    12 01:02:03    4   100  0  9\n"
+             "0   10.1.1.2                Gi0/1                    13 00:10:12    1   100  0  5\n"
+             "2   10.1.2.2                Vl20                     11 2d03h       2   100  0  7\n")
+ASA_EIGRP = ("EIGRP-IPv4 Neighbors for AS(10)\nH   Address                 Interface       Hold Uptime   SRTT   RTO  Q   Seq\n"
+             "                                            (sec)         (ms)       Cnt Num\n0   10.0.0.5                inside            12 00:05:31 1      200  0   7\n")
+NX_EIGRP = ("IP-EIGRP neighbors for process 100 VRF default\nH   Address                 Interface       Hold  Uptime  SRTT   RTO  Q  Seq\n"
+            "                                            (sec)               (ms)       Cnt Num\n0   10.2.0.2                Eth1/1          14   1w2d    3      50   0   12\n")
+check("EIGRP neighbors are read from IOS, ASA and NX-OS", C.eigrp_neighbors(IOS_EIGRP) == (True, [("10.1.1.3", "Gi0/2"), ("10.1.1.2", "Gi0/1"), ("10.1.2.2", "Vl20")])
+      and C.eigrp_neighbors(ASA_EIGRP) == (True, [("10.0.0.5", "inside")]) and C.eigrp_neighbors(NX_EIGRP) == (True, [("10.2.0.2", "Eth1/1")])
+      and C.eigrp_neighbors("") == (False, []) and C.eigrp_neighbors("% Invalid input detected at '^' marker.") == (False, []))
+with db.connect() as cx: cx.execute("DELETE FROM counter_baseline WHERE device='eigrp-sw'")      # a first run
+def eigrp_run(text, plat=""):
+    drv = DRIVERS["cisco"]({"name": "eigrp-sw", "vendor": "cisco", "host": "10.0.0.1", "username": "u", "platform": plat, "password": "p"}, TH, OPTS)
+    drv.connect = lambda: Conn({"show ip eigrp neighbors": text, "show eigrp neighbors": text})
+    rows = {x.check: x for x in drv.run()}
+    drv.flush_baselines()
+    return rows["eigrp"]
+e = eigrp_run(IOS_EIGRP)
+check("EIGRP with 3 neighbors: OK", (e.status, e.value, e.message) == ("OK", "3 neighbors", ""), e)
+fewer = IOS_EIGRP.replace("0   10.1.1.2                Gi0/1                    13 00:10:12    1   100  0  5\n", "")
+e = eigrp_run(fewer)
+check("one gone since the last run: WARN, '2 neighbors', '1 fewer than the last run (3)'", (e.status, e.value, e.message) == ("WARN", "2 neighbors", "1 fewer than the last run (3)"), e)
+e = eigrp_run(fewer)
+check("the same two on the next run: OK again", (e.status, e.value) == ("OK", "2 neighbors"), e)
+e = eigrp_run(ASA_EIGRP, "cisco_asa")
+check("an ASA reads 'show eigrp neighbors', and one neighbor is singular", e.value == "1 neighbor", e)
+keys = [k for k, _l in checks.CATALOG["cisco"]]
+check("EIGRP is in the Cisco list of checks, after OSPF", keys.index("eigrp") == keys.index("ospf") + 1 and ("eigrp", "EIGRP neighbors") in checks.CATALOG["cisco"])
+
+print("== N/A is never a problem")
+check("N/A is not a problem; WARN, FAIL and ERROR are", not is_problem(NA) and not is_problem("OK") and all(is_problem(s) for s in ("WARN", "FAIL", "ERROR")))
+from core import alerts, reports
+from drivers.base import Result
+ev = alerts.evaluate([Result("na-dev", "bgp", "N/A", "not configured", "BGP is not configured on this device")], ["na-dev"])
+check("an N/A row raises no alert", ev == [], ev)
+html = reports.to_html([Result("na-dev", "bgp", "N/A", "not configured", "BGP is not configured on this device"), Result("na-dev", "cpu", "OK", "5%")])
+check("a report lists N/A in its counts but not under Needs attention", "N/A: 1" in html and "No problems found." in html)
+reports.apply_colors("Color-blind safe"); cb = reports.COLORS.get("N/A"); reports.apply_colors("Default")
+check("N/A is grey in every colour preset", cb == reports.NA_COLOR and reports.COLORS["N/A"] == reports.NA_COLOR)
 JT = {"show chassis environment": jn, "show ntp associations": junos.replace("*10.0.0.1", " 10.0.0.1"), "show | compare": "[edit system]\n-  host-name old;\n+  host-name new;\n",
       "show system core-dumps": "-rw-r--r-- 1 root wheel 1234567 Oct 6 10:00 /var/crash/core.rpd.1.gz", "show bfd session": bfd,
       "show system storage": "Filesystem Size Used Avail Capacity Mounted on\n/dev/gpt/junos 1.2G 740M 380M 66% /.mount\n/dev/gpt/var 4.0G 3.8G 100M 96% /.mount/var\ndevfs 1.0K 1.0K 0B 100% /dev\n",

@@ -575,9 +575,12 @@ class SessionsTab(QWidget):
         self.tree.itemCollapsed.connect(self._autosize_soon)
         self.tree.moved.connect(self.handle_moves)
         self.tree.customContextMenuRequested.connect(self._menu)
-        QShortcut(QKeySequence("F2"), self.tree, activated=self.rename_folder)
-        QShortcut(QKeySequence("Delete"), self.tree, activated=self.delete_selected)
-        QShortcut(QKeySequence("Return"), self.tree, activated=self.connect_selected)
+        # only while the list has the focus: an open session's terminal needs Enter, Delete and F2 for the device
+        here = Qt.ShortcutContext.WidgetWithChildrenShortcut
+        QShortcut(QKeySequence("F2"), self.tree, activated=self.rename_folder, context=here)
+        QShortcut(QKeySequence("Delete"), self.tree, activated=self.delete_selected, context=here)
+        for key in ("Return", "Enter"):
+            QShortcut(QKeySequence(key), self.tree, activated=self.connect_selected, context=here)
         self.folder_btn.clicked.connect(lambda: self.new_folder())
         self.expand_btn.clicked.connect(self.expand_all)
         self.collapse_btn.clicked.connect(self.collapse_all)

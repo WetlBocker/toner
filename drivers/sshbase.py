@@ -112,9 +112,10 @@ class SshDriver(Driver):
         status = grade_low(hours, t["warn"], t["fail"])
         return self.result("uptime", status, display.uptime(hours), "recent reboot" if status != OK else "", numeric=hours)
 
-    def peers_row(self, check, established, total, down, fail=True):
+    def peers_row(self, check, established, total, down, fail=True, protocol=None, running=False):
+        """With `protocol` ('BGP', 'OSPF'), no neighbors gives the N/A row (not configured) or the WARN row (running, no neighbors)."""
         if not total:
-            return []                              # protocol not configured
+            return self.neighbors_row(check, protocol, running, 0, []) if protocol else []
         status = (FAIL if fail else WARN) if down else OK
         return self.result(check, status, f"{established}/{total} established", "down: " + ", ".join(down[:5])
                            if down else "", numeric=float(established))

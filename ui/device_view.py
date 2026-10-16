@@ -318,7 +318,7 @@ class DeviceView(QDialog):
             self.status.setText(f"Failed: {res}")
             return
         db.save_run(res)
-        bad = sum(1 for r in res if r.status != "OK")
+        bad = sum(1 for r in res if r.status not in ("OK", "N/A"))
         self.status.setText(f"{len(res)} check(s) done, {bad} not OK.")
         self.reload()
         self.changed.emit()

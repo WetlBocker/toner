@@ -164,6 +164,69 @@ def etherchannels(text):
     return out
 
 
+def asa_cpu(text):
+    """`show cpu usage`: 'CPU utilization for 5 seconds = 1%; 1 minute: 2%; 5 minutes: 3%' -> 3; None if absent."""
+    m = re.search(r"5\s+minutes?\s*[:=]\s*(\d+)\s*%", text or "")
+    return int(m.group(1)) if m else None
+
+
+def asa_memory(text):
+    """`show memory`: 'Used memory:  3544279040 bytes (41%)' -> 41.0; None if absent. Worked out from the byte counts when the
+    percentage is missing."""
+    t = text or ""
+    m = re.search(r"Used memory:\s+(\d+)\s+bytes\s*\(\s*(\d+)\s*%\s*\)", t)
+    if m:
+        return float(m.group(2))
+    used, total = re.search(r"Used memory:\s+(\d+)", t), re.search(r"Total memory:\s+(\d+)", t)
+    if used and total and int(total.group(1)):
+        return int(used.group(1)) / int(total.group(1)) * 100
+    return None
+
+
+def asa_uptime(text):
+    """`show version`: 'fw1 up 12 days 3 hours' -> '12 days 3 hours' (the unit's own line, not 'failover cluster up ...'); None if absent."""
+    for m in re.finditer(r"^(\S+)\s+up\s+((?:\d+\s+[a-z]+\s*)+)$", text or "", re.M | re.I):
+        if m.group(1).lower() not in ("cluster", "failover"):
+            return m.group(2).strip()
+    return None
+
+
+def asa_interfaces(text):
+    """`show interface`: [{'interface', 'nameif', 'link_status', 'input_errors', 'crc'}]. Toner's own reading: the ntc-templates
+    one stops at any line it does not know (an ASAv in Azure prints some) and does not read the error counters."""
+    rows, cur = [], None
+    for line in (text or "").splitlines():
+        m = re.match(r'^Interface\s+(\S+?)(?:\s+"([^"]*)")?,?\s+is\s+(.+?),\s+line\s+protocol\s+is\s+(\S+)', line.strip())
+        if m:
+            cur = {"interface": m.group(1), "nameif": m.group(2) or "", "link_status": m.group(3).strip(), "input_errors": 0, "crc": 0}
+            rows.append(cur)
+            continue
+        e = re.search(r"(\d+)\s+input errors,\s+(\d+)\s+CRC", line)
+        if e and cur is not None:
+            cur["input_errors"], cur["crc"] = int(e.group(1)), int(e.group(2))
+    return rows
+
+
+def bgp_running(text):
+    """`show ip bgp summary` (IOS, NX-OS) / `show bgp summary` (ASA): BGP is configured when it names its router identifier."""
+    return bool(re.search(r"BGP router identifier", text or "", re.I))
+
+
+def ospf_running(text):
+    """`show ip ospf` (IOS, NX-OS) / `show ospf` (ASA): 'Routing Process "ospf 1" with ID 10.0.0.1' when OSPF is configured."""
+    return bool(re.search(r"Routing Process\b.*\bwith ID", text or "", re.I))
+
+
+def eigrp_neighbors(text):
+    """`show ip eigrp neighbors` (IOS, NX-OS) / `show eigrp neighbors` (ASA): (running, [(address, interface)]). A configured
+    process prints its heading ('EIGRP-IPv4 Neighbors for AS(100)', 'IP-EIGRP neighbors for process 100') even with no neighbors;
+    a neighbor that goes down simply leaves the table."""
+    t = text or ""
+    running = bool(re.search(r"EIGRP\S*\s+neighbors\s+for", t, re.I))
+    rows = re.findall(r"^\s*\d+\s+(\d+\.\d+\.\d+\.\d+)\s+(\S+)\s+\d+\s+\S+\s+\d+", t, re.M)
+    return running or bool(rows), rows
+
+
 def asa_failover(text):
     """`show failover`: (state of this unit, state of the other, [problems]); None when failover is off or the output is not understood."""
     if not text or "Failover Off" in text or "not supported" in text.lower():

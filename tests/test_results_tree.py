@@ -90,5 +90,20 @@ check("a device that returned nothing says so after the run", tops()[-1].text(0)
 w.last_ran = ["core-sw1", "edge-fw", "udm", "quiet", "dead"]; w.results = list(RES); w._active = False
 w.expanded = {"core-sw1", "edge-fw"}; w.repopulate(); w.show()
 w.grab().save(SP + r"\results_tree.png")
+
+print("== N/A rows (a check that does not apply)")
+NA_RES = [Result("quiet", "bgp", "N/A", "not configured", "BGP is not configured on this device"), Result("quiet", "cpu", "OK", "1%"),
+          Result("quiet", "environment", "N/A", "no sensors", "this device reports no fans, power supplies or temperature")]
+w.last_ran = ["quiet", "edge-fw"]; w.results = NA_RES + [r for r in RES if r.device == "edge-fw"]; w._active = False
+w.show_filter("all"); w.repopulate()
+q = next(t for t in tops() if t.text(0) == "quiet")
+check("a device with OK and N/A rows is OK, says 'all OK', and lists the N/A rows after the OK one",
+      q.text(2) == "OK" and q.text(4) == "all OK" and [q.child(i).text(2) for i in range(q.childCount())] == ["OK", "N/A", "N/A"],
+      (q.text(2), q.text(4), [q.child(i).text(2) for i in range(q.childCount())]))
+w.show_filter("healthy"); w.repopulate()
+check("it counts as healthy", "quiet" in [t.text(0) for t in tops()], [t.text(0) for t in tops()])
+w.show_filter("problems"); w.repopulate()
+check("and not as a problem", [t.text(0) for t in tops()] == ["edge-fw"], [t.text(0) for t in tops()])
+w.show_filter("all")
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

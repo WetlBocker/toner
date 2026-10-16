@@ -103,7 +103,7 @@ def held_by_results(results, now=None):
     problems = {}
     for r in results:
         problems.setdefault(base(r.device), [])
-        if r.status != "OK":
+        if r.status not in ("OK", "N/A"):
             problems[base(r.device)].append((r.check, r.status))
     before = len(data)
     held = {d for d in list(data) if d in problems and state(d, problems[d], now, data=data, save=False)}

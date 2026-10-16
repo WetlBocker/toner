@@ -2,7 +2,7 @@
 import re
 
 import pyte
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QFontMetricsF, QGuiApplication, QPainter, QPen
 from PySide6.QtWidgets import QMenu, QWidget
 
@@ -318,6 +318,21 @@ class TerminalView(QWidget):
     def focusOutEvent(self, e):
         self.update()
         super().focusOutEvent(e)
+
+    def event(self, e):
+        if e.type() == QEvent.Type.ShortcutOverride and self.for_shell(e):
+            e.accept()                        # a key for the device, ahead of the window's shortcuts (Ctrl+K, Ctrl+B ...)
+            return True
+        return super().event(e)
+
+    @staticmethod
+    def for_shell(e):
+        """Is this a key the terminal sends to the device? Ctrl+1 to Ctrl+9 stay with the window, to change page."""
+        key, ctrl = e.key(), bool(e.modifiers() & Qt.KeyboardModifier.ControlModifier)
+        if ctrl and Qt.Key.Key_0 <= key <= Qt.Key.Key_9:
+            return False
+        return (key in KEYS or key in ARROWS or (ctrl and (Qt.Key.Key_A <= key <= Qt.Key.Key_Z or key == Qt.Key.Key_BracketLeft))
+                or bool(e.text()))
 
     def keyPressEvent(self, e):
         key, mods = e.key(), e.modifiers()

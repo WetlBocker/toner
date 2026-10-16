@@ -1,5 +1,6 @@
 """Result rows shared by the SSH drivers (Cisco, Juniper, Arista, HPE, MikroTik): fans and power supplies, the clock, flash space. They turn what
-drivers/clichecks.py read into a row; a platform without the command, or output that is not understood, gives no row."""
+drivers/clichecks.py read into a row. A device with no fans or sensors to report gets an N/A row for the environment; for the
+clock and flash a platform without the command, or output that is not understood, gives no row."""
 from . import clichecks
 from .base import OK, WARN, FAIL, grade
 
@@ -12,8 +13,8 @@ class CliRows:
     def env_row(self, c, *commands):
         """Fans, power supplies and temperature, from one or more environment commands (those the platform lacks are ignored)."""
         scan = clichecks.scan_environment("\n".join(self._out(c, x) for x in commands))
-        if scan is None:
-            return []
+        if scan is None:                                 # a virtual appliance, or a platform without the command
+            return self.not_applicable("environment", "no sensors", "this device reports no fans, power supplies or temperature")
         seen, problems = scan
         if not problems:
             return self.result("environment", OK, f"{seen} ok", "fans, power supplies and temperature", numeric=0.0)

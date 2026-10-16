@@ -94,7 +94,9 @@ class MikrotikDriver(CliRows, SshDriver):
     def ospf(self, c):
         out = self.cmd(c, "/routing ospf neighbor print terse")
         if "bad command" in out.lower() or "no such" in out.lower():
-            return []
+            return self.peers_row("ospf", 0, 0, [], protocol="OSPF")
         nbrs = re.findall(r"(?m)^\s*\d+.*?address=(\S+).*?state=(\S+)", out)
         bad = [f"{a} ({s})" for a, s in nbrs if s.lower() not in ("full", "2-way")]
-        return self.peers_row("ospf", len(nbrs) - len(bad), len(nbrs), bad)
+        running = bool(nbrs) or any(re.search(r"(?m)^\s*\d+\s", self.cmd(c, cmd)) and "bad command" not in self.cmd(c, cmd).lower()
+                                    for cmd in ("/routing ospf interface-template print terse", "/routing ospf network print terse"))   # v7, v6
+        return self.peers_row("ospf", len(nbrs) - len(bad), len(nbrs), bad, protocol="OSPF", running=running)

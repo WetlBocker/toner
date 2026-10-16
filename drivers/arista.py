@@ -99,17 +99,18 @@ class AristaDriver(CliRows, SshDriver):
     def bgp(self, c):
         out = self.cmd(c, "show ip bgp summary | json")
         if "inactive" in out.lower() or not out.strip().startswith("{"):
-            return []
-        peers = {}
+            return self.peers_row("bgp", 0, 0, [], protocol="BGP")
+        peers, running = {}, False
         for vrf in json.loads(out).get("vrfs", {}).values():
             peers.update(vrf.get("peers", {}))
+            running = running or bool(vrf.get("routerId") or vrf.get("asn"))
         down = [p for p, i in peers.items() if i.get("peerState") != "Established"]
-        return self.peers_row("bgp", len(peers) - len(down), len(peers), down)
+        return self.peers_row("bgp", len(peers) - len(down), len(peers), down, protocol="BGP", running=running)
 
     def ospf(self, c):
         out = self.cmd(c, "show ip ospf neighbor | json")
         if not out.strip().startswith("{"):
-            return []
+            return self.peers_row("ospf", 0, 0, [], protocol="OSPF")
         nbrs = []
 
         def walk(node):
@@ -122,7 +123,9 @@ class AristaDriver(CliRows, SshDriver):
                 for v in node:
                     walk(v)
 
-        walk(json.loads(out))
+        data = json.loads(out)
+        walk(data)
+        running = any(v.get("instList") for v in (data.get("vrfs") or {}).values() if isinstance(v, dict))   # an OSPF instance exists
         bad = [f"{n.get('routerId', '?')} ({n['adjacencyState']})" for n in nbrs
                if str(n["adjacencyState"]).lower() not in ("full", "twoway", "2way")]
-        return self.peers_row("ospf", len(nbrs) - len(bad), len(nbrs), bad)
+        return self.peers_row("ospf", len(nbrs) - len(bad), len(nbrs), bad, protocol="OSPF", running=running)

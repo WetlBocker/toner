@@ -87,7 +87,7 @@ are recorded and count in the numbers. Each one is in the audit log.
 
 | Vendor | How | Checks |
 |---|---|---|
-| Cisco (IOS, IOS XE, NX-OS, ASA) | SSH | CPU, memory, uptime, interfaces and error counters, BGP, OSPF, fans / power / temperature, NTP, unsaved configuration, flash, switch stack, HSRP / VRRP, port-channels, ASA failover |
+| Cisco (IOS, IOS XE, NX-OS, ASA) | SSH | CPU, memory, uptime, interfaces and error counters, BGP, OSPF, EIGRP, fans / power / temperature, NTP, unsaved configuration, flash, switch stack, HSRP / VRRP, port-channels, ASA failover |
 | Juniper (Junos) | SSH | CPU, memory, uptime, chassis alarms, interfaces, BGP, OSPF, fans / power / temperature, NTP, uncommitted changes, core dumps, BFD, storage, virtual chassis |
 | Arista (EOS) | SSH | CPU, memory, uptime, temperature, interfaces, BGP, OSPF, fans and power, MLAG, NTP, flash |
 | HPE Aruba (AOS-CX, AOS-S) | SSH | CPU, memory, uptime, interfaces, fans / power / temperature, NTP |
@@ -105,6 +105,12 @@ are recorded and count in the numbers. Each one is in the audit log.
 | This PC's Wi-Fi | `netsh wlan` | connection, signal strength, link speed |
 
 **Configuration backup** works for Cisco, Juniper, Arista, HPE, MikroTik (SSH), Fortinet and Palo Alto (API).
+
+**N/A.** A chosen check that does not apply to a device still gets a grey **N/A** row, so it never just goes missing: BGP, OSPF or
+EIGRP that is not configured, fans and sensors on a virtual appliance, ASA failover that is off. N/A is never a problem and never
+alerts. A routing protocol that is configured but has no neighbors is a WARN. A Cisco ASA reads its own commands for CPU
+(`show cpu usage`), memory (`show memory`), uptime, interfaces (`show interface`, with error counters), BGP, OSPF, EIGRP and disk
+(`dir disk0:`). EIGRP lists only the neighbors that are up, so a drop in the count since the last run is a WARN.
 
 The parsers for the SSH and API vendors, Proxmox, TrueNAS and OPNsense, and the SNMP checks for UPS, printers and NAS boxes, were
 written from the vendors' documented output and tested against samples, not real hardware. If a check says "unexpected output",
