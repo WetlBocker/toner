@@ -343,6 +343,13 @@ then is it run (a mismatch, or a release with no checksum, is never run). Your i
 **Install updates automatically** installs a verified update when you close Toner. Copies run from source or unzipped can check but
 not install.
 
+**Earlier versions.** The installers of the 3 newest versions stay in the `updates` folder of Toner's data (older ones are deleted
+when an update starts and when Toner starts), and About > **Earlier versions** has a **Revert to** button for each one older than
+the running version. The installer is checked again first: against the checksum recorded when it was downloaded or, for one
+downloaded before 1.5.12, against the one its GitHub release publishes (if GitHub cannot be reached, it is not run). Toner then
+closes, installs that version over the same copy (a portable copy stays portable) and opens again. The version you left is
+skipped, so automatic updating does not put it straight back; newer versions are still offered.
+
 Toner's web requests (updates, notifications, status pages, vendor APIs that check certificates) trust the public certificate
 authorities Toner carries **and** the ones in the Windows certificate store. So on a network that inspects HTTPS (a firewall with
 SSL inspection, or antivirus that scans HTTPS), Toner works once the inspecting certificate is trusted by Windows, as a browser

@@ -8,7 +8,7 @@ from pathlib import Path
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence, QPainter, QPixmap, QShortcut
 from PySide6.QtWidgets import QApplication, QMainWindow, QMenu, QMessageBox, QSystemTrayIcon
-from core import agents, audit, checks, db, display, legacyssh, notify, paths, reports, sessionlog, sessions, trends, trust, tunnel
+from core import agents, audit, checks, db, display, legacyssh, notify, paths, reports, sessionlog, sessions, trends, trust, tunnel, updates
 from ui import theme
 from ui.about import AboutTab
 from ui.configs import ConfigsTab
@@ -610,6 +610,10 @@ def main():
     tunnel.migrate()                               # 1.5.2-1.5.5: the SSH tunnel was a proxy type; it is its own section now
     sessionlog.purge(int(db.get_setting("ssh_log_days")))
     audit.purge(max(365, int(db.get_setting("ssh_log_days"))))
+    try:
+        updates.prune()                            # keep the installers of the newest few versions, for going back
+    except OSError:
+        pass
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(True)
     apply_look(app)

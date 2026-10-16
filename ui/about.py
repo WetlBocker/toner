@@ -82,6 +82,23 @@ class DownloadWorker(QThread):
             self.done.emit(False, f"{type(e).__name__}: {e}", "")
 
 
+class RevertWorker(QThread):
+    done = Signal(bool, str)                         # ok, message
+
+    def __init__(self, item):
+        super().__init__()
+        self.item = item
+
+    def run(self):
+        try:
+            updates.revert(self.item)                # checks the installer (maybe asking GitHub), then starts it
+            self.done.emit(True, "")
+        except updates.UpdateError as e:
+            self.done.emit(False, str(e))
+        except Exception as e:
+            self.done.emit(False, f"The installer could not be started: {type(e).__name__}: {e}")
+
+
 class AboutTab(QWidget):
     update_available = Signal(str)                   # a newer version was found (for the badge and the tray)
     update_cleared = Signal()
@@ -154,6 +171,21 @@ class AboutTab(QWidget):
         ul.addWidget(self.auto_note)
         ul.addWidget(self.last)
 
+        # ---- earlier versions (the installers kept in the updates folder)
+        self.earlier_card, el = _card()
+        t = QLabel("Earlier versions")
+        t.setStyleSheet("font-weight: 600;")
+        el.addWidget(t)
+        self.earlier_note = _muted("")
+        el.addWidget(self.earlier_note)
+        self.earlier_rows = QVBoxLayout()
+        el.addLayout(self.earlier_rows)
+        self.earlier_status = _selectable("")
+        self.earlier_status.hide()
+        el.addWidget(self.earlier_status)
+        self.revert_btns = {}
+        self.reverter = None
+
         # ---- details and components
         det, dl = _card()
         t = QLabel("This copy")
@@ -182,6 +214,7 @@ class AboutTab(QWidget):
         bl.setSpacing(14)
         bl.addLayout(head)
         bl.addWidget(upd)
+        bl.addWidget(self.earlier_card)
         bl.addWidget(det)
         bl.addWidget(comp)
         bl.addLayout(tools)
@@ -253,6 +286,7 @@ class AboutTab(QWidget):
             self.auto_note.setText("Automatic installing is only available in a copy set up with the Toner installer. This "
                                    "copy can still check for updates and tell you where to download them.")
         self._show_last()
+        self.refresh_earlier()
         if self.status.text() == "":
             self.status.setText(f"You are using version {VERSION}.")
         pend = updates.pending()
@@ -424,6 +458,62 @@ class AboutTab(QWidget):
         db.set_setting("update_pending", {})
         return True
 
+    # ---------------------------------------------------------------- going back to an earlier version
+    def refresh_earlier(self):
+        while self.earlier_rows.count():
+            row = self.earlier_rows.takeAt(0).layout()
+            while row is not None and row.count():
+                w = row.takeAt(0).widget()
+                if w is not None:
+                    w.deleteLater()
+        self.revert_btns = {}
+        if not updates.can_self_update():
+            self.earlier_note.setText("Going back to an earlier version needs a copy set up with the Toner installer.")
+            return
+        items = updates.earlier()
+        if not items:
+            self.earlier_note.setText("No earlier versions are kept yet. After the next update, the version you have now can "
+                                      "be restored from here.")
+            return
+        self.earlier_note.setText(f"Toner keeps the installers of the last {updates.KEEP} versions in its data folder, so you "
+                                  "can go back to one if an update causes trouble.")
+        for item in items:
+            row = QHBoxLayout()
+            row.addWidget(QLabel(f"Version {item['version']}   (downloaded {item['at']})"))
+            b = QPushButton(f"Revert to {item['version']}")
+            b.clicked.connect(lambda _=False, it=item: self.revert(it))
+            row.addWidget(b)
+            row.addStretch()
+            self.revert_btns[item["version"]] = b
+            self.earlier_rows.addLayout(row)
+
+    def revert(self, item):
+        if self.busy() or (self.reverter and self.reverter.isRunning()):
+            return
+        v = item["version"]
+        if QMessageBox.question(self, f"Revert to version {v}",
+                                f"Toner will close, install version {v} over this copy and open again. Your inventory, history "
+                                f"and saved passwords are kept; settings and checks added after {v} are not used by it.\n\n"
+                                f"Version {VERSION} will not be offered as an update again; newer versions still will.\n\n"
+                                "Continue?") != QMessageBox.StandardButton.Yes:
+            return
+        for b in self.revert_btns.values():
+            b.setEnabled(False)
+        self.earlier_status.setText(f"Checking the installer for {v}...")
+        self.earlier_status.show()
+        self.reverter = RevertWorker(item)
+        self.reverter.done.connect(lambda ok, msg, v=v: self._reverted(ok, msg, v))
+        self.reverter.start()
+
+    def _reverted(self, ok, msg, version):
+        for b in self.revert_btns.values():
+            b.setEnabled(True)
+        if not ok:
+            self.earlier_status.setText(msg)
+            return
+        audit.log("update reverting", f"{VERSION} -> {version}")
+        self.quit_requested.emit()
+
     def cancel_download(self):
         if self.downloader and self.downloader.isRunning():
             self.downloader.cancel.set()
@@ -449,7 +539,7 @@ class AboutTab(QWidget):
 
     def shutdown(self):
         self.timer.stop()
-        for w in (self.checker, self.downloader):
+        for w in (self.checker, self.downloader, self.reverter):
             if w and w.isRunning():
                 if hasattr(w, "cancel"):
                     w.cancel.set()

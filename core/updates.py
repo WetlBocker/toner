@@ -24,6 +24,9 @@ from core import db, paths, proxy, trust
 from core.version import REPO, VERSION
 
 API = "https://api.github.com/repos/{repo}/releases/latest"
+API_TAG = "https://api.github.com/repos/{repo}/releases/tags/{tag}"
+KEEP = 3                                                        # installers kept in the updates folder, for going back
+MANIFEST = "installers.json"                                    # their checksums, recorded when each was downloaded
 ALLOWED_HOSTS = ("github.com", "githubusercontent.com")        # the installer may only come from these (and subdomains)
 ALLOW_HTTP = False                                              # tests only
 SETUP = re.compile(r"^Toner-Setup-(\d+(?:\.\d+){1,3})\.exe$", re.I)
@@ -108,7 +111,15 @@ def _ssl_reason(e):
 
 def fetch_latest(repo=REPO, timeout=10):
     """The newest published release, or None when the repository has none (or is private). Raises UpdateError."""
-    url = API.format(repo=repo)
+    return _fetch_release(API.format(repo=repo), timeout)
+
+
+def fetch_version(version, repo=REPO, timeout=10):
+    """The release of one version (tag v1.2.0), or None when there is no such release. Raises UpdateError."""
+    return _fetch_release(API_TAG.format(repo=repo, tag="v" + version), timeout)
+
+
+def _fetch_release(url, timeout):
     try:
         r = requests.get(url, headers={"Accept": "application/vnd.github+json", "User-Agent": "Toner"}, timeout=timeout,
                          **proxy.requests_kwargs(None, urlparse(url).hostname))
@@ -212,6 +223,7 @@ def download(rel, dest_dir=None, progress=None, cancel=None, timeout=30):
         if h.hexdigest() != want:
             raise UpdateError("The download does not match its published checksum. It was discarded and not installed.")
         os.replace(part, final)
+        _remember(dest_dir, rel.version, final, want)
     except requests.exceptions.SSLError as e:
         host = urlparse(getattr(getattr(e, "request", None), "url", "") or rel.asset_url).hostname or "GitHub"
         raise UpdateError(f"The download from {host} failed its security check: {_ssl_reason(e)}. {trust.SSL_HINT} "
@@ -235,6 +247,106 @@ def file_hash(path):
     return h.hexdigest()
 
 
+# ---------------------------------------------------------------- installers kept for going back to an earlier version
+def _read_manifest(folder=None):
+    try:
+        with open(os.path.join(str(folder or updates_dir()), MANIFEST), encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _write_manifest(data, folder=None):
+    try:
+        with open(os.path.join(str(folder or updates_dir()), MANIFEST), "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=1)
+    except OSError:
+        pass
+
+
+def _remember(folder, version, path, sha):
+    """Record a verified download's checksum, so it can be checked again before it is ever run to go back."""
+    data = _read_manifest(folder)
+    data[version] = {"file": os.path.basename(path), "sha256": sha, "at": datetime.now().strftime("%Y-%m-%d")}
+    _write_manifest(data, folder)
+
+
+def installers():
+    """The installers in the updates folder, newest version first: [{'version', 'path', 'sha256' ('' when it was downloaded
+    before checksums were recorded), 'at' (the day it was downloaded)}]."""
+    folder, data, out = updates_dir(), _read_manifest(), []
+    for name in os.listdir(folder):
+        m = SETUP.match(name)
+        if not m:
+            continue
+        path = str(folder / name)
+        rec = data.get(m.group(1)) or {}
+        if rec.get("file") != name:
+            rec = {}
+        try:
+            at = rec.get("at") or datetime.fromtimestamp(os.path.getmtime(path)).strftime("%Y-%m-%d")
+        except OSError:
+            continue
+        out.append({"version": m.group(1), "path": path, "sha256": rec.get("sha256", ""), "at": at})
+    return sorted(out, key=lambda i: parse(i["version"]), reverse=True)
+
+
+def earlier(current=VERSION):
+    """The kept installers of versions older than this one: what Toner can go back to."""
+    return [i for i in installers() if is_newer(current, i["version"])]
+
+
+def prune(keep=KEEP, spare=()):
+    """Keep the installers of the `keep` newest versions and delete the rest. A downloaded update waiting to be installed
+    does not count and is kept, as is any path in `spare`. Returns the versions removed."""
+    pend = (db.get_setting("update_pending") or {}).get("path") or ""
+    skip = {os.path.normcase(os.path.abspath(p)) for p in (pend, *spare) if p}
+    counted = [i for i in installers() if os.path.normcase(os.path.abspath(i["path"])) not in skip]
+    gone = []
+    for i in counted[keep:]:
+        try:
+            os.remove(i["path"])
+            gone.append(i["version"])
+        except OSError:
+            pass
+    if gone:
+        data = _read_manifest()
+        for v in gone:
+            data.pop(v, None)
+        _write_manifest(data)
+    return gone
+
+
+def verify_installer(item, timeout=10):
+    """Check a kept installer before it is run: against the checksum recorded when it was downloaded or, for one downloaded
+    before checksums were recorded, against the one its GitHub release publishes. Raises UpdateError when it cannot be
+    checked or does not match."""
+    want = item.get("sha256") or ""
+    if not want:
+        try:
+            rel = fetch_version(item["version"], timeout=timeout)
+            want = expected_hash(rel) if rel else ""
+        except UpdateError:
+            want = ""
+    try:
+        ok = bool(want) and file_hash(item["path"]) == want
+    except OSError:
+        ok = False
+    if not ok:
+        raise UpdateError(f"The installer for {item['version']} could not be checked against its published checksum, so it was "
+                          "not run. Connect to the internet and try again, or download it from the release page.")
+
+
+def revert(item, current=VERSION):
+    """Go back to a kept earlier version: check its installer, then run it over this copy. The version being left is skipped,
+    so automatic updating does not install it again straight away (newer ones are still offered). Raises UpdateError."""
+    verify_installer(item)
+    db.set_setting("update_skip", current)
+    db.set_setting("update_pending", {})                        # a downloaded newer update must not install on the next exit
+    launch_installer(item["path"], relaunch=True)
+
+
 # ---------------------------------------------------------------- a downloaded update waiting to be installed
 def set_pending(rel, path, sha):
     db.set_setting("update_pending", {"version": rel.version, "path": path, "sha256": sha})
@@ -256,9 +368,12 @@ def pending(current=VERSION):
     if not p.get("path"):
         return None
     try:
-        if is_newer(p["version"], current) and os.path.isfile(p["path"]) and file_hash(p["path"]) == p["sha256"] \
+        if os.path.isfile(p["path"]) and file_hash(p["path"]) == p["sha256"] \
                 and os.path.dirname(os.path.abspath(p["path"])) == str(updates_dir()):
-            return p
+            if is_newer(p["version"], current):
+                return p
+            clear_pending(delete=False)                         # installed by now: its installer is kept for going back
+            return None
     except (OSError, KeyError):
         pass
     clear_pending()
@@ -267,7 +382,11 @@ def pending(current=VERSION):
 
 def launch_installer(path, relaunch=True):
     """Start the installer detached, so it keeps running after Toner closes. It verifies nothing itself: call this only
-    with a file whose checksum was checked (pending() re-checks it)."""
+    with a file whose checksum was checked (pending() re-checks it). Installers beyond the newest few are cleared first."""
+    try:
+        prune(spare=(path,))
+    except OSError:
+        pass
     args = [path, "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", f"/relaunch={1 if relaunch else 0}",
             f"/LOG={updates_dir() / 'install.log'}"]
     if installed_kind() == "portable":                          # update this folder in place, as a portable copy again

@@ -255,6 +255,77 @@ check("a copy that cannot update itself never runs an installer on exit", ab.app
 updates.clear_pending()
 sys.executable = saved_exe
 
+print("== keeping the newest three installers, and going back to one")
+updates.API_TAG = BASE + "/repos/{repo}/releases/tags/{tag}"
+for f in os.listdir(udir):
+    os.remove(os.path.join(udir, f))
+def put(v):
+    path = os.path.join(udir, f"Toner-Setup-{v}.exe"); open(path, "wb").write(INSTALLER); return path
+for v in ("1.0.1", "1.0.2", "1.0.3", "1.0.4", "1.0.5", "1.0.6"):
+    put(v)
+open(os.path.join(udir, "install.log"), "w").write("log")
+check("the kept installers are listed newest first", [i["version"] for i in updates.installers()] == ["1.0.6", "1.0.5", "1.0.4", "1.0.3", "1.0.2", "1.0.1"])
+gone = updates.prune()
+check("only the three newest are kept; other files in the folder are left alone", sorted(gone) == ["1.0.1", "1.0.2", "1.0.3"]
+      and [i["version"] for i in updates.installers()] == ["1.0.6", "1.0.5", "1.0.4"] and os.path.exists(os.path.join(udir, "install.log")), gone)
+check("10 counts as newer than 9", updates.prune() == [] and (put("1.0.10") and updates.prune() == ["1.0.4"]) and [i["version"] for i in updates.installers()] == ["1.0.10", "1.0.6", "1.0.5"])
+p, sha = updates.download(rel); updates.set_pending(rel, p, sha)
+check("a download is recorded with its checksum", updates.installers()[0]["version"] == "9.9.9" and updates.installers()[0]["sha256"] == sha)
+check("a downloaded update waiting to be installed does not count, and is kept", updates.prune() == [] and [i["version"] for i in updates.installers()] == ["9.9.9", "1.0.10", "1.0.6", "1.0.5"])
+updates.clear_pending(); put("1.0.0"); launched.clear()
+updates.launch_installer(put("1.0.2"), relaunch=True)
+check("starting an installer clears the old ones first, but never the one being started",
+      [i["version"] for i in updates.installers()] == ["1.0.10", "1.0.6", "1.0.5", "1.0.2"] and launched, [i["version"] for i in updates.installers()])
+os.remove(os.path.join(udir, "Toner-Setup-1.0.2.exe")); os.remove(os.path.join(udir, "Toner-Setup-1.0.10.exe"))
+check("what can be gone back to: the kept versions older than this one", [i["version"] for i in updates.earlier(current="1.0.6")] == ["1.0.5"]
+      and [i["version"] for i in updates.earlier(current="2.0")] == ["1.0.6", "1.0.5"])
+p5 = os.path.join(udir, "Toner-Setup-1.0.5.exe"); updates._remember(str(udir), "1.0.5", p5, SHA)
+item5 = next(i for i in updates.installers() if i["version"] == "1.0.5")
+check("an installer downloaded with this version has its checksum recorded", item5["sha256"] == SHA)
+state["status"] = 500
+try: updates.verify_installer(item5); check("a recorded checksum is checked without asking GitHub", True)
+except updates.UpdateError as e: check("a recorded checksum is checked without asking GitHub", False, e)
+open(p5, "ab").write(b"changed")
+try: updates.verify_installer(item5); check("a kept installer that changed is not run", False)
+except updates.UpdateError as e: check("a kept installer that changed is not run, and says so", "1.0.5 could not be checked against its published checksum, so it was not run" in str(e), e)
+item6 = next(i for i in updates.installers() if i["version"] == "1.0.6")
+try: updates.verify_installer(item6); check("an older download with no recorded checksum is not run when GitHub cannot be asked", False)
+except updates.UpdateError as e: check("an older download with no recorded checksum is not run when GitHub cannot be asked", "Connect to the internet" in str(e), e)
+state["status"] = 200; state["release"] = release(tag="v1.0.6", name="Toner-Setup-1.0.6.exe")
+try: updates.verify_installer(item6); check("...and is checked against its GitHub release when it can", True)
+except updates.UpdateError as e: check("...and is checked against its GitHub release when it can", False, e)
+p, sha = updates.download(rel); updates.set_pending(rel, p, sha); db.set_setting("update_skip", ""); launched.clear()
+updates.revert(item6, current="1.0.7")
+check("going back runs that installer, skips the version being left, and forgets a downloaded newer update",
+      launched and launched[-1][0][0] == item6["path"] and "/relaunch=1" in launched[-1][0] and db.get_setting("update_skip") == "1.0.7"
+      and db.get_setting("update_pending") == {}, (launched[-1:], db.get_setting("update_skip")))
+db.set_setting("update_skip", "")
+p, sha = updates.download(rel); updates.set_pending(rel, p, sha)
+check("an update that has been installed is forgotten, but its installer is kept for going back", updates.pending(current="9.9.9") is None and os.path.exists(p))
+os.remove(p); os.remove(p5)
+
+print("== Earlier versions on the About page")
+check("from source it explains that going back needs the installer", "needs a copy set up with the Toner installer" in ab.earlier_note.text() and not ab.revert_btns)
+sys.frozen = True; sys.executable = os.path.join(fake_dir, "Toner.exe")
+ab3 = AB.AboutTab(); ab3.show()
+check("an installed copy lists the kept earlier versions with their download day, each with a Revert button",
+      list(ab3.revert_btns) == ["1.0.6"] and ab3.revert_btns["1.0.6"].text() == "Revert to 1.0.6" and "last 3 versions" in ab3.earlier_note.text()
+      and any(l.text().startswith("Version 1.0.6   (downloaded 20") for l in ab3.earlier_card.findChildren(AB.QLabel)), list(ab3.revert_btns))
+quits3 = []; ab3.quit_requested.connect(lambda: quits3.append(1)); asked.clear(); launched.clear()
+ab3.revert_btns["1.0.6"].click(); pump(lambda: bool(quits3), 400)
+check("Revert asks first, checks the installer, starts it and closes Toner",
+      quits3 == [1] and asked and "install version 1.0.6 over this copy" in asked[0] and f"Version {VERSION} will not be offered" in asked[0]
+      and launched and launched[-1][0][0] == item6["path"], (quits3, asked[:1], launched[-1:]))
+check("it is in the audit log", any(a["action"] == "update reverting" for a in audit.recent()))
+state["status"] = 500; quits3.clear(); asked.clear()
+ab3.revert_btns["1.0.6"].click(); pump(lambda: "could not be checked" in ab3.earlier_status.text(), 400)
+check("when the installer cannot be checked, Toner stays open and says why", not quits3 and "1.0.6 could not be checked" in ab3.earlier_status.text()
+      and ab3.revert_btns["1.0.6"].isEnabled(), ab3.earlier_status.text())
+state["status"] = 200
+os.remove(item6["path"]); ab3.load()
+check("with none kept it says when there will be one", not ab3.revert_btns and "No earlier versions are kept yet" in ab3.earlier_note.text())
+ab3.shutdown(); del sys.frozen; sys.executable = saved_exe; db.set_setting("update_skip", "")
+
 print("== in the main window")
 w = A.Main()
 names = [w.tabs.tabText(i) for i in range(w.tabs.count())]
