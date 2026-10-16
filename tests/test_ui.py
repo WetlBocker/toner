@@ -64,9 +64,9 @@ T.table.selectRow(0); T.remove_row(); check("remove override", T.table.rowCount(
 S.reload()
 
 print("== checks page")
-C = P["Checks"]; top = C.tree.topLevelItem(0); top.child(3).setCheckState(0, Qt.CheckState.Unchecked)   # cisco: interfaces
+C = P["Checks"]; top = C.tree.topLevelItem(0); top.child(4).setCheckState(0, Qt.CheckState.Unchecked)   # cisco: interfaces (after Reachable, CPU, memory, uptime)
 S.save(); check("unticked check is stored as disabled", db.get_setting("disabled_checks") == ["cisco:interfaces"], db.get_setting("disabled_checks"))
-S.reload(); top = C.tree.topLevelItem(0); check("and shows unticked after reload", top.child(3).checkState(0) == Qt.CheckState.Unchecked and top.child(0).checkState(0) == Qt.CheckState.Checked)
+S.reload(); top = C.tree.topLevelItem(0); check("and shows unticked after reload", top.child(4).checkState(0) == Qt.CheckState.Unchecked and top.child(0).checkState(0) == Qt.CheckState.Checked)
 
 print("== connections / defaults reach the app")
 N = P["Connections"]; N.ssh.setValue(45); N.http.setValue(30); N.retries.setValue(3); N.delay.setValue(5); S.save()

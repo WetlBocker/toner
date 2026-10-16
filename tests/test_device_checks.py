@@ -61,8 +61,8 @@ class Probe(Driver):
         return out
 real = runner.DRIVERS["cisco"]; runner.DRIVERS["cisco"] = Probe
 base_opts = {**db.runtime_options(), "retries": 0, "tls_sweep": False, "custom": [], "disabled": {"cisco:memory"}}
-ra = {r.check: r for r in runner.run_one(a, db.thresholds_for(a), base_opts)}
-rb = {r.check: r for r in runner.run_one(b, db.thresholds_for(b), base_opts)}
+ra = {r.check: r for r in runner.run_one(a, db.thresholds_for(a), base_opts) if r.check != "reachability"}      # the TCP reachability row is tested in test_reach
+rb = {r.check: r for r in runner.run_one(b, db.thresholds_for(b), base_opts) if r.check != "reachability"}
 check("the device without its own settings skips what is off globally", set(ra) == {"cpu", "uptime"} and ra["cpu"].status == "WARN", {k: v.status for k, v in ra.items()})
 check("the one with its own list runs just that, with its own limits (75% is fine under 90)", set(rb) == {"cpu"} and rb["cpu"].status == "OK", {k: v.status for k, v in rb.items()})
 c2 = dev("own-mem", host="127.0.0.1", checkopts={"checks": ["memory"]})

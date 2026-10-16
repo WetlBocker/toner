@@ -293,7 +293,7 @@ check("one retry on rate limit", "devices" in mer_run() and n["c"] == 2)
 print("== through the runner (connection error handling)")
 from core.runner import run_one
 res = run_one({"name": "j", "vendor": "juniper", "host": "127.0.0.1", "port": 1, "username": "u", "platform": "juniper_junos", "password": "p"}, TH, {**OPTS, "ssh_timeout": 3, "retries": 0})
-check("unreachable device -> one connection ERROR", len(res) == 1 and res[0].check == "connection" and res[0].status == "ERROR", res)
+check("unreachable device -> the Reachable row, then one connection ERROR", [r.check for r in res] == ["reachability", "connection"] and res[1].status == "ERROR", res)
 
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

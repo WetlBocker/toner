@@ -53,9 +53,10 @@ d = {"name": "sw-fields", "vendor": "cisco", "host": "127.0.0.1", "port": 0, "pl
      "fields": {"support": (date.today() + timedelta(days=10)).isoformat()}, "location": "", "details": ""}
 d["id"] = db.save_device(d); d = db.get_device(d["id"])
 opts = {**db.runtime_options(), "retries": 0, "tls_sweep": False, "custom": []}
-res = runner.run_one(d, db.thresholds_for(d), opts)
+own = lambda rows: [x for x in rows if x.check != "reachability"]            # the TCP reachability row is tested in test_reach
+res = own(runner.run_one(d, db.thresholds_for(d), opts))
 check("a run includes the support row beside the device's own checks", [x.check for x in res] == ["cpu", "support ends"] and res[1].status == "FAIL", [(x.check, x.status) for x in res])
-res = runner.run_one(d, db.thresholds_for(d), {**opts, "disabled": {"all:support"}})
+res = own(runner.run_one(d, db.thresholds_for(d), {**opts, "disabled": {"all:support"}}))
 check("and it can be switched off for every device in Settings > Checks", [x.check for x in res] == ["cpu"])
 check("that switch is listed, under 'Every device'", "all" in checks.CATALOG and ("support", "Support, warranty and licence dates kept in a device's custom fields") in checks.CATALOG["all"])
 from core import display

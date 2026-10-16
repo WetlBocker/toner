@@ -7,7 +7,7 @@ from PySide6.QtGui import QDesktopServices, QFontDatabase
 from PySide6.QtWidgets import (QAbstractItemView, QApplication as _QApp, QCheckBox, QComboBox, QCompleter, QGroupBox, QHBoxLayout, QLabel,
                                QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QSpinBox, QSplitter,
                                QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
-from core import db, jump, nettools, profiles, sessionlog, snmp, vendors
+from core import db, jump, nettools, profiles, reach, sessionlog, snmp, vendors
 
 
 class OutputBox(QPlainTextEdit):
@@ -197,12 +197,16 @@ class DiagnosticsTab(QWidget):
             self.buttons[text] = b
         self.stop_btn = QPushButton("Stop")
         self.stop_btn.setEnabled(False)
-        self.stop_btn.clicked.connect(self.runner.stop)
+        self.stop_btn.clicked.connect(self.stop)
         clear = QPushButton("Clear")
         clear.clicked.connect(self.out.clear)
         row.addWidget(self.stop_btn)
         row.addWidget(clear)
+        self.via_proxy = QCheckBox("Through the proxy (TCP)")
+        self.via_proxy.toggled.connect(lambda _on: self._busy(self.busy()))
+        row.addWidget(self.via_proxy)
         row.addStretch()
+        self.tcp = None
         lay = QVBoxLayout(self)
         lay.addLayout(_row("Device", self.picker, "Target", self.target))
         lay.addLayout(row)
@@ -211,10 +215,21 @@ class DiagnosticsTab(QWidget):
             lambda: self.picker.currentData() and self.target.setText(self.picker.currentData()["host"]))
         self.runner.finished.connect(lambda: self._busy(False))
 
+    def busy(self):
+        return self.runner.running() or bool(self.tcp and self.tcp.isRunning())
+
     def _busy(self, on):
         for b in self.buttons.values():
             b.setEnabled(not on)
+        tcp = self.via_proxy.isChecked()
+        self.buttons["Traceroute"].setEnabled(not on and not tcp)        # a route cannot be traced through a proxy
+        self.buttons["Traceroute"].setToolTip(reach.TRACE_NEEDS_ICMP if tcp else "")
         self.stop_btn.setEnabled(on)
+
+    def stop(self):
+        self.runner.stop()
+        if self.tcp:
+            self.tcp.stop_event.set()
 
     def _run(self, program, args, title):
         try:
@@ -227,7 +242,22 @@ class DiagnosticsTab(QWidget):
         self.runner.start(program, args + [target])
 
     def ping(self):
-        self._run("ping", ["-n", "4"], "ping")
+        if not self.via_proxy.isChecked():
+            self._run("ping", ["-n", "4"], "ping")
+            return
+        try:
+            target = nettools.check_target(self.target.text())
+        except ValueError as e:
+            self.out.line(str(e))
+            return
+        d = self.picker.currentData()
+        dev = d if isinstance(d, dict) and d.get("host") == target else {}       # the chosen device's own proxy, else the global one
+        self.out.line(f"\n> TCP ping {target}")
+        self._busy(True)
+        self.tcp = TcpPing(dev, target)
+        self.tcp.line.connect(self.out.line)
+        self.tcp.finished.connect(lambda: self._busy(False))
+        self.tcp.start()
 
     def trace(self):
         self._run("tracert", ["-d", "-h", "30"], "tracert")
@@ -236,7 +266,27 @@ class DiagnosticsTab(QWidget):
         self._run("nslookup", [], "nslookup")
 
     def shutdown(self):
-        self.runner.stop()
+        self.stop()
+        if self.tcp:
+            self.tcp.wait(6000)
+
+
+class TcpPing(QThread):
+    """Ping with Through the proxy (TCP) ticked: four TCP connections to the management port, a second apart."""
+    line = Signal(str)
+
+    def __init__(self, dev, host, count=4):
+        super().__init__()
+        self.dev, self.host, self.count = dev, host, count
+        self.stop_event = threading.Event()
+
+    def run(self):
+        for i in range(self.count):
+            if self.stop_event.is_set():
+                break
+            self.line.emit(reach.line(reach.probe(self.dev, host=self.host), self.host))
+            if i < self.count - 1:
+                self.stop_event.wait(1.0)
 
 
 # ---------------------------------------------------------------- port scanner

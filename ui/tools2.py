@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComb
                                QGraphicsSimpleTextItem, QGraphicsView, QHBoxLayout, QLabel, QLineEdit, QListWidget,
                                QListWidgetItem, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QSpinBox,
                                QSplitter, QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
-from core import audit, cmdrun, custom, db, discovery, listeners, nettools, oui, pinger, profiles, reports, snmp
+from core import audit, cmdrun, custom, db, discovery, listeners, nettools, oui, pinger, profiles, reach, reports, snmp
 from core import proxy, topology, vendors
 from ui import theme
 from ui.tools import DevicePicker, OutputBox, _row
@@ -449,18 +449,31 @@ class TopologyTab(QWidget):
 
 
 # =============================================================================== Live ping / MTR
+def picked_device(picker, host):
+    """The device chosen in the picker, when the target is still its address (its proxy is used); else None."""
+    d = picker.currentData()
+    return d if isinstance(d, dict) and d.get("host") == host else None
+
+
 class PingWorker(QThread):
     sample = Signal(object)                       # milliseconds, or None for a lost reply
 
-    def __init__(self, host, interval, timeout_ms):
+    def __init__(self, host, interval, timeout_ms, tcp_dev=None):
         super().__init__()
         self.host, self.interval, self.timeout_ms = host, interval, timeout_ms
+        self.tcp_dev = tcp_dev                       # Through the proxy (TCP): a TCP connection instead of ICMP
         self.stop_event = threading.Event()
+
+    def once(self):
+        if self.tcp_dev is None:
+            return pinger.ping_once(self.host, self.timeout_ms)
+        p = reach.probe(self.tcp_dev, host=self.host, timeout=self.timeout_ms / 1000)
+        return p.ms if p.up else None
 
     def run(self):
         while not self.stop_event.is_set():
             t0 = time.time()
-            self.sample.emit(pinger.ping_once(self.host, self.timeout_ms))
+            self.sample.emit(self.once())
             self.stop_event.wait(max(0.0, self.interval - (time.time() - t0)))
 
 
@@ -548,11 +561,12 @@ class LivePingTab(QWidget):
         self.timeout.setSuffix(" ms")
         self.go, self.stop, self.clear = _primary("Start"), QPushButton("Stop"), QPushButton("Reset")
         self.stop.setEnabled(False)
+        self.via_proxy = QCheckBox("Through the proxy (TCP)")
         self.graph = LatencyGraph()
         self.stats = QLabel("")
         self.stats.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
         self.reset_stats()
-        top = _row("Device", self.picker, "Host", self.host, "Every", self.interval, "Timeout", self.timeout, self.go, self.stop, self.clear)
+        top = _row("Device", self.picker, "Host", self.host, "Every", self.interval, "Timeout", self.timeout, self.via_proxy, self.go, self.stop, self.clear)
         lay = QVBoxLayout(self)
         lay.addLayout(top)
         lay.addWidget(self.graph, 1)
@@ -592,7 +606,8 @@ class LivePingTab(QWidget):
         self.reset_stats()
         self.go.setEnabled(False)
         self.stop.setEnabled(True)
-        self.worker = PingWorker(host, self.interval.value(), self.timeout.value())
+        tcp_dev = (picked_device(self.picker, host) or {}) if self.via_proxy.isChecked() else None
+        self.worker = PingWorker(host, self.interval.value(), self.timeout.value(), tcp_dev)
         self.worker.sample.connect(self._sample)
         self.worker.start()
 
@@ -629,9 +644,11 @@ class MtrTab(QWidget):
         self.host.setPlaceholderText("hostname or IP address")
         self.go, self.stop = _primary("Start"), QPushButton("Stop")
         self.stop.setEnabled(False)
+        self.via_proxy = QCheckBox("Through the proxy (TCP)")
+        self.via_proxy.toggled.connect(self._mode)
         self.status = _muted("")
         self.table = _table(self.COLS, stretch_last=False)
-        top = _row("Device", self.picker, "Target", self.host, self.go, self.stop)
+        top = _row("Device", self.picker, "Target", self.host, self.via_proxy, self.go, self.stop)
         lay = QVBoxLayout(self)
         lay.addLayout(top)
         lay.addWidget(_muted("Finds the route with a traceroute, then pings every router on it once a second and shows loss "
@@ -645,8 +662,13 @@ class MtrTab(QWidget):
         self.updated.connect(self.show_hops)
         self.picker.currentIndexChanged.connect(lambda: self.picker.currentData() and self.host.setText(self.picker.currentData()["host"]))
 
+    def _mode(self, tcp):
+        """A route cannot be traced through a proxy: Start needs ICMP."""
+        self.go.setEnabled(not tcp and not self.mtr)
+        self.go.setToolTip(reach.TRACE_NEEDS_ICMP if tcp else "")
+
     def start(self):
-        if self.mtr:
+        if self.mtr or self.via_proxy.isChecked():
             return
         try:
             host = nettools.check_target(self.host.text())
@@ -682,7 +704,7 @@ class MtrTab(QWidget):
         if self.mtr:
             self.mtr.stop()
             self.mtr = None
-        self.go.setEnabled(True)
+        self.go.setEnabled(not self.via_proxy.isChecked())
         self.stop.setEnabled(False)
 
     def shutdown(self):

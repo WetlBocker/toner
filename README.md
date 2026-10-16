@@ -232,6 +232,13 @@ and a "do not use it for" list (names, `*.corp.example.com`, addresses, networks
 vendor APIs, status pages, web / port / certificate checks and notifications use it; SNMP, ping, traceroute, the listeners and the
 file servers use UDP or ICMP or listen for connections, so they never do.
 
+**Reachability through a proxy.** Ping cannot go through a proxy, so Cisco, Juniper, Arista, HPE, MikroTik, Fortinet and Palo Alto
+devices get a **Reachable (TCP to the management port)** check: a TCP connection to SSH (or the API port for Fortinet and Palo
+Alto), through the proxy or SSH tunnel when the device uses one. A connection the device refuses still means it is up; only no
+answer is a FAIL. It runs before the login, so "the device is down" and "the login failed" are told apart. Tools > Ping, Live
+ping and Path, and the Ping custom check, have **Through the proxy (TCP)**: unticked they use ordinary ICMP; ticked, Ping makes
+TCP connections through the device's proxy instead, and Traceroute and Path are off (a route cannot be traced through a proxy).
+
 **SSH Tunnel** does what PuTTY's Dynamic port forwarding (`ssh -D`) does, with no PuTTY needed: Toner signs in to an SSH server
 and opens a SOCKS5 port on this computer (**Local SOCKS Port**, 1080 by default). Point the proxy at it (SOCKS5, `127.0.0.1`,
 port 1080; **Use it for the proxy above** fills that in), or only the devices that need it. Use the same server, user name and

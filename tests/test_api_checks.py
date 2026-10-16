@@ -148,7 +148,8 @@ r = pan_run()
 check("Palo Alto: any other failure is reported per check, without the address", r["resources"].status == "ERROR" and r["resources"].message == "the device's API answered HTTP 500", r["resources"])
 from core.runner import run_one
 PA.requests.get = lambda url, params=None, headers=None, **kw: Resp(b'<response status="error" code="403"><result><msg>Invalid Credential</msg></result></response>', status=403)
-rows = run_one({"name": "pa", "vendor": "paloalto", "host": "127.0.0.1", "password": "KEY", "checkopts": "", "location": ""}, TH, {**OPTS, "retries": 3, "retry_delay": 0})
+rows = [r for r in run_one({"name": "pa", "vendor": "paloalto", "host": "127.0.0.1", "password": "KEY", "checkopts": "", "location": ""}, TH, {**OPTS, "retries": 3, "retry_delay": 0})
+        if r.check != "reachability"]                     # the TCP reachability row comes first, before the login
 check("in a run it is one 'connection' row, in words, not retried", len(rows) == 1 and rows[0].check == "connection" and rows[0].message.startswith("Palo Alto rejected the API key (Invalid Credential)") and "AuthRejected" not in rows[0].message, rows)
 PA.requests.get = pan_get
 

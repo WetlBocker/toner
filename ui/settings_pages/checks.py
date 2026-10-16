@@ -34,6 +34,7 @@ class CheckDialog(QDialog):
         self.seconds, self.streams = spin(1, 3600, " s"), spin(1, 128)
         self.seconds.setValue(10)
         self.reverse, self.udp = QCheckBox("Download (the server sends)"), QCheckBox("UDP instead of TCP")
+        self.via_proxy = QCheckBox("Through the proxy (TCP)")
         self.bandwidth = QLineEdit()
         self.bandwidth.setPlaceholderText("UDP rate, e.g. 100M")
         self.warn, self.fail = QLineEdit(), QLineEdit()
@@ -47,7 +48,7 @@ class CheckDialog(QDialog):
         self.target_label = QLabel("Command")
         for label, w in (("Name", self.name), ("Kind", self.kind), (self.target_label, self.target), ("Port", self.port),
                          ("Test length", self.seconds), ("Streams", self.streams), ("", self.reverse), ("", self.udp),
-                         ("UDP rate", self.bandwidth), ("Answer is", self.mode), ("Pattern", self.parse), ("Expected status", self.expect),
+                         ("UDP rate", self.bandwidth), ("", self.via_proxy), ("Answer is", self.mode), ("Pattern", self.parse), ("Expected status", self.expect),
                          ("Direction", self.direction), ("WARN at", self.warn), ("FAIL at", self.fail),
                          ("Unit", self.unit), ("Applies to", self.scope), ("", self.enabled)):
             self.form.addRow(label, w)
@@ -88,6 +89,7 @@ class CheckDialog(QDialog):
             self.reverse.setChecked(bool(o.get("reverse")))
             self.udp.setChecked(bool(o.get("udp")))
             self.bandwidth.setText(o.get("bandwidth", ""))
+            self.via_proxy.setChecked(bool(o.get("tcp")))
         self.kind.currentIndexChanged.connect(self.adapt)
         self.mode.currentIndexChanged.connect(self.adapt)
         self.adapt()
@@ -102,6 +104,7 @@ class CheckDialog(QDialog):
         show(self.port, kind in ("tcp", "tls", "iperf"))
         for w in (self.seconds, self.streams, self.reverse, self.udp, self.bandwidth):
             show(w, kind == "iperf")
+        show(self.via_proxy, kind == "ping")
         text_kind = kind in ("ssh", "snmp", "http")
         show(self.mode, kind in ("ssh", "snmp") or kind == "http")
         show(self.parse, text_kind and (mode in ("match", "nomatch") or kind in ("ssh", "snmp")))
@@ -135,7 +138,8 @@ class CheckDialog(QDialog):
                               "History charts. It needs iperf3.exe (see Tools > Throughput).")
         elif kind == "ping":
             self.help.setText("Sends four pings from this computer. FAIL if none are answered, WARN on packet loss. "
-                              "Limits apply to the average time in milliseconds.")
+                              "Limits apply to the average time in milliseconds. Tick Through the proxy (TCP) to test "
+                              "devices behind a proxy with a TCP connection through it instead.")
         elif mode == "number":
             self.help.setText("The first number in the answer is compared with the limits. Use a pattern with one "
                               "( ) group to pick a different number, for example  free=(\\d+).")
@@ -158,7 +162,8 @@ class CheckDialog(QDialog):
                 "scope": self.scope.selected(), "enabled": int(self.enabled.isChecked()),
                 "options": {"seconds": self.seconds.value(), "streams": self.streams.value(),
                             "reverse": self.reverse.isChecked(), "udp": self.udp.isChecked(),
-                            "bandwidth": self.bandwidth.text().strip()} if kind == "iperf" else {}}
+                            "bandwidth": self.bandwidth.text().strip()} if kind == "iperf"
+                else {"tcp": True} if kind == "ping" and self.via_proxy.isChecked() else {}}
 
     def _check(self):
         try:

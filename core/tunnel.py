@@ -266,6 +266,19 @@ def _before_sign_in(t, cfg, err, timeout):
 
 
 # ---------------------------------------------------------------- the local end
+def _socks_reply(e):
+    """The SOCKS5 reply for a channel the SSH server would not open. OpenSSH says 'connect failed' for every failure and
+    puts the reason in the text, so 'Connection refused' (the device is up) is told apart from no answer."""
+    text = str(getattr(e, "text", "") or "").lower()
+    if e.code == 1:
+        return 2                                          # not allowed by the server's rules
+    if "refused" in text:
+        return 5                                          # the device answered and refused: it is up
+    if e.code == 2:
+        return 4                                          # timed out, no route: host unreachable
+    return 1
+
+
 def _recvn(s, n):
     out = b""
     while len(out) < n:
@@ -422,7 +435,7 @@ class Tunnel:
             try:
                 chan = self.client.get_transport().open_channel("direct-tcpip", (host, port), ("127.0.0.1", 0), timeout=15)
             except paramiko.ChannelException as e:
-                c.sendall(bytes([5, {1: 2, 2: 5}.get(e.code, 1), 0, 1, 0, 0, 0, 0, 0, 0]))     # not allowed / refused / failure
+                c.sendall(bytes([5, _socks_reply(e), 0, 1, 0, 0, 0, 0, 0, 0]))
                 return
             except (paramiko.SSHException, EOFError, OSError, AttributeError):
                 c.sendall(b"\x05\x01\x00\x01\x00\x00\x00\x00\x00\x00")

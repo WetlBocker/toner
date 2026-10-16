@@ -52,7 +52,12 @@ class ProxyError(OSError):
 
 
 class TargetRefused(ProxyError):
-    """The proxy is fine and signed us in, but would not open the connection to that address (down, or not allowed)."""
+    """The proxy is fine and signed us in, but would not open the connection to that address (down, or not allowed).
+    `code` is the SOCKS5 reply when there was one: 5 means the target itself refused, so it is up."""
+
+    def __init__(self, message, code=None):
+        super().__init__(message)
+        self.code = code
 
 
 @dataclass
@@ -300,7 +305,8 @@ def _socks5_connect(cfg, host, port, timeout):
         if rep[0] != 5:
             raise ProxyError(f"{cfg.label()} answered the request with {_shown(rep)}, which is not SOCKS5")
         if rep[1] != 0:
-            raise TargetRefused(f"{cfg.label()} would not connect to {host}:{port} ({SOCKS5_REFUSALS.get(rep[1], 'error 0x%02x' % rep[1])})")
+            raise TargetRefused(f"{cfg.label()} would not connect to {host}:{port} ({SOCKS5_REFUSALS.get(rep[1], 'error 0x%02x' % rep[1])})",
+                                rep[1])
         tail = {1: 4, 4: 16}.get(rep[3])
         if tail is None and rep[3] == 3:
             tail = _take(s, 1, cfg, "the connection request")[0]

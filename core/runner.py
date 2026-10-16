@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 
-from core import custom, db, profiles, support, vendors, winmon
+from core import checks, custom, db, profiles, reach, support, vendors, winmon
 from core.nettools import resolve_host
 from drivers import DRIVERS
 from drivers.base import AuthRejected, Driver, Result, ERROR
@@ -31,9 +31,21 @@ def sweepable(dev):
     return kind in ("ssh", "api", "snmp") or (kind == "windows" and winmon.transport(dev) == "winrm")
 
 
+def reachability(dev, opts):
+    """The Reachable row (a TCP connection to the management port, through the proxy when there is one), before the login."""
+    if dev["vendor"] not in reach.VENDORS or checks.key(dev["vendor"], "reachability") in opts.get("disabled", ()):
+        return []
+    try:
+        return [reach.row(dev, timeout=min(5, int(opts.get("ssh_timeout", 5)) or 5))]
+    except Exception:
+        quiet.ignored()
+        return []
+
+
 def run_one(dev, thresholds, opts=None):
     opts = opts or db.runtime_options()
     opts = {**opts, "disabled": db.disabled_for(dev, opts.get("disabled", ()))}      # the device's own list of checks, if it has one
+    pre = reachability(dev, opts)
     attempts = 1 + max(0, int(opts.get("retries", 0)))
     for attempt in range(1, attempts + 1):
         try:
@@ -49,14 +61,14 @@ def run_one(dev, thresholds, opts=None):
             if opts.get("tls_sweep") and sweepable(dev):
                 res += custom.sweep(dev, thresholds, opts.get("tls_sweep_ports", "443"))
             drv.flush_baselines()            # only after a complete run
-            return res
+            return pre + res
         except Exception as e:
             if attempt < attempts and _transient(e):
                 time.sleep(max(0, int(opts.get("retry_delay", 0))))
                 continue
             tail = f" (after {attempt} attempts)" if attempt > 1 else ""
             said = str(e) if isinstance(e, AuthRejected) else Driver.explain(e)          # a rejected key already says so in words; an HTTP error names its code, not the long address
-            rows = [Result(dev["name"], "connection", ERROR, "", f"{said}{tail}")]
+            rows = pre + [Result(dev["name"], "connection", ERROR, "", f"{said}{tail}")]
             try:                                   # web, port, certificate and ping checks do not need the login
                 rows += custom.run_network(dev, [c for c in custom.for_device(dev, opts.get("custom"))
                                                  if c["kind"] in ("http", "tcp", "tls", "ping", "iperf")])

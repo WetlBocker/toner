@@ -272,6 +272,8 @@ def cert_info(der):
 
 
 def run_ping(chk, dev, timeout=8):
+    if (chk.get("options") or {}).get("tcp") and proxy.for_device(dev, dev["host"]):
+        return _ping_by_tcp(chk, dev)
     r = subprocess.run(["ping", "-n", "4", "-w", "1500", dev["host"]], capture_output=True, text=True,
                        timeout=timeout + 8, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     out = r.stdout or ""
@@ -285,6 +287,18 @@ def run_ping(chk, dev, timeout=8):
     if loss and res.status == OK:
         res.status = WARN
     res.message = f"{loss}% loss" if loss else ""
+    return res
+
+
+def _ping_by_tcp(chk, dev):
+    """Through the proxy (TCP): ICMP cannot go through a proxy, so a device behind one is tested with a TCP connection to
+    its management port through it. A connection the device refuses still means it is up."""
+    from core import reach
+    p = reach.probe(dev)
+    if not p.up:
+        return Result(dev["name"], chk["name"], FAIL, "no answer", f"port {p.port} did not answer through the proxy: {p.reason}")
+    res = _measured({**chk, "higher_worse": 1}, dev["name"], p.ms, " ms")
+    res.message = f"TCP to port {p.port} through the proxy (ICMP cannot go through it)"
     return res
 
 

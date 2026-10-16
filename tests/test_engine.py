@@ -139,19 +139,20 @@ class Flaky:
         return [R.Result("flaky", "cpu", "OK", "1%")]
     def flush_baselines(self): pass
 R.DRIVERS["cisco"] = Flaky
-res = run_one(dev("flaky", "cisco"), th, {"retries": 2, "retry_delay": 0}); check("2 retries recover from timeouts", res[0].status == "OK" and len(calls) == 3, (res, len(calls)))
-calls.clear(); res = run_one(dev("flaky", "cisco"), th, {"retries": 1, "retry_delay": 0}); check("gives up after retries, says so", res[0].status == "ERROR" and "after 2 attempts" in res[0].message and len(calls) == 2, res[0].message)
+res = run_one(dev("flaky", "cisco"), th, {"retries": 2, "retry_delay": 0}); row = lambda res, k: next(r for r in res if r.check == k)
+check("2 retries recover from timeouts", row(res, "cpu").status == "OK" and len(calls) == 3, (res, len(calls)))
+calls.clear(); res = run_one(dev("flaky", "cisco"), th, {"retries": 1, "retry_delay": 0}); check("gives up after retries, says so", row(res, "connection").status == "ERROR" and "after 2 attempts" in row(res, "connection").message and len(calls) == 2, res)
 from netmiko.exceptions import NetmikoAuthenticationException
 class BadLogin:
     n = 0
     def __init__(self, *a): pass
     def run(self): BadLogin.n += 1; raise NetmikoAuthenticationException("denied")
 R.DRIVERS["cisco"] = BadLogin
-res = run_one(dev("x", "cisco"), th, {"retries": 3, "retry_delay": 0}); check("a rejected login is NEVER retried", BadLogin.n == 1 and res[0].status == "ERROR", BadLogin.n)
+res = run_one(dev("x", "cisco"), th, {"retries": 3, "retry_delay": 0}); check("a rejected login is NEVER retried", BadLogin.n == 1 and row(res, "connection").status == "ERROR", BadLogin.n)
 class DnsFail:
     def __init__(self, *a): raise AssertionError("driver must not be built when DNS fails")
 R.DRIVERS["cisco"] = DnsFail
-res = run_one(dev("x", "cisco", host="no-such-host.invalid"), th, {"retries": 2, "retry_delay": 0}); check("DNS failure reported without retry", "DNS lookup failed" in res[0].message)
+res = run_one(dev("x", "cisco", host="no-such-host.invalid"), th, {"retries": 2, "retry_delay": 0}); check("DNS failure reported without retry", "DNS lookup failed" in row(res, "connection").message, res)
 
 print("== run_all with per-device thresholds")
 seen_th = {}
