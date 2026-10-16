@@ -5,6 +5,7 @@ session open, and forwards connections through it. Everything else in Toner talk
 that belongs to the tunnel, so SSH, web requests and notifications all go through it the same way as through any proxy.
 The listener is on 127.0.0.1 only and wants a random user name and password, so no other program can use the tunnel.
 """
+import logging
 import secrets
 import socket
 import struct
@@ -16,6 +17,7 @@ import paramiko
 
 from core import db, nettools, quiet
 from core import proxy
+from core.version import VERSION
 
 OTP_WORDS = ("otp", "one-time", "one time", "verification", "passcode", "yubi", "token", "code", "authenticator", "duo", "press", "touch")
 
@@ -25,6 +27,11 @@ _open_lock = threading.Lock()       # one sign-in at a time, so two checks do no
 
 def _key(cfg):
     return (cfg.host, cfg.port, cfg.username)
+
+
+def _note(text):
+    """A line in ssh-tunnel.log (see _SignInLog). Never a password, passphrase or code."""
+    logging.getLogger("paramiko.toner.tunnel").info("TONER: %s", text)
 
 
 # ---------------------------------------------------------------- signing in
@@ -42,11 +49,14 @@ def _handler(cfg, errors):
     without a word, so a problem is kept in `errors` (and an empty answer given) for `_login` to raise."""
     def answer(title, instructions, prompts):
         out = []
+        _note(f"the server asks {len(prompts)} question(s): " + " | ".join(repr(p[0]) for p in prompts)
+              + (f" (title {title!r})" if title else "") + (f" (instructions {instructions!r})" if instructions else ""))
         try:
             for text, _echo in prompts:
                 low = text.lower()
-                if any(w in low for w in OTP_WORDS):
-                    out.append(proxy.one_time_code(replace(cfg, otp=cfg.otp or "ask"), prompt=text, reuse=False))
+                if any(w in low for w in OTP_WORDS):            # with the server's own instructions (Duo lists its options)
+                    said = "\n".join(x for x in (instructions.strip(), text.strip()) if x)
+                    out.append(proxy.one_time_code(replace(cfg, otp=cfg.otp or "ask"), prompt=said, reuse=False))
                 elif "password" in low and cfg.password:
                     out.append(cfg.password)
                 elif "password" in low:
@@ -133,11 +143,13 @@ def _login(t, cfg):
         if not t.is_active():
             raise _closed(t, cfg, "none") from None
         remaining = None
+    _note(f"the server takes: {', '.join(remaining) if remaining else '(it did not say)'}")
     for _ in range(6):
         kind = next((k for k in wanted if k not in done and (remaining is None or k in remaining)), None)
         if kind is None:
             break
         done.add(kind)
+        _note(f"trying {kind}")
         if not t.is_active():
             raise _closed(t, cfg, kind, errors)
         try:
@@ -150,6 +162,7 @@ def _login(t, cfg):
                 remaining = t.auth_interactive(cfg.username, handler)
         except paramiko.BadAuthenticationType as e:
             remaining = list(e.allowed_types)                 # not that way yet: the server says which ways it takes
+            _note(f"{kind} is not taken now; the server takes: {', '.join(remaining)}")
             done.discard(kind)                                # (it may want this one later, after the other)
             if kind in remaining:                             # it says it takes it after all: do not go round in circles
                 done.add(kind)
@@ -167,6 +180,7 @@ def _login(t, cfg):
             if not t.is_active():
                 raise _closed(t, cfg, kind, errors) from None
             raise proxy.ProxyError(f"{cfg.label()}: {e}") from None
+        _note(f"{kind} accepted" + (f"; the server also wants: {', '.join(remaining)}" if remaining else ""))
         if not remaining:
             return
     if t.is_authenticated():
@@ -176,6 +190,70 @@ def _login(t, cfg):
                                f"in ~/.ssh/authorized_keys for that user on the server")
     raise proxy.ProxyError(f"{cfg.label()} did not accept the sign-in"
                            + (f"; it still wants {', '.join(remaining)}, which Toner cannot do" if remaining else ""))
+
+
+# ---------------------------------------------------------------- what happened, for when it does not work
+LOG_CHANNEL = "paramiko.toner.tunnel"
+
+
+logging.getLogger(LOG_CHANNEL).addHandler(logging.NullHandler())     # outside a sign-in, nothing is printed anywhere
+
+
+def log_path():
+    return db.db_path().parent / "ssh-tunnel.log"
+
+
+class _SignInLog:
+    """Writes the last sign-in (paramiko's own step-by-step log plus Toner's notes) to ssh-tunnel.log, replacing the one
+    before. It says which algorithms were agreed, which sign-in methods the server offered and what it asked; it never
+    holds a password, passphrase or code, because neither paramiko nor Toner logs those."""
+
+    def __init__(self, cfg):
+        self.cfg, self.handler = cfg, None
+        self.logger = logging.getLogger(LOG_CHANNEL)
+
+    def __enter__(self):
+        try:
+            self.handler = logging.FileHandler(log_path(), mode="w", encoding="utf-8")
+            self.handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+            self.logger.addHandler(self.handler)
+            self.logger.setLevel(logging.DEBUG)
+            self.logger.propagate = False
+        except OSError:
+            self.handler = None
+        self.note(f"Toner {VERSION}, paramiko {paramiko.__version__}: SSH tunnel to {self.cfg.host}:{self.cfg.port} as "
+                  f"{self.cfg.username or '(no user name)'}" + (", with a key file" if self.cfg.key_file else "")
+                  + (", one-time code: " + self.cfg.otp if self.cfg.otp else ""))
+        return self
+
+    def note(self, text):
+        self.logger.info("TONER: %s", text)
+
+    def failed(self, err):
+        self.logger.error("TONER: failed: %s", err)
+
+    def where(self):
+        return f"The steps were written to {log_path()}" if self.handler else ""
+
+    def __exit__(self, *exc):
+        if self.handler:
+            self.logger.removeHandler(self.handler)
+            self.handler.close()
+        return False
+
+
+def _before_sign_in(t, cfg, err, timeout):
+    """paramiko says 'No existing session' when the SSH key exchange (the step before any sign-in) did not finish: the
+    server hung up during it, or it took too long. Say which, and why if the transport knows."""
+    why = t.get_exception() if t is not None else None
+    why = f" ({why})" if why is not None and str(why) and str(why) != str(err) else ""
+    if "No existing session" not in str(err):
+        return f"{cfg.label()}: {err}{why}"
+    if t is not None and t.is_active():
+        return (f"{cfg.label()} did not finish the SSH key exchange within {timeout} seconds, so Toner never got as far as "
+                f"sending the user name{why}. The server, or something between (a firewall inspecting SSH), may be stalling it")
+    return (f"{cfg.label()} closed the connection during the SSH key exchange, before Toner sent the user name{why}. "
+            f"The server may not accept the algorithms Toner offers, or may refuse this computer's address")
 
 
 # ---------------------------------------------------------------- the local end
@@ -230,23 +308,30 @@ class Tunnel:
         self.since = None
 
     # ------------------------------------------------------------ open and close
-    def open(self, timeout=20):
+    def open(self, timeout=30):
         cfg = self.cfg
         client = _Client()
         nettools.configure_hostkeys(client, db.get_setting("hostkey_mode"))
         client.login = lambda t: _login(t, cfg)
-        try:
-            client.connect(cfg.host, port=cfg.port, username=cfg.username or "", timeout=timeout, banner_timeout=timeout,
-                           auth_timeout=120, allow_agent=False, look_for_keys=False)
-        except proxy.ProxyError:
-            client.close()
-            raise
-        except (paramiko.SSHException, EOFError) as e:
-            client.close()
-            raise proxy.ProxyError(f"{cfg.label()}: {e}") from None
-        except OSError as e:
-            client.close()
-            raise proxy.ProxyError(f"could not reach the proxy {cfg.label()}: {str(e) or type(e).__name__}") from None
+        client.set_log_channel(LOG_CHANNEL)
+        with _SignInLog(cfg) as trail:
+            try:
+                client.connect(cfg.host, port=cfg.port, username=cfg.username or "", timeout=timeout, banner_timeout=timeout,
+                               auth_timeout=120, allow_agent=False, look_for_keys=False)
+            except proxy.ProxyError as e:
+                trail.failed(e)
+                client.close()
+                raise proxy.ProxyError(f"{e}. {trail.where()}") from None
+            except (paramiko.SSHException, EOFError) as e:
+                msg = _before_sign_in(client.get_transport(), cfg, e, timeout)
+                trail.failed(msg)
+                client.close()
+                raise proxy.ProxyError(f"{msg}. {trail.where()}") from None
+            except OSError as e:
+                trail.failed(e)
+                client.close()
+                raise proxy.ProxyError(f"could not reach the proxy {cfg.label()}: {str(e) or type(e).__name__}") from None
+            trail.note("signed in; the tunnel is open")
         t = client.get_transport()
         t.set_keepalive(30)
         ls = socket.socket()

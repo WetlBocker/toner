@@ -223,7 +223,9 @@ for a one-time code or a YubiKey touch after your user name). Toner signs in ove
 code or touch; the saved password answers a password question), keeps the session open and sends connections through it.
 It can also sign in with a **key file** (OpenSSH or PEM: RSA, ECDSA, Ed25519); the Password box is then the key's passphrase,
 and Toner asks for it when the key is protected and none is saved. A PuTTY `.ppk` key must be exported to OpenSSH format in
-PuTTYgen first. A server that wants a key and then a code gets both. The
+PuTTYgen first. A server that wants a key and then a code gets both. Each sign-in is written step by step to `ssh-tunnel.log`
+next to Toner's data (the algorithms agreed, the methods the server offered, the questions it asked; never a password,
+passphrase or code), and a failed sign-in says where it stopped. The
 status strip shows it as connected or disconnected; click it when it is disconnected to sign in. The tunnel's listener is on this
 computer only and has a random password of its own. A tunnel signed in with a YubiKey cannot reconnect by itself, so scheduled
 checks need it to be open already, or a code made from a secret key.

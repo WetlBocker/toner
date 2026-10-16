@@ -43,9 +43,11 @@ class ProxyPage(Page):
         self.otp_key.setEchoMode(QLineEdit.EchoMode.Password)
         self.otp_note = note("")
         self.tunnel_note = note("An SSH tunnel does what ssh -D does: Toner signs in to this SSH server and sends its connections through "
-                                "it. The user name and password are the SSH ones. When the server asks for a one-time code or a "
-                                "YubiKey touch, a box appears. Keep the tunnel's login within reach: checks that run by themselves "
-                                "cannot touch a YubiKey, so they need the tunnel to be open already or a code made from a secret key.")
+                                "it, like PuTTY's Dynamic port forwarding (no PuTTY needed). The user name and password are the "
+                                "ones you use with PuTTY. When the server asks for a one-time code, a Duo option (type 1 for a "
+                                "push, then approve it) or a YubiKey touch, a box appears; a server that sends a Duo push by itself "
+                                "just waits for you to approve it. Checks that run by themselves cannot approve a push or touch a "
+                                "YubiKey, so they use the tunnel while it is open.")
         self.tunnel_close = QPushButton("Close the tunnel")
         self.tunnel_close.setToolTip("Disconnect the SSH session; the next connection signs in again")
         self.key_file = QLineEdit()

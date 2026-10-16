@@ -389,9 +389,16 @@ def one_time_code(cfg, prompt="", reuse=True):
     hit = _codes.get(key) if reuse else None
     if hit and time.time() - hit[1] < CODE_REUSE_SECONDS:
         return hit[0]
-    code = ask_text(cfg, "One-time code", f"{cfg.label()} asks for a one-time code" + (f" for {cfg.username}" if cfg.username else "")
-                    + (f" ({prompt.strip()})" if prompt.strip() else "")
-                    + ".\nType the current code from your authenticator app, or touch your YubiKey.")
+    said = prompt.strip()
+    duo = any(w in said.lower() for w in ("duo", "option", "push"))
+    if "\n" in said:                                   # a menu, such as Duo's list of options: show it as it is
+        text = f"{cfg.label()} asks for a second step" + (f" for {cfg.username}" if cfg.username else "") + ":\n\n" + said
+    else:
+        text = (f"{cfg.label()} asks for a one-time code" + (f" for {cfg.username}" if cfg.username else "")
+                + (f" ({said})" if said else "") + ".")
+    text += ("\n\nType a passcode, or the number of an option (for example 1 for Duo Push) and then approve it on your phone."
+             if duo else "\nType the current code from your authenticator app, or touch your YubiKey.")
+    code = ask_text(cfg, "One-time code", text)
     if not code:
         raise ProxyError(f"{cfg.label()}: no one-time code was entered")
     if reuse:

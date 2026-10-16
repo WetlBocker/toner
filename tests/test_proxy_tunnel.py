@@ -30,6 +30,8 @@ QMessageBox.information = staticmethod(lambda *a, **k: None)
 
 KEY = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
 HOSTKEY = paramiko.ECDSAKey.generate()
+DUO_MENU = ("Duo two-factor login for joe\n\nEnter a passcode or select one of the following options:\n\n"
+            " 1. Duo Push to XXX-XXX-1234\n 2. Phone call to XXX-XXX-1234\n 3. SMS passcodes to XXX-XXX-1234\n\nPasscode or option (1-3): ")
 
 
 def pipe(a, b):
@@ -72,6 +74,7 @@ class Auth(paramiko.ServerInterface):
     def get_allowed_auths(self, u): return self.now
     def check_auth_password(self, u, p):
         self.box.log.append(("password", u, p))
+        if "password" not in self.now: return paramiko.AUTH_FAILED                   # what a real server does
         if self.box.pw is not None and p == self.box.pw:
             if self.box.code is None: return paramiko.AUTH_SUCCESSFUL
             self.now = "keyboard-interactive"; return paramiko.AUTH_PARTIALLY_SUCCESSFUL
@@ -84,6 +87,9 @@ class Auth(paramiko.ServerInterface):
         return paramiko.AUTH_FAILED
     def check_auth_interactive(self, u, sub):
         if "keyboard-interactive" not in self.now: return paramiko.AUTH_FAILED          # what a real server does
+        if self.box.duo:                                                                # PAM: the password, then Duo
+            self.stage = 0
+            return paramiko.server.InteractiveQuery("", "", ("Password: ", False))
         return paramiko.server.InteractiveQuery("", "", (self.box.prompt, False))
     def check_auth_none(self, u):
         self.box.log.append(("none", u))
@@ -92,6 +98,18 @@ class Auth(paramiko.ServerInterface):
     def check_auth_interactive_response(self, responses):
         want = self.box.code() if callable(self.box.code) else self.box.code
         self.box.log.append(("answer", list(responses)))
+        if self.box.duo and self.stage == 0:
+            if list(responses) != [self.box.pw]:
+                if self.box.strict: threading.Timer(0.05, self.t.close).start()
+                return paramiko.AUTH_FAILED
+            self.stage = 1
+            if self.box.duo == "autopush":
+                time.sleep(1.5); return paramiko.AUTH_SUCCESSFUL                       # waits while the push is approved
+            return paramiko.server.InteractiveQuery("", "", (DUO_MENU, True))
+        if self.box.duo:
+            if list(responses) == ["1"]: time.sleep(0.5); return paramiko.AUTH_SUCCESSFUL
+            if self.box.strict: threading.Timer(0.05, self.t.close).start()
+            return paramiko.AUTH_FAILED
         if list(responses) == [want]: return paramiko.AUTH_SUCCESSFUL
         if self.box.strict: threading.Timer(0.05, self.t.close).start()
         return paramiko.AUTH_FAILED
@@ -103,9 +121,10 @@ class Auth(paramiko.ServerInterface):
 class SshBox(Server):
     """An SSH server: `first` says what it takes first, `pw` a password (then the code), `code` the one-time code."""
     def __init__(self, code="482913", pw=None, first="keyboard-interactive", prompt="Verification code: ", refuse=(), keys=(),
-                 strict=False, hangup=False):
+                 strict=False, hangup=False, duo=False):
         self.code, self.pw, self.first, self.prompt, self.refuse, self.keys = code, pw, first, prompt, set(refuse), set(keys)
         self.strict, self.hangup = strict, hangup                  # hang up after a wrong answer / as soon as sign-in starts
+        self.duo = duo                                             # True: password then Duo's menu; "autopush": password, then wait
         super().__init__()
     def handle(self, c):
         t = paramiko.Transport(c); t.add_server_key(HOSTKEY); srv = Auth(self); srv.t = t; t.start_server(server=srv)
@@ -408,6 +427,56 @@ check("a wrong code on such a server is reported plainly, not as 'No existing se
 st3 = SshBox(hangup=True); answers[:] = ["482913"]
 good, msg = reach(cfg_for(st3, otp="ask"))
 check("a server that hangs up as the sign-in starts says so", not good and "No existing session" not in msg and "closed the connection" in msg, msg)
+tunnel.close_all()
+
+print("== a server that stops before the sign-in (\"No existing session\" from the key exchange)")
+class Stall(Server):
+    """Sends an SSH banner and then nothing: the key exchange never finishes."""
+    def handle(self, c):
+        c.sendall(b"SSH-2.0-OpenSSH_9.6\r\n"); time.sleep(8); c.close()
+class AfterKex(Server):
+    """Finishes the key exchange and hangs up straight away."""
+    def handle(self, c):
+        t = paramiko.Transport(c); t.add_server_key(HOSTKEY); ev = threading.Event()
+        t.start_server(event=ev, server=paramiko.ServerInterface()); ev.wait(5); t.close()
+st5 = Stall(); tun5 = tunnel.Tunnel(cfg_for(st5, otp="ask"))
+try: tun5.open(timeout=2); m5 = ""
+except proxy.ProxyError as e: m5 = str(e)
+check("a key exchange that never finishes is said to be that, not 'No existing session'", "did not finish the SSH key exchange within 2 seconds" in m5
+      and "never got as far as sending the user name" in m5 and "No existing session" not in m5, m5)
+check("and the error says where the steps were written", str(tunnel.log_path()) in m5, m5)
+log5 = tunnel.log_path().read_text(encoding="utf-8")
+check("the log names the server, the version and what happened", f"127.0.0.1:{st5.port} as joe" in log5 and "TONER: failed" in log5 and "key exchange" in log5, log5[-400:])
+st6 = AfterKex(); tun6 = tunnel.Tunnel(cfg_for(st6, otp="ask"))
+try: tun6.open(timeout=5); m6 = ""
+except proxy.ProxyError as e: m6 = str(e)
+check("a server that hangs up after the key exchange says so", ("closed the connection during the SSH key exchange" in m6 or "closed the connection before Toner could sign in" in m6)
+      and "No existing session" not in m6, m6)
+st7 = SshBox(pw="s3cret", first="password"); answers[:] = ["482913"]
+good, msg = reach(cfg_for(st7, password="s3cret", otp="ask"))
+log7 = tunnel.log_path().read_text(encoding="utf-8")
+check("a good sign-in is logged step by step: what the server takes, what was tried, what it asked", good and "the server takes: password" in log7
+      and "trying password" in log7 and "password accepted; the server also wants: keyboard-interactive" in log7 and "'Verification code: '" in log7, log7[-800:])
+check("the log has the SSH library's own steps too (algorithms agreed)", "Kex" in log7 or "kex" in log7, log7[:600])
+check("and never the password or the code", "s3cret" not in log7 and "482913" not in log7)
+tunnel.close_all()
+
+print("== domain password and Duo, as in the PuTTY instructions")
+proxy.set_code_prompt(hook); proxy.WAIT_HOOK = None
+d1 = SshBox(duo=True, pw="Domain#pw", strict=True); answers[:] = ["1"]; asked.clear()
+good, msg = reach(cfg_for(d1, password="Domain#pw", otp="ask"))
+answers_sent = [l[1] for l in d1.log if l[0] == "answer"]
+check("the saved password answers 'Password:', and Duo's question is asked of you", good and answers_sent == [["Domain#pw"], ["1"]] and len(asked) == 1, (msg, answers_sent, asked))
+check("the box shows Duo's own options and says to type 1 for a push", "1. Duo Push to XXX-XXX-1234" in asked[0][1] and "1 for Duo Push" in asked[0][1], asked[0][1] if asked else "")
+check("the password is never typed into Duo's question", ["Domain#pw"] not in answers_sent[1:])
+tunnel.close_all()
+d2 = SshBox(duo="autopush", pw="Domain#pw", strict=True); answers[:] = []; asked.clear()
+good, msg = reach(cfg_for(d2, password="Domain#pw", otp="ask"))
+check("a server that sends the push by itself is simply waited for, with nothing asked", good and not asked, (msg, asked))
+tunnel.close_all()
+d3 = SshBox(duo=True, pw="Domain#pw", strict=True); answers[:] = ["Domain#pw", "1"]; asked.clear()
+good, msg = reach(cfg_for(d3, otp="ask"))
+check("with no saved password, it asks for the password (hidden), then Duo", good and [a[0] for a in asked] == ["Password", "One-time code"] and asked[0][2] is True, (msg, asked))
 tunnel.close_all()
 
 print("== the Test button, with the real question box")
