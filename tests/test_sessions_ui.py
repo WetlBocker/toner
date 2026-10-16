@@ -313,7 +313,7 @@ print("== a Serial session, end to end")
 sid_s = [x for x in sessions.list_sessions() if x["kind"] == "serial"][0]["id"]
 st.open_session(sid_s); p5 = st.tabs.currentWidget(); pump(lambda: p5.connected())
 check("a serial tab has a Send break button, and the others do not", not p5.break_btn.isHidden() and p5.break_btn.isEnabled() and p5.kind == "serial")
-p5.term.data_out.emit(b"enable\r"); pump(lambda: "enable" in screen(p5))
+p5.term.data_out.emit(b"enable\r"); pump(lambda: "enable" in screen(p5), 750)      # up to 15 s: the loopback echo can be slow on CI
 check("what you type goes out the port (a loopback sends it straight back)", "enable" in screen(p5), screen(p5))
 p5.break_btn.click(); check("Send break does no harm", p5.connected())
 check("the log says Serial, and shows the port", [x for x in sessionlog.list_sessions() if x["kind"] == "serial"] and "Opening loop://" in screen(p5) or "loop://" in p5.status.text())
