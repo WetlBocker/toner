@@ -109,6 +109,14 @@ class DeviceDialog(QDialog):
         self.proxy_port.setRange(1, 65535)
         self.proxy_port.setValue(8080)
         self.proxy_mode.currentIndexChanged.connect(lambda *_: self._proxy_rows())
+        self._proxy_kind_was = self.proxy_kind.currentData()
+
+        def kind_changed(*_):
+            new = self.proxy_kind.currentData()
+            if self.proxy_port.value() == proxy.DEFAULT_PORTS.get(self._proxy_kind_was):
+                self.proxy_port.setValue(proxy.DEFAULT_PORTS.get(new, self.proxy_port.value()))
+            self._proxy_kind_was = new
+        self.proxy_kind.currentIndexChanged.connect(kind_changed)
         self.win_auth = QComboBox()
         for k, label in winmon.AUTHS:
             self.win_auth.addItem(label, k)
@@ -155,10 +163,10 @@ class DeviceDialog(QDialog):
                                              ("Details", self.details), ("", self.enabled)))
         self.page_access, self.access = page((("Credential profile", self.profile), ("Username", self.username), ("SSH password", self.ssh_pw),
                                               ("Password", self.secret), ("", self.get_key), ("Site", self.site),
-                                              ("Jump host", self.jump), ("Proxy", self.proxy_mode), ("Proxy type", self.proxy_kind),
-                                              ("Proxy address", self.proxy_host), ("Proxy port", self.proxy_port),
-                                              ("Proxy user", self.proxy_user), ("Proxy password", self.proxy_pw),
-                                              ("One-time code", self.proxy_otp), ("Secret key", self.proxy_otp_key),
+                                              ("Jump host", self.jump), ("Proxy", self.proxy_mode), ("Proxy Type", self.proxy_kind),
+                                              ("Proxy Address", self.proxy_host), ("Proxy Port", self.proxy_port),
+                                              ("Proxy User", self.proxy_user), ("Proxy Password", self.proxy_pw),
+                                              ("One-Time Code", self.proxy_otp), ("Secret Key", self.proxy_otp_key),
                                               ("", self.verify), ("", self.ha)))
         self.page_snmp = QWidget()
         sl = QVBoxLayout(self.page_snmp)

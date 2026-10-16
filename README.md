@@ -212,11 +212,18 @@ announced and a fixed one is reported as recovered.
 
 ### Proxy
 
-Settings > Proxy sends Toner's connections through an HTTP (CONNECT), SOCKS5 or SOCKS4 proxy, with an optional user name and
+Settings > Proxy sends Toner's connections through an HTTP (CONNECT), SOCKS5, SOCKS4 or SSH tunnel proxy, with an optional user name and
 password and a "do not use it for" list (names, `*.corp.example.com`, addresses, networks). Choose no proxy, the Windows proxy
 settings (web connections only), or one you enter; a **Test** button tries it. Any device can override it on its Access tab. SSH,
 the vendor APIs, status pages, web / port / certificate checks and notifications use it; SNMP, ping, traceroute, the listeners and
 the file servers use UDP or ICMP or listen for connections, so they never do.
+
+**SSH tunnel** is for a "proxy" that is really an SSH server you use with `ssh -D` (it greets you with an SSH banner, and may ask
+for a one-time code or a YubiKey touch after your user name). Toner signs in over SSH, answers the questions (a box appears for a
+code or touch; the saved password answers a password question), keeps the session open and sends connections through it. The
+status strip shows it as connected or disconnected; click it when it is disconnected to sign in. The tunnel's listener is on this
+computer only and has a random password of its own. A tunnel signed in with a YubiKey cannot reconnect by itself, so scheduled
+checks need it to be open already, or a code made from a secret key.
 
 For a proxy with two-step sign-in, set **One-time code**: Toner adds the current code to the end of the password (or sends it alone
 when there is no password). **Ask me for it when connecting** shows a box for the code; **Make it from a secret key** works the

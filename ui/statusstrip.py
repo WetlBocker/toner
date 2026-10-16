@@ -9,7 +9,7 @@ from datetime import datetime
 from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QProgressBar, QWidget
 
-from core import agents, db, display, notify, proxy
+from core import agents, db, display, notify, proxy, tunnel
 from ui import status as st
 from ui import theme
 
@@ -31,14 +31,17 @@ class Part(QLabel):
 class StatusStrip(QWidget):
     navigate = Signal(str, str)                 # (section, settings page or "")
     probed = Signal(object)                     # (proxy "host:port", answers, message), from the thread that asked it
+    tunnel_done = Signal(str)                   # the sign-in to an SSH tunnel ended: "" or why it did not work
 
     def __init__(self, main):
         super().__init__()
         self.main = main
         self.setObjectName("statusStrip")
         self.probe_state, self._probing = None, False
+        self.opening, self.tunnel_error = False, ""
         self.proxy = Part()
         self.probed.connect(self._on_probe)
+        self.tunnel_done.connect(self._on_tunnel_done)
         self.run, self.schedule, self.backups, self.receiver, self.notify = Part(), Part(), Part(), Part(), Part()
         self.progress = QProgressBar()
         self.progress.setMaximumWidth(160)
@@ -57,7 +60,7 @@ class StatusStrip(QWidget):
                 dot.setProperty("muted", True)
                 lay.addWidget(dot)
             lay.addWidget(w)
-        self.proxy.clicked.connect(lambda: self.navigate.emit("Settings", "Proxy"))
+        self.proxy.clicked.connect(self._proxy_clicked)
         self.run.clicked.connect(lambda: self.navigate.emit("Results", ""))
         self.schedule.clicked.connect(lambda: self.navigate.emit("Settings", "Checks/Schedule"))
         self.backups.clicked.connect(lambda: self.navigate.emit("Settings", "Config backups"))
@@ -86,11 +89,33 @@ class StatusStrip(QWidget):
         """Ask the proxy chosen in Settings whether it answers, off the main thread. A proxy is not a standing connection (each
         check opens its own), so this is: does it answer now, and did the last real connection through it work."""
         cfg = proxy.global_config()
-        if cfg is None or self._probing:
+        if cfg is None or self._probing or cfg.kind == "tunnel":           # a tunnel is open or not: nothing to ask it
             return
         self._probing = True
         key = f"{cfg.host}:{cfg.port}"
         threading.Thread(target=lambda: self.probed.emit((key, *proxy.probe(cfg))), daemon=True).start()
+
+    def _proxy_clicked(self):
+        """A tunnel that is down is signed in to from here (it may ask for a code); anything else opens its settings."""
+        cfg = proxy.global_config(full=True)
+        if cfg is None or cfg.kind != "tunnel" or tunnel.is_open(cfg) or self.opening:
+            self.navigate.emit("Settings", "Proxy")
+            return
+        self.opening, self.tunnel_error = True, ""
+        self.refresh()
+
+        def work():
+            err = ""
+            try:
+                tunnel.get(cfg)
+            except OSError as e:
+                err = str(e)
+            self.tunnel_done.emit(err)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_tunnel_done(self, err):
+        self.opening, self.tunnel_error = False, err
+        self.refresh()
 
     def _on_probe(self, result):
         self._probing = False
@@ -109,11 +134,18 @@ class StatusStrip(QWidget):
                 return "Proxy: Windows settings", f"{proxy.system_text()}. Web connections follow the Windows proxy. Settings > Proxy"
             return "No proxy", "Connections go directly. Settings > Proxy"
         key = f"{cfg.host}:{cfg.port}"
+        dot = lambda word: f"<span style='color:{st.ink(word)}'>&#9679;</span>"
+        if cfg.kind == "tunnel":
+            if self.opening:
+                return "Proxy: signing in...", f"Signing in to {cfg.label()}"
+            if tunnel.is_open(cfg):
+                return f"{dot('OK')} Proxy connected", f"{cfg.label()} is open. Click to open Settings > Proxy."
+            why = f" The last try failed: {self.tunnel_error}." if self.tunnel_error else ""
+            return f"{dot('FAIL')} Proxy disconnected", f"{cfg.label()} is not open.{why} Click to sign in."
         st_ = self.probe_state if self.probe_state and self.probe_state[0] == key else None
         if st_ is None:
             return "Proxy: checking...", f"Asking {cfg.label()} whether it answers"
         _k, answers, msg, at = st_
-        dot = lambda word: f"<span style='color:{st.ink(word)}'>&#9679;</span>"
         if not answers:
             return f"{dot('FAIL')} Proxy disconnected", f"{msg}. Settings > Proxy"
         last = proxy.last_result(cfg)

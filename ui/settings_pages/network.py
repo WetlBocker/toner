@@ -41,6 +41,12 @@ class ProxyPage(Page):
         self.otp.setToolTip("For a proxy with two-step sign-in: the current code from an authenticator app is added to the end of the password.")
         self.otp_key.setEchoMode(QLineEdit.EchoMode.Password)
         self.otp_note = note("")
+        self.tunnel_note = note("An SSH tunnel does what ssh -D does: Toner signs in to this SSH server and sends its connections through "
+                                "it. The user name and password are the SSH ones. When the server asks for a one-time code or a "
+                                "YubiKey touch, a box appears. Keep the tunnel's login within reach: checks that run by themselves "
+                                "cannot touch a YubiKey, so they need the tunnel to be open already or a code made from a secret key.")
+        self.tunnel_close = QPushButton("Close the tunnel")
+        self.tunnel_close.setToolTip("Disconnect the SSH session; the next connection signs in again")
         self.system = note("")
         self.test_to = QLineEdit("www.githubstatus.com:443")
         self.test_btn = QPushButton("Test")
@@ -49,20 +55,23 @@ class ProxyPage(Page):
         self._forget = False
         self._have_key = False
         self.manual = [self.kind, self.host, self.port, self.user, self.password, self.forget, self.bypass, self.otp, self.otp_key]
-        self.form.addRow("Connections go", self.mode)
+        self.form.addRow("Connections Go", self.mode)
         self.form.addRow("", self.system)
-        self.form.addRow("Proxy type", self.kind)
+        self.form.addRow("Proxy Type", self.kind)
+        self.form.addRow("", self.tunnel_note)
+        self.tunnel_close_row = row_of(self.tunnel_close)
+        self.form.addRow("", self.tunnel_close_row)
         self.form.addRow("Address", self.host)
         self.form.addRow("Port", self.port)
-        self.form.addRow("User name", self.user)
+        self.form.addRow("User Name", self.user)
         self.form.addRow("Password", self.password)
         self.form.addRow("", row_of(self.forget))
         self.form.addRow("", self.pw_note)
-        self.form.addRow("One-time code", self.otp)
-        self.form.addRow("Secret key", self.otp_key)
+        self.form.addRow("One-Time Code", self.otp)
+        self.form.addRow("Secret Key", self.otp_key)
         self.form.addRow("", self.otp_note)
-        self.form.addRow("Do not use it for", self.bypass)
-        self.form.addRow("Try a connection to", row_of(self.test_to, self.test_btn))
+        self.form.addRow("Do Not Use It For", self.bypass)
+        self.form.addRow("Try a Connection To", row_of(self.test_to, self.test_btn))
         self.form.addRow("", self.test_out)
         self.lay.insertWidget(0, note(
             "Send Toner's connections through a proxy. This is the setting for every connection; a device can override it "
@@ -73,6 +82,9 @@ class ProxyPage(Page):
             "send SSH and port checks through a proxy as well."))
         self.mode.currentIndexChanged.connect(self.adapt)
         self.otp.currentIndexChanged.connect(self.adapt)
+        self._kind_was = self.kind.currentData()
+        self.kind.currentIndexChanged.connect(self._kind_changed)
+        self.tunnel_close.clicked.connect(self._close_tunnel)
         self.forget.clicked.connect(self._clear_password)
         self.test_btn.clicked.connect(self.test)
 
@@ -81,16 +93,33 @@ class ProxyPage(Page):
         for w in self.manual:
             w.setEnabled(manual)
         self.form.setRowVisible(self.system, self.mode.currentData() == "system")
+        tunnel = self.kind.currentData() == "tunnel"
+        self.form.setRowVisible(self.tunnel_note, tunnel and manual)
+        self.form.setRowVisible(self.tunnel_close_row, tunnel and manual)
         code = self.otp.currentData()
         self.form.setRowVisible(self.otp_key, code == "totp")
         self.form.setRowVisible(self.otp_note, bool(code))
+        where = ("It answers the server's question for a code." if tunnel else
+                 "The code is added to the end of the password (or used alone if there is no password).")
         self.otp_note.setText(
-            "When the proxy asks for a second step, type the code from your authenticator app when Toner connects. The code is added "
-            "to the end of the password (or used alone if there is no password). Checks that run by themselves cannot ask you, so "
-            "use a secret key for those." if code == "ask" else
-            "Toner works out the current code itself from the secret key (the text shown beside the QR code when the account was "
-            "set up). The code is added to the end of the password (or used alone if there is no password). The key is kept in "
-            "Credential Manager." + (" A key is saved; leave the box empty to keep it." if self._have_key else "") if code == "totp" else "")
+            f"When the proxy asks for a second step, type the code from your authenticator app (or touch your YubiKey) when Toner "
+            f"connects. {where} Checks that run by themselves cannot ask you, so use a secret key for those." if code == "ask" else
+            f"Toner works out the current code itself from the secret key (the text shown beside the QR code when the account was "
+            f"set up). {where} The key is kept in Credential Manager."
+            + (" A key is saved; leave the box empty to keep it." if self._have_key else "") if code == "totp" else "")
+
+    def _kind_changed(self, *_):
+        """A new type brings its usual port, unless the port was changed by hand."""
+        new = self.kind.currentData()
+        if self.port.value() == proxy.DEFAULT_PORTS.get(self._kind_was):
+            self.port.setValue(proxy.DEFAULT_PORTS.get(new, self.port.value()))
+        self._kind_was = new
+        self.adapt()
+
+    def _close_tunnel(self):
+        from core import tunnel
+        tunnel.close_all()
+        self.test_out.setText("The tunnel is closed. The next connection signs in again.")
 
     def _clear_password(self):
         self._forget = True
@@ -133,6 +162,11 @@ class ProxyPage(Page):
         return []
 
     def save(self):
+        before = proxy.settings()
+        if any(before.get(k) != v for k, v in (("kind", self.kind.currentData()), ("host", self.host.text().strip()),
+                                                ("port", self.port.value()), ("username", self.user.text().strip()))) or self.password.text():
+            from core import tunnel
+            tunnel.close_all()                       # a tunnel signed in with the old settings is not kept
         db.set_setting("proxy", {"mode": self.mode.currentData(), "kind": self.kind.currentData(),
                                  "host": self.host.text().strip(), "port": self.port.value(),
                                  "username": self.user.text().strip(), "bypass": self.bypass.text().strip(),

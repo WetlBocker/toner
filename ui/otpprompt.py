@@ -10,11 +10,11 @@ from core import proxy
 WAIT_SECONDS = 180
 
 
-def _dialog(title, text):
+def _dialog(title, text, secret=False):
     dlg = QInputDialog(QApplication.activeWindow())
     dlg.setWindowTitle(title)
-    dlg.setLabelText(text + "\nType the current code from your authenticator app.")
-    dlg.setTextEchoMode(QLineEdit.EchoMode.Normal)
+    dlg.setLabelText(text)
+    dlg.setTextEchoMode(QLineEdit.EchoMode.Password if secret else QLineEdit.EchoMode.Normal)
     dlg.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)       # it may have been asked while Toner sits in the tray
     return dlg.textValue() if dlg.exec() else ""
 
@@ -28,7 +28,7 @@ class _Asker(QObject):
 
     def _show(self, job):
         try:
-            job["code"] = _dialog(job["title"], job["text"])
+            job["code"] = _dialog(job["title"], job["text"], job["secret"])
         finally:
             job["done"].set()
 
@@ -36,13 +36,13 @@ class _Asker(QObject):
 _asker = None
 
 
-def ask(title, text):
+def ask(title, text, secret=False):
     app = QApplication.instance()
     if app is None:
         return ""
     if QThread.currentThread() == app.thread():                       # a Test button: already on the main thread
-        return _dialog(title, text)
-    job = {"title": title, "text": text, "code": "", "done": threading.Event()}
+        return _dialog(title, text, secret)
+    job = {"title": title, "text": text, "secret": secret, "code": "", "done": threading.Event()}
     _asker.wanted.emit(job)
     job["done"].wait(WAIT_SECONDS)
     return job["code"]

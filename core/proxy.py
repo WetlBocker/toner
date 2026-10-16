@@ -33,7 +33,8 @@ from core import db
 
 GLOBAL_SECRET = "service:proxy"
 GLOBAL_OTP = "service:proxy-otp"
-KINDS = [("http", "HTTP proxy (CONNECT)"), ("socks5", "SOCKS5"), ("socks4", "SOCKS4")]
+KINDS = [("http", "HTTP proxy (CONNECT)"), ("socks5", "SOCKS5"), ("socks4", "SOCKS4"), ("tunnel", "SSH tunnel")]
+DEFAULT_PORTS = {"http": 8080, "socks5": 1080, "socks4": 1080, "tunnel": 22}
 OTP_MODES = [("", "None"), ("ask", "Ask me for it when connecting"), ("totp", "Make it from a secret key")]
 MODES = [("none", "No proxy (connect directly)"),
          ("system", "Use the Windows proxy settings (web connections only)"),
@@ -91,10 +92,14 @@ def _config(s, password, otp_key=""):
                   password or "", otp, otp_key or "")
 
 
-def global_config():
-    """The proxy chosen in Settings > Proxy ('Use the proxy below'), without its password, or None."""
+def global_config(full=False):
+    """The proxy chosen in Settings > Proxy ('Use the proxy below'), or None. Without its password and key unless full."""
     s = settings()
-    return _config(s, "") if s["mode"] == "manual" else None
+    if s["mode"] != "manual":
+        return None
+    if not full:
+        return _config(s, "")
+    return _config(s, _secret(GLOBAL_SECRET), _secret(GLOBAL_OTP) if s.get("otp") == "totp" else "")
 
 
 def device_settings(dev):
@@ -159,7 +164,7 @@ def requests_kwargs(dev=None, host=None):
     """Extra arguments for requests.get/post: the proxies to use. Pass dev=None for app-wide connections."""
     how, cfg = resolve(dev, host, "web")
     if how == "proxy":
-        url = with_code(cfg).url()
+        url = (effective(cfg) if cfg.kind == "tunnel" else with_code(cfg)).url()
         return {"proxies": {"http": url, "https": url}}
     return {"proxies": dict(DIRECT)} if how == "direct" else {}
 
@@ -348,7 +353,20 @@ def forget_code(cfg):
     _codes.pop((cfg.host, cfg.port, cfg.username), None)
 
 
-def one_time_code(cfg):
+def ask_text(cfg, title, text, secret=False):
+    """Ask the person at the window for something the proxy wants. Raises ProxyError when nobody can be asked."""
+    if CODE_PROMPT is None:
+        raise ProxyError(f"{cfg.label()} needs something typed ({title.lower()}), and Toner can only ask for it while you are "
+                         f"at the window. For checks that run by themselves, set the code to 'Make it from a secret key'")
+    with _ask_lock:
+        got = (CODE_PROMPT(title, text, secret=True) if secret else CODE_PROMPT(title, text)) or ""
+    return got if secret else "".join(got.split())
+
+
+def one_time_code(cfg, prompt="", reuse=True):
+    """The code for a proxy with two-step sign-in: made from the secret key, or typed by the person at the window.
+    `prompt` is what the server itself said when it asked (an SSH tunnel's login); `reuse` allows a code typed a moment
+    ago to be used again (a code sent with the password is wanted by every connection, a login by one)."""
     if cfg.otp == "totp":
         if not cfg.otp_key:
             raise ProxyError(f"{cfg.label()} needs a one-time code, but no secret key is saved for it")
@@ -356,24 +374,33 @@ def one_time_code(cfg):
             time.sleep(1.6)
         return totp(cfg.otp_key)
     key = (cfg.host, cfg.port, cfg.username)
-    with _ask_lock:
-        hit = _codes.get(key)
-        if hit and time.time() - hit[1] < CODE_REUSE_SECONDS:
-            return hit[0]
-        if CODE_PROMPT is None:
-            raise ProxyError(f"{cfg.label()} needs a one-time code, and Toner can only ask for it while you are at the window. "
-                             f"For checks that run by themselves, set the code to 'Make it from a secret key'")
-        code = "".join((CODE_PROMPT("One-time code", f"The proxy {cfg.label()} asks for a one-time code"
-                                    + (f" for {cfg.username}" if cfg.username else "") + ".") or "").split())
-        if not code:
-            raise ProxyError(f"{cfg.label()}: no one-time code was entered")
+    hit = _codes.get(key) if reuse else None
+    if hit and time.time() - hit[1] < CODE_REUSE_SECONDS:
+        return hit[0]
+    code = ask_text(cfg, "One-time code", f"{cfg.label()} asks for a one-time code" + (f" for {cfg.username}" if cfg.username else "")
+                    + (f" ({prompt.strip()})" if prompt.strip() else "")
+                    + ".\nType the current code from your authenticator app, or touch your YubiKey.")
+    if not code:
+        raise ProxyError(f"{cfg.label()}: no one-time code was entered")
+    if reuse:
         _codes[key] = (code, time.time())
-        return code
+    return code
 
 
 def with_code(cfg):
-    """cfg with the one-time code added to the end of its password (or in its place, when there is no password)."""
-    return replace(cfg, password=cfg.password + one_time_code(cfg)) if cfg.otp else cfg
+    """cfg with the one-time code added to the end of its password (or in its place, when there is no password). An SSH
+    tunnel answers the server's own question instead (see tunnel.py)."""
+    return replace(cfg, password=cfg.password + one_time_code(cfg)) if cfg.otp and cfg.kind != "tunnel" else cfg
+
+
+def effective(cfg):
+    """What to connect to for this proxy: itself, or for an SSH tunnel the local SOCKS5 end of the open tunnel, signing in
+    first if it is not open."""
+    if cfg.kind != "tunnel":
+        return cfg
+    from core import tunnel
+    t = tunnel.get(cfg)
+    return Config("socks5", "127.0.0.1", t.port, t.user, t.password)
 
 
 LAST = {}                     # "host:port" of a proxy -> (worked, time, message) of the latest real connection through it
@@ -399,7 +426,10 @@ def connect(cfg, host, port, timeout=15):
 
 def probe(cfg, timeout=3):
     """(reachable, message): does something answer as this kind of proxy? Nothing is sent that signs in, so it cannot use up
-    a one-time code or count as a wrong password."""
+    a one-time code or count as a wrong password. For an SSH tunnel: is it open now?"""
+    if cfg.kind == "tunnel":
+        from core import tunnel
+        return (True, f"{cfg.label()} is open") if tunnel.is_open(cfg) else (False, f"{cfg.label()} is not open")
     try:
         s = socket.create_connection((cfg.host, cfg.port), timeout=timeout)
     except OSError as e:
@@ -422,7 +452,7 @@ def probe(cfg, timeout=3):
 def _connect(cfg, host, port, timeout=15):
     port = int(port)
     try:
-        used = with_code(cfg)
+        used = effective(cfg) if cfg.kind == "tunnel" else with_code(cfg)
         try:
             if used.kind == "http":
                 return _http_connect(used, host, port, timeout)
@@ -431,8 +461,8 @@ def _connect(cfg, host, port, timeout=15):
         except TargetRefused:
             raise
         except ProxyError:
-            if cfg.otp:
-                forget_code(cfg)                     # a refused code is not tried again, and not asked about twice in a row
+            if cfg.otp and cfg.kind != "tunnel":
+                forget_code(cfg)                   # a refused code is not tried again, and not asked about twice in a row
             raise
         import socks
         return socks.create_connection((host, port), timeout=timeout, proxy_type=socks.SOCKS4, proxy_addr=cfg.host,

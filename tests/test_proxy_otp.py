@@ -240,7 +240,7 @@ otpprompt._real_dialog = otpprompt.QInputDialog
 otpprompt.QInputDialog = FakeDialog
 otpprompt.install()
 check("installing it hands the question to the proxy code", proxy.CODE_PROMPT is otpprompt.ask)
-check("asked on the main thread, it answers directly", otpprompt.ask("Code", "for joe") == "424242" and shown[0] == "Code" and "authenticator" in shown[1])
+check("asked on the main thread, it answers directly", otpprompt.ask("Code", "for joe") == "424242" and shown[0] == "Code" and shown[1] == "for joe")
 got = {}
 t = threading.Thread(target=lambda: got.update(code=otpprompt.ask("Code", "for joe")), daemon=True); t.start()
 end = time.time() + 5
