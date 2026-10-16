@@ -7,9 +7,9 @@ from datetime import datetime
 
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFileDialog, QInputDialog, QLabel, QLineEdit, QMessageBox,
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QInputDialog, QLabel, QLineEdit, QMessageBox,
                                QPushButton, QTableWidget, QTableWidgetItem, QWidget)
-from core import audit, db, display, nettools, sessionlog, vault
+from core import audit, db, display, legacyssh, nettools, sessionlog, vault
 from ui.settings_base import Page, note, row_of
 from ui.toast import toast
 from ui.widgets import EmptyHint
@@ -28,6 +28,12 @@ class SecurityPage(Page):
             "Trust on first use: remember each device's key the first time, and refuse the connection if it "
             "ever changes (protects against a swapped or spoofed device). Always trust: accept anything, "
             "remember nothing. Reject unknown hosts: only connect to devices already remembered."))
+        self.legacy = QCheckBox("Allow older SSH algorithms for older devices (ssh-rsa, SHA-1 key exchange)")
+        self.form.addRow("", self.legacy)
+        self.form.addRow(note(
+            "Many Cisco ASAs, older switches and other network gear only offer these, and without them the connection fails "
+            "with \"Incompatible ssh peer (no acceptable host key)\". They are tried last, so a device that offers anything "
+            "newer still uses the newer one, as OpenSSH does with +ssh-rsa."))
 
         self.keys = QTableWidget(0, 3)
         self.keys.setHorizontalHeaderLabels(["Host", "Type", "Fingerprint"])
@@ -59,6 +65,7 @@ class SecurityPage(Page):
 
     def load(self):
         self.mode.setCurrentText(db.get_setting("hostkey_mode"))
+        self.legacy.setChecked(bool(db.get_setting("ssh_legacy_algorithms")))
         self.refresh()
 
     def refresh(self):
@@ -109,6 +116,8 @@ class SecurityPage(Page):
 
     def save(self):
         db.set_setting("hostkey_mode", self.mode.currentText())
+        db.set_setting("ssh_legacy_algorithms", self.legacy.isChecked())
+        legacyssh.apply()
 
 
 # ------------------------------------------------------------------ Data & logs

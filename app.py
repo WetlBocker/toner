@@ -8,7 +8,7 @@ from pathlib import Path
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence, QPainter, QPixmap, QShortcut
 from PySide6.QtWidgets import QApplication, QMainWindow, QMenu, QMessageBox, QSystemTrayIcon
-from core import agents, audit, checks, db, display, notify, paths, reports, sessionlog, sessions, trends, trust, tunnel
+from core import agents, audit, checks, db, display, legacyssh, notify, paths, reports, sessionlog, sessions, trends, trust, tunnel
 from ui import theme
 from ui.about import AboutTab
 from ui.configs import ConfigsTab
@@ -593,6 +593,7 @@ def run_cli(args):
     try:
         db.init()                                  # cli.main does this too; the move below needs the database first
         tunnel.migrate()
+        legacyssh.apply()
     except Exception:
         pass                                       # cli.main reports a database problem in its own words
     import cli
@@ -605,6 +606,7 @@ def main():
     setup_logging()
     db.init()
     trust.install()                                # web requests also trust what Windows trusts (HTTPS inspection)
+    legacyssh.apply()                              # ssh-rsa and SHA-1 key exchange for older devices, unless turned off
     tunnel.migrate()                               # 1.5.2-1.5.5: the SSH tunnel was a proxy type; it is its own section now
     sessionlog.purge(int(db.get_setting("ssh_log_days")))
     audit.purge(max(365, int(db.get_setting("ssh_log_days"))))

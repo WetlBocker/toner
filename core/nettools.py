@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import paramiko
 from PySide6.QtCore import QThread, Signal
+from core import legacyssh  # noqa: F401  (ssh-rsa and SHA-1 key exchange for older devices; see Settings > Security)
 from core import quiet
 
 # ---------- input validation ----------

@@ -92,6 +92,7 @@ DEFAULT_SETTINGS = {
     "report_include_all": True,
     # security
     "hostkey_mode": "Trust on first use",
+    "ssh_legacy_algorithms": True,               # ssh-rsa and SHA-1 key exchange for older devices (core/legacyssh.py)
     # notifications
     "notify_enabled": False, "notify_channels": [], "notify_snooze_until": "",
     "notify_consecutive": 1, "notify_remind_hours": 0, "notify_on_manual": True,
