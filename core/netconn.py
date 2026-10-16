@@ -66,6 +66,19 @@ class AsaSSH(CiscoAsaSSH):
         return seen
 
 
+def any_mode(conn):
+    """A pattern for this device's prompt in any mode, for send_command's expect_string. netmiko otherwise waits for the
+    exact prompt it saw before the command, and a command that changes mode ('conf t', 'object-group ...', Juniper or
+    Palo Alto 'configure', HPE 'system-view', FortiOS 'config ...') changes it: 'fw1#' becomes 'fw1(config)#', and the
+    command fails with ReadTimeout after the full wait. The device's name (its first 16 characters, as netmiko itself uses
+    for config mode, since some devices shorten a long name there), then anything, then a prompt character at the very end.
+    None when the name is not known, which leaves netmiko's own pattern."""
+    base = (getattr(conn, "base_prompt", "") or "").strip()
+    if not base:
+        return None
+    return re.escape(base[:16]) + r"[^\r\n]*[>#\]$]\s*$"
+
+
 SPECIAL = {"cisco_asa": AsaSSH}
 
 

@@ -41,8 +41,33 @@ check("a copy of the folder, on another path, opens the same data", str(db.db_pa
 db.set_setting("report_org", "Changed on the other drive"); sys.executable = os.path.join(prog, "Toner.exe")
 check("and the two copies are independent", db.get_setting("report_org") == "Portable Co")
 
+print("== checks running side by side (Run all checks), with the folder now and then held by OneDrive or a scanner")
+import threading
+real = paths._writable; flaky = [0]
+def sometimes(folder):
+    flaky[0] += 1
+    return flaky[0] % 3 != 0 and real(folder)
+paths._writable = sometimes
+seen = []; errors = []
+def worker():
+    for _ in range(40):
+        try:
+            seen.append(str(db.db_path())); db.list_devices()
+        except Exception as e:
+            errors.append(e)
+threads = [threading.Thread(target=worker) for _ in range(12)]
+for t in threads: t.start()
+for t in threads: t.join()
+check("every connection opens the portable database: no 'no such table: devices'", set(seen) == {os.path.join(data, "netcheck.db")} and not errors, (set(seen), errors[:1]))
+check("the folder is tested once, not on every connection", flaky[0] == 0, flaky[0])
+check("and no test files are left behind", not [f for f in os.listdir(data) if f.startswith(".write-test")])
+paths._writable = real
+paths._confirmed.clear(); flaky[0] = 0; paths._writable = sometimes
+check("a folder not yet known is tested once, then remembered", str(paths.data_dir()) == data and str(paths.data_dir()) == data and flaky[0] == 1)
+
 print("== when the folder cannot be written to")
-real = paths._writable; paths._writable = lambda folder: False
+paths._confirmed.clear()                                              # as when Toner starts on a read-only drive
+paths._writable = lambda folder: False
 check("it falls back to %APPDATA% instead of failing to start", str(paths.data_dir()) == appdata and os.path.isdir(appdata))
 paths._writable = real
 check("and returns to the portable folder when it can be written", str(paths.data_dir()) == data)

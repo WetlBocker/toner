@@ -6,7 +6,7 @@ import os as _os, sys as _sys, tempfile as _tmp
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-import logging, os, socket, sys, threading, time
+import logging, os, re, socket, sys, threading, time
 SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + r"\asa%d.db" % int(time.time()); os.environ["APPDATA"] = SP
 from core import db
 db.init()
@@ -47,6 +47,7 @@ class FakeAsa:
     def __init__(self, delay=1.5, never=False, banner=None, prompt="fw1"):
         self.delay, self.never, self.discarded, self.commands = delay, never, b"", []
         self.banner, self.name, self.keys = banner or [], prompt, []
+        self.config, self.saved = [], []
         self.sock = socket.socket(); self.sock.bind(("127.0.0.1", 0)); self.sock.listen(8); self.port = self.sock.getsockname()[1]
         threading.Thread(target=self._loop, daemon=True).start()
     def _loop(self):
@@ -82,8 +83,14 @@ class FakeAsa:
                 cmd = line.decode().strip("\r").strip()
                 self.commands.append(cmd)
                 out = ANSWERS.get(cmd, "")
-                if cmd == "configure terminal": mode = f"{self.name}(config)# "
-                elif cmd in ("end", "exit"): mode = f"{self.name}# "
+                low = cmd.lower()
+                if low in ("configure terminal", "conf t"): mode = f"{self.name}(config)# "
+                elif low.startswith("object-group network ") and "(config" in mode: mode = f"{self.name}(config-network-object-group)# "
+                elif low.startswith("network-object ") and "object-group" in mode: self.config.append(cmd)
+                elif low in ("end", "exit"): mode = f"{self.name}# "
+                elif low in ("wr", "write memory") and "(config" not in mode:
+                    out = "Building configuration...\r\nCryptochecksum: 3f1c2a9b 0e4d7c21 9a8b6f55 12cd34ef\r\n\r\n8123 bytes copied in 0.200 secs\r\n[OK]\r\n"
+                    self.saved = list(self.config)
                 elif cmd and cmd not in ANSWERS and cmd not in ("terminal pager 0", "terminal width 511", "enable"):
                     out = "ERROR: % Invalid input detected at '^' marker.\r\n"
                 chan.send((cmd + "\r\n" + out + mode).encode())
@@ -193,6 +200,39 @@ check("the backup is taken", r.status == "OK" and r.value == "first copy", (r.st
 body = backup.get_text(backup.latest("fw1")["id"])
 check("it holds the configuration, with the passwords masked", "hostname fw1" in body and "nameif outside" in body and "Qz9xLmN0pQ" not in body, body[:300])
 check("a backup that works leaves no session file behind", not backup.session_file(dev).exists())
+
+print("== a config change from the Command Runner, as sent to the real ASA")
+CHANGE = ["conf t", "object-group network BAD_IPS", "network-object host 152.32.245.27", "network-object host 45.194.70.251", "end", "Wr"]
+plain_asa = FakeAsa(delay=0, banner=BANNER, prompt=NAME)
+with netconn.connect(**args(plain_asa)) as c:
+    try:
+        c.send_command("conf t", read_timeout=3); plain = "worked"
+    except Exception as e:
+        plain = f"{type(e).__name__}: {e}"
+check("netmiko's send_command waits for 'name#' and times out at 'name(config)#', as on the real ASA",
+      "ReadTimeout" in plain and "NoFailover\\\\#" in plain, plain)
+change_asa = FakeAsa(delay=0, banner=BANNER, prompt=NAME)
+change_dev = {**paged_dev, "name": "vasa-change", "port": change_asa.port}
+STORE[("netcheck", "vasa-change")] = "Adm1n!pw"
+t0 = time.time()
+r = cmdrun.run_on_device(change_dev, CHANGE, read_timeout=20)
+check("Toner runs every line, through config and object-group mode and back", r["ok"] and [o[0] for o in r["outputs"]] == CHANGE, r)
+check("without waiting out a time-out", time.time() - t0 < 10, time.time() - t0)
+check("the change is made and saved", change_asa.saved == CHANGE[2:4], (change_asa.config, change_asa.saved))
+check("and the save's output comes back", "[OK]" in r["outputs"][-1][1], r["outputs"][-1])
+check("no line was refused", not any("Invalid input" in o[1] for o in r["outputs"]), r["outputs"])
+class _C: base_prompt = NAME
+pat = netconn.any_mode(_C)
+check("the prompt pattern takes the name in any mode, and only at the end",
+      all(re.search(pat, s) for s in (NAME + "# ", NAME + "(config)# ", NAME + "(config-network-object-group)#", NAME + ">"))
+      and not re.search(pat, NAME + "(config)# \r\nmore output") and not re.search(pat, "hostname " + NAME[:19]), pat)
+others = {"admin@srx1": ["admin@srx1> ", "[edit]\r\nadmin@srx1# "], "HP": ["<HP>", "[HP]", "[HP-vlan10]"],
+          "FGT60F": ["FGT60F # ", "FGT60F (interface) # "], "[admin@MikroTik]": ["[admin@MikroTik] > ", "[admin@MikroTik] /ip address> "],
+          "core-sw": ["core-sw#", "core-sw(config-if)#"]}
+class _D: base_prompt = ""
+check("and on other vendors' prompts, in their config modes too",
+      all(re.search(netconn.any_mode(type("C", (), {"base_prompt": b})), p) for b, ps in others.items() for p in ps))
+check("with no known name, netmiko's own pattern is used", netconn.any_mode(_D) is None)
 
 print("== an ASA that never shows its prompt")
 netconn.AsaSSH.prompt_wait = 3

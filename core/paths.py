@@ -9,6 +9,7 @@ Passwords are the exception: they stay in Windows Credential Manager on whicheve
 travel with a portable copy."""
 import os
 import sys
+import threading
 from pathlib import Path
 
 FLAG = "portable.flag"
@@ -30,18 +31,25 @@ def is_portable():
 def _writable(folder):
     try:
         folder.mkdir(parents=True, exist_ok=True)
-        probe = folder / ".write-test"
-        probe.write_text("x")
+        probe = folder / f".write-test-{os.getpid()}-{threading.get_ident()}"   # one per thread: checks running side
+        probe.write_text("x")                                                    # by side must not trip over each other
         probe.unlink()
         return True
     except OSError:
         return False
 
 
+# Portable data folders found writable. Every database connection asks for data_dir(), and checks run many at once; testing
+# the folder each time could fail now and then (OneDrive or a virus scanner holding the test file) and send that one
+# connection to an empty database in %APPDATA% ("no such table: devices"). Once writable, the folder stays the answer.
+_confirmed = set()
+
+
 def data_dir():
     if is_portable():
         d = Path(app_dir()) / "data"
-        if _writable(d):
+        if d in _confirmed or _writable(d):
+            _confirmed.add(d)
             return d
     d = Path(os.environ.get("APPDATA", Path.home())) / "NetCheck"
     d.mkdir(parents=True, exist_ok=True)

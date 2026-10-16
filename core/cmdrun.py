@@ -13,6 +13,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from core.netconn import connect as ConnectHandler      # netmiko's, with Toner's fixes for some devices (ASA)
+from core.netconn import any_mode
 
 from core import db, profiles, vendors, winmon
 from core import quiet
@@ -210,8 +211,9 @@ def _run_ssh(dev, commands, opts, read_timeout, out):
             c.enable()
         except Exception:
             quiet.ignored()
+        prompt = any_mode(c)                        # 'conf t' and the like change the prompt
         for cmd in commands:
-            out["outputs"].append((cmd, c.send_command(cmd, read_timeout=read_timeout)))
+            out["outputs"].append((cmd, c.send_command(cmd, read_timeout=read_timeout, expect_string=prompt)))
 
 
 def _run_cli(dev, commands, opts, read_timeout, out):
@@ -231,8 +233,9 @@ def _run_cli(dev, commands, opts, read_timeout, out):
         args["sock"] = sock
     try:
         with ConnectHandler(**args) as c:
+            prompt = any_mode(c)
             for cmd in commands:
-                out["outputs"].append((cmd, c.send_command(cmd, read_timeout=read_timeout)))
+                out["outputs"].append((cmd, c.send_command(cmd, read_timeout=read_timeout, expect_string=prompt)))
     finally:
         for x in closers:
             try:

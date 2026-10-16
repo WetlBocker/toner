@@ -175,6 +175,8 @@ Each SSH device's last Command Runner session is written to `ssh-logs\command-ru
 left out), and a failure says where it is; a failed SSH config backup leaves `ssh-logs\backup-<device>.log`, masked like a stored
 backup. A Cisco ASA is given time to show its prompt before the first command, since one that
 authorises the shell over TACACS+ or RADIUS drops what is typed before then.
+Config changes can be sent as plain lines (`conf t`, the changes, `end`, `wr`): each line waits for the device's prompt in whatever mode
+it is in, such as `fw1(config)#` or `[edit]` `user@srx#`.
 On Windows, the Command Runner works for this PC and for computers reached over WinRM; one that reports by agent is listed greyed, because an agent takes no
 commands. Read-only mode lets PowerShell *look* (Get-..., Where-Object on `$_`, hostname, ipconfig, netstat ...) and asks before anything that could change a computer. A rejected key is reported once,
 in words, instead of once per check.
