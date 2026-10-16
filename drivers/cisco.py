@@ -1,5 +1,5 @@
 import re
-from netmiko import ConnectHandler
+from core.netconn import connect as ConnectHandler      # netmiko's, with Toner's fixes for some devices (ASA)
 from .base import Driver, OK, WARN, FAIL, grade_low
 from .sshbase import Recorder
 from .clirows import CliRows
@@ -43,6 +43,8 @@ class CiscoDriver(CliRows, Driver):
                     secret=self.password, timeout=t, conn_timeout=t)
         if d.get("port"):
             args["port"] = d["port"]
+        if getattr(self, "session_log", None):          # Command Runner records the session (passwords left out)
+            args["session_log"] = self.session_log
         from core import jump
         sock, closers = jump.open_channel(d, t)          # (None, []) unless the device is behind a jump host
         if sock is not None:

@@ -102,7 +102,7 @@ db.set_setting("default_ssh_port", 2222)
 C.run_on_device(fg2, ["get system status"]); check("the default SSH port setting applies", calls[-1]["port"] == 2222); db.set_setting("default_ssh_port", 22)
 n = len(calls); r = C.run_on_device(fg, ["get system status"])
 check("without a login it says what to do, and does not connect", not r["ok"] and "SSH user name and SSH password" in r["error"] and len(calls) == n, r)
-check("the API key is never used as the SSH password", not any("API-KEY-123" in json.dumps(c) for c in calls))
+check("the API key is never used as the SSH password", not any("API-KEY-123" in json.dumps(c, default=str) for c in calls))
 C.ConnectHandler = real_connect
 
 print("== the Command Runner window")

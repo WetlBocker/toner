@@ -6,12 +6,13 @@ Three kinds of device take commands:
 - Fortinet and Palo Alto firewalls, over SSH, with the SSH login stored on the device (Edit device > Access); their checks use the API key.
 A Windows computer that reports by agent cannot be commanded: the agent only sends."""
 import base64
+import io
 import json
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from netmiko import ConnectHandler
+from core.netconn import connect as ConnectHandler      # netmiko's, with Toner's fixes for some devices (ASA)
 
 from core import db, profiles, vendors, winmon
 from core import quiet
@@ -203,6 +204,7 @@ def _run_ssh(dev, commands, opts, read_timeout, out):
     cls = DRIVERS.get(dev["vendor"])
     drv = cls(dev, {}, opts or db.runtime_options())
     drv.plat = dev.get("platform") or cls.DEFAULT_PLATFORM
+    drv.session_log = out.get("_log")
     with drv.connect() as c:
         try:
             c.enable()
@@ -218,11 +220,25 @@ def _run_cli(dev, commands, opts, read_timeout, out):
     if not user or not pw:
         raise ValueError("no SSH login is stored for this device: Edit device > Access, SSH user name and SSH password")
     t = int((opts or db.runtime_options()).get("ssh_timeout", 20))
+    port = int(db.get_setting("default_ssh_port") or 22)
     args = dict(device_type=vendors.CLI_TYPES[dev["vendor"]], host=dev["host"], username=user, password=pw,
-                port=int(db.get_setting("default_ssh_port") or 22), timeout=t, conn_timeout=t)
-    with ConnectHandler(**args) as c:
-        for cmd in commands:
-            out["outputs"].append((cmd, c.send_command(cmd, read_timeout=read_timeout)))
+                port=port, timeout=t, conn_timeout=t)
+    if out.get("_log") is not None:
+        args["session_log"] = out["_log"]
+    from core import jump
+    sock, closers = jump.open_channel({**dev, "port": port}, t)     # through the proxy or SSH tunnel, as the checks go
+    if sock is not None:
+        args["sock"] = sock
+    try:
+        with ConnectHandler(**args) as c:
+            for cmd in commands:
+                out["outputs"].append((cmd, c.send_command(cmd, read_timeout=read_timeout)))
+    finally:
+        for x in closers:
+            try:
+                x.close()
+            except Exception:
+                quiet.ignored()
 
 
 def ps_script(commands):
@@ -277,13 +293,39 @@ def run_on_device(dev, commands, opts=None, read_timeout=60):
     if not kind:
         out["error"] = "no way to run commands on this kind of device (Cisco, Juniper, Arista, HPE and MikroTik by SSH, Windows by PowerShell, Fortinet and Palo Alto by SSH)"
         return out
+    if kind in ("ssh", "cli"):
+        out["_log"] = io.BytesIO()                  # what was sent and received (netmiko leaves the passwords out)
     try:
         {"ssh": _run_ssh, "cli": _run_cli, "windows": _run_windows}[kind](dev, commands, opts, read_timeout, out)
         out["ok"] = True
     except Exception as e:
         out["error"] = f"{type(e).__name__}: {str(e)[:200]}"
+    path = _save_session(dev, out.pop("_log", None))
+    if path and out["error"]:
+        out["error"] += f" The session was written to {path}"
     out["seconds"] = time.time() - start
     return out
+
+
+def session_file(dev):
+    from core import sessionlog
+    safe = re.sub(r"[^\w.-]+", "_", dev["name"])[:60]
+    return sessionlog.log_dir() / f"command-runner-{safe}.log"
+
+
+def _save_session(dev, buf):
+    """Write the last Command Runner session with this device to the SSH logs folder (one file per device, replaced each
+    time), so a failure can be looked at. Returns its path, or None when there was nothing to write."""
+    data = buf.getvalue() if buf is not None else b""
+    if not data:
+        return None
+    try:
+        path = session_file(dev)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        return path
+    except OSError:
+        return None
 
 
 def run_many(devices, commands, workers=8, on_result=None, opts=None, cancel=None):

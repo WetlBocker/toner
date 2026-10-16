@@ -171,6 +171,10 @@ two-factor sign-in cannot be used. For other products paste a key made in their 
 
 **Command line on firewalls.** Fortinet and Palo Alto are checked through their API, so for the Command Runner their device dialog also has an
 **SSH user name** and **SSH password** (Access tab; separate from the API key, kept in Credential Manager). Without them the firewall is listed greyed.
+Each SSH device's last Command Runner session is written to `ssh-logs\command-runner-<device>.log` next to Toner's data (passwords
+left out), and a failure says where it is; a failed SSH config backup leaves `ssh-logs\backup-<device>.log`, masked like a stored
+backup. A Cisco ASA is given time to show its prompt before the first command, since one that
+authorises the shell over TACACS+ or RADIUS drops what is typed before then.
 On Windows, the Command Runner works for this PC and for computers reached over WinRM; one that reports by agent is listed greyed, because an agent takes no
 commands. Read-only mode lets PowerShell *look* (Get-..., Where-Object on `$_`, hostname, ipconfig, netstat ...) and asks before anything that could change a computer. A rejected key is reported once,
 in words, instead of once per check.

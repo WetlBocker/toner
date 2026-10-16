@@ -6,6 +6,7 @@ Stored text is cleaned first: volatile lines (timestamps, byte counts) are dropp
 from core import proxy
 import difflib
 import hashlib
+import io
 import re
 import zlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -131,12 +132,40 @@ def fetch(dev, opts=None):
     drv = DRIVERS[vendor](dev, {}, opts)
     drv.plat = dev.get("platform") or drv.DEFAULT_PLATFORM
     cmd = SSH_COMMANDS[drv.plat]
-    with drv.connect() as c:
-        try:
-            c.enable()
-        except Exception:
-            quiet.ignored()
-        return c.send_command(cmd, read_timeout=max(120, opts["ssh_timeout"] * 4))
+    drv.session_log = io.BytesIO()                    # kept only if the backup fails, masked like a stored backup
+    try:
+        with drv.connect() as c:
+            try:
+                c.enable()
+            except Exception:
+                quiet.ignored()
+            return c.send_command(cmd, read_timeout=max(120, opts["ssh_timeout"] * 4))
+    except Exception as e:
+        path = _save_failed_session(dev, drv.session_log)
+        if path:
+            raise BackupError(f"{type(e).__name__}: {str(e)[:200]}. The session was written to {path}") from None
+        raise
+
+
+def session_file(dev):
+    from core import sessionlog
+    safe = re.sub(r"[^\w.-]+", "_", dev["name"])[:60]
+    return sessionlog.log_dir() / f"backup-{safe}.log"
+
+
+def _save_failed_session(dev, buf):
+    """What was sent and received when a backup failed, with passwords and keys masked as in a stored backup (the output
+    may be part of the configuration). Returns its path, or None."""
+    data = buf.getvalue().decode("utf-8", "replace") if buf is not None else ""
+    if not data.strip():
+        return None
+    try:
+        path = session_file(dev)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(clean(data, mask=True), encoding="utf-8")
+        return path
+    except OSError:
+        return None
 
 
 # ---------------------------------------------------------------- storing
