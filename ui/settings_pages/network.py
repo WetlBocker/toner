@@ -1,6 +1,7 @@
 """Settings pages: proxy, agents and maintenance windows."""
 
 import ipaddress
+import os
 import keyring
 from datetime import datetime
 
@@ -47,6 +48,13 @@ class ProxyPage(Page):
                                 "cannot touch a YubiKey, so they need the tunnel to be open already or a code made from a secret key.")
         self.tunnel_close = QPushButton("Close the tunnel")
         self.tunnel_close.setToolTip("Disconnect the SSH session; the next connection signs in again")
+        self.key_file = QLineEdit()
+        self.key_file.setPlaceholderText("optional: a private key file (OpenSSH or PEM)")
+        self.browse_key = QPushButton("Browse...")
+        self.browse_key.setAutoDefault(False)
+        self.key_row = row_of(self.key_file, self.browse_key)
+        self.key_note = note("With a key file, the Password box is the key's passphrase (leave it empty if the key has none; "
+                             "Toner asks if it needs one). A server that also wants a password or a code still gets asked.")
         self.system = note("")
         self.test_to = QLineEdit("www.githubstatus.com:443")
         self.test_btn = QPushButton("Test")
@@ -54,7 +62,8 @@ class ProxyPage(Page):
         self.test_out.setWordWrap(True)
         self._forget = False
         self._have_key = False
-        self.manual = [self.kind, self.host, self.port, self.user, self.password, self.forget, self.bypass, self.otp, self.otp_key]
+        self.manual = [self.kind, self.host, self.port, self.user, self.password, self.forget, self.bypass, self.otp, self.otp_key,
+                       self.key_file, self.browse_key]
         self.form.addRow("Connections Go", self.mode)
         self.form.addRow("", self.system)
         self.form.addRow("Proxy Type", self.kind)
@@ -64,6 +73,8 @@ class ProxyPage(Page):
         self.form.addRow("Address", self.host)
         self.form.addRow("Port", self.port)
         self.form.addRow("User Name", self.user)
+        self.form.addRow("Key File", self.key_row)
+        self.form.addRow("", self.key_note)
         self.form.addRow("Password", self.password)
         self.form.addRow("", row_of(self.forget))
         self.form.addRow("", self.pw_note)
@@ -85,6 +96,8 @@ class ProxyPage(Page):
         self._kind_was = self.kind.currentData()
         self.kind.currentIndexChanged.connect(self._kind_changed)
         self.tunnel_close.clicked.connect(self._close_tunnel)
+        self.browse_key.clicked.connect(self._browse_key)
+        self.key_file.textChanged.connect(self.adapt)
         self.forget.clicked.connect(self._clear_password)
         self.test_btn.clicked.connect(self.test)
 
@@ -96,6 +109,9 @@ class ProxyPage(Page):
         tunnel = self.kind.currentData() == "tunnel"
         self.form.setRowVisible(self.tunnel_note, tunnel and manual)
         self.form.setRowVisible(self.tunnel_close_row, tunnel and manual)
+        self.form.setRowVisible(self.key_row, tunnel)
+        self.form.setRowVisible(self.key_note, tunnel and bool(self.key_file.text().strip()))
+        self.password.setPlaceholderText("the key's passphrase, if it has one" if tunnel and self.key_file.text().strip() else "")
         code = self.otp.currentData()
         self.form.setRowVisible(self.otp_key, code == "totp")
         self.form.setRowVisible(self.otp_note, bool(code))
@@ -116,6 +132,12 @@ class ProxyPage(Page):
         self._kind_was = new
         self.adapt()
 
+    def _browse_key(self):
+        start = self.key_file.text().strip() or os.path.join(os.path.expanduser("~"), ".ssh")
+        path, _ = QFileDialog.getOpenFileName(self, "Private key file", start)
+        if path:
+            self.key_file.setText(os.path.normpath(path))
+
     def _close_tunnel(self):
         from core import tunnel
         tunnel.close_all()
@@ -133,6 +155,7 @@ class ProxyPage(Page):
         self.host.setText(s["host"])
         self.port.setValue(int(s["port"] or 8080))
         self.user.setText(s["username"])
+        self.key_file.setText(s.get("key_file") or "")
         self.bypass.setText(s["bypass"])
         self.password.clear()
         self._forget = False
@@ -151,6 +174,9 @@ class ProxyPage(Page):
     def validate(self):
         if self.mode.currentData() == "manual" and not self.host.text().strip():
             return ["Proxy: enter the proxy's address, or choose another option."]
+        key = os.path.expandvars(os.path.expanduser(self.key_file.text().strip().strip('"')))
+        if self.mode.currentData() == "manual" and self.kind.currentData() == "tunnel" and key and not os.path.isfile(key):
+            return [f"Proxy: the key file {key} was not found."]
         if self.mode.currentData() == "manual" and self.otp.currentData() == "totp":
             if not self.otp_key.text().strip() and not self._have_key:
                 return ["Proxy: enter the secret key for the one-time code, or choose 'Ask me for it when connecting'."]
@@ -164,13 +190,14 @@ class ProxyPage(Page):
     def save(self):
         before = proxy.settings()
         if any(before.get(k) != v for k, v in (("kind", self.kind.currentData()), ("host", self.host.text().strip()),
-                                                ("port", self.port.value()), ("username", self.user.text().strip()))) or self.password.text():
+                                                ("port", self.port.value()), ("username", self.user.text().strip()),
+                                                ("key_file", self.key_file.text().strip()))) or self.password.text():
             from core import tunnel
             tunnel.close_all()                       # a tunnel signed in with the old settings is not kept
         db.set_setting("proxy", {"mode": self.mode.currentData(), "kind": self.kind.currentData(),
                                  "host": self.host.text().strip(), "port": self.port.value(),
                                  "username": self.user.text().strip(), "bypass": self.bypass.text().strip(),
-                                 "otp": self.otp.currentData()})
+                                 "otp": self.otp.currentData(), "key_file": self.key_file.text().strip()})
         if self.password.text():
             db.set_secret(proxy.GLOBAL_SECRET, self.password.text())
         elif self._forget:
@@ -195,7 +222,7 @@ class ProxyPage(Page):
         try:
             if mode == "manual":
                 cfg = proxy._config({"kind": self.kind.currentData(), "host": self.host.text(), "port": self.port.value(),
-                                     "username": self.user.text(), "otp": self.otp.currentData()},
+                                     "username": self.user.text(), "otp": self.otp.currentData(), "key_file": self.key_file.text()},
                                     self.password.text() or ("" if self._forget else
                                                              keyring.get_password(db.SERVICE, proxy.GLOBAL_SECRET) or ""),
                                     proxy.clean_key(self.otp_key.text()) or keyring.get_password(db.SERVICE, proxy.GLOBAL_OTP) or "")

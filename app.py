@@ -8,7 +8,7 @@ from pathlib import Path
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence, QPainter, QPixmap, QShortcut
 from PySide6.QtWidgets import QApplication, QMainWindow, QMenu, QMessageBox, QSystemTrayIcon
-from core import agents, audit, checks, db, display, notify, paths, reports, sessionlog, sessions, trends
+from core import agents, audit, checks, db, display, notify, paths, reports, sessionlog, sessions, trends, trust
 from ui import theme
 from ui.about import AboutTab
 from ui.configs import ConfigsTab
@@ -589,6 +589,7 @@ def console_streams():
 def run_cli(args):
     """`Toner.exe cli service` and friends: Toner without a window (see cli.py), including the agent receiver."""
     console_streams()
+    trust.install()
     import cli
     return cli.main(args)
 
@@ -598,6 +599,7 @@ def main():
         sys.exit(run_cli(sys.argv[2:]))
     setup_logging()
     db.init()
+    trust.install()                                # web requests also trust what Windows trusts (HTTPS inspection)
     sessionlog.purge(int(db.get_setting("ssh_log_days")))
     audit.purge(max(365, int(db.get_setting("ssh_log_days"))))
     app = QApplication(sys.argv)

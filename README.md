@@ -220,7 +220,10 @@ the file servers use UDP or ICMP or listen for connections, so they never do.
 
 **SSH tunnel** is for a "proxy" that is really an SSH server you use with `ssh -D` (it greets you with an SSH banner, and may ask
 for a one-time code or a YubiKey touch after your user name). Toner signs in over SSH, answers the questions (a box appears for a
-code or touch; the saved password answers a password question), keeps the session open and sends connections through it. The
+code or touch; the saved password answers a password question), keeps the session open and sends connections through it.
+It can also sign in with a **key file** (OpenSSH or PEM: RSA, ECDSA, Ed25519); the Password box is then the key's passphrase,
+and Toner asks for it when the key is protected and none is saved. A PuTTY `.ppk` key must be exported to OpenSSH format in
+PuTTYgen first. A server that wants a key and then a code gets both. The
 status strip shows it as connected or disconnected; click it when it is disconnected to sign in. The tunnel's listener is on this
 computer only and has a random password of its own. A tunnel signed in with a YubiKey cannot reconnect by itself, so scheduled
 checks need it to be open already, or a code made from a secret key.
@@ -321,6 +324,11 @@ this version**. The installer comes from GitHub over HTTPS only, its SHA-256 is 
 then is it run (a mismatch, or a release with no checksum, is never run). Your inventory, history and saved passwords are kept.
 **Install updates automatically** installs a verified update when you close Toner. Copies run from source or unzipped can check but
 not install.
+
+Toner's web requests (updates, notifications, status pages, vendor APIs that check certificates) trust the public certificate
+authorities Toner carries **and** the ones in the Windows certificate store. So on a network that inspects HTTPS (a firewall with
+SSL inspection, or antivirus that scans HTTPS), Toner works once the inspecting certificate is trusted by Windows, as a browser
+does. A certificate error during an update says so and points to the release page.
 
 ## Build and test
 

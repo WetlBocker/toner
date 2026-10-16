@@ -76,6 +76,12 @@ class Auth(paramiko.ServerInterface):
             if self.box.code is None: return paramiko.AUTH_SUCCESSFUL
             self.now = "keyboard-interactive"; return paramiko.AUTH_PARTIALLY_SUCCESSFUL
         return paramiko.AUTH_FAILED
+    def check_auth_publickey(self, u, key):
+        self.box.log.append(("publickey", u, key.get_base64()))
+        if "publickey" in self.now and key.get_base64() in self.box.keys:
+            if self.box.code is None: return paramiko.AUTH_SUCCESSFUL
+            self.now = "keyboard-interactive"; return paramiko.AUTH_PARTIALLY_SUCCESSFUL
+        return paramiko.AUTH_FAILED
     def check_auth_interactive(self, u, sub):
         if "keyboard-interactive" not in self.now: return paramiko.AUTH_FAILED          # what a real server does
         return paramiko.server.InteractiveQuery("", "", (self.box.prompt, False))
@@ -90,8 +96,8 @@ class Auth(paramiko.ServerInterface):
 
 class SshBox(Server):
     """An SSH server: `first` says what it takes first, `pw` a password (then the code), `code` the one-time code."""
-    def __init__(self, code="482913", pw=None, first="keyboard-interactive", prompt="Verification code: ", refuse=()):
-        self.code, self.pw, self.first, self.prompt, self.refuse = code, pw, first, prompt, set(refuse); super().__init__()
+    def __init__(self, code="482913", pw=None, first="keyboard-interactive", prompt="Verification code: ", refuse=(), keys=()):
+        self.code, self.pw, self.first, self.prompt, self.refuse, self.keys = code, pw, first, prompt, set(refuse), set(keys); super().__init__()
     def handle(self, c):
         t = paramiko.Transport(c); t.add_server_key(HOSTKEY); srv = Auth(self); t.start_server(server=srv)
         while t.is_active():
@@ -278,6 +284,105 @@ v = dd.values()
 check("it is saved as a tunnel, with the key kept apart", v["proxy"]["kind"] == "tunnel" and v["proxy"]["port"] == 22 and v["proxy"]["otp"] == "totp" and dd.proxy_secrets() == {"proxy_otp": "GEZDGNBV"}, (v["proxy"], dd.proxy_secrets()))
 imp = __import__("core.importer", fromlist=["x"])
 check("the import file may say tunnel", "tunnel" in dict(proxy.KINDS))
+check("the key file row shows only for a tunnel", dd.access.isRowVisible(dd.proxy_key_row) and
+      (dd.proxy_kind.setCurrentIndex(dd.proxy_kind.findData("socks5")), not dd.access.isRowVisible(dd.proxy_key_row))[1])
+dd.proxy_kind.setCurrentIndex(dd.proxy_kind.findData("tunnel")); dd.proxy_key.setText(r"C:\keys\id_ed25519")
+check("a device keeps its key file path with its proxy", dd.values()["proxy"]["key_file"] == r"C:\keys\id_ed25519")
+dd.proxy_kind.setCurrentIndex(dd.proxy_kind.findData("socks5"))
+check("but not for another type", "key_file" not in dd.values()["proxy"])
+
+print("== signing in with a key file")
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ed25519
+KEYDIR = os.path.join(SP, "keys%d" % int(time.time())); os.makedirs(KEYDIR)
+def make_key(name, passphrase=None):
+    k = ed25519.Ed25519PrivateKey.generate()
+    enc = serialization.BestAvailableEncryption(passphrase.encode()) if passphrase else serialization.NoEncryption()
+    path = os.path.join(KEYDIR, name)
+    with open(path, "wb") as f: f.write(k.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.OpenSSH, enc))
+    return path, paramiko.PKey.from_path(path, password=passphrase.encode() if passphrase else None).get_base64()
+plain_path, plain_pub = make_key("id_plain")
+locked_path, locked_pub = make_key("id_locked", "keypass")
+other_path, other_pub = make_key("id_other")
+proxy.set_code_prompt(hook)
+
+kb1 = SshBox(code=None, first="publickey", keys=[plain_pub])
+answers[:] = []; asked.clear()
+good, msg = reach(cfg_for(kb1, key_file=plain_path))
+check("a key the server knows signs in with nothing asked", good and not asked and ("publickey", "joe", plain_pub) in kb1.log, (msg, asked, kb1.log))
+check("and no password is sent", not [l for l in kb1.log if l[0] == "password"])
+tunnel.close_all()
+
+kb2 = SshBox(first="publickey", keys=[plain_pub])
+answers[:] = ["482913"]; asked.clear()
+good, msg = reach(cfg_for(kb2, key_file=plain_path, otp="ask"))
+check("a server that wants the key and then a code gets both, with only the code asked", good and len(asked) == 1 and asked[0][0] == "One-time code", (msg, asked))
+tunnel.close_all()
+
+kb3 = SshBox(code=None, first="publickey", keys=[locked_pub])
+answers[:] = []; asked.clear()
+good, msg = reach(cfg_for(kb3, key_file=locked_path, password="keypass"))
+check("a protected key opens with the saved password as its passphrase", good and not asked and not [l for l in kb3.log if l[0] == "password"], (msg, asked, kb3.log))
+tunnel.close_all()
+answers[:] = ["keypass"]; asked.clear()
+good, msg = reach(cfg_for(kb3, key_file=locked_path))
+check("with no password saved, the passphrase is asked for, hidden", good and len(asked) == 1 and asked[0][0] == "Key passphrase" and asked[0][2] is True, (msg, asked))
+tunnel.close_all()
+answers[:] = ["keypass"]; asked.clear()
+good, msg = reach(cfg_for(kb3, key_file=locked_path, password="not-it"))
+check("a saved password that is not the passphrase leads to the question, which says so", good and "not its passphrase" in asked[0][1], (msg, asked))
+tunnel.close_all()
+answers[:] = ["wrong"]; asked.clear()
+good, msg = reach(cfg_for(kb3, key_file=locked_path))
+check("a wrong passphrase is explained", not good and "wrong passphrase for the key file id_locked" in msg, msg)
+answers[:] = [""]
+good, msg = reach(cfg_for(kb3, key_file=locked_path))
+check("cancelling the passphrase box says so", not good and "no passphrase was entered" in msg, msg)
+
+kb4 = SshBox(code=None, first="publickey", keys=[plain_pub])
+good, msg = reach(cfg_for(kb4, key_file=other_path))
+check("a key the server does not know is explained", not good and "did not accept the key file" in msg and "authorized_keys" in msg, msg)
+kb5 = SshBox(first="publickey,keyboard-interactive", keys=[plain_pub])
+answers[:] = ["482913"]; asked.clear()
+good, msg = reach(cfg_for(kb5, key_file=other_path, otp="ask"))
+check("when the key is refused but the server also takes a code, the code is asked for and works", good and len(asked) == 1, (msg, asked))
+tunnel.close_all()
+
+good, msg = reach(cfg_for(kb1, key_file=os.path.join(KEYDIR, "missing")))
+check("a missing key file is explained", not good and "was not found" in msg, msg)
+ppk = os.path.join(KEYDIR, "putty.ppk")
+with open(ppk, "w") as f: f.write("PuTTY-User-Key-File-3: ssh-ed25519\nEncryption: none\n")
+good, msg = reach(cfg_for(kb1, key_file=ppk))
+check("a PuTTY key says how to convert it", not good and "PuTTYgen" in msg and "Export OpenSSH key" in msg, msg)
+junk = os.path.join(KEYDIR, "notakey.txt")
+with open(junk, "w") as f: f.write("hello")
+good, msg = reach(cfg_for(kb1, key_file=junk))
+check("a file that is not a key is explained", not good and "not a private key Toner can read" in msg, msg)
+
+print("== the key file in Settings")
+db.set_setting("proxy", dict(proxy.DEFAULTS))
+page = N.ProxyPage(); page.load()
+page.mode.setCurrentIndex(page.mode.findData("manual")); page.kind.setCurrentIndex(page.kind.findData("socks5")); page.adapt()
+check("the key file row is hidden for other types", not page.form.isRowVisible(page.key_row))
+page.kind.setCurrentIndex(page.kind.findData("tunnel"))
+check("and shown for a tunnel, its note only once a file is chosen", page.form.isRowVisible(page.key_row) and not page.form.isRowVisible(page.key_note))
+page.key_file.setText(os.path.join(KEYDIR, "missing")); page.host.setText("127.0.0.1"); page.port.setValue(kb1.port); page.user.setText("joe")
+check("a key file that is not there is refused on save", any("was not found" in m for m in page.validate()), page.validate())
+page.key_file.setText(plain_path)
+check("a real one passes, and the note says the password is its passphrase",
+      page.validate() == [] and page.form.isRowVisible(page.key_note) and "passphrase" in page.password.placeholderText())
+page.save()
+check("it is saved with the proxy setting", proxy.settings()["key_file"] == plain_path and proxy.global_config(full=True).key_file == plain_path)
+page.test_to.setText(f"127.0.0.1:{echo.port}"); asked.clear(); page.test()
+check("the Test button signs in with it", page.test_out.text().startswith("OK:") and not asked, page.test_out.text())
+gc = proxy.global_config()
+check("the tunnel stays open", tunnel.is_open(gc))
+page.save()
+check("saving with nothing changed keeps it open", tunnel.is_open(gc))
+page.key_file.setText(other_path); page.save()
+check("choosing another key file closes it", not tunnel.is_open(gc))
+check("a key file is ignored for the other types", proxy._config({"kind": "socks5", "host": "h", "port": 1, "key_file": plain_path}, "").key_file == "")
+tunnel.close_all()
 
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

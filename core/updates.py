@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 
 import requests
 
-from core import db, paths, proxy
+from core import db, paths, proxy, trust
 from core.version import REPO, VERSION
 
 API = "https://api.github.com/repos/{repo}/releases/latest"
@@ -100,12 +100,20 @@ def _pick_hex(text, name=""):
     return ""
 
 
+def _ssl_reason(e):
+    """The useful part of an SSLError, such as 'certificate verify failed: self-signed certificate in certificate chain'."""
+    m = re.search(r"certificate verify failed: ([^()\]]+)", str(e))
+    return ("the certificate was not trusted (" + m.group(1).strip() + ")") if m else str(e)[:120]
+
+
 def fetch_latest(repo=REPO, timeout=10):
     """The newest published release, or None when the repository has none (or is private). Raises UpdateError."""
     url = API.format(repo=repo)
     try:
         r = requests.get(url, headers={"Accept": "application/vnd.github+json", "User-Agent": "Toner"}, timeout=timeout,
                          **proxy.requests_kwargs(None, urlparse(url).hostname))
+    except requests.exceptions.SSLError as e:
+        raise UpdateError(f"Could not reach GitHub securely: {_ssl_reason(e)}. {trust.SSL_HINT}") from None
     except requests.RequestException as e:
         raise UpdateError(f"Could not reach GitHub: {type(e).__name__}: {str(e)[:120]}") from None
     if r.status_code == 404:
@@ -204,6 +212,10 @@ def download(rel, dest_dir=None, progress=None, cancel=None, timeout=30):
         if h.hexdigest() != want:
             raise UpdateError("The download does not match its published checksum. It was discarded and not installed.")
         os.replace(part, final)
+    except requests.exceptions.SSLError as e:
+        host = urlparse(getattr(getattr(e, "request", None), "url", "") or rel.asset_url).hostname or "GitHub"
+        raise UpdateError(f"The download from {host} failed its security check: {_ssl_reason(e)}. {trust.SSL_HINT} "
+                          f"Or download the installer from the release page.") from None
     except requests.RequestException as e:
         raise UpdateError(f"The download failed: {type(e).__name__}: {str(e)[:100]}") from None
     finally:

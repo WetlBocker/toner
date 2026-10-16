@@ -60,20 +60,63 @@ def _handler(cfg, errors):
     return answer
 
 
+def load_key(cfg):
+    """The private key in cfg.key_file. The saved password is tried as its passphrase; a protected key without one (or with
+    the wrong one) makes Toner ask. Raises ProxyError with what to do."""
+    import os
+    path = os.path.expandvars(os.path.expanduser(cfg.key_file.strip().strip('"')))
+    name = os.path.basename(path)
+    if not os.path.isfile(path):
+        raise proxy.ProxyError(f"{cfg.label()}: the key file {path} was not found")
+    try:
+        with open(path, "rb") as f:
+            head = f.read(64)
+    except OSError as e:
+        raise proxy.ProxyError(f"{cfg.label()}: the key file {name} could not be read ({e})") from None
+    if head.startswith(b"PuTTY-User-Key-File"):
+        raise proxy.ProxyError(f"{name} is a PuTTY key (.ppk). Open it in PuTTYgen and use Conversions > Export OpenSSH key, "
+                               f"then choose the exported file")
+    tried = cfg.password or None
+    try:
+        return paramiko.PKey.from_path(path, password=tried.encode() if tried else None)
+    except paramiko.PasswordRequiredException:
+        pass                                                  # protected, and no passphrase saved
+    except Exception as e:
+        said = str(e).lower()                                 # an OpenSSH-format key says so in a TypeError instead
+        protected = isinstance(e, TypeError) or any(w in said for w in ("password", "passphrase", "encrypted"))
+        if tried is None and not protected:
+            raise proxy.ProxyError(f"{cfg.label()}: {name} is not a private key Toner can read ({e or type(e).__name__}). "
+                                   f"It takes OpenSSH and PEM keys: RSA, ECDSA and Ed25519") from None
+    typed = proxy.ask_text(cfg, "Key passphrase", f"The key file {name} for {cfg.label()} is protected"
+                           + (" and the saved password is not its passphrase" if tried else "") + ". Type its passphrase.", secret=True)
+    if not typed:
+        raise proxy.ProxyError(f"{cfg.label()}: no passphrase was entered for the key file {name}")
+    try:
+        return paramiko.PKey.from_path(path, password=typed.encode())
+    except Exception:
+        raise proxy.ProxyError(f"{cfg.label()}: wrong passphrase for the key file {name}") from None
+
+
 def _login(t, cfg):
-    """Password first when there is one, then the server's questions; whichever the server wants, in the order it wants."""
+    """The key file first when there is one, then the password, then the server's questions; whichever the server wants,
+    in the order it wants. With a key file the saved password is the key's passphrase, so it is not sent as a password."""
     errors = []
-    handler = _handler(cfg, errors)
-    wanted = ["password", "keyboard-interactive"] if cfg.password else ["keyboard-interactive", "password"]
-    done, remaining = set(), None
-    for _ in range(4):
+    pkey = load_key(cfg) if cfg.key_file else None
+    plain = replace(cfg, password="") if pkey else cfg
+    handler = _handler(plain, errors)
+    wanted = (["publickey"] if pkey else []) + (["password", "keyboard-interactive"] if plain.password
+                                                 else ["keyboard-interactive", "password"])
+    done, remaining, key_refused = set(), None, False
+    for _ in range(6):
         kind = next((k for k in wanted if k not in done and (remaining is None or k in remaining)), None)
         if kind is None:
             break
         done.add(kind)
         try:
-            if kind == "password":
-                remaining = t.auth_password(cfg.username, cfg.password or proxy.ask_text(
+            if kind == "publickey":
+                remaining = t.auth_publickey(cfg.username, pkey)
+            elif kind == "password":
+                remaining = t.auth_password(cfg.username, plain.password or proxy.ask_text(
                     cfg, "Password", f"{cfg.label()} asks for the password of {cfg.username}.", secret=True))
             else:
                 remaining = t.auth_interactive(cfg.username, handler)
@@ -82,6 +125,9 @@ def _login(t, cfg):
             done.discard(kind)                                # (it may want this one later, after the other)
             continue
         except paramiko.AuthenticationException:
+            if kind == "publickey":
+                key_refused, remaining = True, None           # as ssh does: try the other ways the server takes
+                continue
             if errors:
                 raise errors[0] from None
             raise proxy.ProxyError(f"{cfg.label()} rejected the sign-in (user name, password or one-time code)") from None
@@ -89,6 +135,9 @@ def _login(t, cfg):
             return
     if t.is_authenticated():
         return
+    if key_refused:
+        raise proxy.ProxyError(f"{cfg.label()} did not accept the key file for {cfg.username}. Check that its public key is "
+                               f"in ~/.ssh/authorized_keys for that user on the server")
     raise proxy.ProxyError(f"{cfg.label()} did not accept the sign-in"
                            + (f"; it still wants {', '.join(remaining)}, which Toner cannot do" if remaining else ""))
 

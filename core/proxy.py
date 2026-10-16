@@ -39,7 +39,8 @@ OTP_MODES = [("", "None"), ("ask", "Ask me for it when connecting"), ("totp", "M
 MODES = [("none", "No proxy (connect directly)"),
          ("system", "Use the Windows proxy settings (web connections only)"),
          ("manual", "Use the proxy below")]
-DEFAULTS = {"mode": "system", "kind": "http", "host": "", "port": 8080, "username": "", "bypass": "localhost, 127.0.0.1"}
+DEFAULTS = {"mode": "system", "kind": "http", "host": "", "port": 8080, "username": "", "bypass": "localhost, 127.0.0.1",
+            "otp": "", "key_file": ""}
 DIRECT = {"http": "", "https": ""}          # an empty address tells `requests` to ignore any proxy, even the Windows one
 
 
@@ -61,6 +62,7 @@ class Config:
     password: str = ""
     otp: str = ""                    # "" none, "ask" ask for a code each time, "totp" make it from otp_key
     otp_key: str = ""
+    key_file: str = ""               # SSH tunnel: a private key to sign in with (the password is its passphrase)
 
     def label(self):
         return f"{dict(KINDS).get(self.kind, self.kind).split(' (')[0]} {self.host}:{self.port}"
@@ -88,8 +90,9 @@ def _config(s, password, otp_key=""):
     if not str(s.get("host") or "").strip():
         return None
     otp = s.get("otp") if s.get("otp") in ("ask", "totp") else ""
-    return Config(s.get("kind") or "http", s["host"].strip(), int(s.get("port") or 8080), (s.get("username") or "").strip(),
-                  password or "", otp, otp_key or "")
+    kind = s.get("kind") or "http"
+    return Config(kind, s["host"].strip(), int(s.get("port") or 8080), (s.get("username") or "").strip(),
+                  password or "", otp, otp_key or "", str(s.get("key_file") or "").strip() if kind == "tunnel" else "")
 
 
 def global_config(full=False):
