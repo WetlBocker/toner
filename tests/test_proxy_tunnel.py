@@ -85,10 +85,16 @@ class Auth(paramiko.ServerInterface):
     def check_auth_interactive(self, u, sub):
         if "keyboard-interactive" not in self.now: return paramiko.AUTH_FAILED          # what a real server does
         return paramiko.server.InteractiveQuery("", "", (self.box.prompt, False))
+    def check_auth_none(self, u):
+        self.box.log.append(("none", u))
+        if self.box.hangup: threading.Timer(0, self.t.close).start(); time.sleep(0.5)     # gone before it answers
+        return paramiko.AUTH_FAILED
     def check_auth_interactive_response(self, responses):
         want = self.box.code() if callable(self.box.code) else self.box.code
         self.box.log.append(("answer", list(responses)))
-        return paramiko.AUTH_SUCCESSFUL if list(responses) == [want] else paramiko.AUTH_FAILED
+        if list(responses) == [want]: return paramiko.AUTH_SUCCESSFUL
+        if self.box.strict: threading.Timer(0.05, self.t.close).start()
+        return paramiko.AUTH_FAILED
     def check_channel_request(self, kind, chanid): return paramiko.OPEN_SUCCEEDED
     def check_channel_direct_tcpip_request(self, chanid, origin, destination):
         if destination[1] in self.box.refuse: return paramiko.OPEN_FAILED_ADMINISTRATIVELY_PROHIBITED
@@ -96,10 +102,13 @@ class Auth(paramiko.ServerInterface):
 
 class SshBox(Server):
     """An SSH server: `first` says what it takes first, `pw` a password (then the code), `code` the one-time code."""
-    def __init__(self, code="482913", pw=None, first="keyboard-interactive", prompt="Verification code: ", refuse=(), keys=()):
-        self.code, self.pw, self.first, self.prompt, self.refuse, self.keys = code, pw, first, prompt, set(refuse), set(keys); super().__init__()
+    def __init__(self, code="482913", pw=None, first="keyboard-interactive", prompt="Verification code: ", refuse=(), keys=(),
+                 strict=False, hangup=False):
+        self.code, self.pw, self.first, self.prompt, self.refuse, self.keys = code, pw, first, prompt, set(refuse), set(keys)
+        self.strict, self.hangup = strict, hangup                  # hang up after a wrong answer / as soon as sign-in starts
+        super().__init__()
     def handle(self, c):
-        t = paramiko.Transport(c); t.add_server_key(HOSTKEY); srv = Auth(self); t.start_server(server=srv)
+        t = paramiko.Transport(c); t.add_server_key(HOSTKEY); srv = Auth(self); srv.t = t; t.start_server(server=srv)
         while t.is_active():
             chan = t.accept(1)
             if chan is None: continue
@@ -382,6 +391,48 @@ check("saving with nothing changed keeps it open", tunnel.is_open(gc))
 page.key_file.setText(other_path); page.save()
 check("choosing another key file closes it", not tunnel.is_open(gc))
 check("a key file is ignored for the other types", proxy._config({"kind": "socks5", "host": "h", "port": 1, "key_file": plain_path}, "").key_file == "")
+tunnel.close_all()
+
+print("== a server that hangs up after a wrong answer (\"No existing session\")")
+proxy.set_code_prompt(hook); proxy.WAIT_HOOK = None
+st1 = SshBox(strict=True); cs1 = cfg_for(st1, password="s3cret", otp="ask")
+answers[:] = ["482913"]; asked.clear()
+good, msg = reach(cs1)
+check("a saved password is never typed into the code question", good and not any(l[0] == "answer" and "s3cret" in l[1] for l in st1.log), (msg, st1.log))
+check("the server is asked which ways it takes first, and the code is asked for once", st1.log[0][0] == "none" and len(asked) == 1, (st1.log, asked))
+tunnel.close_all()
+st2 = SshBox(strict=True); answers[:] = ["000000"]
+good, msg = reach(cfg_for(st2, otp="ask"))
+check("a wrong code on such a server is reported plainly, not as 'No existing session'", not good and "No existing session" not in msg
+      and ("rejected the sign-in" in msg or "closed the connection after the answers were sent" in msg), msg)
+st3 = SshBox(hangup=True); answers[:] = ["482913"]
+good, msg = reach(cfg_for(st3, otp="ask"))
+check("a server that hangs up as the sign-in starts says so", not good and "No existing session" not in msg and "closed the connection" in msg, msg)
+tunnel.close_all()
+
+print("== the Test button, with the real question box")
+from ui import otpprompt
+shown = []
+class CodeDialog:
+    def __init__(self, parent=None): pass
+    def setWindowTitle(self, t): shown.append(t)
+    def setLabelText(self, t): pass
+    def setTextEchoMode(self, m): pass
+    def setWindowFlag(self, *a): pass
+    def exec(self): return 1
+    def textValue(self): return "482913"
+real_dialog = otpprompt.QInputDialog
+otpprompt.QInputDialog = CodeDialog
+otpprompt.install()
+st4 = SshBox(strict=True)
+db.set_setting("proxy", {**proxy.DEFAULTS, "mode": "manual", "kind": "tunnel", "host": "127.0.0.1", "port": st4.port, "username": "joe", "otp": "ask"})
+STORE[("netcheck", proxy.GLOBAL_SECRET)] = "s3cret"
+page4 = N.ProxyPage(); page4.load(); page4.test_to.setText(f"127.0.0.1:{echo.port}")
+t0 = time.time(); page4.test(); took = time.time() - t0
+check("clicked on the window's own thread, the code box still appears and the sign-in works", page4.test_out.text().startswith("OK:") and shown == ["One-time code"], (page4.test_out.text(), shown))
+check("without waiting for a time-out", took < 20, took)
+otpprompt.QInputDialog = real_dialog
+STORE.pop(("netcheck", proxy.GLOBAL_SECRET), None)
 tunnel.close_all()
 
 print(f"\n{ok} passed, {bad} failed")

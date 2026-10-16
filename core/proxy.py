@@ -352,6 +352,15 @@ def set_code_prompt(fn):
     CODE_PROMPT = fn
 
 
+WAIT_HOOK = None              # set by the app: fn(work) runs work() and, on the window's thread, keeps the window responsive
+
+
+def run_waiting(work):
+    """Run work() for a sign-in that may ask questions. Called from a button (the window's own thread), the questions could
+    not be shown while the window waits, so the app's hook keeps it responsive until the work is done."""
+    return WAIT_HOOK(work) if WAIT_HOOK else work()
+
+
 def forget_code(cfg):
     _codes.pop((cfg.host, cfg.port, cfg.username), None)
 

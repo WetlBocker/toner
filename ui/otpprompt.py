@@ -2,7 +2,7 @@
 main thread, so a worker hands the question over and waits for the answer."""
 import threading
 
-from PySide6.QtCore import QObject, Qt, QThread, Signal
+from PySide6.QtCore import QEventLoop, QObject, Qt, QThread, Signal
 from PySide6.QtWidgets import QApplication, QInputDialog, QLineEdit
 
 from core import proxy
@@ -48,9 +48,33 @@ def ask(title, text, secret=False):
     return job["code"]
 
 
+def wait_responsive(work):
+    """Run work() on a helper thread while the window keeps handling events, when called on the window's thread (a Test
+    button). Otherwise the SSH sign-in would wait for an answer that the waiting window could never ask for."""
+    app = QApplication.instance()
+    if app is None or QThread.currentThread() != app.thread():
+        return work()
+    box = {}
+
+    def run():
+        try:
+            box["value"] = work()
+        except BaseException as e:                                     # handed back to the caller below
+            box["error"] = e
+    th = threading.Thread(target=run, daemon=True)
+    th.start()
+    while th.is_alive():
+        app.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 50)
+        th.join(0.02)
+    if "error" in box:
+        raise box["error"]
+    return box.get("value")
+
+
 def install():
     """Call once, on the main thread, after the QApplication exists."""
     global _asker
     if _asker is None:
         _asker = _Asker()
     proxy.set_code_prompt(ask)
+    proxy.WAIT_HOOK = wait_responsive

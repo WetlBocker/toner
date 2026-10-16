@@ -97,9 +97,25 @@ def load_key(cfg):
         raise proxy.ProxyError(f"{cfg.label()}: wrong passphrase for the key file {name}") from None
 
 
+AFTER = {"none": "before Toner could sign in", "publickey": "after the key file was tried",
+         "password": "after the password was sent", "keyboard-interactive": "after the answers were sent"}
+
+
+def _closed(t, cfg, kind, errors=()):
+    """The server hung up during the sign-in (paramiko then says only 'No existing session')."""
+    if errors:
+        return errors[0]
+    why = t.get_exception()
+    return proxy.ProxyError(f"{cfg.label()} closed the connection {AFTER.get(kind, 'during the sign-in')}"
+                            + (f" ({why})" if why and str(why) else "")
+                            + ". A server often hangs up after a wrong answer, or when a code or YubiKey touch takes too long. "
+                              "Try again; if it keeps happening, check the user name and the server's log")
+
+
 def _login(t, cfg):
-    """The key file first when there is one, then the password, then the server's questions; whichever the server wants,
-    in the order it wants. With a key file the saved password is the key's passphrase, so it is not sent as a password."""
+    """Ask the server which ways it takes (as ssh does), then use them in this order: the key file, the password, the server's
+    own questions. With a key file the saved password is the key's passphrase, so it is not sent as a password. A password is
+    never typed into a question the server asks (paramiko would otherwise answer a one-time code prompt with it)."""
     errors = []
     pkey = load_key(cfg) if cfg.key_file else None
     plain = replace(cfg, password="") if pkey else cfg
@@ -107,30 +123,50 @@ def _login(t, cfg):
     wanted = (["publickey"] if pkey else []) + (["password", "keyboard-interactive"] if plain.password
                                                  else ["keyboard-interactive", "password"])
     done, remaining, key_refused = set(), None, False
+    try:
+        remaining = t.auth_none(cfg.username)              # 'none' is how a client asks; it is not a failed try
+        if not remaining or t.is_authenticated():
+            return
+    except paramiko.BadAuthenticationType as e:
+        remaining = list(e.allowed_types)
+    except paramiko.SSHException:
+        if not t.is_active():
+            raise _closed(t, cfg, "none") from None
+        remaining = None
     for _ in range(6):
         kind = next((k for k in wanted if k not in done and (remaining is None or k in remaining)), None)
         if kind is None:
             break
         done.add(kind)
+        if not t.is_active():
+            raise _closed(t, cfg, kind, errors)
         try:
             if kind == "publickey":
                 remaining = t.auth_publickey(cfg.username, pkey)
             elif kind == "password":
                 remaining = t.auth_password(cfg.username, plain.password or proxy.ask_text(
-                    cfg, "Password", f"{cfg.label()} asks for the password of {cfg.username}.", secret=True))
+                    cfg, "Password", f"{cfg.label()} asks for the password of {cfg.username}.", secret=True), fallback=False)
             else:
                 remaining = t.auth_interactive(cfg.username, handler)
         except paramiko.BadAuthenticationType as e:
             remaining = list(e.allowed_types)                 # not that way yet: the server says which ways it takes
             done.discard(kind)                                # (it may want this one later, after the other)
+            if kind in remaining:                             # it says it takes it after all: do not go round in circles
+                done.add(kind)
             continue
         except paramiko.AuthenticationException:
-            if kind == "publickey":
+            if kind == "publickey" and t.is_active():
                 key_refused, remaining = True, None           # as ssh does: try the other ways the server takes
                 continue
             if errors:
                 raise errors[0] from None
+            if not t.is_active() and kind != "password":
+                raise _closed(t, cfg, kind) from None
             raise proxy.ProxyError(f"{cfg.label()} rejected the sign-in (user name, password or one-time code)") from None
+        except paramiko.SSHException as e:
+            if not t.is_active():
+                raise _closed(t, cfg, kind, errors) from None
+            raise proxy.ProxyError(f"{cfg.label()}: {e}") from None
         if not remaining:
             return
     if t.is_authenticated():
@@ -304,7 +340,7 @@ def get(cfg, connect=True):
         if t is not None:
             t.close()
         t = Tunnel(cfg)
-        t.open()
+        proxy.run_waiting(t.open)
         _tunnels[_key(cfg)] = t
         return t
 
