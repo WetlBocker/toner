@@ -1,9 +1,10 @@
 """Opening netmiko sessions, with Toner's adjustments for particular devices.
 
 Cisco ASA: netmiko's ASA set-up types "show curpriv" the moment the SSH sign-in is done and waits 10 seconds for it to be
-echoed. An ASA that authorises the shell over TACACS+ or RADIUS (domain accounts), or shows a banner first, throws away
-what is typed before its prompt appears, so the echo never comes: "ReadTimeout: Pattern not detected: 'show\\ curpriv'".
-An interactive SSH client waits for the prompt; so does this.
+echoed. Two things on a real ASA stop that echo: a sign-in banner longer than a screen stops at '<--- More --->', which
+takes the first letters typed as a key press (the ASA then sees only "curpriv"); and an ASA that authorises the shell over
+TACACS+ or RADIUS drops what is typed before its prompt. Either way netmiko fails with "ReadTimeout: Pattern not detected:
+'show\\ curpriv'". An interactive SSH client pages through the banner and waits for the prompt; so does this.
 """
 import re
 import time
@@ -12,12 +13,20 @@ from netmiko import ConnectHandler
 from netmiko.cisco.cisco_asa_ssh import CiscoAsaSSH
 
 PROMPT = re.compile(r"\S[>#]\s?$")
+MORE = re.compile(r"<-+\s*More\s*-+>|--\s*More\s*--", re.IGNORECASE)
 
 
 def is_prompt(text):
     """Does the output end with a prompt such as 'fw1>' or 'fw1/ctx#'? A prompt is the last line, with no newline after it."""
     last = text.replace("\r", "").split("\n")[-1]
-    return bool(PROMPT.search(last))
+    return bool(PROMPT.search(last)) and not MORE.search(last)        # '<--- More --->' ends in '>' too
+
+
+def at_more(text):
+    """Is the output stopped at a pager ('<--- More --->'), waiting for a key? Only spaces or backspaces may follow it."""
+    tail = text[-120:]
+    marks = list(MORE.finditer(tail))
+    return bool(marks) and not tail[marks[-1].end():].strip(" \x08\r\t")
 
 
 class AsaSSH(CiscoAsaSSH):
@@ -30,17 +39,25 @@ class AsaSSH(CiscoAsaSSH):
         super().session_preparation()
 
     def wait_for_prompt(self, seconds):
-        """Read until something that looks like 'name>' or 'name#' ends the output. Press Enter after a quiet couple of
-        seconds (once a few seconds apart), as a person would. Returns what was read; on a time-out netmiko's own step
-        runs anyway and reports what it finds."""
-        seen, end, nudged, quiet_since = "", time.time() + seconds, 0, time.time()
+        """Read until something that looks like 'name>' or 'name#' ends the output. A sign-in banner longer than a screen
+        stops at '<--- More --->': press Space for the next page (Enter would show only one more line, and what netmiko
+        types next would be eaten by the pager). Press Enter after a quiet couple of seconds otherwise, as a person would.
+        Returns what was read; on a time-out netmiko's own step runs anyway and reports what it finds."""
+        seen, end, nudged, pages, quiet_since = "", time.time() + seconds, 0, 0, time.time()
         while time.time() < end:
             new = self.read_channel()
             if new:
                 seen += new
                 quiet_since = time.time()
-                if is_prompt(seen):
+                if is_prompt(seen) and not at_more(seen):
                     return seen
+                if at_more(seen) and pages < 50:
+                    self.write_channel(" ")
+                    pages += 1
+            elif at_more(seen) and pages < 50 and time.time() - quiet_since > 2:
+                self.write_channel(" ")                        # a page key that got lost
+                pages += 1
+                quiet_since = time.time()
             elif time.time() - quiet_since > 2 and nudged < 5:
                 self.write_channel(self.RETURN)
                 nudged += 1

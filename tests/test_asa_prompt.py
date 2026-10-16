@@ -42,9 +42,11 @@ class Auth(paramiko.ServerInterface):
 
 class FakeAsa:
     """Shows its prompt `delay` seconds after the sign-in and drops anything typed before that, as an ASA waiting on
-    TACACS+ does. `never`: no prompt at all."""
-    def __init__(self, delay=1.5, never=False):
+    TACACS+ does. `never`: no prompt at all. `banner`: lines shown first through the ASA's pager, 24 lines a screen, as in
+    the log from the real ASA: Space shows the next page, Enter one more line, and any other key is used up as a key press."""
+    def __init__(self, delay=1.5, never=False, banner=None, prompt="fw1"):
         self.delay, self.never, self.discarded, self.commands = delay, never, b"", []
+        self.banner, self.name, self.keys = banner or [], prompt, []
         self.sock = socket.socket(); self.sock.bind(("127.0.0.1", 0)); self.sock.listen(8); self.port = self.sock.getsockname()[1]
         threading.Thread(target=self._loop, daemon=True).start()
     def _loop(self):
@@ -67,23 +69,50 @@ class FakeAsa:
             time.sleep(0.05)
         if self.never:
             time.sleep(40); return
-        mode = "fw1# "
+        buf = self.page(chan, self.banner) if self.banner else b""
+        mode = f"{self.name}# "
         chan.send(b"\r\nType help or '?' for a list of available commands.\r\n" + mode.encode())
-        buf = b""
         while True:
-            data = chan.recv(1024)
-            if not data: return
-            buf += data
+            if b"\n" not in buf:
+                data = chan.recv(1024)
+                if not data: return
+                buf += data
             while b"\n" in buf:
                 line, buf = buf.split(b"\n", 1)
                 cmd = line.decode().strip("\r").strip()
                 self.commands.append(cmd)
                 out = ANSWERS.get(cmd, "")
-                if cmd == "configure terminal": mode = "fw1(config)# "
-                elif cmd in ("end", "exit"): mode = "fw1# "
+                if cmd == "configure terminal": mode = f"{self.name}(config)# "
+                elif cmd in ("end", "exit"): mode = f"{self.name}# "
                 elif cmd and cmd not in ANSWERS and cmd not in ("terminal pager 0", "terminal width 511", "enable"):
                     out = "ERROR: % Invalid input detected at '^' marker.\r\n"
                 chan.send((cmd + "\r\n" + out + mode).encode())
+
+    def page(self, chan, lines, screen=24):
+        """Show lines through a pager; returns what was typed after the pager let go (it reaches the command line)."""
+        pending, i = b"", 0
+        def key():
+            nonlocal pending
+            while not pending:
+                data = chan.recv(1024)
+                if not data: raise EOFError
+                pending += data
+            k, pending = pending[:1], pending[1:]
+            self.keys.append(k)
+            return k
+        first = lines[:screen - 1]; i = len(first)
+        chan.send(("\r\n".join(first) + "\r\n").encode())
+        while i < len(lines):
+            chan.send(b"<--- More --->")
+            k = key()
+            chan.send(b"\r" + b" " * 14 + b"\r")                   # the ASA rubs the marker out
+            if k == b"q":
+                break
+            take = 1 if k in (b"\r", b"\n") else screen - 1          # Enter: one line; anything else: a page
+            chan.send(("\r\n".join(lines[i:i + take]) + "\r\n").encode())
+            i += take
+        return pending
+
 
 def args(asa):
     return dict(device_type="cisco_asa", host="127.0.0.1", port=asa.port, username="admin", password="Adm1n!pw", secret="Adm1n!pw",
@@ -113,6 +142,38 @@ check("an ASA that is ready at once works the same", "Adaptive Security Applianc
 check("other device types are left to netmiko", netconn.SPECIAL == {"cisco_asa": netconn.AsaSSH})
 check("the prompt test", netconn.is_prompt("banner\r\nfw1# ") and netconn.is_prompt("fw1/admin>") and netconn.is_prompt("fw1(config)#")
       and not netconn.is_prompt("fw1# \r\n") and not netconn.is_prompt("Type help or '?'"))
+
+print("== a sign-in banner longer than a screen, as on the real ASA")
+BANNER = ['"' + "*" * 56] + [f"* line {n} of the warning banner{' ' * 26}*" for n in range(1, 15)] + ["*" * 57] * 2 \
+         + [f"* line {n} again{' ' * 40}*" for n in range(1, 13)] + ["Welcome to AZ-PROD-NEU-VASA-01, on europe.stericorp.com",
+                                                                  "User sentinel logged in to AZ-PROD-NEU-VASA-01"]
+NAME = "AZ-PROD-NEU-VASA-01/sec/NoFailover"
+paged = FakeAsa(delay=0, banner=BANNER, prompt=NAME)
+try:
+    PlainConnectHandler(**args(paged)).disconnect(); plain = "connected"
+except Exception as e:
+    plain = f"{type(e).__name__}: {e}"
+check("netmiko on its own fails the same way as in the log", "Pattern not detected" in plain and "curpriv" in plain, plain)
+check("because the pager took the start of 'show curpriv' as a key press, leaving 'curpriv'",
+      any(c.endswith("curpriv") and not c.startswith("show") for c in paged.commands), paged.commands)
+paged2 = FakeAsa(delay=0, banner=BANNER, prompt=NAME)
+with netconn.connect(**args(paged2)) as c:
+    out = c.send_command("show version")
+    base = c.base_prompt
+check("Toner pages through the banner with Space, then the set-up and the command work",
+      "Adaptive Security Appliance" in out and b" " in paged2.keys and "show curpriv" in paged2.commands, (out, paged2.keys, paged2.commands))
+check("nothing typed was eaten by the pager", not any(c.endswith("curpriv") and not c.startswith("show") for c in paged2.commands), paged2.commands)
+check("the prompt with its context and failover state is recognised", base == NAME, base)
+check("the pager test", netconn.at_more("...\r\n* proceedings. *\r\n<--- More --->") and netconn.at_more("x --More-- \x08\x08")
+      and not netconn.at_more("<--- More --->\r              \r* line *\r\n") and not netconn.is_prompt("* proceedings *\r\n<--- More --->"))
+paged_dev = dict(name="vasa", vendor="cisco", platform="cisco_asa", host="127.0.0.1", port=FakeAsa(delay=1, banner=BANNER, prompt=NAME).port,
+                 username="admin", site="default", verify_ssl=0, ha_expected=0, enabled=1, location="", details="", folder_id=None, tags="", fields="")
+STORE[("netcheck", "vasa")] = "Adm1n!pw"
+r = cmdrun.run_on_device(paged_dev, ["show version"], read_timeout=20)
+check("Command Runner works on it", r["ok"] and "9.8(4)32" in r["outputs"][0][1], r)
+from core import backup as _backup
+r = _backup.backup_device(paged_dev)
+check("and so does a config backup", r.status == "OK", (r.status, r.message))
 
 print("== Command Runner on the ASA")
 asa = FakeAsa()
