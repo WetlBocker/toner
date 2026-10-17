@@ -5,8 +5,8 @@ Normally in %APPDATA%\\NetCheck. A portable copy has a file named portable.flag 
 folder can be copied to a USB drive or another computer. If that folder cannot be written to (Program Files, a read-only
 drive) Toner falls back to %APPDATA% rather than failing to start.
 
-Passwords are the exception: they stay in Windows Credential Manager on whichever computer Toner runs on, so they do not
-travel with a portable copy."""
+Passwords travel too: they are in Toner's vault (netcheck.vault, beside the database), opened with the master password. Only
+"Remember on this computer" stays behind, since Windows protects it for one user on one computer."""
 import os
 import sys
 import threading

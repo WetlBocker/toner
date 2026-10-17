@@ -33,9 +33,22 @@ FIELDS = ["name", "kind", "target", "parse", "mode", "warn", "fail", "higher_wor
           "enabled", "port", "options"]
 
 
-def list_checks():
+def _checks_here():
     with db.connect() as c:
-        out = [dict(r) for r in c.execute("SELECT * FROM custom_checks ORDER BY name COLLATE NOCASE")]
+        return [dict(r) for r in c.execute("SELECT * FROM custom_checks ORDER BY name COLLATE NOCASE")]
+
+
+def list_checks():
+    """The checks that apply to the organization being written to: its own and Global's Shared ones (each with 'org')."""
+    return _decode(db.gather_own(_checks_here))
+
+
+def listing():
+    """For Settings > Custom checks: in Global every organization's, in an organization its own and the Shared ones."""
+    return _decode(db.listing(_checks_here))
+
+
+def _decode(out):
     for r in out:
         try:
             r["scope"] = json.loads(r["scope"] or "[]")
@@ -86,6 +99,12 @@ def validate(chk):
 
 
 def save_check(chk):
+    """Insert or update, in the check's own organization's file (chk['org']; Shared ones in Global's)."""
+    with db.within(chk.get("org")):
+        return _save_check(chk)
+
+
+def _save_check(chk):
     name = validate(chk)
     row = {k: chk.get(k) for k in FIELDS}
     row["name"] = name
@@ -96,21 +115,21 @@ def save_check(chk):
     row["options"] = json.dumps(chk.get("options") or {})
     if row["kind"] == "iperf":
         row["higher_worse"] = 0                            # a slow link is the problem
+    shared = 1 if chk.get("shared") and db.target() == db.GLOBAL else 0
     with db.connect() as c:
         clash = c.execute("SELECT id FROM custom_checks WHERE name=? COLLATE NOCASE AND id IS NOT ?",
                           (name, chk.get("id"))).fetchone()
         if clash:
             raise ValueError(f"A check named '{name}' already exists.")
+        cols, vals = FIELDS + ["shared"], [row[k] for k in FIELDS] + [shared]
         if chk.get("id"):
-            c.execute("UPDATE custom_checks SET " + ", ".join(f"{k}=?" for k in FIELDS) + " WHERE id=?",
-                      [row[k] for k in FIELDS] + [chk["id"]])
+            c.execute("UPDATE custom_checks SET " + ", ".join(f"{k}=?" for k in cols) + " WHERE id=?", vals + [chk["id"]])
             return chk["id"]
-        return c.execute(f"INSERT INTO custom_checks ({','.join(FIELDS)}) VALUES ({','.join('?' * len(FIELDS))})",
-                         [row[k] for k in FIELDS]).lastrowid
+        return c.execute(f"INSERT INTO custom_checks ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})", vals).lastrowid
 
 
-def delete_check(cid):
-    with db.connect() as c:
+def delete_check(cid, org=None):
+    with db.within(org), db.connect() as c:
         c.execute("DELETE FROM custom_checks WHERE id=?", (cid,))
 
 

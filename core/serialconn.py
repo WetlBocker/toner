@@ -47,12 +47,15 @@ class SerialSession(QThread):
         self.ser = None
         self._stop = False
         self._lock = threading.Lock()
+        self._early = b""                              # typed after Connect but before the port was open
 
     def send(self, data: bytes):
         try:
             with self._lock:
                 if self.ser and self.ser.is_open:
                     self.ser.write(data)
+                elif self.ser is None and not self._stop:
+                    self._early += data                # the port is still being opened: sent as soon as it is
         except (OSError, ValueError, getattr(serial, "SerialException", OSError)):
             pass
 
@@ -77,12 +80,20 @@ class SerialSession(QThread):
             self.closed.emit("Serial support is missing: install pyserial (pip install pyserial).")
             return
         try:
-            self.ser = serial.serial_for_url(self.port, baudrate=self.baud, bytesize=self.bytesize, parity=self.parity,
-                                             stopbits=self.stopbits, xonxoff=self.flow == "xonxoff",
-                                             rtscts=self.flow == "rtscts", timeout=0.2)
+            ser = serial.serial_for_url(self.port, baudrate=self.baud, bytesize=self.bytesize, parity=self.parity,
+                                        stopbits=self.stopbits, xonxoff=self.flow == "xonxoff",
+                                        rtscts=self.flow == "rtscts", timeout=0.2)
         except (serial.SerialException, ValueError, OSError) as e:
             self.closed.emit(friendly(self.port, e))
             return
+        with self._lock:                               # what was typed while the port opened goes out first, in order
+            self.ser = ser
+            early, self._early = self._early, b""
+            try:
+                if early:
+                    ser.write(early)
+            except (serial.SerialException, OSError):
+                pass
         try:
             while not self._stop:
                 n = self.ser.in_waiting

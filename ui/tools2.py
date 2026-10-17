@@ -18,6 +18,7 @@ from core import proxy, topology, vendors
 from ui import theme
 from ui.tools import DevicePicker, OutputBox, _row
 from ui.widgets import EmptyHint, GroupPicker
+from ui.finder import FilterButton, SearchBox, device_sections, shown_devices
 from ui.toast import toast
 from ui import status as st
 
@@ -260,6 +261,7 @@ class NodeItem(QGraphicsRectItem):
         if not inventory:
             pen.setStyle(Qt.PenStyle.DashLine)
         self.setPen(pen)
+        name = db.label(name)
         label = QGraphicsSimpleTextItem(name if len(name) <= 17 else name[:16] + "…", self)
         label.setBrush(QBrush(QColor(reports.fg_for(bg) if bg else tk.get("text", "#222222"))))
         r = label.boundingRect()
@@ -349,9 +351,11 @@ class TopologyTab(QWidget):
         super().__init__()
         self.worker = None
         self.rows, self.nodes, self.links = [], {}, []
-        self.group = GroupPicker()
-        self.group.set_labels(db.group_labels()[1:])
+        self.find = SearchBox("Search devices", "Type part of a name, address, vendor, location, tag or detail. Several words must all match.",
+                              page=self)
+        self.funnel = FilterButton(lambda: device_sections(topology.snmp_devices()))
         self.go = _primary("Discover neighbours")
+        self.go.setToolTip("Asks the devices shown that have SNMP settings")
         self.view_btn = QPushButton("Show map")
         self.view_btn.setCheckable(True)
         self.save_btn = QPushButton("Save picture...")
@@ -362,9 +366,11 @@ class TopologyTab(QWidget):
         self.stack.addWidget(self.table)
         self.stack.addWidget(self.map)
         top = QHBoxLayout()
-        for w in (self.group, self.go, self.view_btn, self.save_btn):
+        for w in (self.go, self.view_btn, self.save_btn):
             top.addWidget(w)
         top.addWidget(self.status, 1)
+        top.addWidget(self.find, 1)                       # on the right, as on Inventory
+        top.addWidget(self.funnel)
         lay = QVBoxLayout(self)
         lay.addLayout(top)
         lay.addWidget(_muted("Asks every device that has SNMP settings for its LLDP and CDP neighbours, then joins the answers "
@@ -377,7 +383,7 @@ class TopologyTab(QWidget):
         self.refresh()
 
     def refresh(self):
-        self.group.set_labels(db.group_labels()[1:])
+        pass                                              # the funnel reads the inventory each time it opens
 
     def _toggle(self, on):
         self.stack.setCurrentIndex(1 if on else 0)
@@ -391,7 +397,7 @@ class TopologyTab(QWidget):
     def start(self):
         if self.running():
             return
-        devs = [d for d in topology.snmp_devices() if db.in_groups(d, self.group.selected())]
+        devs = shown_devices(topology.snmp_devices(), self.find, self.funnel)
         if not devs:
             QMessageBox.information(self, "Topology", "No devices with SNMP settings. Set SNMP on a device (its SNMP tab) "
                                     "or use a credential profile that includes SNMP.")
@@ -731,12 +737,15 @@ class CommandRunnerTab(QWidget):
         super().__init__()
         self.worker = None
         self.results = {}
-        self.group = GroupPicker()
-        self.group.changed.connect(self.fill_devices)
+        self.find = SearchBox("Search devices", "Type part of a name, address, vendor, location, tag or detail. Several words must all match.",
+                              page=self)
+        self.funnel = FilterButton(lambda: device_sections(db.list_devices(enabled_only=True)))
+        self.find.textChanged.connect(lambda _t: self.fill_devices())
+        self.funnel.changed.connect(self.fill_devices)
         self.devs = QListWidget()
         self.devs.setMaximumWidth(280)
         self.devs.itemClicked.connect(self._devs_clicked)
-        self.devs_hint = EmptyHint(self.devs, "No devices in these groups take commands", "Try other groups, or see Edit device > Access.", wrap=True)
+        self.devs_hint = EmptyHint(self.devs, "No devices shown take commands", "Try another search or filter, or see Edit device > Access.", wrap=True)
         self.all_btn, self.none_btn = QPushButton("All"), QPushButton("None")
         self.commands = QPlainTextEdit()
         self.commands.setPlaceholderText("one command per line, e.g.\nshow version\nshow ip interface brief\n\nWindows computers take PowerShell, e.g.\nGet-Service | Where-Object { $_.Status -eq 'Stopped' }")
@@ -765,7 +774,10 @@ class CommandRunnerTab(QWidget):
         self.save_btn, self.copy_btn = QPushButton("Save all output..."), QPushButton("Copy")
         left = QVBoxLayout()
         left.addWidget(QLabel("Devices"))
-        left.addWidget(self.group)
+        finder = QHBoxLayout()                           # where the "All devices" drop-down was
+        finder.addWidget(self.find, 1)
+        finder.addWidget(self.funnel)
+        left.addLayout(finder)
         left.addWidget(self.devs, 1)
         lb = QHBoxLayout()
         lb.addWidget(self.all_btn)
@@ -812,13 +824,12 @@ class CommandRunnerTab(QWidget):
             pass
 
     def refresh(self):
-        self.group.set_labels(db.group_labels()[1:])
         self.fill_devices()
         self.fill_snippets()
 
     def candidates(self):
-        """Enabled devices, in the chosen groups, that are of a kind that takes commands (whether or not they can be reached that way now)."""
-        return [d for d in db.list_devices(enabled_only=True) if cmdrun.kind_of(d) and db.in_groups(d, self.group.selected())]
+        """Enabled devices the search box and the funnel leave, of a kind that takes commands (whether or not they can be reached that way now)."""
+        return [d for d in shown_devices(db.list_devices(enabled_only=True), self.find, self.funnel) if cmdrun.kind_of(d)]
 
     def ssh_devices(self):
         """The devices commands can be run on now."""
@@ -835,10 +846,10 @@ class CommandRunnerTab(QWidget):
             if not can:
                 skipped.append((d, why))
                 continue
-            it = QListWidgetItem(d["name"])
-            it.setData(Qt.ItemDataRole.UserRole, d["name"])
+            it = QListWidgetItem(db.label_org(d["key"]))
+            it.setData(Qt.ItemDataRole.UserRole, d["key"])
             it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            it.setCheckState(Qt.CheckState.Checked if d["name"] in ticked else Qt.CheckState.Unchecked)
+            it.setCheckState(Qt.CheckState.Checked if d["key"] in ticked else Qt.CheckState.Unchecked)
             it.setToolTip(cmdrun.KINDS[cmdrun.kind_of(d)])
             self.devs.addItem(it)
         if len(skipped) == 1:                                               # one: just show it, greyed, with its reason
@@ -862,8 +873,8 @@ class CommandRunnerTab(QWidget):
         self.devs_hint.setVisible(self.devs.count() == 0)
 
     def _add_skipped(self, d, why, indent):
-        it = QListWidgetItem(("    " if indent else "") + f"{d['name']}  ({why})")
-        it.setData(Qt.ItemDataRole.UserRole, d["name"])
+        it = QListWidgetItem(("    " if indent else "") + f"{db.label_org(d['key'])}  ({why})")
+        it.setData(Qt.ItemDataRole.UserRole, d["key"])
         it.setFlags(Qt.ItemFlag.NoItemFlags)                                # shown, greyed, so it is clear why it cannot be ticked
         it.setToolTip(cmdrun.HELP.get(why, why))
         self.devs.addItem(it)
@@ -881,7 +892,7 @@ class CommandRunnerTab(QWidget):
 
     def checked_devices(self):
         names = {self.devs.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.devs.count()) if self.devs.item(i).checkState() == Qt.CheckState.Checked}
-        return [d for d in self.ssh_devices() if d["name"] in names]
+        return [d for d in self.ssh_devices() if d["key"] in names]
 
     # ---- snippets
     def fill_snippets(self):
@@ -1183,18 +1194,18 @@ class ListenersTab(QWidget):
         self.sys_btn, self.trap_btn = QPushButton("Start syslog"), QPushButton("Start trap receiver")
         self.pause, self.clear, self.save = QPushButton("Pause"), QPushButton("Clear"), QPushButton("Save...")
         self.pause.setCheckable(True)
-        self.filter = QLineEdit()
-        self.filter.setPlaceholderText("Filter the list")
-        self.kind = QComboBox()
-        self.kind.addItems(["Everything", "Syslog only", "Traps only"])
-        self.sev = QComboBox()
-        self.sev.addItem("Any severity", 7)
-        for n, name in enumerate(listeners.SEVERITIES):
-            self.sev.addItem(f"{name} and worse", n)
+        self.filter = SearchBox("Search messages", "Type part of a message, an address or a device name. Several words must all match.",
+                                page=self)
+        self.funnel = FilterButton(self._sections, tip="Filter by kind, severity or device")
         self.status = _muted("Not listening. Port 514 and 162 are the standard ones; point devices at this computer's address.")
         self.table = _table(["Time", "Type", "From", "Device", "Severity", "Message"])
         top = _row("Syslog UDP", self.sys_port, self.sys_btn, "Traps UDP", self.trap_port, self.communities, self.trap_btn)
-        bar = _row(self.kind, self.sev, self.filter, self.pause, self.clear, self.save)
+        bar = QHBoxLayout()
+        for w in (self.pause, self.clear, self.save):
+            bar.addWidget(w)
+        bar.addStretch(1)
+        bar.addWidget(self.filter, 1)                     # on the right, as on Inventory
+        bar.addWidget(self.funnel)
         lay = QVBoxLayout(self)
         lay.addLayout(top)
         lay.addLayout(bar)
@@ -1206,8 +1217,7 @@ class ListenersTab(QWidget):
         self.pause.toggled.connect(lambda on: setattr(self, "paused", on))
         self.clear.clicked.connect(self.clear_rows)
         self.save.clicked.connect(self.save_rows)
-        for w in (self.kind, self.sev):
-            w.currentIndexChanged.connect(self.repaint_rows)
+        self.funnel.changed.connect(self.repaint_rows)
         self.filter.textChanged.connect(self.repaint_rows)
 
     # ---- start / stop
@@ -1253,15 +1263,23 @@ class ListenersTab(QWidget):
             self.status.setText("Not listening.")
 
     # ---- rows
+    def _sections(self):
+        from ui.finder import Section
+        devs = sorted({m.get("device") for m in self.rows if m.get("device")}, key=str.lower)
+        return [Section("kind", "Kind", [("Syslog", "syslog"), ("Traps", "trap")]),
+                Section("severity", "Severity", [("Any severity", 7)] + [(f"{name} and worse", n) for n, name in enumerate(listeners.SEVERITIES)],
+                        exclusive=True),
+                Section("device", "Device", [(d, d) for d in devs] + ([("(not in the inventory)", "")] if any(not m.get("device") for m in self.rows) else []))]
+
     def wanted(self, m):
-        if self.kind.currentIndex() == 1 and m["type"] != "syslog":
+        kinds, sev, devs = self.funnel.selected("kind"), self.funnel.selected("severity"), self.funnel.selected("device")
+        if kinds and m["type"] not in kinds:
             return False
-        if self.kind.currentIndex() == 2 and m["type"] != "trap":
+        if m["type"] == "syslog" and sev and m["severity_no"] > min(sev):
             return False
-        if m["type"] == "syslog" and m["severity_no"] > self.sev.currentData():
+        if devs and (m.get("device") or "") not in devs:
             return False
-        f = self.filter.text().strip().lower()
-        return not f or f in (m["text"] + " " + m["source"] + " " + m.get("device", "")).lower()
+        return self.filter.matches(m["text"], m["source"], m.get("device", ""), m.get("trap", ""))
 
     def _add_row(self, m):
         i = self.table.rowCount()

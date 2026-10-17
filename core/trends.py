@@ -28,15 +28,43 @@ def compute(days=7, now=None):
     start, prev_start = now - timedelta(days=days), now - timedelta(days=2 * days)
     cur = db.availability(start=start.strftime(FMT), end=now.strftime(FMT))
     prev = db.availability(start=prev_start.strftime(FMT), end=start.strftime(FMT))
-    names = {d["name"] for d in db.list_devices()}
+    names = {d["key"] for d in db.list_devices()}
     cur = {k: v for k, v in cur.items() if k in names}
     prev = {k: v for k, v in prev.items() if k in names}
     now_o, before_o = _overall(cur), _overall(prev)
     delta = None if now_o["healthy"] is None or before_o["healthy"] is None else now_o["healthy"] - before_o["healthy"]
-    worst = sorted(((d, _pct(s["healthy"], s["runs"]), _pct(s["reachable"], s["runs"]), s["runs"],
+    worst = sorted(((db.label_org(d), _pct(s["healthy"], s["runs"]), _pct(s["reachable"], s["runs"]), s["runs"],
                      None if d not in prev else _pct(prev[d]["healthy"], prev[d]["runs"])) for d, s in cur.items() if s["runs"]),
                    key=lambda r: (r[1], r[0].lower()))
     worst = [w for w in worst if w[1] < 100][:10]
+    failing, still, cpu, growth, runs = {}, [], [], [], 0
+    for org, only in db._each_file():                  # every organization's file in Global; one's own (and Shared devices) otherwise
+        with db.within(org):
+            part = _raw(start, now)
+        keep = (lambda d: True) if only is None else (lambda d: (d or "").split(" / ")[0] in only)
+        name = lambda d: db.label_org(db.dkey(d, org))
+        for check, n, devices in part["failing"]:
+            if only is None:
+                was = failing.get(check, (0, 0))
+                failing[check] = (was[0] + n, was[1] + devices)
+        still += [(name(d), c, st, since) for d, c, st, since in part["still"] if keep(d)]
+        cpu += [(name(d), a, m) for d, a, m in part["cpu"] if keep(d)]
+        growth += [(name(d), a, b, g) for d, a, b, g in part["growth"] if keep(d)]
+        runs += part["runs"] if only is None else 0
+    failing = sorted(((c, n, d) for c, (n, d) in failing.items()), key=lambda f: (-f[1], f[0]))[:10]
+    still.sort(key=lambda x: x[3] or "")
+    cpu = sorted(cpu, key=lambda x: -(x[1] or 0))[:5]
+    growth.sort(key=lambda g: -g[3])
+    s = fleet.summary()
+    return {"days": days, "start": start.strftime(FMT), "end": now.strftime(FMT), "runs": runs, "devices": len(cur),
+            "healthy": now_o["healthy"], "reachable": now_o["reachable"], "previous": before_o["healthy"], "delta": delta,
+            "worst": worst, "failing": failing, "still": still, "changes": len(backup.recent_changes(24 * days)),
+            "busiest": cpu, "disk_growth": growth[:5], "certs": s["sections"]["certs"] if s else [],
+            "silent": s["sections"]["silent"] if s else [], "computers": s["computers"] if s else 0}
+
+
+def _raw(start, now):
+    """What one file says about the period: failing checks, problems still open, the busiest and fastest-filling computers, runs."""
     with db.connect() as c:
         failing = [(r["check_name"], r["n"], r["devices"]) for r in c.execute(
             "SELECT check_name, COUNT(*) n, COUNT(DISTINCT device) devices FROM results JOIN runs ON runs.id = results.run_id "
@@ -54,14 +82,8 @@ def compute(days=7, now=None):
             last = c.execute("SELECT disk FROM agent_metrics WHERE device=? AND disk IS NOT NULL ORDER BY at DESC LIMIT 1", (r["device"],)).fetchone()
             if first and last and last["disk"] - first["disk"] >= 1:
                 growth.append((r["device"], first["disk"], last["disk"], last["disk"] - first["disk"]))
-        growth.sort(key=lambda g: -g[3])
         runs = c.execute("SELECT COUNT(*) FROM runs WHERE started_at >= ? AND started_at < ?", (start.strftime(FMT), now.strftime(FMT))).fetchone()[0]
-    s = fleet.summary()
-    return {"days": days, "start": start.strftime(FMT), "end": now.strftime(FMT), "runs": runs, "devices": len(cur),
-            "healthy": now_o["healthy"], "reachable": now_o["reachable"], "previous": before_o["healthy"], "delta": delta,
-            "worst": worst, "failing": failing, "still": still, "changes": len(backup.recent_changes(24 * days)),
-            "busiest": cpu, "disk_growth": growth[:5], "certs": s["sections"]["certs"] if s else [],
-            "silent": s["sections"]["silent"] if s else [], "computers": s["computers"] if s else 0}
+    return {"failing": failing, "still": still, "cpu": cpu, "growth": growth, "runs": runs}
 
 
 def _fmt(p):

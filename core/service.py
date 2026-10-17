@@ -16,11 +16,18 @@ def _groups_alive(groups):
     return None if groups and not alive else alive
 
 
-def run_checks(groups=None, do_notify=True, scheduled=True, on_result=None):
-    """Check every enabled device in the groups. Saves the run, then alerts like the desktop app does.
-    Returns the list of Results (empty when there is nothing to check)."""
+def own_devices(groups=None):
+    """The enabled devices in the groups that the organization being written to owns (its schedule's; Global's are its own and
+    the Shared ones, which live in its file)."""
+    me = db.target()
+    return [d for d in db.list_devices(enabled_only=True) if db.in_groups(d, list(groups or [])) and d.get("org", me) == me]
+
+
+def run_checks(groups=None, do_notify=True, scheduled=True, on_result=None, own=False):
+    """Check every enabled device in the groups (own: only the organization's own, for its schedule). Saves the run, then alerts
+    like the desktop app does. Returns the list of Results (empty when there is nothing to check)."""
     groups = list(groups or [])
-    devices = [d for d in db.list_devices(enabled_only=True) if db.in_groups(d, groups)]
+    devices = own_devices(groups) if own else [d for d in db.list_devices(enabled_only=True) if db.in_groups(d, groups)]
     if not devices:
         return []
     base, rules = db.get_thresholds(), db.get_setting("threshold_overrides")
@@ -34,9 +41,9 @@ def run_checks(groups=None, do_notify=True, scheduled=True, on_result=None):
     return results
 
 
-def run_backups(groups=None, do_notify=True, scheduled=True):
+def run_backups(groups=None, do_notify=True, scheduled=True, own=False):
     groups = list(groups or [])
-    devices = [d for d in db.list_devices(enabled_only=True) if db.in_groups(d, groups)]
+    devices = own_devices(groups) if own else [d for d in db.list_devices(enabled_only=True) if db.in_groups(d, groups)]
     if not devices:
         return []
     results = backup.backup_many(devices, workers=min(5, int(db.get_setting("workers"))))
@@ -53,21 +60,10 @@ def _esc(v):
 
 
 def latest_rows():
-    """Per device, the rows of the newest run that included it (config-backup rows excluded)."""
-    out = []
-    with db.connect() as c:
-        newest = {}
-        for r in c.execute("SELECT device, MAX(run_id) rid FROM results WHERE check_name != 'config backup' GROUP BY device"):
-            b = (r["device"] or "").split(" / ")[0]
-            newest[b] = max(newest.get(b, 0), r["rid"])
-        runs = {}
-        for b, rid in newest.items():
-            runs.setdefault(rid, set()).add(b)
-        for rid, bases in runs.items():
-            for r in c.execute("SELECT device, check_name, status, numeric FROM results WHERE run_id=?", (rid,)):
-                if (r["device"] or "").split(" / ")[0] in bases and r["check_name"] != "config backup":
-                    out.append(dict(r))
-    return out
+    """Per device, the rows of the newest run that included it (config-backup rows excluded), in every organization; another
+    organization's device is named 'edge-fw (Acme)'."""
+    rows, _at = db.latest_results()
+    return [{"device": db.label_org(r["device"]), "check_name": r["check_name"], "status": r["status"], "numeric": r["numeric"]} for r in rows]
 
 
 def metrics_text():
@@ -85,7 +81,7 @@ def metrics_text():
             lines.append(f'toner_check_value{{device="{_esc(r["device"])}",check="{_esc(r["check_name"])}"}} {r["numeric"]:g}')
     lines += ["# HELP toner_device_status Worst status across a device's latest checks.", "# TYPE toner_device_status gauge"]
     for name in sorted(health):
-        lines.append(f'toner_device_status{{device="{_esc(name)}"}} {SEVERITY.get(health[name]["status"], 0)}')
+        lines.append(f'toner_device_status{{device="{_esc(db.label_org(name))}"}} {SEVERITY.get(health[name]["status"], 0)}')
     last = db.last_run()
     stamp = datetime.strptime(last["started_at"], "%Y-%m-%d %H:%M:%S").timestamp() if last else 0
     lines += ["# HELP toner_devices Devices in the inventory.", "# TYPE toner_devices gauge",
@@ -140,11 +136,16 @@ class Daemon:
         self.next_checks = self.next_backup = None
 
     def _arm(self):
+        """When each organization's next checks and backups are due (Global's, and every organization's that is not archived)."""
         now = datetime.now()
-        self.next_checks = now + timedelta(minutes=max(1, int(db.get_setting("schedule_minutes")))) \
-            if db.get_setting("schedule_enabled") else None
-        self.next_backup = now + timedelta(hours=max(1, int(db.get_setting("backup_hours")))) \
-            if db.get_setting("backup_enabled") else None
+        self.due = {}
+        for org in [db.GLOBAL] + [o["id"] for o in db.org_rows() if not o["archived"]]:
+            with db.within(org):
+                self.due[org] = {"checks": now + timedelta(minutes=max(1, int(db.get_setting("schedule_minutes"))))
+                                 if db.get_setting("schedule_enabled") else None,
+                                 "backup": now + timedelta(hours=max(1, int(db.get_setting("backup_hours"))))
+                                 if db.get_setting("backup_enabled") else None}
+        self.next_checks, self.next_backup = self.due[db.GLOBAL]["checks"], self.due[db.GLOBAL]["backup"]
 
     def tick(self, now=None):
         """Run whatever is due. Returns a list of what it did (for tests and the log)."""
@@ -159,28 +160,38 @@ class Daemon:
                     self.log(f"{now:%Y-%m-%d %H:%M:%S} trend report: {path}")
         except Exception as e:
             self.log(f"trend report failed: {type(e).__name__}: {e}")
-        if self.next_checks and now >= self.next_checks:
-            groups = _groups_alive(db.get_setting("schedule_groups"))
-            if groups is not None:
-                res = run_checks(groups)
-                did.append(("checks", len(res)))
-                self.log(f"{now:%Y-%m-%d %H:%M:%S} checks: {len(res)} result(s), {sum(1 for r in res if r.status not in ('OK', 'N/A'))} not OK")
-            self.next_checks = now + timedelta(minutes=max(1, int(db.get_setting("schedule_minutes"))))
-        if self.next_backup and now >= self.next_backup:
-            groups = _groups_alive(db.get_setting("backup_groups"))
-            if groups is not None:
-                res = run_backups(groups)
-                did.append(("backup", len(res)))
-                self.log(f"{now:%Y-%m-%d %H:%M:%S} backups: {len(res)} device(s), {sum(1 for r in res if r.status == 'WARN')} changed")
-            self.next_backup = now + timedelta(hours=max(1, int(db.get_setting("backup_hours"))))
+        if not hasattr(self, "due"):
+            self.due = {db.GLOBAL: {"checks": self.next_checks, "backup": self.next_backup}}
+        self.due[db.GLOBAL].update(checks=self.next_checks, backup=self.next_backup)      # (tests set these directly)
+        for org, when in list(self.due.items()):
+            who = "" if org == db.GLOBAL else f"{db.org_name(org)}: "
+            with db.within(org):
+                if when["checks"] and now >= when["checks"]:
+                    groups = _groups_alive(db.get_setting("schedule_groups"))
+                    if groups is not None:
+                        res = run_checks(groups, own=True)
+                        did.append(("checks", len(res)))
+                        self.log(f"{now:%Y-%m-%d %H:%M:%S} {who}checks: {len(res)} result(s), {sum(1 for r in res if r.status not in ('OK', 'N/A'))} not OK")
+                    when["checks"] = now + timedelta(minutes=max(1, int(db.get_setting("schedule_minutes"))))
+                if when["backup"] and now >= when["backup"]:
+                    groups = _groups_alive(db.get_setting("backup_groups"))
+                    if groups is not None:
+                        res = run_backups(groups, own=True)
+                        did.append(("backup", len(res)))
+                        self.log(f"{now:%Y-%m-%d %H:%M:%S} {who}backups: {len(res)} device(s), {sum(1 for r in res if r.status == 'WARN')} changed")
+                    when["backup"] = now + timedelta(hours=max(1, int(db.get_setting("backup_hours"))))
+        self.next_checks, self.next_backup = self.due[db.GLOBAL]["checks"], self.due[db.GLOBAL]["backup"]
         return did
 
     def run(self, poll=5.0):
         self._arm()
-        if db.get_setting("schedule_enabled") and db.get_setting("schedule_on_start"):
-            self.next_checks = datetime.now()
-        if db.get_setting("backup_enabled") and db.get_setting("backup_on_start"):
-            self.next_backup = datetime.now()
+        for org, when in self.due.items():
+            with db.within(org):
+                if db.get_setting("schedule_enabled") and db.get_setting("schedule_on_start"):
+                    when["checks"] = datetime.now()
+                if db.get_setting("backup_enabled") and db.get_setting("backup_on_start"):
+                    when["backup"] = datetime.now()
+        self.next_checks, self.next_backup = self.due[db.GLOBAL]["checks"], self.due[db.GLOBAL]["backup"]
         from core import agents
         err = agents.apply()
         if db.get_setting("agent_enabled"):

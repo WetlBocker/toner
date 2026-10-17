@@ -11,7 +11,8 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComb
 from core import ansible as AN, audit, db, scope
 from ui import status as st
 from ui.nav import PageStack
-from ui.widgets import EmptyHint, GroupPicker, flow
+from ui.widgets import EmptyHint, flow
+from ui.finder import FilterButton, SearchBox, device_sections, shown_devices
 
 MODES = {"check": "Check", "run": "Run", "syntax": "Syntax"}
 VERBOSITY = ["Normal output", "More (-v)", "Even more (-vv)", "Debug (-vvv)"]
@@ -78,8 +79,11 @@ class PlaybooksPage(QWidget):
         self.edit_btn, self.settings_btn = QPushButton("Edit"), QPushButton("Ansible settings")
         self.edit_btn.setToolTip("Open the playbook in Tools > Playbook Editor")
         self.settings_btn.setToolTip("Where Ansible runs (WSL or a server), the playbook folder and defaults: Settings > Ansible")
-        self.group = GroupPicker()
-        self.group.changed.connect(self.fill_devices)
+        self.find = SearchBox("Search devices", "Type part of a name, address, vendor, location, tag or detail. Several words must all match.",
+                              page=self)
+        self.funnel = FilterButton(lambda: device_sections(db.list_devices(enabled_only=True)))
+        self.find.textChanged.connect(lambda _t: self.fill_devices())
+        self.funnel.changed.connect(self.fill_devices)
         self.devs = QListWidget()
         self.devs.setMaximumWidth(300)
         self.devs_hint = EmptyHint(self.devs, "No devices", "Add devices in the Inventory", wrap=True)
@@ -117,7 +121,10 @@ class PlaybooksPage(QWidget):
         pb.addWidget(self.settings_btn)
         left.addLayout(pb)
         left.addWidget(QLabel("Run on"))
-        left.addWidget(self.group)
+        finder = QHBoxLayout()                           # where the "All devices" drop-down was
+        finder.addWidget(self.find, 1)
+        finder.addWidget(self.funnel)
+        left.addLayout(finder)
         left.addWidget(self.devs, 2)
         lb = QHBoxLayout()
         lb.addWidget(self.all_btn)
@@ -181,7 +188,6 @@ class PlaybooksPage(QWidget):
             if p["name"] == keep:
                 self.listing.setCurrentItem(it)
         self.list_hint.setVisible(self.listing.count() == 0)
-        self.group.set_labels(db.group_labels()[1:])
         self.fill_devices()
         self.where.setText(self.where_text())
         self._buttons()
@@ -205,16 +211,16 @@ class PlaybooksPage(QWidget):
         return False
 
     def candidates(self):
-        return [d for d in scope.keep(db.list_devices(enabled_only=True)) if db.in_groups(d, self.group.selected())]
+        return shown_devices(db.list_devices(enabled_only=True), self.find, self.funnel)
 
     def fill_devices(self):
         ticked = {self.devs.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.devs.count()) if self.devs.item(i).checkState() == Qt.CheckState.Checked}
         self.devs.clear()
         for d in self.candidates():
-            it = QListWidgetItem(d["name"])
-            it.setData(Qt.ItemDataRole.UserRole, d["name"])
+            it = QListWidgetItem(db.label_org(d["key"]))
+            it.setData(Qt.ItemDataRole.UserRole, d["key"])
             it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            it.setCheckState(Qt.CheckState.Checked if d["name"] in ticked else Qt.CheckState.Unchecked)
+            it.setCheckState(Qt.CheckState.Checked if d["key"] in ticked else Qt.CheckState.Unchecked)
             it.setToolTip(f"{d['vendor']}  {d['host']}")
             self.devs.addItem(it)
         self.devs_hint.setVisible(self.devs.count() == 0)
@@ -225,7 +231,7 @@ class PlaybooksPage(QWidget):
 
     def checked_devices(self):
         names = {self.devs.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.devs.count()) if self.devs.item(i).checkState() == Qt.CheckState.Checked}
-        return [d for d in self.candidates() if d["name"] in names]
+        return [d for d in self.candidates() if d["key"] in names]
 
     def _mode_changed(self, on):
         self.go.setText("Run check" if on else "Run playbook")

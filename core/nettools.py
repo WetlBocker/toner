@@ -210,7 +210,7 @@ HOSTKEY_MODES = ["Trust on first use", "Always trust", "Reject unknown hosts"]
 
 def known_hosts_path():
     from core import db
-    return db.db_path().parent / "known_hosts"
+    return db.base_path().parent / "known_hosts"
 
 
 def list_host_keys():

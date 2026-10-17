@@ -353,7 +353,7 @@ class DashboardTab(QWidget):
         bits = []
         for key, word in (("worse", "got worse"), ("better", "improved")):
             if ch[key]:
-                shown = ", ".join(f"{d}: {a} to {b}" for d, a, b in ch[key][:5]) + ("..." if len(ch[key]) > 5 else "")
+                shown = ", ".join(f"{db.label_org(d)}: {a} to {b}" for d, a, b in ch[key][:5]) + ("..." if len(ch[key]) > 5 else "")
                 bits.append(f"<b>{len(ch[key])} {word}</b> ({html.escape(shown)})")
         self.moved.setText("Since the previous run: " + "; ".join(bits) + "." if bits else "")
         self.moved.setVisible(bool(bits))
@@ -369,7 +369,7 @@ class DashboardTab(QWidget):
         return self.rows[r] if 0 <= r < len(self.rows) and self.attention.selectionModel().isRowSelected(r) else None
 
     def _device(self, name):
-        return next((d for d in db.list_devices() if d["name"] == name), None)
+        return db.find_device(name)
 
     def _attention_buttons(self):
         cur = self._current()
@@ -398,7 +398,7 @@ class DashboardTab(QWidget):
             return
         if cur[2]:                                                         # already put aside: bring it back
             acks.clear(cur[0])
-            audit.log("problem un-acknowledged", cur[0])
+            audit.log("problem un-acknowledged", db.label_org(cur[0]))
             self.refresh()
         else:
             self._put_aside(None)
@@ -411,9 +411,9 @@ class DashboardTab(QWidget):
         acks.put_aside(name, health["problems"], hours)
         what = "acknowledged" if hours is None else f"snoozed for {hours} h"
         audit.log("problem " + ("acknowledged" if hours is None else "snoozed"),
-                  f"{name}: {', '.join(c for c, _s, _m in health['problems'][:5])}" + ("" if hours is None else f" for {hours} h"))
+                  f"{db.label_org(name)}: {', '.join(c for c, _s, _m in health['problems'][:5])}" + ("" if hours is None else f" for {hours} h"))
         from ui.toast import toast
-        toast(self, f"{name} {what}. It comes back if anything gets worse.")
+        toast(self, f"{db.label_org(name)} {what}. It comes back if anything gets worse.")
         self.refresh()
 
     def _attention_menu(self, pos):
@@ -443,7 +443,7 @@ class DashboardTab(QWidget):
         devs = scope.keep(db.list_devices())
         enabled = [d for d in devs if d["enabled"]]
         health = db.device_health()
-        known = {d["name"] for d in devs}
+        known = {d["key"] for d in devs}
         health = {k: v for k, v in health.items() if k in known}
         count = lambda s: sum(1 for v in health.values() if v["status"] == s)
         bad = count("FAIL") + count("ERROR")
@@ -484,7 +484,7 @@ class DashboardTab(QWidget):
                 state, entry = aside[name]
                 what = (f"(acknowledged {display.ago(entry['at'])}) " if state == "acknowledged"
                         else f"(snoozed until {entry['until'][11:16]}) ") + what
-            for j, text in enumerate([name, v["status"], what, self._ago(v["at"])]):
+            for j, text in enumerate([db.label_org(name), v["status"], what, self._ago(v["at"])]):
                 item = QTableWidgetItem(text)
                 item.setToolTip(v["at"] if j == 3 else text)
                 if name in aside and j != 1:
@@ -502,14 +502,14 @@ class DashboardTab(QWidget):
                            if health else "Press Run checks to see how the network is doing")
 
         av = db.availability(int(self.period.currentData()))
-        rows = [(n, v["healthy"] / v["runs"] * 100, "") for n, v in av.items() if v["runs"] and n in known]
+        rows = [(db.label_org(n), v["healthy"] / v["runs"] * 100, "") for n, v in av.items() if v["runs"] and n in known]
         rows.sort(key=lambda r: (r[1], r[0].lower()))
         self.bars.set_rows(rows[:10])
 
         parts = []
         if changes:
             parts.append("<b>Configuration changes (24 h)</b><br>" + "<br>".join(
-                f"{c['device']} &nbsp; <span style='color:gray'>{c['taken_at']}  +{c['added']} / -{c['removed']}</span>"
+                f"{html.escape(db.label_org(c['device']))} &nbsp; <span style='color:gray'>{c['taken_at']}  +{c['added']} / -{c['removed']}</span>"
                 for c in changes[:6]))
         runs = db.list_runs(5)
         if runs:

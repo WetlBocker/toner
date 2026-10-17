@@ -9,6 +9,7 @@ from core import db, display, scope
 from core.reports import COLORS, fg_for
 from ui import theme
 from ui.widgets import EmptyHint, GroupPicker, StatusDelegate, flow
+from ui.finder import FilterButton, SearchBox, device_sections, listed_devices, shown_devices, wants_archived
 from ui import status as st
 
 PCT_CHECKS = ("cpu", "memory")
@@ -371,7 +372,7 @@ def _table(cols):
 class HistoryTab(QWidget):
     def __init__(self):
         super().__init__()
-        self.runs = _table(["Run time", "OK", "WARN", "FAIL", "ERROR"])
+        self.runs = _table(["Run time", "OK", "WARN", "FAIL", "ERROR", "Organization"])
         self.detail = _table(["Device", "Check", "Status", "Value", "Message"])
         self.detail.setItemDelegateForColumn(2, StatusDelegate(self.detail))
         self.runs.itemSelectionChanged.connect(self.show_run)
@@ -380,15 +381,18 @@ class HistoryTab(QWidget):
         hh = self.runs.horizontalHeader()
         hh.setStretchLastSection(False)
         hh.setSectionResizeMode(0, hh.ResizeMode.Stretch)                  # the run time takes what the counts leave
-        for col in range(1, 5):
+        for col in range(1, 6):
             hh.setSectionResizeMode(col, hh.ResizeMode.ResizeToContents)
-        self.group, self.dev = GroupPicker(), QComboBox()
+        self.dev = QComboBox()
         self.chk = GroupPicker(all_text="Select checks", noun="checks", clear_text="Clear selection")
         self.check_keys = {}                     # shown name -> stored check name
-        self.group.set_labels(db.group_labels()[1:])
-        self.group.changed.connect(self.group_changed)
+        self.find = SearchBox("Search devices", "Type part of a name, address, vendor, location, tag or detail. Several words must all match.",
+                              page=self)
+        self.funnel = FilterButton(lambda: device_sections(listed_devices(self.funnel)))
+        self.find.textChanged.connect(lambda _t: self.group_changed())
+        self.funnel.changed.connect(self.group_changed)
         self.chart = ChartStack()
-        self.dev.currentTextChanged.connect(self.fill_checks)
+        self.dev.currentIndexChanged.connect(lambda _i: self.fill_checks(self.dev.currentData()))
         self.chk.changed.connect(self.draw)
 
         left = QSplitter(Qt.Orientation.Vertical)
@@ -396,23 +400,28 @@ class HistoryTab(QWidget):
         left.addWidget(self.detail)
         right = QWidget()
         rl = QVBoxLayout(right)
-        for w in (self.group, self.dev, self.chk):               # share the width, and wrap when the pane is narrow
+        for w in (self.dev, self.chk):               # share the width, and wrap when the pane is narrow
             w.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        rl.addLayout(flow("Group", self.group, "Device", self.dev, "Check", self.chk))
+        rl.addLayout(flow("Device", self.dev, "Check", self.chk))
         rl.addWidget(self.chart, 1)
         split = QSplitter()
         split.addWidget(left)
         split.addWidget(right)
         split.setSizes([450, 450])
+        top = QHBoxLayout()
+        top.addStretch(1)
+        top.addWidget(self.find, 1)                 # on the right, as on Inventory
+        top.addWidget(self.funnel)
         lay = QVBoxLayout(self)
+        lay.addLayout(top)
         lay.addWidget(split, 1)                 # the page takes all the height: without the stretch the header drifts down the window
         self.refresh()
 
     def _group_names(self):
-        names, client = db.group_device_names(self.group.selected()), scope.names()
-        if client is None:
-            return names
-        return client if names is None else set(names) & client
+        """The devices the search box and the funnel leave (within the client being looked at), or None for every device."""
+        if not self.find.words() and not self.funnel.active():
+            return scope.names()
+        return {d["key"] for d in shown_devices(listed_devices(self.funnel), self.find, self.funnel)}
 
     @staticmethod
     def _base(device):
@@ -420,31 +429,38 @@ class HistoryTab(QWidget):
         return (device or "").split(" / ")[0]
 
     def group_changed(self, *_):
+        """The search box or the funnel changed: the device list and the chosen run's rows follow."""
         self.refresh(reload_groups=False)
+        self.show_run()
 
     def refresh(self, reload_groups=True):
-        if reload_groups:                      # inventory may have changed since last time
-            self.group.set_labels(db.group_labels()[1:])
-        runs = db.list_runs()
-        self.run_ids = [r["id"] for r in runs]
+        with db.including_archived(wants_archived(self.funnel)):
+            runs = db.list_runs()
+        orgs = self.funnel.selected("org")
+        if orgs:                                                            # Global: only the runs of the organizations picked
+            runs = [r for r in runs if r["org"] in orgs]
+        self.run_ids = [(r["id"], r["org"]) for r in runs]
         self.runs.setRowCount(len(runs))
+        self.runs.setColumnHidden(5, not db.several())
         for i, r in enumerate(runs):
-            for j, v in enumerate([r["started_at"], r["ok"], r["warn"], r["fail"], r["error"]]):
+            for j, v in enumerate([r["started_at"], r["ok"], r["warn"], r["fail"], r["error"], db.org_name(r["org"])]):
                 self.runs.setItem(i, j, QTableWidgetItem(str(v)))
         self.runs_hint.setVisible(not runs)
         if runs and self.runs.currentRow() < 0:
             self.runs.selectRow(0)                                          # the latest run, so the lower table is never blank
         names = self._group_names()
-        self.map = {d: c for d, c in db.device_checks().items()
-                    if names is None or self._base(d) in names}
-        cur = self.dev.currentText()
+        with db.including_archived(wants_archived(self.funnel)):
+            checks = db.device_checks()
+        self.map = {d: c for d, c in checks.items() if names is None or self._base(d) in names}
+        cur = self.dev.currentData()
         self.dev.blockSignals(True)
         self.dev.clear()
-        self.dev.addItems(list(self.map))
+        for key in self.map:
+            self.dev.addItem(db.label_org(key), key)
         if cur in self.map:
-            self.dev.setCurrentText(cur)
+            self.dev.setCurrentIndex(self.dev.findData(cur))
         self.dev.blockSignals(False)
-        self.fill_checks(self.dev.currentText())
+        self.fill_checks(self.dev.currentData())
 
     def show_run(self):
         row = self.runs.currentRow()
@@ -453,18 +469,19 @@ class HistoryTab(QWidget):
             self.detail_hint.setVisible(True)
             return
         names = self._group_names()
-        res = [r for r in db.run_results(self.run_ids[row])
+        rid, org = self.run_ids[row]
+        res = [r for r in db.run_results(rid, org)
                if names is None or self._base(r["device"]) in names]
         self.detail.setRowCount(len(res))
         self.detail_hint.setVisible(not res)
         for i, r in enumerate(res):
-            for j, v in enumerate([r["device"], display.check_name(r["check_name"]), r["status"],
+            for j, v in enumerate([db.label(r["device"]), display.check_name(r["check_name"]), r["status"],
                                    display.value(r["value"]), r["message"]]):
                 self.detail.setItem(i, j, QTableWidgetItem(v or ""))
 
     def fill_checks(self, device):
         """List this device's checks. Ticks that still apply are kept; a first visit ticks the first check."""
-        checks = self.map.get(device, [])
+        checks = self.map.get(device or "", [])
         self.check_keys = {display.check_name(c): c for c in checks}
         keep = self.chk.selected()
         self.chk.set_labels(list(self.check_keys))
@@ -475,7 +492,9 @@ class HistoryTab(QWidget):
         self.draw()
 
     def draw(self, *_):
-        d = self.dev.currentText()
+        d = self.dev.currentData()
         picked = [self.check_keys[k] for k in self.chk.selected() if k in self.check_keys]
         series = [(c, db.series(d, c)) for c in picked] if d else []
-        self.chart.set_series(series, db.get_thresholds().get(picked[0].split(" (")[0]) if picked else None)
+        with db.within(db.split_key(d or "")[1]):                         # that organization's limits
+            th = db.get_thresholds()
+        self.chart.set_series(series, th.get(picked[0].split(" (")[0]) if picked else None)

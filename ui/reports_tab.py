@@ -75,10 +75,10 @@ class ReportsTab(QWidget):
         self.source.addItem(CURRENT, None)
         for r in db.list_runs(limit=100):
             if r["ok"] + r["warn"] + r["fail"] + r["error"]:      # skip empty runs
-                self.run_times[r["id"]] = r["started_at"]
+                self.run_times[(r["id"], r["org"])] = r["started_at"]
                 self.source.addItem(
                     f"{r['started_at']}  —  OK {r['ok']}, WARN {r['warn']}, "
-                    f"FAIL {r['fail']}, ERROR {r['error']}", r["id"])
+                    f"FAIL {r['fail']}, ERROR {r['error']}" + (f"  ({db.org_name(r['org'])})" if db.several() else ""), (r["id"], r["org"]))
         self.source.setCurrentIndex(max(0, self.source.findData(cur)))
         self.source.blockSignals(False)
         self.load_source()
@@ -86,20 +86,23 @@ class ReportsTab(QWidget):
     def load_source(self):
         data = self.source.currentData()
         if data is None:
-            self.base = list(self.get_current())
+            self.base = [Result(**r.__dict__) for r in self.get_current()]        # copies: names are rewritten below
         else:
             self.base = [Result(r["device"], r["check_name"], r["status"], r["value"] or "",
-                                r["message"] or "") for r in db.run_results(data)]
+                                r["message"] or "") for r in db.run_results(*data)]
         names = scope.names()
         if names is not None:
             self.base = [r for r in self.base if alerts.base(r.device) in names]
         self.base.sort(key=lambda r: (-SEVERITY[r.status], r.device, r.check))
-        devices = {d["name"]: d for d in db.list_devices()}
+        devices = {d["key"]: d for d in db.list_devices()}
         self._meta = {}
         for r in self.base:
             d = devices.get(alerts.base(r.device), {})
             self._meta[id(r)] = {"Status": r.status, "Location": d.get("location") or NO_LOCATION,
-                                 "Vendor": vendors.family(d.get("vendor") or ""), "Tag": {x.lower() for x in db.split_tags(d.get("tags"))}}
+                                 "Vendor": vendors.family(d.get("vendor") or ""), "Tag": {x.lower() for x in db.split_tags(d.get("tags"))},
+                                 "Organization": db.org_name(db.split_key(r.device)[1])}
+            if "@@" in r.device:                                     # Global: another organization's device, named with it
+                r.device = db.label_org(r.device)
         self.filter.set_sections(self._sections())          # keeps ticks that still apply
         self.show_preview()
 
@@ -109,16 +112,20 @@ class ReportsTab(QWidget):
         places = sorted({x["Location"] for x in m}, key=lambda s: (s == NO_LOCATION, s.lower()))
         vendors_ = sorted({x["Vendor"] for x in m if x["Vendor"]}, key=lambda v: display.vendor_name(v).lower())
         tags = sorted({t for x in m for t in x["Tag"]})
-        return {"Status": [(s, s) for s in statuses], "Location": [(p, p) for p in places],
-                "Vendor": [(display.vendor_name(v), v) for v in vendors_], "Tag": [(t, t) for t in tags]}
+        out = {"Status": [(s, s) for s in statuses], "Location": [(p, p) for p in places],
+               "Vendor": [(display.vendor_name(v), v) for v in vendors_], "Tag": [(t, t) for t in tags]}
+        if db.several():
+            names = sorted({x["Organization"] for x in m}, key=lambda n: (n != "Global", n.lower()))
+            out = {"Organization": [(n, n) for n in names], **out}
+        return out
 
     def selected_results(self):
         """Any of the ticked values in a submenu, and all the submenus that have something ticked."""
-        want = {t: self.filter.selected(t) for t in ("Status", "Location", "Vendor", "Tag")}
+        want = {t: self.filter.selected(t) for t in ("Organization", "Status", "Location", "Vendor", "Tag")}
 
         def keep(r):
             m = self._meta[id(r)]
-            return all(not want[t] or m[t] in want[t] for t in ("Status", "Location", "Vendor")) and \
+            return all(not want[t] or m[t] in want[t] for t in ("Organization", "Status", "Location", "Vendor")) and \
                 (not want["Tag"] or bool(want["Tag"] & m["Tag"]))
         return [r for r in self.base if keep(r)]
 

@@ -112,7 +112,7 @@ class FileServerTab(QWidget):
                 "the folder below, is read-only until you allow uploads, gives no shell, and locks out an address after "
                 "five wrong passwords.")
 
-    # ---- saved choices (never the password: that goes to Credential Manager)
+    # ---- saved choices (never the password: that goes to the vault)
     def load(self):
         saved = (db.get_setting("fileserver") or {}).get(self.proto, {})
         self.folder.setText(saved.get("folder", ""))
@@ -519,8 +519,9 @@ class WifiTab(QWidget):
         self.auto = QCheckBox("Rescan every 5 seconds")
         self.band = QComboBox()
         self.band.addItems(["All bands", "2.4 GHz", "5 GHz", "6 GHz"])
-        self.filter = QLineEdit()
-        self.filter.setPlaceholderText("Filter by network name or maker")
+        from ui.finder import SearchBox
+        self.filter = SearchBox("Search networks", "Type part of a network name or an access point's maker. Several words must all match.",
+                                page=self)
         self.me = _muted("")
         self.summary = _muted("")
         self.table = _table(self.COLS)
@@ -529,7 +530,8 @@ class WifiTab(QWidget):
         bar = QHBoxLayout()
         for w in (self.scan_btn, self.auto, self.band):
             bar.addWidget(w)
-        bar.addWidget(self.filter, 1)
+        bar.addStretch(1)
+        bar.addWidget(self.filter, 1)                     # on the right, as on Inventory
         lay = QVBoxLayout(self)
         lay.addWidget(_muted("The Wi-Fi networks this computer can hear, strongest first, with the channel each one uses. "
                              "Use it to find a crowded channel, a weak spot, or an access point that is not yours. "
@@ -577,9 +579,7 @@ class WifiTab(QWidget):
 
     def show_rows(self, *_):
         band = self.band.currentText()
-        want = self.filter.text().strip().lower()
-        rows = [n for n in self.nets if (band == "All bands" or n["band"] == band)
-                and (not want or want in (n["ssid"] + " " + n.get("maker", "")).lower())]
+        rows = [n for n in self.nets if (band == "All bands" or n["band"] == band) and self.filter.matches(n["ssid"], n.get("maker", ""))]
         self.table.setRowCount(len(rows))
         for i, n in enumerate(rows):
             sig = n["signal"]

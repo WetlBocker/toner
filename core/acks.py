@@ -35,7 +35,14 @@ def _sig(problems):
 
 
 def put_aside(device, problems, hours=None, who="", now=None):
-    """Acknowledge (hours=None) or snooze for `hours` the device's current problems [(check, status, message)]."""
+    """Acknowledge (hours=None) or snooze for `hours` the device's current problems [(check, status, message)]. `device` can be a key
+    from Global's lists: the entry is kept by its own organization."""
+    device, org = db.split_key(device)
+    with db.within(org):
+        return _put_aside(device, problems, hours, who, now)
+
+
+def _put_aside(device, problems, hours, who, now):
     now = now or datetime.now()
     data = _load()
     data[device] = {"sig": _sig(problems), "until": (now + timedelta(hours=hours)).strftime(_FMT) if hours else "",
@@ -45,6 +52,12 @@ def put_aside(device, problems, hours=None, who="", now=None):
 
 
 def clear(device):
+    device, org = db.split_key(device)
+    with db.within(org):
+        return _clear(device)
+
+
+def _clear(device):
     data = _load()
     if data.pop(device, None) is not None:
         _save(data)
@@ -80,7 +93,23 @@ def state(device, problems, now=None, data=None, save=True):
 
 
 def put_aside_devices(health, now=None):
-    """{device: (state, entry)} for every device in device_health() output that is acknowledged or snoozed (entries that ended are removed)."""
+    """{device: (state, entry)} for every device in device_health() output that is acknowledged or snoozed (entries that ended are removed).
+    In Global, each organization's devices are looked up in that organization's own entries."""
+    if not db.everything():
+        return _aside_here(health, now)
+    by_org = {}
+    for key, v in health.items():
+        name, org = db.split_key(key)
+        by_org.setdefault(org or db.GLOBAL, {})[name] = v
+    out = {}
+    for org, part in by_org.items():
+        with db.within(org):
+            for name, val in _aside_here(part, now).items():
+                out[db.qualified(name, org)] = val
+    return out
+
+
+def _aside_here(health, now=None):
     data = _load()
     before = len(data)
     out = {}

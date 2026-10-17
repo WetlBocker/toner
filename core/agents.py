@@ -6,7 +6,7 @@ commands. Two things keep a stranger out of Toner:
   * a certificate Toner made for itself. The script is given its SHA-256 fingerprint and refuses any server that
     does not match, so there is nothing to trust-on-first-use and no certificate authority to set up.
   * a long random token per device. Only a hash of it is kept in Toner's database; the token itself is in
-    Windows Credential Manager (and in that device's script).
+    Toner's vault (and in that device's script).
 """
 import hashlib
 import hmac
@@ -140,10 +140,13 @@ def token_due(device):
 
 
 def revoke(device):
-    """Stop a computer's agent being accepted (the device stays in the inventory). Make a new script or package to start again."""
-    db.delete_secret(db.secret_name(device, "agent"))
-    with db.connect() as c:
-        c.execute("UPDATE agent_reports SET token_hash='', prev_hash='', prev_until='' WHERE device=?", (device,))
+    """Stop a computer's agent being accepted (the device stays in the inventory). Make a new script or package to start again.
+    `device` can be a key from Global's lists."""
+    device, org = db.split_key(device)
+    with db.within(org):
+        db.delete_secret(db.secret_name(device, "agent"))
+        with db.connect() as c:
+            c.execute("UPDATE agent_reports SET token_hash='', prev_hash='', prev_until='' WHERE device=?", (device,))
 
 
 def rename(old, new):
@@ -157,7 +160,8 @@ def rename(old, new):
 
 def forget(name):
     """A deleted device's token (the secret itself goes with db.delete_device_secrets) and last report."""
-    with db.connect() as c:
+    name, org = db.split_key(name)
+    with db.within(org), db.connect() as c:
         for table in ("agent_reports", "agent_seen", "agent_metrics"):
             c.execute(f"DELETE FROM {table} WHERE device=?", (name,))
 
@@ -168,13 +172,28 @@ _failures = {}                                       # source address -> times o
 
 
 def enroll_key(rotate=False):
-    """The sign-up key that goes in the package. Made once; rotate=True replaces it (old packages stop signing computers up)."""
+    """The sign-up key that goes in the package of the organization being written to (each has its own, so a package signs computers
+    up to the organization it came from). Made once; rotate=True replaces it (old packages stop signing computers up)."""
     import keyring
-    key = None if rotate else keyring.get_password(db.SERVICE, ENROLL_SECRET)
+    key = None if rotate else keyring.get_password(db.SERVICE, db.qualify(ENROLL_SECRET))
     if not key:
         key = secrets.token_urlsafe(24)
-        db.set_secret(ENROLL_SECRET, key)
+        db.set_secret(db.qualify(ENROLL_SECRET), key)
     return key
+
+
+def key_owner(key):
+    """The organization whose sign-up key this is (Global, or one that is not archived), or None. Keys are never made here."""
+    import keyring
+    if not key:
+        return None
+    found = None
+    for org in [db.GLOBAL] + [r["id"] for r in db.org_rows() if not r["archived"]]:
+        with db.within(org):
+            stored = keyring.get_password(db.SERVICE, db.qualify(ENROLL_SECRET))
+        if stored and hmac.compare_digest(key.encode(), stored.encode()) and found is None:
+            found = org                               # (every key is compared, so the time taken says nothing about which matched)
+    return found
 
 
 def safe_name(text):
@@ -182,16 +201,23 @@ def safe_name(text):
 
 
 def enroll(computer, key, source=""):
-    """A computer asks to be added. Returns (HTTP status, answer). Needs sign-up turned on and the right key."""
-    if not db.get_setting("agent_enroll"):
-        return 403, {"ok": False, "error": "Toner is not accepting new computers (Settings > Agents)."}
+    """A computer asks to be added. Returns (HTTP status, answer). Needs the right key, and sign-up turned on in the organization the
+    key belongs to: the computer is added to that organization (a package downloaded in Acme signs computers up to Acme)."""
     now = time.time()
     recent = [t for t in _failures.get(source, []) if now - t < 300]
     if len(recent) >= 10:
         return 429, {"ok": False, "error": "too many wrong keys; try again later"}
-    if not hmac.compare_digest(key.encode(), enroll_key().encode()):
+    org = key_owner(key)
+    if org is None:
         _failures[source] = recent + [now]
         return 401, {"ok": False, "error": "the sign-up key is wrong (the package is out of date?)"}
+    with db.within(org):
+        return _enroll(computer, source, org)
+
+
+def _enroll(computer, source, org):
+    if not db.get_setting("agent_enroll"):
+        return 403, {"ok": False, "error": "Toner is not accepting new computers (Settings > Agents)."}
     name = safe_name(computer)
     if not name:
         return 400, {"ok": False, "error": "no computer name"}
@@ -213,33 +239,41 @@ def enroll(computer, key, source=""):
     token = token_for(name)
     audit.log("agent signed up", f"{name} from {source}")
     if not existing:                                         # a new computer appeared: say so (in the background: it is a network call)
-        threading.Thread(target=_announce_new, args=(name, source), daemon=True).start()
+        threading.Thread(target=_announce_new, args=(name, source, org), daemon=True).start()
     return 200, {"ok": True, "token": token, "name": name}
 
 
-def _announce_new(name, source):
+def _announce_new(name, source, org=None):
     try:
         from core import notify
-        notify.announce(name, "agent sign-up", "new computer", f"signed itself up from {source}. If you did not install the agent there, "
-                        "turn off sign-up or renew the key in Settings > Agents.")
+        with db.within(org):                                  # through the organization's own alerts
+            notify.announce(name, "agent sign-up", "new computer", f"signed itself up from {source}. If you did not install the agent "
+                            "there, turn off sign-up or renew the key in Settings > Agents.")
     except Exception:
         quiet.ignored()
 
 
 def device_for_token(token):
     """Inventory name for a token, or ''."""
+    return token_owner(token)[0]
+
+
+def token_owner(token):
+    """(inventory name, organization) for a token, looked for in every organization's file; ('', None) when it is unknown. Each
+    agent reports into its own device's organization, whichever one Toner is showing."""
     if not token:
-        return ""
+        return "", None
     want = _hash(token)
     now = _now()
-    with db.connect() as c:
-        rows = c.execute("SELECT device, token_hash, prev_hash, prev_until FROM agent_reports WHERE token_hash<>''").fetchall()
-    for r in rows:
-        if hmac.compare_digest(r["token_hash"], want):
-            return r["device"]
-        if r["prev_hash"] and r["prev_until"] > now and hmac.compare_digest(r["prev_hash"], want):
-            return r["device"]
-    return ""
+    for org in [db.GLOBAL] + [r["id"] for r in db.org_rows()]:
+        with db.within(org), db.connect() as c:
+            rows = c.execute("SELECT device, token_hash, prev_hash, prev_until FROM agent_reports WHERE token_hash<>''").fetchall()
+        for r in rows:
+            if hmac.compare_digest(r["token_hash"], want):
+                return r["device"], org
+            if r["prev_hash"] and r["prev_until"] > now and hmac.compare_digest(r["prev_hash"], want):
+                return r["device"], org
+    return "", None
 
 
 _last_purge = [0.0]
@@ -322,11 +356,19 @@ def latest(device):
 
 
 def overview():
-    """[{device, received_at, source, age (minutes) or None, has_token}] for the Settings page."""
+    """[{device, received_at, source, age (minutes) or None, has_token, org}] for the Settings page; in Global, every organization's
+    (device is then a key, see db.dkey)."""
     out = []
-    with db.connect() as c:
-        rows = c.execute("SELECT device, token_hash, received_at, source, version, issued_at, report FROM agent_reports "
-                         "ORDER BY device COLLATE NOCASE").fetchall()
+
+    def here():
+        with db.connect() as c:
+            return [dict(r) for r in c.execute("SELECT device, token_hash, received_at, source, version, issued_at, report FROM agent_reports "
+                                               "ORDER BY device COLLATE NOCASE")]
+    rows = []
+    for org, only in db._each_file():
+        with db.within(org):
+            part = here()
+        rows += [{**r, "device": db.dkey(r["device"], org), "org": org} for r in part if only is None or r["device"] in only]
     now = datetime.now(timezone.utc)
     for r in rows:
         try:
@@ -337,7 +379,7 @@ def overview():
             rep = json.loads(r["report"]) if r["report"] else {}
         except ValueError:
             rep = {}
-        out.append({"device": r["device"], "received_at": r["received_at"], "source": r["source"], "age": age,
+        out.append({"device": r["device"], "org": r["org"], "received_at": r["received_at"], "source": r["source"], "age": age,
                     "has_token": bool(r["token_hash"]), "version": r["version"], "issued_at": r["issued_at"],
                     "computer": rep.get("computer", ""), "os": rep.get("os", ""), "domain": rep.get("domain", "") if rep.get("joined") else "",
                     "pending_reboot": bool(rep.get("reboot")), "uptime_h": rep.get("uptime_h")})
@@ -445,7 +487,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         except ValueError:
             n = -1
         auth = self.headers.get("Authorization", "")
-        device = device_for_token(auth[7:].strip()) if auth.lower().startswith("bearer ") else ""
+        device, org = token_owner(auth[7:].strip()) if auth.lower().startswith("bearer ") else ("", None)
         if not device:
             owner.rejected += 1
             self._drain()
@@ -462,16 +504,18 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             return self._send(400, b'{"ok":false,"error":"not a report"}')
         version = (self.headers.get("X-Toner-Agent") or "").strip()[:20]
         kind, _ = agent_kind(version)
-        store(device, report, self.client_address[0], version if kind != "none" else "")
+        with db.within(org):                                # into the device's own organization's file
+            store(device, report, self.client_address[0], version if kind != "none" else "")
         owner.accepted += 1
         answer = {"ok": True}
         if kind != "none":                                  # only the package agent knows how to take these
             if agent_outdated(version):
                 answer["update"] = True
-            if token_due(device):
-                answer["token"] = replace_token(device)
-            if db.get_setting("agent_push_minutes"):          # the interval chosen in Settings > Agents; the agent changes itself only if it differs
-                answer["minutes"] = max(1, min(60, int(db.get_setting("agent_minutes") or 5)))
+            with db.within(org):
+                if token_due(device):
+                    answer["token"] = replace_token(device)
+                if db.get_setting("agent_push_minutes"):      # the interval chosen in the organization's Settings > Agents; the agent changes itself only if it differs
+                    answer["minutes"] = max(1, min(60, int(db.get_setting("agent_minutes") or 5)))
         self._send(200, json.dumps(answer).encode())
 
 

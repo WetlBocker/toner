@@ -135,7 +135,7 @@ class DeviceView(QDialog):
 
     # ---------- content
     def reload(self):
-        d = db.get_device(self.dev["id"]) if self.dev.get("id") else None
+        d = db.get_device(self.dev["id"], self.dev.get("org")) if self.dev.get("id") else None
         if d:
             self.dev = d
         d = self.dev
@@ -304,7 +304,11 @@ class DeviceView(QDialog):
         for k in ("checks", "backup"):
             self.buttons[k].setEnabled(False)
         self.status.setText(text)
-        self.job = _Job(fn)
+        org = self.dev.get("org")
+        def in_org():
+            with db.within(org):                         # its passwords, baselines and history are in its own file
+                return fn()
+        self.job = _Job(in_org)
         self.job.done.connect(done)
         self.job.start()
 
@@ -337,3 +341,18 @@ class DeviceView(QDialog):
         if self.job and self.job.isRunning():
             self.job.wait(5000)
         super().closeEvent(e)
+
+
+def _in_own_org(fn):
+    """Run a DeviceView method inside the device's own organization's file, where its name is its key (Global lists every
+    organization, so the same name can belong to two devices there)."""
+    def wrapped(self, *a, **k):
+        with db.within(self.dev.get("org")):
+            return fn(self, *a, **k)
+    wrapped.__name__, wrapped.__doc__ = fn.__name__, fn.__doc__
+    return wrapped
+
+
+for _name in ("reload", "_fill_info", "_latest_rows", "_fill_checks", "_fill_history", "draw", "_fill_versions", "show_config",
+              "_checks_done", "_backup_done"):
+    setattr(DeviceView, _name, _in_own_org(getattr(DeviceView, _name)))

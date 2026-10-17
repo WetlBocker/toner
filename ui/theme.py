@@ -99,10 +99,12 @@ QPushButton:pressed, QToolButton:pressed { background: %(surface2)s; }
 QPushButton:disabled, QToolButton:disabled { color: %(muted)s; background: %(bg)s; }
 QPushButton:focus { border-color: %(accent)s; }
 QPushButton[primary="true"], QPushButton:default {
-    background: %(accent)s; color: %(accent_text)s; border: 1px solid %(accent)s; font-weight: 600;
+    background: %(accent)s; color: %(accent_text)s; border: 1px solid %(accent)s;
 }
+QPushButton[primary="true"] { font-weight: 600; }
+/* (only a button marked primary is bold: a dialog makes a button its default after sizing it, so bold text there would not fit) */
 QPushButton[primary="true"]:hover, QPushButton:default:hover { background: %(accent_hover)s; border-color: %(accent_hover)s; }
-QPushButton[primary="true"]:disabled { background: %(surface2)s; color: %(muted)s; border-color: %(border)s; }
+QPushButton[primary="true"]:disabled, QPushButton:default:disabled { background: %(surface2)s; color: %(muted)s; border-color: %(border)s; }
 QPushButton[flat="true"], QPushButton[ghost="true"] { background: transparent; border-color: transparent; color: %(muted)s; }
 QPushButton[ghost="true"]:hover { background: %(hover)s; color: %(text)s; }
 QToolButton[popupMode="2"] { padding-right: 26px; }
@@ -220,7 +222,7 @@ QFrame#statusChip { border-radius: 11px; }
 OPS_QSS = """
 QPushButton, QToolButton { border-radius: 3px; padding: 3px 10px; min-height: 16px; background: %(surface2)s; }
 QPushButton:hover, QToolButton:hover { background: %(hover)s; border-color: %(muted)s; }
-QPushButton[primary="true"], QPushButton:default { font-weight: 700; }
+QPushButton[primary="true"] { font-weight: 700; }
 QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QAbstractSpinBox { border-radius: 3px; padding: 2px 7px; min-height: 16px; }
 QPlainTextEdit, QTextEdit { border-radius: 3px; padding: 6px; }
 QComboBox QAbstractItemView, QMenu { border-radius: 4px; }

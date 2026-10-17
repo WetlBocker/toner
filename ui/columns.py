@@ -7,12 +7,12 @@ from core import db
 
 
 class ColumnChooser(QObject):
-    def __init__(self, view, header, setting, names, locked=(0,), auto=None):
+    def __init__(self, view, header, setting, names, locked=(0,), auto=None, org_col=None):
         """view: the table or tree. setting: where the hidden columns are kept (None = automatic). auto: () -> set of column numbers
-        to hide while the choice is automatic."""
+        to hide while the choice is automatic. org_col: the Organization column, which only exists while Global lists everything."""
         super().__init__(view)
         self.view, self.header, self.setting, self.names = view, header, setting, list(names)
-        self.locked, self.auto = set(locked), auto
+        self.locked, self.auto, self.org_col = set(locked), auto, org_col
         header.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         header.customContextMenuRequested.connect(self._menu)
 
@@ -23,9 +23,10 @@ class ColumnChooser(QObject):
 
     def hidden(self):
         chosen = self.chosen()
-        if chosen is not None:
-            return chosen - self.locked
-        return (self.auto() if self.auto else set()) - self.locked
+        hide = (chosen if chosen is not None else (self.auto() if self.auto else set())) - self.locked
+        if self.org_col is not None and not db.several():
+            hide = hide | {self.org_col}
+        return hide
 
     def apply(self):
         hide = self.hidden()
@@ -36,6 +37,8 @@ class ColumnChooser(QObject):
         menu = QMenu(self.view)
         hide = self.hidden()
         for i, name in enumerate(self.names):
+            if i == self.org_col and not db.several():
+                continue
             act = menu.addAction(name or f"Column {i + 1}")
             act.setCheckable(True)
             act.setChecked(i not in hide)
@@ -47,6 +50,8 @@ class ColumnChooser(QObject):
 
     def toggle(self, column, shown):
         hide = set(self.hidden())
+        if self.org_col is not None and not db.several():
+            hide.discard(self.org_col)                     # hidden here only because no organization column exists here
         (hide.discard if shown else hide.add)(column)
         db.set_setting(self.setting, sorted(hide))
         self.apply()

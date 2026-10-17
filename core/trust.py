@@ -18,7 +18,7 @@ MARK = "# ---- trusted by Windows on this computer (added by Toner)"
 
 
 def bundle_path():
-    return db.db_path().parent / "ca-bundle.pem"
+    return db.base_path().parent / "ca-bundle.pem"
 
 
 def windows_pems():

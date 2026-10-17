@@ -33,6 +33,7 @@ from ui.settings_pages.profiles import ProfileDialog, ProfilesPage  # noqa: F401
 from ui.settings_pages.checks import CheckDialog, row_of_layout, CustomChecksPage, BackupsPage, AuditPage  # noqa: F401
 from ui.settings_pages.network import ProxyPage, AgentsPage, MaintenanceDialog, MaintenancePage  # noqa: F401
 from ui.settings_pages.ansible import AnsiblePage  # noqa: F401
+from ui.settings_pages.orgs import OrganizationsPage  # noqa: F401
 
 
 
@@ -42,10 +43,32 @@ GROUPS = [("Monitoring", ["General", "Thresholds", "Checks", "Maintenance"]),
           ("Alerts and reports", ["Notifications", "Reports", "Config backups"]),
           ("Automation", ["Ansible"]),
           ("Look and feel", ["Appearance", "Terminal"]),
-          ("Security and data", ["Security", "Audit log", "Data and logs"])]
+          ("Security and data", ["Security", "Audit log", "Data and logs"]),
+          ("Organizations", ["Organizations"])]
 
 
 DIRTY = Qt.ItemDataRole.UserRole + 1          # on a list entry: the page has edits that are not saved yet
+
+# Pages about this computer or the whole program: an organization sees them, read-only, as "Managed by Global".
+GLOBAL_PAGES = {"Proxy", "Ansible", "Appearance", "Terminal", "Security", "Data and logs"}   # (Agents: only the receiver part)
+GLOBAL_ONLY_PAGES = {"Organizations"}               # shown in Global only
+
+# What an organization's own value of a setting is called on its page's "Reset to Global" line.
+KEY_LABELS = {"retention_days": "Keep run history", "workers": "Devices checked in parallel", "default_ssh_port": "Default SSH port",
+              "default_verify_ssl": "Verify SSL certificates on new devices", "scan_confirm_over": "Confirm scans larger than",
+              "ssh_timeout": "SSH timeout", "http_timeout": "HTTP timeout", "retries": "Retries", "retry_delay": "Retry delay",
+              "disabled_checks": "Checks that run", "counter_mode": "Port error counting", "firmware_severity": "Firmware update severity",
+              "threshold_overrides": "Threshold overrides", "thresholds": "Thresholds", "schedule_enabled": "Scheduled checks",
+              "schedule_minutes": "Check interval", "schedule_groups": "Devices checked on the schedule", "schedule_on_start": "Run when Toner starts",
+              "report_title": "Report title", "report_org": "Report organization name", "report_folder": "Reports folder",
+              "report_include_all": "Reports include every check", "trend_schedule": "Scheduled trend report",
+              "notify_enabled": "Notifications", "notify_channels": "Notification channels", "notify_consecutive": "Alert after failed runs",
+              "notify_remind_hours": "Reminders", "notify_on_manual": "Alert on runs started by hand",
+              "backup_enabled": "Scheduled backups", "backup_hours": "Backup interval", "backup_groups": "Devices backed up on the schedule",
+              "backup_keep": "Versions kept", "backup_mask": "Hide passwords in backups", "backup_on_start": "Back up when Toner starts",
+              "discover_communities": "Discovery SNMP communities", "discover_ports": "Discovery ports", "tls_sweep": "Certificate sweep",
+              "tls_sweep_ports": "Certificate sweep ports", "agent_enroll": "Agent sign-up", "agent_minutes": "Agent report interval",
+              "agent_push_minutes": "Change computers that already have the agent"}
 
 
 class _NavDelegate(QStyledItemDelegate):
@@ -63,18 +86,30 @@ class _NavDelegate(QStyledItemDelegate):
             painter.restore()
 
 
+def _not_setting(w, page):
+    while w is not None and w is not page:
+        if w.property("notSetting"):
+            return True
+        w = w.parentWidget()
+    return False
+
+
 def signature(page):
     """What the person can type or tick on a page, as one comparable value (lists kept in memory are not part of it)."""
     out = []
     if not getattr(page, "track", True):
         return ()
     for w in page.findChildren(QWidget):
+        if _not_setting(w, page):
+            continue                                  # acts by its own buttons (Settings > Security's vault section)
         if isinstance(w, QLineEdit):
+            if isinstance(w.parentWidget(), (QAbstractSpinBox, QComboBox)) and w.parentWidget().property("notSetting"):
+                continue
             out.append(w.text())
         elif isinstance(w, QAbstractButton):
             if w.isCheckable() and not w.property("notSetting"):
                 out.append(w.isChecked())
-        elif isinstance(w, QComboBox):
+        elif isinstance(w, QComboBox) and not w.property("notSetting"):
             out.append((w.currentIndex(), w.currentText()))
         elif isinstance(w, QAbstractSpinBox):
             out.append(w.text())
@@ -88,18 +123,22 @@ def signature(page):
 
 class SettingsTab(QWidget):
     changed = Signal()                    # emitted after a successful save (or an import)
+    orgs_changed = Signal()               # Settings > Organizations created, renamed, archived or removed one
 
     def __init__(self):
         super().__init__()
         self.pages = [GeneralPage(), ThresholdsPage(), ChecksPage(), ConnectionsPage(), ProxyPage(), AgentsPage(),
                       BackupsPage(), MaintenancePage(), NotificationsPage(), ProfilesPage(), AnsiblePage(), AppearancePage(), TerminalPage(), ReportsPage(), SecurityPage(),
-                      AuditPage(), DataPage(self.reload)]
+                      AuditPage(), DataPage(self.reload), OrganizationsPage()]
+        self.pages[-1].changed_orgs.connect(self.orgs_changed)
         for p in self.pages:
             tidy(p)                                           # no drop-down or button stretches across a wide window
         self._texts = {}                                      # page index -> lower-case words on the page, for the search box
-        self.search = QLineEdit()
-        self.search.setPlaceholderText("Search settings")
-        self.search.setClearButtonEnabled(True)
+        from ui.finder import SearchBox
+        self.search = SearchBox("Search settings", "Type a word to list only the pages that mention it.")
+        self.search.setMaximumWidth(16777215)
+        from PySide6.QtGui import QKeySequence, QShortcut
+        QShortcut(QKeySequence("Ctrl+F"), self, activated=self._focus_search)
         self.nav = QListWidget()
         self.nav.setObjectName("settingsNav")
         self.nav.setSpacing(0)
@@ -108,12 +147,34 @@ class SettingsTab(QWidget):
         self.snaps = {}                                      # page index -> the page's settings in words, taken at the same time
         self._dirty = {}                                     # page index -> it differs from that
         self.stack = QStackedWidget()
-        for p in self.pages:
+        self.managed = {}                                     # page index -> its "Managed by Global" line
+        self.own_lines = {}                                   # page index -> the line listing the organization's own values
+        self.page_keys = {}                                   # page index -> the settings the page shows (read while it loads)
+        for i, p in enumerate(self.pages):
             area = QScrollArea()
             area.setWidgetResizable(True)
             area.setFrameShape(QScrollArea.Shape.NoFrame)
-            area.setWidget(p)
+            holder = QWidget()
+            hl = QVBoxLayout(holder)
+            hl.setContentsMargins(0, 0, 0, 0)
+            if p.title in GLOBAL_PAGES:
+                lab = self.managed[i] = QLabel("Managed by Global")
+                lab.setProperty("banner", True)
+                lab.setStyleSheet("font-weight:600; padding:6px 0;")
+                lab.hide()
+                hl.addWidget(lab)
+            own = self.own_lines[i] = QLabel("")               # an organization's own values on this page, each with Reset to Global
+            own.setWordWrap(True)
+            own.setTextFormat(Qt.TextFormat.RichText)
+            own.linkActivated.connect(lambda key, i=i: self.reset_to_global(i, key))
+            own.hide()
+            hl.addWidget(own)
+            hl.addWidget(p, 1)
+            area.setWidget(holder)
             self.stack.addWidget(area)
+        self.scope_note = QLabel("Changes here only apply to this Organization.")    # shown while an organization is picked
+        self.scope_note.setStyleSheet("font-weight:600; padding:2px 0 6px 0;")
+        self.scope_note.hide()
         self._fill_nav()
         left = QWidget()
         left.setFixedWidth(200)
@@ -128,15 +189,15 @@ class SettingsTab(QWidget):
         self.status = QLabel("")
         self.unsaved = QLabel("")                                       # "Unsaved changes on 2 pages", next to the buttons
         self.unsaved.setStyleSheet("font-weight:600;")
-        save, revert = self.save_btn, self.revert_btn = QPushButton("Save changes"), QPushButton("Revert")
+        save, cancel = self.save_btn, self.cancel_btn = QPushButton("Save changes"), QPushButton("Cancel")
         save.setProperty("primary", True)
         save.setDefault(True)
-        save.clicked.connect(self.ask_save)                  # both say what they are about to change, and ask
-        revert.clicked.connect(self.ask_revert)
+        save.clicked.connect(self.ask_save)                  # says what it is about to change, and asks
+        cancel.clicked.connect(self.cancel)                  # drops the edits without asking
         bar = QHBoxLayout()
         bar.addWidget(self.status, 1)
         bar.addWidget(self.unsaved)
-        bar.addWidget(revert)
+        bar.addWidget(cancel)
         bar.addWidget(save)
         right = QVBoxLayout()
         right.addWidget(self.stack, 1)
@@ -145,6 +206,7 @@ class SettingsTab(QWidget):
         body.addWidget(left)
         body.addLayout(right, 1)
         lay = QVBoxLayout(self)
+        lay.addWidget(self.scope_note)
         lay.addLayout(body, 1)
         self.select_page(self.pages[0].title)
         self.reload()
@@ -164,9 +226,9 @@ class SettingsTab(QWidget):
     def dirty_pages(self):
         return [i for i, v in self._dirty.items() if v]
 
-    def check_dirty(self):
+    def check_dirty(self, hidden_too=False):
         """Compare the page in view with how it was when loaded or saved; its list entry gets a dot if it differs."""
-        if not self.isVisible():
+        if not (self.isVisible() or hidden_too):
             return
         i = self.stack.currentIndex()
         if i in self.baseline:
@@ -245,6 +307,12 @@ class SettingsTab(QWidget):
         return self.pages[i].title if 0 <= i < len(self.pages) else ""
 
     # ---------- search
+    def _focus_search(self):
+        """Ctrl+F: the open page's own search box (the audit log has one), else the one above the page list."""
+        page = self.pages[self.stack.currentIndex()] if 0 <= self.stack.currentIndex() < len(self.pages) else None
+        box = getattr(page, "search", None)
+        (box if box is not None and box.isVisible() else self.search).focus_here()
+
     def _page_text(self, i):
         """Everything a person could look for on a page: its title, labels, buttons, tick boxes and tooltips."""
         if i not in self._texts:
@@ -269,7 +337,7 @@ class SettingsTab(QWidget):
                 heading = r
                 visible_in_group[heading] = 0
                 continue
-            ok = all(w in self._page_text(i) for w in words)
+            ok = all(w in self._page_text(i) for w in words) and not self._hidden(i)
             self.nav.setRowHidden(r, not ok)
             if ok:
                 visible_in_group[heading] = visible_in_group.get(heading, 0) + 1
@@ -287,10 +355,68 @@ class SettingsTab(QWidget):
                 self.nav.setCurrentRow(r)
                 return
 
+    def _hidden(self, i):
+        """A page that does not apply where we are (Organizations, inside an organization)."""
+        return db.home() != db.GLOBAL and self.pages[i].title in GLOBAL_ONLY_PAGES
+
+    def apply_org(self):
+        """Global or an organization: the line at the top, read-only pages managed by Global, and the Organizations page."""
+        inside = db.home() != db.GLOBAL
+        self.scope_note.setVisible(inside)
+        for i, lab in self.managed.items():
+            lab.setVisible(inside)
+            self.pages[i].setEnabled(not inside)
+        for p in self.pages:                                  # single settings about this computer on an organization's pages
+            for w in p.findChildren(QWidget):
+                if w.property("globalOnly"):
+                    if w.property("tipBefore") is None:
+                        w.setProperty("tipBefore", w.toolTip())
+                    w.setEnabled(not inside)
+                    w.setToolTip("Managed by Global" if inside else w.property("tipBefore"))
+        self.filter_pages(self.search.text())
+        cur = self._index_of(self.nav.currentRow())
+        if cur is None or self._hidden(cur):
+            self._first_match()
+
+    def _load_page(self, i):
+        """Load one page, noting which settings it shows (so its organization's own values can be listed)."""
+        real, seen = db._raw_setting, set()
+
+        def spy(key):
+            seen.add(key)
+            return real(key)
+        db._raw_setting = spy
+        try:
+            self.pages[i].load()
+        finally:
+            db._raw_setting = real
+        self.page_keys[i] = seen
+
+    def show_own(self):
+        """In an organization: on each page, the settings it changes from Global, each with a Reset to Global link."""
+        inside = db.home() != db.GLOBAL
+        for i, lab in self.own_lines.items():
+            keys = sorted(k for k in self.page_keys.get(i, ()) if inside and db.overridden(k)) if self.pages[i].title not in GLOBAL_PAGES else []
+            lab.setText("<br>".join(f"<b>{KEY_LABELS.get(k, k.replace('_', ' ').capitalize())}</b> is set for this organization. "
+                                    f"<a href='{k}'>Reset to Global</a>" for k in keys))
+            lab.setVisible(bool(keys))
+
+    def reset_to_global(self, i, key):
+        """Forget the organization's own value of one setting: it follows Global again (right away)."""
+        db.follow_global(key)
+        audit.log("setting reset to Global", KEY_LABELS.get(key, key))
+        self._load_page(i)
+        self.rebase(only={i})
+        self.show_own()
+        self.changed.emit()
+        toast(self, f"{KEY_LABELS.get(key, key)} follows Global again.")
+
     def reload(self):
         """Show what is stored, discarding unsaved edits."""
-        for p in self.pages:
-            p.load()
+        self.apply_org()
+        for i in range(len(self.pages)):
+            self._load_page(i)
+        self.show_own()
         self.status.setText("")
         self._dirty = {}
         self.rebase()
@@ -306,7 +432,7 @@ class SettingsTab(QWidget):
         self.refresh_dynamic()
         super().showEvent(e)
 
-    # ---------- asking before Save and Revert
+    # ---------- asking before Save, and before leaving with unsaved edits
     def pending_changes(self):
         """[(page title, [(setting, stored value, value now)])] for every page whose settings differ from what was loaded or saved."""
         groups = []
@@ -337,16 +463,40 @@ class SettingsTab(QWidget):
         if dlg.exec():
             self.save()
 
-    def ask_revert(self):
-        """Revert: list what the edits are and what each goes back to, and wait for a yes."""
-        groups = [(title, [(name, now, stored) for name, stored, now in rows]) for title, rows in self.pending_changes()]
-        if not groups:
-            toast(self, "Nothing to revert: every setting is as it was saved.")
-            return
-        dlg = SD.ConfirmChanges(self, "Revert changes", "These {n} edited setting{s} will go back to what was last saved. Revert them?",
-                                ("Your edit", "Goes back to"), groups, "Revert", "Keep editing")
-        if dlg.exec():
+    def unsaved_count(self):
+        """How many pages have edits that are not saved (looking again at the page in view, for an edit made a moment ago)."""
+        self.check_dirty(hidden_too=True)
+        return len({self.pages[i].title for i in self.dirty_pages()} | {title for title, _rows in self.pending_changes()})
+
+    def cancel(self):
+        """Cancel: every page goes back to what was last saved, without asking."""
+        if self.unsaved_count():
             self.reload()
+
+    def confirm_leave(self, before="leaving Settings", reload=True):
+        """Unsaved edits when leaving Settings (or switching organization, or closing Toner): Save changes, Discard changes or Stay in
+        Settings. True when it is fine to go on. Save changes is the usual Save (it lists the changes and asks)."""
+        n = self.unsaved_count()
+        if not n:
+            return True
+        box = QMessageBox(QMessageBox.Icon.Warning, "Unsaved settings",
+                          f"You have unsaved changes on {n} page{'s' if n != 1 else ''}.\nSave them before {before}?", parent=self)
+        save = box.addButton("Save changes", QMessageBox.ButtonRole.ActionRole)
+        discard = box.addButton("Discard changes", QMessageBox.ButtonRole.ActionRole)
+        stay = box.addButton("Stay in Settings", QMessageBox.ButtonRole.ActionRole)
+        box.setDefaultButton(save)                           # (all one role, so they stay in this order)
+        box.setEscapeButton(stay)
+        box.exec()
+        if box.clickedButton() is save:
+            self.ask_save()
+            return not self.unsaved_count()                  # kept editing, or something to fix first: stay
+        if box.clickedButton() is discard:
+            if reload:
+                self.reload()
+            else:
+                self._dirty = {}
+            return True
+        return False
 
     def save(self):
         problems, first_bad = self._problems()
@@ -360,5 +510,6 @@ class SettingsTab(QWidget):
         audit.log("settings saved")
         self._dirty = {}
         self.rebase()
+        self.show_own()
         self.status.setText(f"Saved at {datetime.now():%H:%M:%S}")
         self.changed.emit()

@@ -1,8 +1,8 @@
-"""The client being looked at.
+"""The client being looked at (before organizations).
 
-For an MSP the top-level folders of the inventory are usually its clients. Choosing one in the sidebar narrows every section to that
-client's devices: the Overview, Results, the Inventory, Configs, History, Reports and the runs started from them. "All clients" shows
-everything. The choice is kept per computer (it is not a setting that travels with an export)."""
+Choosing a top-level folder in the sidebar used to narrow every section to that client's devices. Organizations replaced it
+(core/orgs.py): each keeps its own file, so there is nothing left to narrow. These functions stay so callers need no change:
+they now always mean 'everything in the organization being looked at'."""
 from core import db
 
 SETTING = "client_scope"
@@ -16,15 +16,8 @@ def clients():
 
 
 def current():
-    """The chosen client's folder id, or None for all clients (also when the folder has gone)."""
-    fid = db.get_setting(SETTING)
-    if fid is None:
-        return None
-    try:
-        fid = int(fid)
-    except (TypeError, ValueError):
-        return None
-    return fid if fid in {c for c, _n in clients()} else None
+    """Always None: every device of the organization being looked at counts."""
+    return None
 
 
 def set_current(fid):

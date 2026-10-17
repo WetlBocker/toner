@@ -1,6 +1,6 @@
 # Run directly (python tests/test_x.py) or all together (python tests/run_all.py). Each test builds its own
 # throw-away database and uses a fake credential store, so nothing on this computer is touched.
-# Settings > Save changes and Revert: each lists what will change, with the old and the new value, and asks first.
+# Settings > Save changes lists what will change, with the old and the new value, and asks first; Cancel drops the edits without asking.
 import os as _os, sys as _sys, tempfile as _tmp
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
@@ -77,8 +77,8 @@ for _t, f in all_folds:
 print("== nothing changed")
 check("freshly loaded, there is nothing to list", S.pending_changes() == [])
 T.history.clear(); seen.clear(); answer(True)
-S.ask_revert()
-check("Revert with nothing edited just says so, and shows no window", not seen and "Nothing to revert" in T.history[-1], T.history)
+S.cancel()
+check("Cancel with nothing edited shows no window", not seen)
 S.ask_save()
 check("Save with nothing edited saves as before, with no window", not seen and S.status.text().startswith("Saved"), S.status.text())
 
@@ -113,21 +113,14 @@ S.ask_save()
 check("contradicting limits give the usual warning and no confirmation window", warned and "contradict" in warned[-1] and not seen, (warned, seen))
 th.spins["cpu"][0].setValue(55); th.spins["cpu"][1].setValue(90)
 
-print("== Revert lists what goes back")
+print("== Cancel puts everything back, without asking")
 sp.setValue(7); th.spins["memory"][1].setValue(95); S.search.setText("")
-# an override row in the table is described too
-th.add_row("Vendor: Cisco", "cpu", 40, 60)
+th.add_row("Vendor: Cisco", "cpu", 40, 60)                  # an override row in the table goes too
 seen.clear(); answer(False)
-S.ask_revert()
-flat = {r[0]: r for _t, rs in seen[0]["rows"] for r in rs}
-check("it says your edit and what it goes back to", seen[0]["title"] == "Revert changes" and seen[0]["head"] == ["Setting", "Your edit", "Goes back to"] and seen[0]["go"] == "Revert", seen[0]["head"])
-check("each edited setting shows the edit first, then the saved value", flat["Keep run history"][1:] == ("7 days", f"{old_days - 30} days") and flat["Memory %"][1:] == ("WARN at 80 / FAIL at 95", "WARN at 80 / FAIL at 90"), flat)
-check("a new override row is listed and goes back to (not set)", flat["Override: Vendor: Cisco / CPU %"][1:] == ("WARN 40 / FAIL 60", "(not set)"), [k for k in flat if "Override" in k])
-check("answering no keeps the edits", sp.value() == 7 and th.table.rowCount() == 1)
-seen.clear(); answer(True)
-S.ask_revert()
-check("answering yes puts everything back as saved", sp.value() == old_days - 30 and th.spins["memory"][1].value() == 90 and th.table.rowCount() == 0 and S.pending_changes() == [])
-check("and nothing was written by a revert", int(db.get_setting("retention_days")) == old_days - 30)
+S.cancel()
+check("no window opens", not seen)
+check("everything is back as saved", sp.value() == old_days - 30 and th.spins["memory"][1].value() == 90 and th.table.rowCount() == 0 and S.pending_changes() == [])
+check("and nothing was written by Cancel", int(db.get_setting("retention_days")) == old_days - 30)
 
 print("== the checks page and the unsaved marks")
 ck = page("Checks"); top = ck.tree.topLevelItem(0); first = top.child(0); first.setCheckState(0, Qt.CheckState.Unchecked)
@@ -139,12 +132,12 @@ check("and the list names the check", flat[f"{top.text(0)}: {first.text(0)}"][1:
 first.setCheckState(0, Qt.CheckState.Checked)
 
 print("== the buttons")
-check("the buttons ask first (they are wired to the asking versions)", S.save_btn.text() == "Save changes" and S.revert_btn.text() == "Revert")
+check("the buttons say Save changes and Cancel", S.save_btn.text() == "Save changes" and S.cancel_btn.text() == "Cancel")
 sp.setValue(11); seen.clear(); answer(False)
-S.revert_btn.click()
-check("the Revert button opens the list", seen and seen[0]["title"] == "Revert changes")
-seen.clear(); S.save_btn.click()
+S.save_btn.click()
 check("the Save button opens the list", seen and seen[0]["title"] == "Save changes")
+seen.clear(); S.cancel_btn.click()
+check("the Cancel button drops the edit with no window", not seen and sp.value() == old_days - 30 and S.pending_changes() == [])
 check("the confirmation window really exists and is not a plain message box", SD.ConfirmChanges.__mro__[1].__name__ == "QDialog")
 
 print(f"\n{ok} passed, {bad} failed")

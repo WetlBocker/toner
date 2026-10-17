@@ -80,7 +80,7 @@ check("the worst state decides the dot (the ERROR device says ERROR)", by_name["
 dev("quiet-one"); inv.refresh()
 by_name = {it.text(0): it for it in inv._all_items() if inv.kind_of(it)[0] == "device"}
 check("a device never checked has no state text", by_name["quiet-one"].toolTip(0) == "")
-check("the less-used buttons are in a More menu so the row fits a narrow window", set(inv.more_actions) == {"Import...", "Export...", "Expand all", "Collapse all"})
+check("the less-used buttons are in a More menu so the row fits a narrow window", set(inv.more_actions) == {"Import...", "Import PuTTY sessions on this computer...", "Export...", "Expand all", "Collapse all"})
 
 print("== results: what failed opens by itself")
 from ui import results as R

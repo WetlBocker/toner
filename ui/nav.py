@@ -20,12 +20,13 @@ class NavStack(QWidget):
     currentChanged = Signal(int)
     search_requested = Signal()
     collapsed_changed = Signal(bool)
-    client_changed = Signal(object)            # a top-level folder id, or None for all clients
+    org_changed = Signal(int)                  # the organization picked in the switcher (0 = Global)
     PAGE_MARGINS = (24, 20, 24, 20)
 
     def __init__(self, title="Toner"):
         super().__init__()
         self._names, self._icon_names = [], []
+        self.leave_guard = None                    # (from index, to index) -> False to stay on the section being left
         self.side = QWidget()
         self.side.setObjectName("sidebar")
         from ui import logo
@@ -47,12 +48,12 @@ class NavStack(QWidget):
         side = QVBoxLayout(self.side)
         side.setContentsMargins(12, 16, 12, 12)
         side.addLayout(head)
-        self.client = QComboBox()                 # the client being looked at: every section follows it
-        self.client.setObjectName("clientPicker")
-        self.client.setToolTip("Show one client (a top-level folder of the Inventory) in every section, or all of them")
-        self.client.currentIndexChanged.connect(lambda _i: None if self._filling else self.client_changed.emit(self.client.currentData()))
+        self.org = QComboBox()                    # the organization being looked at: every section follows it
+        self.org.setObjectName("orgPicker")
+        self.org.setToolTip("The organization every section shows. Global lists every organization.")
+        self.org.currentIndexChanged.connect(lambda _i: None if self._filling else self.org_changed.emit(int(self.org.currentData() or 0)))
         self._filling = False
-        side.addWidget(self.client)
+        side.addWidget(self.org)
         side.addSpacing(6)
         side.addWidget(self.list, 1)
         self.quick = QPushButton("Search      Ctrl+K")                   # the command palette is easy to miss otherwise
@@ -112,16 +113,21 @@ class NavStack(QWidget):
     def collapsed(self):
         return self._collapsed
 
-    def set_clients(self, clients, current=None):
-        """[(folder id, name)]: the choices besides "All clients". Hidden while there are none."""
+    def set_orgs(self, orgs, current=0):
+        """[(id, name, colour)]: the organizations besides Global (archived ones are not offered). Hidden while there are none."""
+        from PySide6.QtGui import QColor, QPixmap
+        def dot(colour):
+            pm = QPixmap(10, 10)
+            pm.fill(QColor(colour or "#888888"))
+            return QIcon(pm)
         self._filling = True
-        self.client.clear()
-        self.client.addItem("All clients", None)
-        for fid, name in clients:
-            self.client.addItem(name, fid)
-        self.client.setCurrentIndex(max(0, self.client.findData(current)))
+        self.org.clear()
+        self.org.addItem("Global", 0)
+        for oid, name, colour in orgs:
+            self.org.addItem(dot(colour), name, oid)
+        self.org.setCurrentIndex(max(0, self.org.findData(current)))
         self._filling = False
-        self.client.setVisible(bool(clients) and not self._collapsed)
+        self.org.setVisible(bool(orgs) and not self._collapsed)
 
     def setCollapsed(self, on):
         """The sidebar as a strip of icons (names show as tooltips) or in full."""
@@ -130,8 +136,8 @@ class NavStack(QWidget):
         self._collapsed = on
         self.side.setFixedWidth(COLLAPSED_WIDTH if on else self.expanded_width())
         self._brand.setVisible(not on)
-        if hasattr(self, "client"):
-            self.client.setVisible(not on and self.client.count() > 1)
+        if hasattr(self, "org"):
+            self.org.setVisible(not on and self.org.count() > 1)
         self.quick.setText("" if on else ("Search   Ctrl+K" if theme.is_ops() else "Search      Ctrl+K"))
         self.bottom.setDirection(QBoxLayout.Direction.TopToBottom if on else QBoxLayout.Direction.LeftToRight)
         self.fold.setToolTip("Show the sidebar in full   (Ctrl+B)" if on else "Collapse the sidebar   (Ctrl+B)")
@@ -151,9 +157,16 @@ class NavStack(QWidget):
         item.setToolTip(tip + (f"   (Ctrl+{i + 1})" if i < 9 else ""))
 
     def _row_changed(self, row):
-        if row >= 0:
-            self.stack.setCurrentIndex(row)
-            self.currentChanged.emit(row)
+        if row < 0:
+            return
+        was = self.stack.currentIndex()
+        if self.leave_guard is not None and was >= 0 and was != row and not self.leave_guard(was, row):
+            self.list.blockSignals(True)                   # stay where we were (unsaved settings, and the person chose to stay)
+            self.list.setCurrentRow(was)
+            self.list.blockSignals(False)
+            return
+        self.stack.setCurrentIndex(row)
+        self.currentChanged.emit(row)
 
     def addTab(self, widget, label, icon_name=None):
         if widget.layout() is not None:

@@ -89,7 +89,7 @@ def can_self_update():
 
 
 def updates_dir():
-    d = db.db_path().parent / "updates"
+    d = db.base_path().parent / "updates"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -101,6 +101,11 @@ def _pick_hex(text, name=""):
         if m and (not name or not m.group(2).strip() or name.lower() in m.group(2).lower()):
             return m.group(1).lower()
     return ""
+
+
+def _proxies(url):
+    """Settings > Proxy, unless About > Connect directly for updates is ticked."""
+    return proxy.web_kwargs(urlparse(url).hostname, bool(db.get_setting("update_direct")))
 
 
 def _ssl_reason(e):
@@ -122,7 +127,7 @@ def fetch_version(version, repo=REPO, timeout=10):
 def _fetch_release(url, timeout):
     try:
         r = requests.get(url, headers={"Accept": "application/vnd.github+json", "User-Agent": "Toner"}, timeout=timeout,
-                         **proxy.requests_kwargs(None, urlparse(url).hostname))
+                         **_proxies(url))
     except requests.exceptions.SSLError as e:
         raise UpdateError(f"Could not reach GitHub securely: {_ssl_reason(e)}. {trust.SSL_HINT}") from None
     except requests.RequestException as e:
@@ -182,7 +187,7 @@ def expected_hash(rel, timeout=15):
         _check_url(rel.checksum_url)
         try:
             r = requests.get(rel.checksum_url, timeout=timeout, headers={"User-Agent": "Toner"},
-                             **proxy.requests_kwargs(None, urlparse(rel.checksum_url).hostname))
+                             **_proxies(rel.checksum_url))
             r.raise_for_status()
         except requests.RequestException as e:
             raise UpdateError(f"Could not fetch the checksum: {type(e).__name__}") from None
@@ -205,7 +210,7 @@ def download(rel, dest_dir=None, progress=None, cancel=None, timeout=30):
     part, h, got = final + ".part", hashlib.sha256(), 0
     try:
         with requests.get(rel.asset_url, stream=True, timeout=timeout, headers={"User-Agent": "Toner"},
-                          **proxy.requests_kwargs(None, urlparse(rel.asset_url).hostname)) as r:
+                          **_proxies(rel.asset_url)) as r:
             r.raise_for_status()
             _check_url(r.url)                                   # after redirects, still GitHub
             total = int(r.headers.get("Content-Length") or rel.asset_size or 0)

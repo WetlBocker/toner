@@ -1,5 +1,5 @@
 """Saved connection sessions: SSH, Telnet, Remote Desktop (RDP) and Serial. A session is a name plus how to connect, kept
-so it can be opened again with a double-click. SSH sessions can keep their password in Credential Manager; the rest of a
+so it can be opened again with a double-click. SSH sessions can keep their password in Toner's vault; the rest of a
 session is stored in the database. RDP sessions run in a tab (Windows' Remote Desktop control, hosted by Toner) or start Windows' own client (mstsc) with a generated .rdp
 file, so Windows asks for the password. The others open in a terminal tab inside Toner."""
 import json
@@ -42,15 +42,24 @@ move_sessions, ensure_folder_path = FOLDERS.move_members, FOLDERS.ensure_path
 
 
 def secret_name(session_id):
-    return f"session:{session_id}"
+    return db.qualify(f"session:{session_id}")
 
 
 # ---------------------------------------------------------------- storage
-def list_sessions():
+def _sessions_here():
     with db.connect() as c:
         rows = [dict(r) for r in c.execute("SELECT * FROM sessions ORDER BY name COLLATE NOCASE")]
     for r in rows:
         r["options"] = _options(r)
+    return rows
+
+
+def list_sessions():
+    """The sessions of the view, each with 'org' (the file it is kept in): an organization's own plus Global's Shared ones, or in
+    Global every organization's."""
+    rows = db.gather(_sessions_here)
+    if len({r["org"] for r in rows}) > 1:
+        rows.sort(key=lambda r: r["name"].lower())
     return rows
 
 
@@ -62,8 +71,13 @@ def _options(row):
     return {**DEFAULTS.get(row.get("kind"), {}), **(given if isinstance(given, dict) else {})}
 
 
-def get(session_id):
-    return next((s for s in list_sessions() if s["id"] == session_id), None)
+def get(session_id, org=None):
+    """One saved session (from `org`'s file; None: the one being written to)."""
+    with db.within(org):
+        found = next((s for s in _sessions_here() if s["id"] == session_id), None)
+        if found:
+            found["org"] = db.target()
+    return found
 
 
 def path_of(session):
@@ -104,9 +118,16 @@ def validate(s):
 
 
 def save(s):
-    """Insert or update. Returns the id. Raises ValueError (bad input) or KeyError-free."""
+    """Insert or update, in the session's own organization's file (s['org']; Shared ones in Global's). Returns the id.
+    Raises ValueError (bad input)."""
+    with db.within(s.get("org")):
+        return _save(s)
+
+
+def _save(s):
     name = validate(s)
     row = {k: s.get(k) for k in FIELDS}
+    row["shared"] = 1 if s.get("shared") and db.target() == db.GLOBAL else 0
     known = {f["id"] for f in list_folders()}
     row.update(name=name, folder_id=s.get("folder_id") if s.get("folder_id") in known else None, host=(s.get("host") or "").strip(),
                port=int(s.get("port") or (0 if s["kind"] == "serial" else DEFAULT_PORT[s["kind"]])),
@@ -118,27 +139,34 @@ def save(s):
         if clash:
             where = folder_paths().get(row["folder_id"])
             raise ValueError(f"A session named '{name}' already exists" + (f" in {where}." if where else " at the top level."))
+        cols = FIELDS + ["shared"]
         if s.get("id"):
-            c.execute("UPDATE sessions SET " + ", ".join(f"{k}=?" for k in FIELDS) + " WHERE id=?",
-                      [row[k] for k in FIELDS] + [s["id"]])
+            c.execute("UPDATE sessions SET " + ", ".join(f"{k}=?" for k in cols) + " WHERE id=?",
+                      [row[k] for k in cols] + [s["id"]])
             return s["id"]
-        return c.execute(f"INSERT INTO sessions ({','.join(FIELDS)}, created) VALUES ({','.join('?' * len(FIELDS))}, ?)",
-                         [row[k] for k in FIELDS] + [_now()]).lastrowid
+        return c.execute(f"INSERT INTO sessions ({','.join(cols)}, created) VALUES ({','.join('?' * len(cols))}, ?)",
+                         [row[k] for k in cols] + [_now()]).lastrowid
 
 
-def delete(session_id):
-    with db.connect() as c:
-        c.execute("DELETE FROM sessions WHERE id=?", (session_id,))
-    forget_password(session_id)
+def delete(session_id, org=None):
+    with db.within(org):
+        with db.connect() as c:
+            c.execute("DELETE FROM sessions WHERE id=?", (session_id,))
+        forget_password(session_id)
 
 
-def duplicate(session_id):
+def duplicate(session_id, org=None):
+    with db.within(org):
+        return _duplicate(session_id)
+
+
+def _duplicate(session_id):
     s = get(session_id)
     if not s:
         return None
     new = {**s, "id": None}
     base = f"{s['name']} (copy)"
-    names = {x["name"].lower() for x in list_sessions() if x["folder_id"] == s["folder_id"]}
+    names = {x["name"].lower() for x in _sessions_here() if x["folder_id"] == s["folder_id"]}
     n, name = 2, base
     while name.lower() in names:
         name, n = f"{s['name']} (copy {n})", n + 1
@@ -150,8 +178,8 @@ def duplicate(session_id):
     return new_id
 
 
-def touch(session_id):
-    with db.connect() as c:
+def touch(session_id, org=None):
+    with db.within(org), db.connect() as c:
         c.execute("UPDATE sessions SET last_used=? WHERE id=?", (_now(), session_id))
 
 
@@ -160,19 +188,22 @@ def _now():
 
 
 # ---------------------------------------------------------------- the saved password (SSH only)
-def password(session_id):
+def password(session_id, org=None):
     try:
-        return keyring.get_password(db.SERVICE, secret_name(session_id)) or ""
+        with db.within(org):
+            return keyring.get_password(db.SERVICE, secret_name(session_id)) or ""
     except Exception:
         return ""
 
 
-def set_password(session_id, value):
-    db.set_secret(secret_name(session_id), value)
+def set_password(session_id, value, org=None):
+    with db.within(org):
+        db.set_secret(secret_name(session_id), value)
 
 
-def forget_password(session_id):
-    db.delete_secret(secret_name(session_id))
+def forget_password(session_id, org=None):
+    with db.within(org):
+        db.delete_secret(secret_name(session_id))
 
 
 # ---------------------------------------------------------------- Remote Desktop
@@ -209,7 +240,7 @@ def find_mstsc():
 
 
 def rdp_path(s):
-    d = db.db_path().parent / "rdp"
+    d = db.base_path().parent / "rdp"
     d.mkdir(parents=True, exist_ok=True)
     return d / (re.sub(r"[^A-Za-z0-9._-]", "_", s.get("name") or s["host"])[:60] + ".rdp")
 

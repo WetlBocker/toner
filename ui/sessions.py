@@ -20,13 +20,25 @@ def _muted(text=""):
     return lab
 
 
-def _device(name):
-    return next((d for d in db.list_devices() if d["name"] == name), None) if name else None
+def _device(name, org=None):
+    """The inventory device a session points at, looked up in the session's own organization."""
+    if not name:
+        return None
+    with db.within(org):
+        return next((d for d in db.list_devices() if d["name"] == name), None)
 
 
 # =============================================================================== the new / edit dialog
 class SessionDialog(QDialog):
-    def __init__(self, session=None, kind="ssh", parent=None, folder_id=None):
+    def __init__(self, session=None, kind="ssh", parent=None, folder_id=None, org=None):
+        """org: for a new session, the organization picked in Global's list (its folders and devices are offered)."""
+        from ui.orgfield import choice_file
+        start = (session or {}).get("org") if session and session.get("id") else choice_file(org)
+        with db.within(start):
+            self._build(session, kind, parent, folder_id, org)
+
+    def _build(self, session, kind, parent, folder_id, org):
+        from ui.orgfield import org_choices, choice_file
         super().__init__(parent)
         self.session = session or {}
         self.folder_id = (session or {}).get("folder_id", folder_id)
@@ -52,13 +64,22 @@ class SessionDialog(QDialog):
         for d in db.list_devices():
             self.device.addItem(f"{d['name']}  -  {d['host']}", d["name"])
         self.device.setToolTip("Use an inventory device's address, user name, saved password, jump host and proxy.")
+        self.org_pick = QComboBox()
+        org_choices(self.org_pick, self.session if self.session.get("id") else None, org)
+        self.org_pick.setToolTip("Which organization the session belongs to. Shared sessions are seen by every organization.")
+        if self.session.get("id") and not db.everything():
+            self.org_pick.setEnabled(False)
+        self._org_was = choice_file(self.org_pick.currentData())
+        self.org_pick.currentIndexChanged.connect(self._org_changed)
         self.host, self.user, self.password = QLineEdit(), QLineEdit(), QLineEdit()
         self.password.setEchoMode(QLineEdit.EchoMode.Password)
         self.host.setPlaceholderText("host name or IP address")
         self.port = QSpinBox()
         self.port.setRange(0, 65535)
         self.port.setSpecialValueText("default")
-        self.remember = QCheckBox("Remember the password (kept in Windows Credential Manager)")
+        self.remember = QCheckBox("Remember the password (kept in Toner's vault)")
+        from ui.linkitem import LinkRow
+        self.link_row = LinkRow()                                    # Link... to a password manager item (when one is chosen)
         self.paging = QCheckBox("Turn off paging after login")
         # remote desktop
         self.fullscreen = QCheckBox("Fill the window (full screen in Windows' own client)")
@@ -101,12 +122,13 @@ class SessionDialog(QDialog):
         pl.addWidget(self.refresh_ports)
         self.rows = {}
         for key, label, widget, kinds in (
+                ("org", "Organization", self.org_pick, "all"),
                 ("kind", "Type", self.kind, "all"), ("about", "", self.about_kind, "all"), ("name", "Name", self.name, "all"),
                 ("folder", "Folder", folder_row, "all"),
                 ("device", "Inventory device", self.device, ("ssh", "telnet", "rdp")),
                 ("host", "Host", self.host, ("ssh", "telnet", "rdp")), ("port", "Port", self.port, ("ssh", "telnet", "rdp")),
                 ("user", "User name", self.user, ("ssh", "rdp")), ("password", "Password", self.password, ("ssh",)),
-                ("remember", "", self.remember, ("ssh",)), ("paging", "", self.paging, ("ssh",)),
+                ("remember", "", self.remember, ("ssh",)), ("link", "", self.link_row, ("ssh",)), ("paging", "", self.paging, ("ssh",)),
                 ("fullscreen", "", self.fullscreen, ("rdp",)), ("width", "Window width", self.width_, ("rdp",)),
                 ("height", "Window height", self.height_, ("rdp",)), ("clipboard", "", self.clipboard, ("rdp",)),
                 ("drives", "", self.drives, ("rdp",)), ("printers", "", self.printers, ("rdp",)), ("admin", "", self.admin, ("rdp",)),
@@ -146,8 +168,11 @@ class SessionDialog(QDialog):
 
     def _adapt(self, *_):
         k = self.current_kind()
+        from core import orgs
+        from ui.linkitem import wanted
         for key, (widget, kinds) in self.rows.items():
-            self.form.setRowVisible(widget, kinds == "all" or k in kinds)
+            self.form.setRowVisible(widget, (kinds == "all" or k in kinds) and (key != "org" or bool(orgs.list_orgs()))
+                                    and (key != "link" or wanted()))
         info = next(t for kk, _, _, t in sessions.KINDS if kk == k)
         self.about_kind.setText(info)
         self.connect_btn.setText("Connect")
@@ -169,12 +194,31 @@ class SessionDialog(QDialog):
         if not ok or not name.strip():
             return
         parent = self.folder.currentData()
+        from ui.orgfield import choice_file
         try:
-            fid = sessions.create_folder(name, parent)
+            with db.within(choice_file(self.org_pick.currentData())):
+                fid = sessions.create_folder(name, parent)
         except ValueError as e:
             QMessageBox.warning(self, "New folder", str(e))
             return
-        self._fill_folders(fid)
+        with db.within(choice_file(self.org_pick.currentData())):
+            self._fill_folders(fid)
+
+    def _org_changed(self, *_):
+        """Another organization: its folders and inventory devices."""
+        from ui.orgfield import choice_file
+        new = choice_file(self.org_pick.currentData())
+        if new is None or new == self._org_was:
+            return
+        self._org_was = new
+        with db.within(new):
+            self._fill_folders(None)
+            self.device.blockSignals(True)
+            self.device.clear()
+            self.device.addItem("(none: enter the details here)", "")
+            for d in db.list_devices():
+                self.device.addItem(f"{d['name']}  -  {d['host']}", d["name"])
+            self.device.blockSignals(False)
 
     def _fill_ports(self, keep=""):
         cur = keep if isinstance(keep, str) and keep else self.serial_port.currentText()
@@ -187,7 +231,8 @@ class SessionDialog(QDialog):
             self.serial_port.setCurrentIndex(0)
 
     def _from_device(self, *_):
-        d = _device(self.device.currentData())
+        from ui.orgfield import choice_file
+        d = _device(self.device.currentData(), choice_file(self.org_pick.currentData()))
         if d:
             self.host.setText(d["host"])
             if d.get("port"):
@@ -210,8 +255,11 @@ class SessionDialog(QDialog):
         self.user.setText(s.get("username") or "")
         self.remember.setChecked(bool(o.get("remember")))
         self.paging.setChecked(bool(o.get("paging", True)))
-        if s.get("id") and sessions.password(s["id"]):
+        if s.get("id") and sessions.password(s["id"], s.get("org")):
             self.password.setPlaceholderText("saved; leave blank to keep")
+        if s.get("id"):
+            with db.within(s.get("org")):
+                self.link_row.load(sessions.secret_name(s["id"]))
         self.fullscreen.setChecked(bool(o.get("fullscreen")))
         self.width_.setValue(int(o.get("width", 1280)))
         self.height_.setValue(int(o.get("height", 800)))
@@ -230,7 +278,9 @@ class SessionDialog(QDialog):
     # ---- what it produces
     def values(self):
         k = self.current_kind()
+        from ui.orgfield import choice_file, SHARED_CHOICE
         v = {"id": self.session.get("id"), "kind": k, "name": self.name.text().strip(),
+             "org": choice_file(self.org_pick.currentData()), "shared": int(self.org_pick.currentData() == SHARED_CHOICE),
              "folder_id": self.folder.currentData(), "device": self.device.currentData() if k in ("ssh", "telnet", "rdp") else "",
              "host": self.host.text().strip(), "port": self.port.value(), "username": self.user.text().strip() if k in ("ssh", "rdp") else "",
              "options": {}}
@@ -267,6 +317,9 @@ class SessionDialog(QDialog):
 
     def _done(self, action):
         v = self.values()
+        if self.org_pick.currentData() is None and (action == "save" or self.save_box.isChecked()):
+            QMessageBox.warning(self, "Organization", "Choose the organization this session belongs to.")
+            return
         check = {**v, "name": v["name"] or v["host"] or "session"}
         try:
             if action == "save" or self.save_box.isChecked():
@@ -461,15 +514,19 @@ class SessionTree(QTreeWidget):
 
     def dropEvent(self, e):
         target = self.itemAt(e.position().toPoint())
-        tid = None
+        tid, where = None, db.target()
         if target is not None:
             kind, ident = self.owner.kind_of(target)
-            tid = ident if kind == "folder" else self.owner.payload[target.data(0, ROLE)].get("folder_id")
-        moves = [k for k in (self.owner.kind_of(i) for i in self.selectedItems()) if k[0] in ("session", "folder")]
+            where = self.owner.org_of(target)
+            tid = ident if kind == "folder" else (None if kind == "org" else self.owner.payload[target.data(0, ROLE)].get("folder_id"))
+        items = [i for i in self.selectedItems() if self.owner.kind_of(i)[0] in ("session", "folder")]
         e.setDropAction(Qt.DropAction.IgnoreAction)                       # we move the data and rebuild; Qt must not move items
         e.accept()
+        if any(self.owner.org_of(i) != where for i in items) or not self.owner.editable(where):
+            return                                                        # sessions stay in their own organization
+        moves = [self.owner.kind_of(i) for i in items]
         if moves:
-            self.moved.emit(moves, tid)
+            self.moved.emit(moves, (where, tid))
 
 
 class SessionsTab(QWidget):
@@ -478,9 +535,11 @@ class SessionsTab(QWidget):
     def __init__(self):
         super().__init__()
         self.logs_dialog = None
-        self.search = QLineEdit()
-        self.search.setPlaceholderText("Search sessions")
-        self.search.setClearButtonEnabled(True)
+        from ui.finder import FilterButton, SearchBox
+        self.search = SearchBox("Search sessions", "Type part of a name, address, folder or type. Several words must all match.", page=self)
+        self.search.setMaximumWidth(16777215)                     # the box fills the column above the list
+        self.funnel = FilterButton(self._sections, tip="Filter by type or device")
+        self.funnel.changed.connect(self.refresh)
         self.payload = {}                                  # item key -> session / folder
         self._building = False
         self.expanded = set(db.get_setting("sessions_expanded"))
@@ -548,7 +607,10 @@ class SessionsTab(QWidget):
         left = QWidget()
         ll = QVBoxLayout(left)
         ll.setContentsMargins(0, 0, 8, 0)
-        ll.addWidget(self.search)
+        finder = QHBoxLayout()
+        finder.addWidget(self.search, 1)
+        finder.addWidget(self.funnel)
+        ll.addLayout(finder)
         ll.addWidget(self.tree, 1)
         self.more_btn = QPushButton("More")                         # the occasional buttons live in a menu, so the row stays one line
         self.more_menu = QMenu(self.more_btn)
@@ -595,27 +657,66 @@ class SessionsTab(QWidget):
     # ---------------------------------------------------------------- the saved list
     @staticmethod
     def kind_of(item):
+        """('session', id), ('folder', id), ('org', organization) or ('', None). Items of another organization's file than the one
+        being written to carry it in their key: 'session:3:12' (see org_of)."""
         key = item.data(0, ROLE) or ""
         kind, _, ident = key.partition(":")
-        return (kind, int(ident)) if ident.isdigit() else ("", None)
+        last = ident.rpartition(":")[2]
+        return (kind, int(last)) if last.isdigit() else ("", None)
+
+    @staticmethod
+    def org_of(item):
+        key = item.data(0, ROLE) or ""
+        kind, _, ident = key.partition(":")
+        if kind == "org":
+            return int(ident)
+        return int(ident.partition(":")[0]) if ":" in ident else db.target()
+
+    @staticmethod
+    def _key(kind, org, ident):
+        return f"{kind}:{ident}" if org == db.target() else f"{kind}:{org}:{ident}"
+
+    @staticmethod
+    def _ek(org, fid):
+        return fid if org == db.target() else f"{org}:{fid}"
+
+    def _keep_open(self):
+        db.set_setting("sessions_expanded", sorted(self.expanded, key=str))
+
+    def editable(self, org):
+        """Sessions of the organization being looked at can be changed here; Shared ones (from an organization) and archived ones cannot."""
+        if org in db.archived_ids():
+            return False
+        return db.everything() or org == db.home()
+
+    def selected_org(self):
+        found = {self.org_of(i) for i in self.tree.selectedItems()}
+        if len(found) > 1:
+            return None
+        return found.pop() if found else db.target()
+
+    @staticmethod
+    def device_of(s, by_host):
+        """The inventory device a session belongs to: the one it is linked to, else the one at its address."""
+        return s.get("device") or by_host.get((s.get("host") or "").lower(), "")
+
+    def _sections(self):
+        from ui.finder import Section
+        all_sessions = sessions.list_sessions()
+        by_host = {d["host"].lower(): d["name"] for d in db.list_devices() if d.get("host")}
+        kinds = {s["kind"] for s in all_sessions}
+        from ui.finder import org_section
+        devs = sorted({self.device_of(s, by_host) for s in all_sessions} - {""}, key=str.lower)
+        return org_section() + [x for x in (Section("type", "Type", [(KIND_TEXT.get(k, k), k) for k, *_ in sessions.KINDS if k in kinds]),
+                                            Section("device", "Device", [(d, d) for d in devs])) if x.options]
 
     def refresh(self, *_):
-        want = self.search.text().strip().lower()
-        keep = [self.kind_of(i) for i in self.tree.selectedItems()]
-        paths = sessions.folder_paths()
-        folders, all_sessions = sessions.list_folders(), sessions.list_sessions()
-        known = {f["id"] for f in folders}
-        kids, by_folder = {}, {}
-        for f in folders:
-            kids.setdefault(f["parent_id"] if f["parent_id"] in known else None, []).append(f)
-        for s in all_sessions:
-            if want and want not in f"{s['name']} {s['host']} {paths.get(s['folder_id'], '')} {KIND_TEXT.get(s['kind'], '')}".lower():
-                continue
-            by_folder.setdefault(s["folder_id"] if s["folder_id"] in known else None, []).append(s)
-
-        def count(fid):
-            return len(by_folder.get(fid, [])) + sum(count(c["id"]) for c in kids.get(fid, []))
-
+        want = bool(self.search.words()) or self.funnel.active()
+        kinds, devices, picked = self.funnel.selected("type"), self.funnel.selected("device"), self.funnel.selected("org")
+        by_host = {d["host"].lower(): d["name"] for d in db.list_devices() if d.get("host")} if devices else {}
+        keep = [(self.kind_of(i), self.org_of(i)) for i in self.tree.selectedItems()]
+        me = db.target()
+        all_sessions = sessions.list_sessions()
         self._building = True
         self.tree.blockSignals(True)
         self.tree.clear()
@@ -624,35 +725,54 @@ class SessionsTab(QWidget):
         bold.setBold(True)
         shown = [0]
 
-        def fill(parent_item, fid):
-            def add(item):
-                (parent_item.addChild if parent_item else self.tree.addTopLevelItem)(item)
-            for f in sorted(kids.get(fid, []), key=lambda f: f["name"].lower()):
-                if want and not count(f["id"]):
-                    continue                                   # while searching, hide folders with nothing to show
-                item = QTreeWidgetItem([f"{f['name']}  ({count(f['id'])})", "", ""])
-                key = f"folder:{f['id']}"
-                item.setData(0, ROLE, key)
-                self.payload[key] = f
-                item.setFont(0, bold)
-                item.setIcon(0, self._folder_icon())
-                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsDragEnabled | Qt.ItemFlag.ItemIsDropEnabled)
-                add(item)
-                fill(item, f["id"])
-                item.setExpanded(f["id"] in self.expanded or bool(want))
-            for s in sorted(by_folder.get(fid, []), key=lambda s: s["name"].lower()):
-                host = s["host"] if s["kind"] != "rdp" or s["port"] == 3389 else f"{s['host']}:{s['port']}"
-                item = QTreeWidgetItem([s["name"], KIND_TEXT.get(s["kind"], s["kind"]), host])
-                key = f"session:{s['id']}"
-                item.setData(0, ROLE, key)
-                self.payload[key] = s
-                item.setFlags((item.flags() | Qt.ItemFlag.ItemIsDragEnabled) & ~Qt.ItemFlag.ItemIsDropEnabled)
-                add(item)
-                shown[0] += 1
+        def chosen(s, paths):
+            if picked and s["org"] not in picked:
+                return False
+            if kinds and s["kind"] not in kinds or devices and self.device_of(s, by_host) not in devices:
+                return False
+            return self.search.matches(s["name"], s["host"], paths.get(s["folder_id"], ""), KIND_TEXT.get(s["kind"], ""),
+                                       db.org_name(s["org"]) if db.several() else "")
 
-        fill(None, None)
+        def branch(title, key, org, tip=""):
+            node = QTreeWidgetItem([title, "", ""])
+            node.setData(0, ROLE, key)
+            self.payload[key] = {"org": org}
+            node.setFont(0, bold)
+            node.setIcon(0, self._folder_icon())
+            node.setToolTip(0, tip)
+            node.setFlags((node.flags() | Qt.ItemFlag.ItemIsDropEnabled) & ~Qt.ItemFlag.ItemIsDragEnabled)
+            self.tree.addTopLevelItem(node)
+            return node
+
+        if db.several():                                   # Global: a branch per organization
+            from core import orgs
+            files = [db.GLOBAL] + [o["id"] for o in orgs.list_orgs(archived=False)]
+            for org in files:
+                if picked and org not in picked:
+                    continue
+                with db.within(org):
+                    folders, paths = sessions.list_folders(), sessions.folder_paths()
+                mine = [x for x in all_sessions if x["org"] == org and chosen(x, paths)]
+                if want and not mine:
+                    continue
+                node = branch(f"{db.org_name(org)}  ({len(mine)})", f"org:{org}", org)
+                self._fill_tree(node, folders, mine, org, want, bold, shown)
+                node.setExpanded(f"org:{org}" in self.expanded or bool(want))
+        else:
+            paths = sessions.folder_paths()
+            own = [x for x in all_sessions if x["org"] == me and chosen(x, paths)]
+            self._fill_tree(None, sessions.list_folders(), own, me, want, bold, shown)
+            with db.within(db.GLOBAL):
+                gpaths = sessions.folder_paths()
+            shared = [x for x in all_sessions if x["org"] != me and chosen(x, gpaths)]
+            if shared:
+                node = branch(f"Shared  ({len(shared)})", f"org:{db.GLOBAL}", db.GLOBAL, "Sessions Global shares with every organization. They are changed from Global.")
+                for x in sorted(shared, key=lambda x: x["name"].lower()):
+                    node.addChild(self._session_item(x, db.GLOBAL))
+                    shown[0] += 1
+                node.setExpanded(f"org:{db.GLOBAL}" in self.expanded or bool(want))
         for it in self._all_items():
-            if self.kind_of(it) in keep:
+            if (self.kind_of(it), self.org_of(it)) in keep:
                 it.setSelected(True)
         self._building = False
         self.tree.blockSignals(False)
@@ -662,6 +782,49 @@ class SessionsTab(QWidget):
         self.note.setText((f"{shown[0]} of {total} session(s)" if shown[0] else "No session matches.") if want else "")      # the header already says how many are saved
         self.tree_hint.setVisible(total == 0)
         self._buttons()
+
+    def _session_item(self, s, org):
+        host = s["host"] if s["kind"] != "rdp" or s["port"] == 3389 else f"{s['host']}:{s['port']}"
+        item = QTreeWidgetItem([s["name"], KIND_TEXT.get(s["kind"], s["kind"]), host])
+        key = self._key("session", org, s["id"])
+        item.setData(0, ROLE, key)
+        self.payload[key] = s
+        item.setFlags((item.flags() | Qt.ItemFlag.ItemIsDragEnabled) & ~Qt.ItemFlag.ItemIsDropEnabled)
+        return item
+
+    def _fill_tree(self, top, folders, found, org, want, bold, shown):
+        """One organization's session folders and sessions, under `top` (None: at the top of the list)."""
+        known = {f["id"] for f in folders}
+        kids, by_folder = {}, {}
+        for f in folders:
+            kids.setdefault(f["parent_id"] if f["parent_id"] in known else None, []).append(f)
+        for x in found:
+            by_folder.setdefault(x["folder_id"] if x["folder_id"] in known else None, []).append(x)
+
+        def count(fid):
+            return len(by_folder.get(fid, [])) + sum(count(c["id"]) for c in kids.get(fid, []))
+
+        def fill(parent_item, fid):
+            def add(item):
+                (parent_item.addChild if parent_item else self.tree.addTopLevelItem)(item)
+            for f in sorted(kids.get(fid, []), key=lambda f: f["name"].lower()):
+                if want and not count(f["id"]):
+                    continue                                   # while searching, hide folders with nothing to show
+                item = QTreeWidgetItem([f"{f['name']}  ({count(f['id'])})", "", ""])
+                key = self._key("folder", org, f["id"])
+                item.setData(0, ROLE, key)
+                self.payload[key] = {**f, "org": org}
+                item.setFont(0, bold)
+                item.setIcon(0, self._folder_icon())
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsDragEnabled | Qt.ItemFlag.ItemIsDropEnabled)
+                add(item)
+                fill(item, f["id"])
+                item.setExpanded(self._ek(org, f["id"]) in self.expanded or bool(want))
+            for x in sorted(by_folder.get(fid, []), key=lambda x: x["name"].lower()):
+                add(self._session_item(x, org))
+                shown[0] += 1
+
+        fill(top, None)
 
     def _folder_icon(self):
         from ui import icons, theme
@@ -681,9 +844,10 @@ class SessionsTab(QWidget):
         if self._building:
             return
         kind, ident = self.kind_of(item)
-        if kind == "folder":
-            (self.expanded.add if open_ else self.expanded.discard)(ident)
-            db.set_setting("sessions_expanded", sorted(self.expanded))
+        if kind in ("folder", "org"):
+            key = self._ek(self.org_of(item), ident) if kind == "folder" else f"org:{ident}"
+            (self.expanded.add if open_ else self.expanded.discard)(key)
+            self._keep_open()
 
     def _autosize(self):
         """Keep names readable as folders open and close. Done after the tree has finished changing, not during."""
@@ -709,7 +873,7 @@ class SessionsTab(QWidget):
         return [self.kind_of(i)[1] for i in self.tree.selectedItems() if self.kind_of(i)[0] == "folder"]
 
     def selected_id(self):
-        """The id of the one session that is selected, or None."""
+        """The id of the one session that is selected, or None (its organization: selected_org)."""
         s = self.selected_sessions()
         return s[0]["id"] if len(s) == 1 and not self.selected_folders() else None
 
@@ -733,11 +897,14 @@ class SessionsTab(QWidget):
     def _buttons(self):
         one = self.selected_id() is not None
         folders, found = self.selected_folders(), self.selected_sessions()
+        org = self.selected_org()
+        can = org is not None and self.editable(org)
         self.connect_btn.setEnabled(one)
-        self.copy_btn.setEnabled(one)
-        self.edit_btn.setEnabled(one or (len(folders) == 1 and not found))
+        self.copy_btn.setEnabled(one and can)
+        self.edit_btn.setEnabled(can and (one or (len(folders) == 1 and not found)))
         self.edit_btn.setText("Rename" if len(folders) == 1 and not found else "Edit")
-        self.delete_btn.setEnabled(bool(found or folders))
+        self.delete_btn.setEnabled(can and bool(found or folders))
+        self.folder_btn.setEnabled(can)
 
     def _double_clicked(self, item, *_):
         if self.kind_of(item)[0] == "session":
@@ -749,26 +916,32 @@ class SessionsTab(QWidget):
             self.tree.clearSelection()
             item.setSelected(True)
         found, folders = self.selected_sessions(), self.selected_folders()
+        org = self.selected_org()
+        can = org is not None and self.editable(org)
         m = QMenu(self)
         if found or folders:
             if len(found) == 1 and not folders:
                 m.addAction("Connect", self.connect_selected)
-                m.addAction("Edit...", self.edit_selected)
-                m.addAction("Duplicate", self.duplicate_selected)
-            if len(folders) == 1 and not found:
+                if can:
+                    m.addAction("Edit...", self.edit_selected)
+                    m.addAction("Duplicate", self.duplicate_selected)
+            if len(folders) == 1 and not found and can:
                 add = m.addMenu("New session here")
                 for k, label, _, _ in sessions.KINDS:
                     add.addAction(label, lambda k=k: self.new_session(k))
                 m.addAction("New subfolder...", lambda: self.new_folder(folders[0]))
                 m.addAction("Rename...", self.rename_folder)
-            move = m.addMenu("Move to folder")
-            banned = set().union(*(sessions.folder_descendants(f) for f in folders)) if folders else set()
-            move.addAction("(top level)", lambda: self.move_selected_to(None))
-            for fid, path in sorted(sessions.folder_paths().items(), key=lambda kv: kv[1].lower()):
-                if fid not in banned:
-                    move.addAction(path, lambda fid=fid: self.move_selected_to(fid))
-            m.addSeparator()
-            m.addAction("Delete folder..." if folders and not found else "Delete...", self.delete_selected)
+            if can:
+                move = m.addMenu("Move to folder")
+                with db.within(org):
+                    banned = set().union(*(sessions.folder_descendants(f) for f in folders)) if folders else set()
+                    paths = sessions.folder_paths()
+                move.addAction("(top level)", lambda: self.move_selected_to(None))
+                for fid, path in sorted(paths.items(), key=lambda kv: kv[1].lower()):
+                    if fid not in banned:
+                        move.addAction(path, lambda fid=fid: self.move_selected_to(fid))
+                m.addSeparator()
+                m.addAction("Delete folder..." if folders and not found else "Delete...", self.delete_selected)
         else:
             m.addAction("New folder...", lambda: self.new_folder(None, use_selection=False))
             add = m.addMenu("New session")
@@ -786,17 +959,22 @@ class SessionsTab(QWidget):
 
     def new_folder(self, parent_id=None, use_selection=True):
         parent = self.current_folder() if use_selection and parent_id is None else parent_id
+        org = self.selected_org() if self.tree.selectedItems() and use_selection or parent_id is not None else db.target()
+        if org is None or not self.editable(org):
+            return None
         name = self._ask_name("New folder", "Folder name:")
         if not name:
             return None
         try:
-            fid = sessions.create_folder(name, parent)
+            with db.within(org):
+                fid = sessions.create_folder(name, parent)
         except ValueError as e:
             QMessageBox.warning(self, "New folder", str(e))
             return None
-        self.expanded.update({fid} | ({parent} if parent else set()))
-        db.set_setting("sessions_expanded", sorted(self.expanded))
-        audit.log("session folder created", sessions.folder_paths().get(fid, name))
+        self.expanded.update({self._ek(org, fid)} | ({self._ek(org, parent)} if parent else set()) | ({f"org:{org}"} if db.several() else set()))
+        self._keep_open()
+        with db.within(org):
+            audit.log("session folder created", sessions.folder_paths().get(fid, name))
         self.refresh()
         return fid
 
@@ -804,11 +982,15 @@ class SessionsTab(QWidget):
         folders = self.selected_folders()
         if len(folders) != 1 or self.selected_sessions():
             return
-        name = self._ask_name("Rename folder", "New name:", self.payload[f"folder:{folders[0]}"]["name"])
+        org = self.selected_org()
+        if org is None or not self.editable(org):
+            return
+        name = self._ask_name("Rename folder", "New name:", self.payload[self._key("folder", org, folders[0])]["name"])
         if not name:
             return
         try:
-            sessions.rename_folder(folders[0], name)
+            with db.within(org):
+                sessions.rename_folder(folders[0], name)
         except ValueError as e:
             QMessageBox.warning(self, "Rename folder", str(e))
             return
@@ -818,21 +1000,26 @@ class SessionsTab(QWidget):
         folders = self.selected_folders()
         if len(folders) != 1:
             return
-        fid = folders[0]
-        f = self.payload[f"folder:{fid}"]
-        kids = sum(1 for x in sessions.list_folders() if x["parent_id"] == fid)
-        inside = sum(1 for s in sessions.list_sessions() if s["folder_id"] == fid)
-        where = sessions.folder_paths().get(f["parent_id"], "") or "the top level"
+        fid, org = folders[0], self.selected_org()
+        if org is None or not self.editable(org):
+            return
+        f = self.payload[self._key("folder", org, fid)]
+        with db.within(org):
+            kids = sum(1 for x in sessions.list_folders() if x["parent_id"] == fid)
+            inside = sum(1 for s in sessions.list_sessions() if s["folder_id"] == fid and s["org"] == org)
+            where = sessions.folder_paths().get(f["parent_id"], "") or "the top level"
         if QMessageBox.question(self, "Delete folder", f"Delete the folder '{f['name']}'?\n\nIts {inside} session(s) and "
                                 f"{kids} subfolder(s) move up to {where}. No session is deleted.") != QMessageBox.StandardButton.Yes:
             return
         try:
-            sessions.delete_folder(fid)
+            with db.within(org):
+                sessions.delete_folder(fid)
         except ValueError as e:
             QMessageBox.warning(self, "Delete folder", str(e))
             return
-        audit.log("session folder deleted", f["name"])
-        self.expanded.discard(fid)
+        with db.within(org):
+            audit.log("session folder deleted", f["name"])
+        self.expanded.discard(self._ek(org, fid))
         self.refresh()
 
     def move_selected_to(self, target_id):
@@ -840,36 +1027,45 @@ class SessionsTab(QWidget):
         self.handle_moves(moves, target_id)
 
     def handle_moves(self, moves, target_id):
-        """Move sessions and folders into a folder (None = top level), reporting anything that cannot move."""
+        """Move sessions and folders into a folder (None = top level) of their own organization, reporting anything that cannot
+        move. target_id can be (organization, folder id), from a drop."""
+        org, target_id = target_id if isinstance(target_id, tuple) else (self.selected_org(), target_id)
+        if org is None or not self.editable(org):
+            return
         problems, ids = [], []
-        for kind, ident in moves:
-            if kind == "session":
-                ids.append(ident)
-            else:
-                try:
-                    sessions.move_folder(ident, target_id)
-                except ValueError as e:
-                    problems.append(str(e))
-        clash = {s["name"].lower() for s in sessions.list_sessions() if s["folder_id"] == target_id and s["id"] not in ids}
-        moving = [s for s in sessions.list_sessions() if s["id"] in ids]
-        ok_ids = []
-        for s in moving:
-            if s["name"].lower() in clash and s["folder_id"] != target_id:
-                problems.append(f"'{s['name']}' was not moved: the folder already has a session with that name.")
-            else:
-                ok_ids.append(s["id"])
-                clash.add(s["name"].lower())
-        sessions.move_sessions(ok_ids, target_id)
+        with db.within(org):
+            for kind, ident in moves:
+                if kind == "session":
+                    ids.append(ident)
+                else:
+                    try:
+                        sessions.move_folder(ident, target_id)
+                    except ValueError as e:
+                        problems.append(str(e))
+            here = sessions._sessions_here()
+            clash = {s["name"].lower() for s in here if s["folder_id"] == target_id and s["id"] not in ids}
+            moving = [s for s in here if s["id"] in ids]
+            ok_ids = []
+            for s in moving:
+                if s["name"].lower() in clash and s["folder_id"] != target_id:
+                    problems.append(f"'{s['name']}' was not moved: the folder already has a session with that name.")
+                else:
+                    ok_ids.append(s["id"])
+                    clash.add(s["name"].lower())
+            sessions.move_sessions(ok_ids, target_id)
         if target_id is not None:
-            self.expanded.add(target_id)
-            db.set_setting("sessions_expanded", sorted(self.expanded))
+            self.expanded.add(self._ek(org, target_id))
+            self._keep_open()
         self.refresh()
         if problems:
             QMessageBox.warning(self, "Move", "\n".join(sorted(set(problems))))
 
     # ---------------------------------------------------------------- creating, changing, removing
     def new_session(self, kind="ssh", prefill=None):
-        dlg = SessionDialog(prefill, kind, self, folder_id=self.current_folder())
+        from ui.orgfield import GLOBAL_ONLY_CHOICE
+        org = self.selected_org() if db.several() and self.tree.selectedItems() else None
+        pre = None if org is None else (GLOBAL_ONLY_CHOICE if org == db.GLOBAL else org)
+        dlg = SessionDialog(prefill, kind, self, folder_id=self.current_folder() if org is None or org == db.target() or db.several() else None, org=pre)
         dlg.exec()
         if dlg.action:
             self._after_dialog(dlg)
@@ -881,7 +1077,10 @@ class SessionsTab(QWidget):
         if len(folders) == 1 and not self.selected_sessions():
             self.rename_folder()
             return
-        s = sessions.get(self.selected_id())
+        org = self.selected_org()
+        if org is None or not self.editable(org):
+            return
+        s = sessions.get(self.selected_id(), org)
         if s:
             dlg = SessionDialog(s, parent=self)
             dlg.exec()
@@ -894,30 +1093,42 @@ class SessionsTab(QWidget):
         v = dlg.values()
         pw = dlg.typed_password()
         saved_id = None
+        org = v.get("org")
+        old = dlg.session.get("org") if dlg.session.get("id") else None
+        if v["kind"] == "ssh" and dlg.link_row.linked():
+            v["options"]["remember"] = True                    # a linked password is always the one used
         if dlg.wants_save():
+            if old is not None and org is not None and org != old:      # Global: moved to another organization's file
+                pw = pw or sessions.password(dlg.session["id"], old)
+                v = {**v, "id": None}
             try:
                 saved_id = sessions.save(v)
             except ValueError as e:
                 QMessageBox.warning(self, "Session", str(e))
                 return
+            if v.get("id") is None and old is not None and org != old:
+                sessions.delete(dlg.session["id"], old)
             if v["kind"] == "ssh":
                 if v["options"]["remember"] and pw:
-                    sessions.set_password(saved_id, pw)
+                    sessions.set_password(saved_id, pw, org)
                 elif not v["options"]["remember"]:
-                    sessions.forget_password(saved_id)
+                    sessions.forget_password(saved_id, org)
+                with db.within(org):
+                    dlg.link_row.apply(sessions.secret_name(saved_id))
             if v["folder_id"] is not None:
-                self.expanded.add(v["folder_id"])
-                db.set_setting("sessions_expanded", sorted(self.expanded))
-            audit.log("session saved", f"{v['kind']} {v['name']}")
+                self.expanded.add(self._ek(org if org is not None else db.target(), v["folder_id"]))
+                self._keep_open()
+            with db.within(org):
+                audit.log("session saved", f"{v['kind']} {v['name']}")
         self.refresh()
         if dlg.action == "connect":
             spec = self._spec(v, pw, saved_id)
             if saved_id:
-                sessions.touch(saved_id)
+                sessions.touch(saved_id, org)
             self.open_spec(spec)
 
     def duplicate_selected(self):
-        new = sessions.duplicate(self.selected_id())
+        new = sessions.duplicate(self.selected_id(), self.selected_org())
         if new:
             audit.log("session saved", f"copy of session {self.selected_id()}")
             self.refresh()
@@ -932,22 +1143,25 @@ class SessionsTab(QWidget):
         what = f"the session '{found[0]['name']}'" if len(found) == 1 else f"these {len(found)} sessions"
         if QMessageBox.question(self, "Delete session", f"Delete {what}?\n\nA saved password is removed too.") != QMessageBox.StandardButton.Yes:
             return
+        if any(not self.editable(s.get("org", db.target())) for s in found):
+            return
         for s in found:
-            sessions.delete(s["id"])
-            audit.log("session deleted", f"{s['kind']} {s['name']}")
+            sessions.delete(s["id"], s.get("org"))
+            with db.within(s.get("org")):
+                audit.log("session deleted", f"{s['kind']} {s['name']}")
         self.refresh()
 
     # ---------------------------------------------------------------- opening
     def _spec(self, s, password="", saved_id=None):
         """Everything a pane needs to connect: the saved session plus the inventory device it points at."""
-        dev = _device(s.get("device"))
+        dev = _device(s.get("device"), s.get("org"))
         kind = s["kind"]
         spec = {"name": s.get("name") or s.get("host") or "session", "kind": kind, "host": s.get("host") or (dev["host"] if dev else ""),
                 "port": int(s.get("port") or (dev.get("port") if dev else 0) or sessions.DEFAULT_PORT[kind]),
                 "username": s.get("username") or (profiles.username(dev) if dev else ""), "password": password,
                 "dev": dev, "options": {**sessions.DEFAULTS[kind], **(s.get("options") or {})}, "saved_id": saved_id}
         if kind == "ssh" and not password and saved_id:
-            spec["password"] = sessions.password(saved_id)
+            spec["password"] = sessions.password(saved_id, s.get("org"))
         return spec
 
     def _open_rdp_tab(self, spec):
@@ -970,13 +1184,13 @@ class SessionsTab(QWidget):
         """Inventory > Open Remote Desktop, the device window and the command palette: a Remote Desktop tab for a Windows computer."""
         for i in range(self.tabs.count()):
             p = self.tabs.widget(i)
-            if p.kind == "rdp" and p.spec.get("dev") and p.spec["dev"]["name"] == dev["name"]:
+            if p.kind == "rdp" and p.spec.get("dev") and p.spec["dev"]["name"] == dev["name"] and p.spec["dev"].get("org") == dev.get("org"):
                 self.tabs.setCurrentIndex(i)
                 if not p.connected():
                     p.connect_now()
                 return p
         base = sessions.rdp_for_device(dev)
-        spec = self._spec({"name": dev["name"], "kind": "rdp", "host": dev["host"], "port": 3389, "device": dev["name"],
+        spec = self._spec({"name": dev["name"], "kind": "rdp", "host": dev["host"], "port": 3389, "device": dev["name"], "org": dev.get("org"),
                            "username": base["username"], "options": {"fullscreen": True}})
         self.open_spec(spec)
         return self.tabs.currentWidget() if self.tabs.count() else None
@@ -1004,29 +1218,29 @@ class SessionsTab(QWidget):
         QTimer.singleShot(0, lambda: pane.connect_now() if pane in self.panes() else None)
 
     def connect_selected(self):
-        sid = self.selected_id()
-        s = sessions.get(sid)
+        sid, org = self.selected_id(), self.selected_org()
+        s = sessions.get(sid, org)
         if s:
-            sessions.touch(sid)
+            sessions.touch(sid, org)
             self.open_spec(self._spec(s, "", sid))
 
-    def open_session(self, session_id):
-        s = sessions.get(session_id)
+    def open_session(self, session_id, org=None):
+        s = sessions.get(session_id, org)
         if s:
-            sessions.touch(session_id)
+            sessions.touch(session_id, org)
             self.open_spec(self._spec(s, "", session_id))
 
     def open_device(self, dev):
         """An inventory device's SSH session (Inventory > Open SSH session, the device window, the command palette)."""
         for i in range(self.tabs.count()):
             p = self.tabs.widget(i)
-            if p.spec.get("dev") and p.spec["dev"]["name"] == dev["name"] and p.kind == "ssh":
+            if p.spec.get("dev") and p.spec["dev"]["name"] == dev["name"] and p.spec["dev"].get("org") == dev.get("org") and p.kind == "ssh":
                 self.tabs.setCurrentIndex(i)
                 if not p.connected():
                     p.connect_now()
                 return p
         spec = self._spec({"name": dev["name"], "kind": "ssh", "host": dev["host"], "port": dev.get("port") or int(db.get_setting("default_ssh_port")),
-                           "device": dev["name"], "options": {"paging": True}})
+                           "device": dev["name"], "org": dev.get("org"), "options": {"paging": True}})
         self.open_spec(spec)
         return self.tabs.currentWidget()
 

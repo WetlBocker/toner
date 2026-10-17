@@ -22,6 +22,8 @@ class GeneralPage(Page):
         self.background.setToolTip("Scheduled checks, backups and alerts keep working. Use the tray icon to open or quit.")
         self.scan_over = spin(0, 10_000_000, " addresses")
         self.scan_over.setSpecialValueText("never ask")
+        for w in (self.ssh_logs, self.background):          # about this computer: an organization cannot change them
+            w.setProperty("globalOnly", True)
         def heading(text):
             title = QLabel(text.upper())
             title.setProperty("muted", True)

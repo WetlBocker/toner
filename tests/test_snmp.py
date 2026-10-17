@@ -150,6 +150,18 @@ S.table.selectRow(0); S.copy()
 clip = QApplication.clipboard().text()
 check("copy gives header + selected row, tab separated", clip.splitlines()[0] == "OID\tName\tType\tValue" and len(clip.splitlines()) == 2 and "sysDescr.0" in clip, clip[:80])
 S.table.clearSelection(); S.copy(); check("copy with no selection copies everything", len(QApplication.clipboard().text().splitlines()) == S.table.rowCount() + 1)
+import csv as _csv
+from PySide6.QtWidgets import QFileDialog
+asked = []
+out_csv = os.path.join(os.environ["SP"], "snmp-save-test.csv")
+QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (asked.append(a[2]) or out_csv, ""))
+S.table.selectRow(0); S.save_btn.click()
+saved = list(_csv.reader(open(out_csv, encoding="utf-8-sig", newline="")))
+check("Save... writes every row (not only the selected one) to a CSV with the column names first",
+      saved[0] == ["OID", "Name", "Type", "Value"] and len(saved) == S.table.rowCount() + 1 and any("sysDescr.0" in r for r in saved), saved[:2])
+check("the file is named after the host and the time", asked and asked[-1].startswith("snmp-127.0.0.1-") and asked[-1].endswith(".csv"), asked)
+QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: ("", "")); S.save_btn.click()
+check("cancelling the file window saves nothing", True)
 S.community.setText("wrong"); S.go.click(); wait()
 check("failure shows the hint and an empty table", "No response" in S.status.text() and S.table.rowCount() == 0, S.status.text())
 S.community.setText("public")

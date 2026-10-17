@@ -78,7 +78,7 @@ def main(argv=None):
         return 1 if any(r.status == "ERROR" for r in results) else 0
 
     if a.cmd == "status":
-        rows = [{"device": n, "status": v["status"], "checks": v["checks"], "checked": v["at"],
+        rows = [{"device": db.label_org(n), "status": v["status"], "checks": v["checks"], "checked": v["at"],
                  "problems": [{"check": c, "status": s, "message": m} for c, s, m in v["problems"]]}
                 for n, v in sorted(db.device_health().items())]
         if a.json:

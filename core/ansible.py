@@ -318,13 +318,15 @@ def device_vars(dev):
 def build_inventory(devices):
     """(inventory, logins, names): `inventory` has every device with its connection settings and the groups (each vendor, folder_<path>, location_<place>,
     tag_<tag>); `logins` (or None) holds only the passwords and tokens, for the length of one run; `names` maps the host names Ansible uses to Toner's."""
-    folders = db.folder_paths()
     hosts, logins, groups = {}, {}, {}
-    names = {}
+    names, keys = {}, {}
     for dev in devices:
         h = host_name(dev)
-        if h in names and names[h] != dev["name"]:
-            h = f"{h}_{dev.get('id') or len(names)}"
+        key = dev.get("key") or dev["name"]
+        if h in keys and keys[h] != key:                  # two devices with one name (in two organizations, from Global)
+            code = (next((o["code"] for o in db.org_rows() if o["id"] == dev.get("org")), "") or str(dev.get("id") or len(names)))
+            h = f"{h}_{code}"
+        keys[h] = key
         names[h] = dev["name"]
         plain, secret = device_vars(dev)
         hosts[h] = plain
@@ -332,9 +334,11 @@ def build_inventory(devices):
             logins[h] = secret
         member = lambda g: groups.setdefault(g, {}).__setitem__(h, None)
         member(_ident(dev["vendor"]) or "other")
-        fp = folders.get(dev.get("folder_id"))
+        fp = db.path_of(dev)
         if fp:
             member(_ident(fp, "folder_"))
+        if db.several() and dev.get("org") is not None:     # Global: a group per organization too
+            member(_ident(db.org_name(dev["org"]), "org_"))
         if dev.get("location"):
             member(_ident(dev["location"], "location_"))
         for tag in db.split_tags(dev.get("tags")):
@@ -723,7 +727,7 @@ def device_login(name):
 
 
 def server_login():
-    """The control-node login: an Inventory device chosen in Settings, or the host and user typed there (password in Credential Manager)."""
+    """The control-node login: an Inventory device chosen in Settings, or the host and user typed there (password in the vault)."""
     name = (db.get_setting("ansible_server_device") or "").strip()
     if name:
         return device_login(name)

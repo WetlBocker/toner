@@ -334,7 +334,13 @@ def _save_session(dev, buf):
 def run_many(devices, commands, workers=8, on_result=None, opts=None, cancel=None):
     results = []
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        futs = [pool.submit(run_on_device, d, commands, opts) for d in devices]
+        def one(d):
+            with db.within(d.get("org")):                  # its passwords, jump host and proxy are in its own organization
+                r = run_on_device(d, commands, opts)
+            if d.get("key") and d["key"] != d["name"]:     # Global: another organization's device, named with it
+                r["device"] = db.label_org(d["key"])
+            return r
+        futs = [pool.submit(one, d) for d in devices]
         for f in as_completed(futs):
             r = f.result()
             results.append(r)

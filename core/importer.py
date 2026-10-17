@@ -165,7 +165,7 @@ def _winopts(vendor, row, text):
 
 
 def _proxy(vendor, row, text):
-    """A device's own proxy (never its password, which stays in Credential Manager), or '' to use the global setting."""
+    """A device's own proxy (never its password, which stays in the vault), or '' to use the global setting."""
     from core import proxy as proxy_mod, vendors as vend
     mode = text("proxy_mode").lower()
     if not mode or mode == "default":
@@ -221,14 +221,13 @@ def export_rows(devices):
     """Inventory records as plain dicts for writing to a file. Secrets are never included."""
     from core import db, profiles, winmon
     from core import proxy as proxy_mod
-    paths = db.folder_paths()
     out = []
     for d in devices:
         try:
             jump = json.loads(d.get("jump") or "{}").get("device", "")
         except ValueError:
             jump = ""
-        prof = (profiles.get(d.get("profile_id")) or {}).get("name", "")
+        prof = profiles.of(d).get("name", "")
         wo = winmon.options(d) if d["vendor"] == "windows" and d.get("winopts") else None
         px = proxy_mod.device_settings(d) if d.get("proxy") else {}
         custom_px = px.get("mode") == "custom"
@@ -243,7 +242,7 @@ def export_rows(devices):
         out.append({**extra, "name": d["name"], "vendor": vendors.family(d["vendor"]), "host": d["host"], "platform": kind or d.get("platform") or "",
                     "port": d.get("port") or "", "username": d.get("username") or "", "site": d.get("site") or "",
                     "location": d.get("location") or "", "details": d.get("details") or "",
-                    "folder": paths.get(d.get("folder_id"), ""), "tags": d.get("tags") or "", "profile": prof,
+                    "folder": db.path_of(d), "tags": d.get("tags") or "", "profile": prof,
                     "jump": jump, "enabled": "yes" if d.get("enabled", 1) else "no",
                     "verify_ssl": "yes" if d.get("verify_ssl") else "no", "ha_expected": "yes" if d.get("ha_expected") else "no"})
     return out

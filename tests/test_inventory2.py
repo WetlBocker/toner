@@ -16,6 +16,8 @@ keyring.get_password = lambda s, u: STORE.get((s, u))
 keyring.delete_password = lambda s, u: STORE.pop((s, u), None)
 from PySide6.QtWidgets import QApplication, QMessageBox
 app = QApplication([])
+from ui import orgassign as _oa
+_oa.OrgAssignDialog.exec = lambda self: True     # the import step (asked when an import has folders): keep its starting choices
 import app as A; A.apply_look(app)
 import ui.inventory as I
 

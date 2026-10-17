@@ -168,11 +168,11 @@ check("and with 'show version' on a Windows computer it is not read-only, so rea
 R.safe.setChecked(False); tick("fw2"); ran.clear(); asked.clear(); R.commands.setPlainText("get system status"); R.go.click(); pump(lambda: R.go.isEnabled())
 check("a firewall runs its command line", ran.get("devs") == ["fw2"] and not asked)
 C.run_many = real_many
-R.group.set_selected([]); R.fill_devices()
+R.funnel.clear(); R.fill_devices()
 check("with devices to choose from, there is no empty message", R.devs.count() > 0 and not R.devs_hint.isVisibleTo(R))
 real_candidates = R.candidates; R.candidates = lambda: []; R.fill_devices()
-check("with none in the chosen groups, the list says so, in wording C", R.devs.count() == 0 and R.devs_hint.isVisibleTo(R) and R.devs_hint.head.text() == "No devices in these groups take commands"
-      and R.devs_hint.sub.text() == "Try other groups, or see Edit device > Access.", (R.devs_hint.head.text(), R.devs_hint.sub.text()))
+check("with none shown, the list says so", R.devs.count() == 0 and R.devs_hint.isVisibleTo(R) and R.devs_hint.head.text() == "No devices shown take commands"
+      and R.devs_hint.sub.text() == "Try another search or filter, or see Edit device > Access.", (R.devs_hint.head.text(), R.devs_hint.sub.text()))
 R.candidates = real_candidates; R.fill_devices()
 only_fw1 = [d for d in real_candidates() if cmdrun_name(d) in ("sw1", "fw1")]
 R.candidates = lambda: only_fw1; R.fill_devices()

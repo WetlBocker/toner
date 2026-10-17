@@ -163,7 +163,7 @@ R.commands.clear(); R.load_snippet(); check("choosing a snippet fills the comman
 R.delete_snippet(); check("snippets can be deleted", db.get_setting("snippets") == [])
 T2.QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (SP + r"\cmd_out.txt", "")); R.save_all()
 txt = open(SP + r"\cmd_out.txt", encoding="utf-8").read(); check("save-all writes a section per device", "===== r1" in txt and "FAILED: TimeoutError" in txt and "$ show version" in txt)
-R.group.set_selected([]); R.commands.clear(); R.go.click(); check("nothing to run is explained", "at least one" in R.status.text())
+R.funnel.clear(); R.commands.clear(); R.go.click(); check("nothing to run is explained", "at least one" in R.status.text())
 
 print("== TLS")
 TL = tools.tls
@@ -187,9 +187,9 @@ for text in (b"<11>disk failure on sw1", b"<14>user logged in", b"<189>Interface
     tx.sendto(text, ("127.0.0.1", port))
 pump(lambda: Ls.table.rowCount() >= 3, 150)
 check("messages arrive with source, device and severity", Ls.table.rowCount() == 3 and Ls.table.item(0, 2).text() == "127.0.0.1" and Ls.table.item(0, 3).text() == "sw1" and Ls.table.item(0, 4).text() == "error", [Ls.table.item(i, 5).text() for i in range(Ls.table.rowCount())])
-Ls.sev.setCurrentIndex(Ls.sev.findData(3)); check("severity filter keeps errors and worse", Ls.table.rowCount() == 1 and "disk failure" in Ls.table.item(0, 5).text())
-Ls.sev.setCurrentIndex(0); Ls.filter.setText("logged"); check("text filter", Ls.table.rowCount() == 1 and "logged in" in Ls.table.item(0, 5).text()); Ls.filter.setText("")
-Ls.kind.setCurrentIndex(2); check("type filter hides syslog when traps are chosen", Ls.table.rowCount() == 0); Ls.kind.setCurrentIndex(0)
+Ls.funnel.set("severity", {3}); check("severity filter keeps errors and worse", Ls.table.rowCount() == 1 and "disk failure" in Ls.table.item(0, 5).text())
+Ls.funnel.clear(); Ls.filter.setText("logged"); check("text filter", Ls.table.rowCount() == 1 and "logged in" in Ls.table.item(0, 5).text()); Ls.filter.setText("")
+Ls.funnel.set("kind", {"trap"}); check("type filter hides syslog when traps are chosen", Ls.table.rowCount() == 0); Ls.funnel.clear()
 Ls.pause.setChecked(True); tx.sendto(b"<14>while paused", ("127.0.0.1", port)); time.sleep(0.4); QCoreApplication.processEvents()
 check("paused: new messages are not added", Ls.table.rowCount() == 3); Ls.pause.setChecked(False)
 T2.QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (SP + r"\msgs.txt", "")); Ls.save_rows()

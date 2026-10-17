@@ -153,8 +153,8 @@ class AnsiblePage(Page):
         self.password.clear()
         self._forget = False
         have = bool(keyring.get_password(db.SERVICE, AN.SERVER_SECRET))
-        self.pw_note.setText("A password is saved in Credential Manager. Leave the box empty to keep it. With a key file, this is the key's passphrase." if have
-                             else "Stored in Credential Manager, not in Toner's database. With a key file, this is the key's passphrase.")
+        self.pw_note.setText("A password is saved in the vault. Leave the box empty to keep it. With a key file, this is the key's passphrase." if have
+                             else "Stored in Toner's vault, not in its database. With a key file, this is the key's passphrase.")
         self._have_password = have
         self.folder.setText(db.get_setting("ansible_playbooks") or "")
         self.check_default.setChecked(bool(db.get_setting("ansible_check_default")))

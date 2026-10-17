@@ -152,8 +152,9 @@ def resolve(dev=None, host=None, purpose="socket"):
     if mode == "none":
         return "direct", None
     if mode == "custom":
-        pw = (dev or {}).get("_proxy_secret") or _secret(db.secret_name(dev["name"], "proxy"))
-        key = (dev or {}).get("_proxy_otp_secret") or (_secret(db.secret_name(dev["name"], "proxy_otp")) if own.get("otp") == "totp" else "")
+        with db.within((dev or {}).get("org")):
+            pw = (dev or {}).get("_proxy_secret") or _secret(db.secret_name(dev["name"], "proxy"))
+            key = (dev or {}).get("_proxy_otp_secret") or (_secret(db.secret_name(dev["name"], "proxy_otp")) if own.get("otp") == "totp" else "")
         cfg = _config(own, pw, key)
         return ("proxy", cfg) if cfg else ("direct", None)
     s = settings()
@@ -178,6 +179,37 @@ def requests_kwargs(dev=None, host=None):
         url = effective(cfg).url()
         return {"proxies": {"http": url, "https": url}}
     return {"proxies": dict(DIRECT)} if how == "direct" else {}
+
+
+def web_kwargs(host, direct=False):
+    """requests' proxies for an app-wide web connection; direct=True ignores every proxy setting (Toner's and Windows')."""
+    return {"proxies": dict(DIRECT)} if direct else requests_kwargs(None, host)
+
+
+PROXY_ENV = ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "all_proxy", "no_proxy")
+
+
+def child_env(env, host, direct=False):
+    """The environment for a command-line tool that reaches `host` (bw.exe, op.exe): Toner's proxy in the variables such tools
+    read (HTTPS_PROXY, HTTP_PROXY), the Windows proxy when Settings says so, or none at all (NO_PROXY=*) when connecting
+    directly. Proxies set in the environment before Toner started are replaced, so Settings decides."""
+    env = {k: v for k, v in env.items() if k not in PROXY_ENV}
+    how, cfg = ("direct", None) if direct else resolve(None, host, "web")
+    url = None
+    if how == "proxy":
+        url = effective(cfg).url()
+    elif how == "system":
+        try:
+            import urllib.request
+            found = urllib.request.getproxies_registry() if hasattr(urllib.request, "getproxies_registry") else {}
+            url = found.get("https") or found.get("http")
+        except Exception:
+            url = None
+    if url:
+        env.update(HTTPS_PROXY=url, HTTP_PROXY=url)
+    else:
+        env["NO_PROXY"] = "*"
+    return env
 
 
 def system_text():

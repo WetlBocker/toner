@@ -1,7 +1,7 @@
 """Deliver notifications: message formatting and the channels (desktop, email, Teams, Slack, Discord,
 generic webhook, ntfy). Which events to send is decided in core/alerts.py.
 
-Secrets (webhook URLs, passwords, tokens) are kept in Windows Credential Manager, never in the database
+Secrets (webhook URLs, passwords, tokens) are kept in Toner's vault (core/passvault.py), never in the database
 or in exported settings, and are scrubbed from any error text that is shown or logged.
 """
 import json
@@ -29,7 +29,7 @@ LOOPBACK = {"localhost", "127.0.0.1", "::1"}
 CHANNEL_TYPES = {
     "desktop": {"label": "Windows notification", "fields": [],
                 "help": "A pop-up from Toner's tray icon. Only works while Toner is running."},
-    "email": {"label": "Email (SMTP)", "help": "Sent through your mail server. Passwords are kept in Credential Manager.",
+    "email": {"label": "Email (SMTP)", "help": "Sent through your mail server. Passwords are kept in Toner's vault.",
               "fields": [("smtp_host", "SMTP server", "text", {"required": True, "placeholder": "smtp.example.com"}),
                          ("smtp_port", "Port", "int", {"default": 587, "range": (1, 65535)}),
                          ("security", "Security", "choice", {"choices": ["STARTTLS", "SSL/TLS", "None"], "default": "STARTTLS"}),
@@ -165,13 +165,13 @@ def _line(e):
     return e.status, f"{e.status:<5} {what}{detail}"
 
 
-def build_message(events, org=""):
+def build_message(events, org="", prefix=""):
     ordered = sorted(events, key=lambda e: (e.kind == "recovered", -SEVERITY[e.status], e.device, e.check))
     problems = sum(e.kind != "recovered" for e in events)
     recov = len(events) - problems
     bits = ([f"{problems} problem{'s' if problems != 1 else ''}"] if problems else []) + \
            ([f"{recov} recovered"] if recov else [])
-    title = f"Toner{f' ({org})' if org else ''}: {', '.join(bits)}"
+    title = f"{prefix}Toner{f' ({org})' if org else ''}: {', '.join(bits)}"
     lines = [_line(e) for e in ordered]
     if len(lines) > MAX_LINES:
         extra = len(lines) - MAX_LINES
@@ -326,8 +326,39 @@ def snoozed(now=None):
 
 
 def process_run(results, ran, scheduled, desktop=None, retry_delay=2):
-    """Called after every run. Works out what changed and sends it to each channel that wants it.
+    """Called after every run. Works out what changed and sends it to each channel that wants it, organization by organization
+    (a run in Global can cover several; each uses its own notification settings, and an archived one stays quiet).
     Returns a short text saying what happened (used by tests and the log)."""
+    groups, where = {}, {}
+    here = db.target()
+    for r in results:
+        name, org = db.split_key(r.device)
+        org = r.org if r.org is not None else (org if org is not None else here)
+        where[name.split(" / ")[0]] = org
+        groups.setdefault(org, ([], []))[0].append(r if name == r.device else type(r)(**{**r.__dict__, "device": name}))
+    for key in ran:
+        name, org = db.split_key(key)
+        org = org if org is not None else where.get(name, db.GLOBAL if db.everything() else here)
+        groups.setdefault(org, ([], []))[1].append(name)
+    if not groups or set(groups) == {here}:
+        return _process_here(results, ran, scheduled, desktop, retry_delay)
+    archived = db.archived_ids()
+    said = []
+    for org, (res, rn) in sorted(groups.items()):
+        if org in archived:
+            continue
+        with db.within(org):
+            said.append(_process_here(res, rn, scheduled, desktop, retry_delay))
+    return "; ".join(said)
+
+
+def _prefix():
+    """'[Acme] ' when an organization sends with Global's channels (so the message says whose it is); nothing otherwise."""
+    org = db.target()
+    return f"[{db.org_name(org)}] " if org and not db.overridden("notify_channels") else ""
+
+
+def _process_here(results, ran, scheduled, desktop=None, retry_delay=2):
     if not db.get_setting("notify_enabled"):
         return "off"
     if snoozed():
@@ -352,7 +383,7 @@ def process_run(results, ran, scheduled, desktop=None, retry_delay=2):
         if not mine:
             continue
         attempted += 1
-        ok, detail = deliver(ch, build_message(mine, org), desktop, retry_delay=retry_delay)
+        ok, detail = deliver(ch, build_message(mine, org, _prefix()), desktop, retry_delay=retry_delay)
         alerts.log_delivery(ch["name"], ok, len(mine), detail)
         delivered += ok
     if attempted and not delivered:                # nobody got it: announce again next run
@@ -371,7 +402,7 @@ def announce(device, check, value, message, status="WARN", desktop=None):
     sent = 0
     for ch in channels():
         if ch.get("enabled", True) and wants(ch, e):
-            ok, detail = deliver(ch, build_message([e], org), desktop)
+            ok, detail = deliver(ch, build_message([e], org, _prefix()), desktop)
             alerts.log_delivery(ch["name"], ok, 1, detail)
             sent += ok
     return sent

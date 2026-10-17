@@ -110,22 +110,22 @@ print("== the Overview's cards filter Results")
 d = w.dashboard
 w.go("Overview"); d.cards["fail"].clicked.emit(); app.processEvents()
 names = [r.table.topLevelItem(i).text(0) for i in range(r.table.topLevelItemCount())]
-check("Failing opens Results with only what fails", w.tabs.currentWidget() is r and r.filter.currentText() == "Failing" and names == ["globex-pa", "acme-sw1"], names)
+check("Failing opens Results with only what fails", w.tabs.currentWidget() is r and r.status_mode() == 3 and names == ["globex-pa", "acme-sw1"], names)
 check("and lists only the failing checks", r.table.topLevelItem(1).childCount() == 1 and r.table.topLevelItem(1).child(0).text(1) == "interfaces")
 d.cards["warn"].clicked.emit(); app.processEvents()
 check("Warnings: only the warnings", [r.table.topLevelItem(i).text(0) for i in range(r.table.topLevelItemCount())] == ["acme-fw"])
 d.cards["ok"].clicked.emit(); app.processEvents()
 check("Healthy: the devices with nothing wrong, every check listed", sorted(r.table.topLevelItem(i).text(0) for i in range(r.table.topLevelItemCount())) == ["acme-dc", "globex-sw"])
 check("each card says where it goes", "Results" in d.cards["fail"].toolTip() and "Inventory" in d.cards["devices"].toolTip())
-r.filter.setCurrentIndex(0)
+r.show_filter("all")
 
 print("== empty states with a next step")
 r.results, r.stored = [], False; r.repopulate()
 check("an empty Results offers Run checks", r.hint.isVisibleTo(r) and [b.text() for b in r.hint.buttons] == ["Run checks"])
 r.load_stored()
-r.filter.setCurrentIndex(2); r.results = [x for x in r.results if x.status != "WARN"]; r.repopulate()
+r.show_filter("warn"); r.results = [x for x in r.results if x.status != "WARN"]; r.repopulate()
 check("a filter that hides everything says so, and offers to show all", "Nothing matches" in r.hint.head.text() and [b.text() for b in r.hint.buttons] == ["Show all results"])
-r.hint.buttons[0].click(); check("which it does", r.filter.currentIndex() == 0)
+r.hint.buttons[0].click(); check("which it does", r.status_mode() == 0 and not r.funnel.active())
 r.stored = True; r.load_stored()
 w.go("Sessions")
 check("Sessions offers the usual first steps", [b.text() for b in w.sessions.welcome_buttons.values()] == ["New SSH session", "New Remote Desktop", "New serial console"])
@@ -136,10 +136,10 @@ check("History's empty run list can run checks", [b.text() for b in w.history.ru
 print("== section headers")
 for attr, title in w.HEADERS:
     h = w.headers[attr]
-    check(f"{title} has the same header", h.title.text() == title and h.title.property("title") is True and getattr(w, attr).layout().itemAt(0).widget() is h)
+    check(f"{title} has the same header", h.title.text() == f"Global - {title}" and h.title.property("title") is True and getattr(w, attr).layout().itemAt(0).widget() is h)
 w.update_headers()
 check("the Inventory's says how the devices are doing", w.headers["inventory"].context.text() == "5 devices  ·  2 failing  ·  1 with warnings", w.headers["inventory"].context.text())
-check("Results has one too, with its summary as the context", r.header.title.text() == "Results" and r.header.context is r.summary)
+check("Results has one too, with its summary as the context", r.header.title.text() == "Global - Results" and r.header.context is r.summary)
 
 print("== Inventory")
 inv = w.inventory; w.go("Inventory"); inv.refresh(); app.processEvents()
@@ -195,17 +195,26 @@ check("and goes back to the summary at the end", s.run.text().startswith("Last r
 s.schedule.clicked.emit()
 check("each part opens where it is set", w.tabs.currentWidget() is w.settings and w.settings.pages[w.settings.stack.currentIndex()].title == "Checks" and w.settings.pages[w.settings.stack.currentIndex()].tabs.tabText(w.settings.pages[w.settings.stack.currentIndex()].tabs.currentIndex()) == "Schedule")
 
-print("== one client at a time")
-check("the clients are the top-level folders", scope.clients() == [(acme, "Acme Dental"), (globex, "Globex Law")])
-check("the sidebar offers them", [w.tabs.client.itemText(i) for i in range(w.tabs.client.count())] == ["All clients", "Acme Dental", "Globex Law"] and w.tabs.client.isVisibleTo(w.tabs.side))
-w.tabs.client.setCurrentIndex(1); app.processEvents()
-check("choosing one is remembered, and named in the title", scope.current() == acme and w.windowTitle() == "Toner - Acme Dental")
-check("the Overview counts only that client (a subfolder included)", d.cards["devices"].value.text() == "3" and sorted(d.names) == ["acme-fw", "acme-sw1"], (d.cards["devices"].value.text(), d.names))
+print("== one organization at a time")
+from core import orgs as ORGS
+check("no organizations yet: no switcher", not w.tabs.org.isVisibleTo(w.tabs.side))
+a_org, g_org = ORGS.create("Acme Dental", "ACME"), ORGS.create("Globex Law", "GLOBEX")
+devs = {x["name"]: x for x in db.list_devices()}
+ORGS.move_devices([devs[n] for n in ("acme-sw1", "acme-fw", "acme-dc")], a_org)
+ORGS.move_devices([devs[n] for n in ("globex-pa", "globex-sw")], g_org)
+w.refresh_orgs(); app.processEvents()
+check("the sidebar offers Global and the organizations", [w.tabs.org.itemText(i) for i in range(w.tabs.org.count())] == ["Global", "Acme Dental", "Globex Law"]
+      and w.tabs.org.isVisibleTo(w.tabs.side))
+w.tabs.org.setCurrentIndex(1); app.processEvents()
+check("picking one is remembered; the window title stays Toner", ORGS.current() == a_org and w.windowTitle() == "Toner")
+check("every section's title names it", w.headers["inventory"].title.text() == "Acme Dental - Inventory" and d.title.text() == "Acme Dental - Overview"
+      and r.header.title.text() == "Acme Dental - Results", (w.headers["inventory"].title.text(), d.title.text()))
+check("the Overview counts only its devices", d.cards["devices"].value.text() == "3" and sorted(d.names) == ["acme-fw", "acme-sw1"], (d.cards["devices"].value.text(), d.names))
 check("Results shows only its devices, and says so", sorted(r.table.topLevelItem(i).text(0) for i in range(r.table.topLevelItemCount())) == ["acme-dc", "acme-fw", "acme-sw1"]
-      and "3 devices" in r.summary.text() and r.chips.counts["ERROR"] == 0, r.summary.text())
+      and "3 devices" in r.summary.text() and r.chips.counts.get("ERROR", 0) == 0, r.summary.text())
 inv.refresh()
 top = [inv.table.topLevelItem(i).text(0) for i in range(inv.table.topLevelItemCount())]
-check("the Inventory shows that client's folder, open", top == ["Acme Dental  (3)"] and inv.table.topLevelItem(0).isExpanded(), top)
+check("the Inventory shows its own folders", top == ["Acme Dental  (3)"], top)
 check("Configs lists only its devices", sorted(w.configs.names) == ["acme-dc", "acme-fw", "acme-sw1"], w.configs.names)
 w.history.refresh(); check("History's charts list only its devices", all(n.startswith("acme") for n in w.history.map))
 w.reports.load_source(); check("Reports cover only its devices", w.reports.base and all(x.device.startswith("acme") for x in w.reports.base))
@@ -218,20 +227,28 @@ class W:
     def isRunning(self): return False
 A.ResultsTab.__init__.__globals__["Worker"] = W
 r._start([], scheduled=False)
-check("a run started by hand covers only that client", ran[-1] == ["acme-dc", "acme-fw", "acme-sw1"], ran)
+check("a run covers only its devices", ran[-1] == ["acme-dc", "acme-fw", "acme-sw1"], ran)
 r._active = False
-r._start([], scheduled=True)
-check("a scheduled run still covers everything it was set to", ran[-1] == ["acme-dc", "acme-fw", "acme-sw1", "globex-pa", "globex-sw"], ran)
+r.run_btn.setEnabled(True)
+w.tabs.org.setCurrentIndex(0); app.processEvents()
+check("Global shows everything again", ORGS.current() == 0 and d.cards["devices"].value.text() == "5" and w.headers["inventory"].title.text() == "Global - Inventory")
+r._start([], scheduled=False)
+check("a run in Global covers every organization", ran[-1] == ["acme-dc", "acme-fw", "acme-sw1", "globex-pa", "globex-sw"], ran)
 r._active = False
 A.ResultsTab.__init__.__globals__["Worker"] = real_worker
 r.run_btn.setEnabled(True)
-w.tabs.client.setCurrentIndex(0); app.processEvents()
-check("All clients shows everything again", scope.current() is None and w.windowTitle() == "Toner" and d.cards["devices"].value.text() == "5")
-db.set_setting("client_scope", 999999)
-check("a client whose folder has gone means all clients", scope.current() is None and len(scope.keep(db.list_devices())) == 5)
-db.set_setting("client_scope", None)
-w.tabs.setCollapsed(True); check("folded, the sidebar hides the client list", not w.tabs.client.isVisibleTo(w.tabs.side))
-w.tabs.setCollapsed(False); check("unfolded, it is back", w.tabs.client.isVisibleTo(w.tabs.side))
+r.reset_view()
+orgcol = {r.table.topLevelItem(i).text(0): r.table.topLevelItem(i).text(r.ORG) for i in range(r.table.topLevelItemCount())}
+check("Results in Global names each device's organization", orgcol.get("acme-sw1") == "Acme Dental" and orgcol.get("globex-pa") == "Globex Law"
+      and not r.table.isColumnHidden(r.ORG), orgcol)
+inv.refresh()
+top = [inv.table.topLevelItem(i).text(0) for i in range(inv.table.topLevelItemCount())]
+check("the Inventory in Global has a branch per organization", top == ["Global  (0)", "Acme Dental  (3)", "Globex Law  (2)"], top)
+ORGS.set_archived(a_org, True); w.refresh_orgs(); app.processEvents()
+check("an archived organization leaves the switcher", [w.tabs.org.itemText(i) for i in range(w.tabs.org.count())] == ["Global", "Globex Law"])
+ORGS.set_archived(a_org, False); w.refresh_orgs()
+w.tabs.setCollapsed(True); check("folded, the sidebar hides the switcher", not w.tabs.org.isVisibleTo(w.tabs.side))
+w.tabs.setCollapsed(False); check("unfolded, it is back", w.tabs.org.isVisibleTo(w.tabs.side))
 
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

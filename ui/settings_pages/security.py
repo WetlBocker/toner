@@ -9,8 +9,8 @@ from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QInputDialog, QLabel, QLineEdit, QMessageBox,
                                QPushButton, QTableWidget, QTableWidgetItem, QWidget)
-from core import audit, db, display, legacyssh, nettools, sessionlog, vault
-from ui.settings_base import Page, note, row_of
+from core import audit, db, display, legacyssh, nettools, passvault, sessionlog, vault
+from ui.settings_base import Page, compact_row, note, row_of
 from ui.toast import toast
 from ui.widgets import EmptyHint
 
@@ -35,6 +35,20 @@ class SecurityPage(Page):
             "with \"Incompatible ssh peer (no acceptable host key)\". They are tried last, so a device that offers anything "
             "newer still uses the newer one, as OpenSSH does with +ssh-rsa."))
 
+        self.change_master = QPushButton("Change master password...")      # the vault: these act right away
+        self.change_master.clicked.connect(self._change_master)
+        self.remember = QCheckBox("Remember on this computer")
+        self.remember.setProperty("notSetting", True)
+        self.remember.setToolTip("Toner and its scheduled service open the vault without asking.")
+        self.remember.toggled.connect(self._remember)
+        self.lock_now = QPushButton("Lock now")
+        self.lock_now.clicked.connect(self._lock)
+        self.lay.insertWidget(0, QLabel("<b>Vault</b>"))
+        self.lay.insertWidget(1, compact_row(self.change_master, self.remember, self.lock_now))
+        from ui.vaultsettings import VaultSection
+        self.vault = VaultSection()                                        # Store passwords in: Toner's vault or a password manager
+        self.lay.insertWidget(2, self.vault)
+
         self.keys = QTableWidget(0, 3)
         self.keys.setHorizontalHeaderLabels(["Host", "Type", "Fingerprint"])
         self.keys.horizontalHeader().setStretchLastSection(True)
@@ -45,30 +59,61 @@ class SecurityPage(Page):
         forget, forget_all = QPushButton("Forget selected key"), QPushButton("Forget all keys")
         forget.clicked.connect(self.forget_one)
         forget_all.clicked.connect(self.forget_all)
-        self.lay.insertWidget(1, QLabel("<b>Remembered host keys</b>  (these actions take effect immediately)"))
-        self.lay.insertWidget(2, self.keys)
-        self.lay.insertWidget(3, row_of(forget, forget_all, QWidget()))
+        self.lay.insertWidget(4, QLabel("<b>Remembered host keys</b>  (these actions take effect immediately)"))
+        self.lay.insertWidget(5, self.keys)
+        self.lay.insertWidget(6, row_of(forget, forget_all, QWidget()))
 
         self.creds = QTableWidget(0, 3)
-        self.creds.setHorizontalHeaderLabels(["Device", "Vendor", "Stored in Credential Manager"])
+        self.creds.setHorizontalHeaderLabels(["Device", "Vendor", "Stored in the vault"])
         self.creds.horizontalHeader().setStretchLastSection(True)
         self.creds.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.creds.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.creds.setMinimumHeight(110)
-        self.creds_hint = EmptyHint(self.creds, "No stored passwords or tokens", "They are saved in Windows Credential Manager when you add a device")
+        self.creds_hint = EmptyHint(self.creds, "No stored passwords or tokens", "They are saved in Toner's vault when you add a device")
         clear = QPushButton("Delete stored secret for selected device")
         clear.clicked.connect(self.clear_secret)
-        self.lay.insertWidget(4, QLabel("<b>Stored credentials</b>  (passwords and API tokens; "
+        self.lay.insertWidget(7, QLabel("<b>Stored credentials</b>  (passwords and API tokens; "
                                         "re-enter them in Inventory > Edit)"))
-        self.lay.insertWidget(5, self.creds)
-        self.lay.insertWidget(6, row_of(clear, QWidget()))
+        self.lay.insertWidget(8, self.creds)
+        self.lay.insertWidget(9, row_of(clear, QWidget()))
 
     def load(self):
         self.mode.setCurrentText(db.get_setting("hostkey_mode"))
         self.legacy.setChecked(bool(db.get_setting("ssh_legacy_algorithms")))
         self.refresh()
 
+    def show_vault(self):
+        self.remember.blockSignals(True)
+        self.remember.setChecked(passvault.remembered())
+        self.remember.blockSignals(False)
+        self.lock_now.setVisible(not passvault.remembered())
+
+    def _change_master(self):
+        from ui import vaultdlg
+        if vaultdlg.change_master(self):
+            toast(self, "Master password changed.")
+
+    def _remember(self, on):
+        try:
+            passvault.set_remembered(on)
+        except passvault.Locked:
+            pass
+        audit.log("vault " + ("remembered on this computer" if on else "no longer remembered on this computer"))
+        self.show_vault()
+
+    def _lock(self):
+        """Lock now: close the vault and ask for the master password again (Quit closes Toner)."""
+        from PySide6.QtWidgets import QApplication
+        from ui import vaultdlg
+        passvault.lock()
+        if not vaultdlg.UnlockDialog(self).exec():
+            win = self.window()
+            (win.quit_for_real if hasattr(win, "quit_for_real") else QApplication.quit)()
+
     def refresh(self):
+        self.show_vault()
+        if passvault.is_open():
+            self.vault.load()
         keys = nettools.list_host_keys()
         self.keys.setRowCount(len(keys))
         self.keys_hint.setVisible(not keys)
@@ -81,11 +126,13 @@ class SecurityPage(Page):
         self.creds_hint.setVisible(not devs)
         for i, d in enumerate(devs):
             try:
-                has = bool(keyring.get_password(db.SERVICE, d["name"]))
+                with db.within(d.get("org")):
+                    has = bool(keyring.get_password(db.SERVICE, db.secret_name(d["name"])))
             except Exception:
                 has = False
             for j, v in enumerate((d["name"], display.vendor_name(d["vendor"]), "yes" if has else "no")):
                 self.creds.setItem(i, j, QTableWidgetItem(v))
+            self.creds.item(i, 0).setData(Qt.ItemDataRole.UserRole, d.get("org"))
         self.creds.resizeColumnsToContents()
 
     def forget_one(self):
@@ -111,7 +158,8 @@ class SecurityPage(Page):
             if QMessageBox.question(self, "Delete secret", f"Delete the stored password/token for {name}?\n\n"
                                     "Checks on that device will fail until you enter it again.") \
                     == QMessageBox.StandardButton.Yes:
-                db.delete_secret(name)
+                with db.within(self.creds.item(r, 0).data(Qt.ItemDataRole.UserRole)):
+                    db.delete_secret(db.secret_name(name))
                 self.refresh()
 
     def save(self):
@@ -152,7 +200,8 @@ class DataPage(Page):
             f"<b>Database</b>: {path} ({size:.1f} MB)<br>"
             f"<b>Run history</b>: {runs:,} runs, {rows:,} results<br>"
             f"<b>Session logs</b>: {sessions:,} sessions in {sessionlog.log_dir()}<br>"
-            f"<b>Saved host keys</b>: {nettools.known_hosts_path()}")
+            f"<b>Saved host keys</b>: {nettools.known_hosts_path()}<br>"
+            f"<b>Vault</b>: {passvault.path()}")
 
     load = refresh
 
@@ -171,8 +220,8 @@ class DataPage(Page):
             src.close()
             dst.close()
             QMessageBox.information(self, "Backup", f"Saved to {path}\n\nThe backup holds devices, history and "
-                                    "settings. Passwords and API tokens live in Windows Credential Manager "
-                                    "and are not included.")
+                                    "settings. Passwords and API tokens live in Toner's vault "
+                                    f"({passvault.path().name}) and are not included.")
         except (OSError, sqlite3.Error) as e:
             QMessageBox.warning(self, "Backup failed", str(e))
 

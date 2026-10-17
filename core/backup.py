@@ -173,17 +173,25 @@ def _pack(text):
     return zlib.compress(text.encode("utf-8", "replace"), 6)
 
 
-def get_text(backup_id):
-    with db.connect() as c:
-        row = c.execute("SELECT body FROM config_backups WHERE id=?", (backup_id,)).fetchone()
+def get_text(backup_id, org=None):
+    """A stored configuration. `org`: the organization whose file the version is in (a row from list_backups or search says)."""
+    with db.within(org):
+        with db.connect() as c:
+            row = c.execute("SELECT body FROM config_backups WHERE id=?", (backup_id,)).fetchone()
     return zlib.decompress(row["body"]).decode("utf-8", "replace") if row else ""
 
 
 def list_backups(device, limit=200):
-    with db.connect() as c:
-        return [dict(r) for r in c.execute(
-            "SELECT id, device, taken_at, sha, size, lines, added, removed FROM config_backups WHERE device=? "
-            "ORDER BY id DESC LIMIT ?", (device, limit))]
+    """A device's versions, newest first, each with 'org'. `device` can be a key from Global's lists."""
+    device, org = db.split_key(device)
+    with db.within(org):
+        with db.connect() as c:
+            rows = [dict(r) for r in c.execute(
+                "SELECT id, device, taken_at, sha, size, lines, added, removed FROM config_backups WHERE device=? "
+                "ORDER BY id DESC LIMIT ?", (device, limit))]
+        for r in rows:
+            r["org"] = db.target()
+    return rows
 
 
 def latest(device):
@@ -192,7 +200,11 @@ def latest(device):
 
 
 def summary():
-    """{device: {'versions': n, 'last': time, 'changed': time of the last change}} for the device list."""
+    """{device: {'versions': n, 'last': time, 'changed': time of the last change}} for the device list (keyed with db.dkey)."""
+    return db.per_device(_summary_here)
+
+
+def _summary_here():
     out = {}
     with db.connect() as c:
         for r in c.execute("SELECT device, COUNT(*) n, MAX(taken_at) last FROM config_backups GROUP BY device"):
@@ -207,10 +219,33 @@ def summary():
 def recent_changes(hours=24):
     from datetime import timedelta
     cutoff = (datetime.now() - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
-    with db.connect() as c:
-        return [dict(r) for r in c.execute(
-            "SELECT device, taken_at, added, removed FROM config_backups WHERE taken_at >= ? AND "
-            "id NOT IN (SELECT MIN(id) FROM config_backups GROUP BY device) ORDER BY id DESC", (cutoff,))]
+    def here():
+        with db.connect() as c:
+            return [dict(r) for r in c.execute(
+                "SELECT device, taken_at, added, removed FROM config_backups WHERE taken_at >= ? AND "
+                "id NOT IN (SELECT MIN(id) FROM config_backups GROUP BY device) ORDER BY id DESC", (cutoff,))]
+    rows = []
+    for org, only in db._each_file():
+        with db.within(org):
+            part = here()
+        for r in part:
+            if only is None or r["device"] in only:
+                r["device"], r["org"] = db.dkey(r["device"], org), org
+                rows.append(r)
+    rows.sort(key=lambda r: r["taken_at"], reverse=True)
+    return rows
+
+
+def names_in(keys, org):
+    """The plain names among device keys that belong to organization `org`'s file (None stays None: every device)."""
+    if keys is None:
+        return None
+    out = set()
+    for k in keys:
+        name, o = db.split_key(k)
+        if o == org or (o is None and (not db.everything() or org == db.GLOBAL)):
+            out.add(name)
+    return out
 
 
 def diff_lines(old, new, old_label="before", new_label="after", context=3):
@@ -280,10 +315,16 @@ def backup_many(devices, workers=5, on_result=None, opts=None):
     """Back several devices up in parallel. Returns the Results (also passed to on_result as they finish)."""
     opts = opts or db.runtime_options()
     todo = [d for d in devices if supported(d)]
-    skipped = [Result(d["name"], CHECK_NAME, OK, "n/a", why_unsupported(d)) for d in devices if not supported(d)]
+    skipped = [Result(d["name"], CHECK_NAME, OK, "n/a", why_unsupported(d), org=d.get("org")) for d in devices if not supported(d)]
     out = []
+
+    def one(d):
+        with db.within(d.get("org")):                  # stored in the device's own organization's file
+            r = backup_device(d, opts)
+        r.org = d.get("org")
+        return r
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        futs = [pool.submit(backup_device, d, opts) for d in todo]
+        futs = [pool.submit(one, d) for d in todo]
         for f in as_completed(futs):
             r = f.result()
             out.append(r)
@@ -294,8 +335,25 @@ def backup_many(devices, workers=5, on_result=None, opts=None):
 
 # ---------------------------------------------------------------- searching
 def search(pattern, devices=None, regex=False, all_versions=False, limit=500):
-    """Find lines in stored configurations. Returns [{'device','taken_at','line_no','line'}]."""
+    """Find lines in stored configurations, in every file of the view. Returns [{'device', 'taken_at', 'line_no', 'line', 'id', 'org'}];
+    devices and the 'device' of each hit are keys (db.dkey)."""
     rx = re.compile(pattern if regex else re.escape(pattern), re.I)
+    out = []
+    for org, only in db._each_file():
+        names = names_in(devices, org)
+        if only is not None:
+            names = only if names is None else names & only
+        with db.within(org):
+            hits = _search_here(rx, names, all_versions, limit - len(out))
+        for h in hits:
+            h["device"], h["org"] = db.dkey(h["device"], org), org
+        out += hits
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _search_here(rx, devices, all_versions, limit):
     out = []
     with db.connect() as c:
         if all_versions:
@@ -315,6 +373,7 @@ def search(pattern, devices=None, regex=False, all_versions=False, limit=500):
 
 
 def delete_versions(device, keep_latest=1):
-    with db.connect() as c:
+    device, org = db.split_key(device)
+    with db.within(org), db.connect() as c:
         c.execute("DELETE FROM config_backups WHERE device=? AND id NOT IN "
                   "(SELECT id FROM config_backups WHERE device=? ORDER BY id DESC LIMIT ?)", (device, device, keep_latest))

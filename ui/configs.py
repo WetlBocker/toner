@@ -9,7 +9,8 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QComboBox, QDial
 from core import audit, backup, db, display, scope
 from drivers.base import SEVERITY
 from ui import theme
-from ui.widgets import EmptyHint, GroupPicker
+from ui.widgets import EmptyHint
+from ui.finder import FilterButton, SearchBox, device_sections, listed_devices, shown_devices, wants_archived
 from ui.toast import toast
 from ui import status as st
 
@@ -97,7 +98,7 @@ class SearchDialog(QDialog):
             return
         self.table.setRowCount(len(self.hits))
         for i, h in enumerate(self.hits):
-            for j, v in enumerate([h["device"], h["taken_at"], str(h["line_no"]), h["line"]]):
+            for j, v in enumerate([db.label(h["device"]), h["taken_at"], str(h["line_no"]), h["line"]]):
                 self.table.setItem(i, j, QTableWidgetItem(v))
         self.table.resizeColumnsToContents()
         self.info.setText(f"{len(self.hits)} match(es)" + ("  (stopped at the limit)" if len(self.hits) >= 500 else "")
@@ -117,9 +118,13 @@ class ConfigsTab(QWidget):
         super().__init__()
         self.worker = None
         self.versions = []
-        self.group = GroupPicker()
-        self.group.set_labels(db.group_labels()[1:])
+        self.find = SearchBox("Search devices", "Type part of a name, address, vendor, location, tag or detail. Several words must all match.",
+                              page=self)
+        self.funnel = FilterButton(lambda: device_sections(listed_devices(self.funnel)))
+        self.find.textChanged.connect(lambda _t: self.refresh())
+        self.funnel.changed.connect(self.refresh)
         self.run_btn = QPushButton("Back up now")
+        self.run_btn.setToolTip("Backs up the devices shown")
         self.run_btn.setProperty("primary", True)
         self.run_btn.clicked.connect(self.start)
         self.one_btn = QPushButton("Back up selected")
@@ -129,8 +134,8 @@ class ConfigsTab(QWidget):
         self.status = QLabel("")
         self.status.setProperty("muted", True)
 
-        self.devs = QTableWidget(0, 5)
-        self.devs.setHorizontalHeaderLabels(["Device", "Vendor", "Versions", "Last backup", "State"])
+        self.devs = QTableWidget(0, 6)
+        self.devs.setHorizontalHeaderLabels(["Device", "Vendor", "Versions", "Last backup", "State", "Organization"])
         self.vers = QTableWidget(0, 4)
         self.vers.setHorizontalHeaderLabels(["Taken", "Size", "Lines", "Change"])
         for t in (self.devs, self.vers):
@@ -144,7 +149,7 @@ class ConfigsTab(QWidget):
         hh = self.devs.horizontalHeader()
         hh.setStretchLastSection(False)
         for col, mode in ((0, hh.ResizeMode.ResizeToContents), (1, hh.ResizeMode.Stretch), (2, hh.ResizeMode.ResizeToContents),
-                          (3, hh.ResizeMode.ResizeToContents), (4, hh.ResizeMode.ResizeToContents)):
+                          (3, hh.ResizeMode.ResizeToContents), (4, hh.ResizeMode.ResizeToContents), (5, hh.ResizeMode.ResizeToContents)):
             hh.setSectionResizeMode(col, mode)
         self.devs.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.vers.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -173,12 +178,13 @@ class ConfigsTab(QWidget):
 
         top = QHBoxLayout()
         top.setSpacing(10)
-        top.addWidget(self.group)
         top.addWidget(self.run_btn)
         top.addWidget(self.one_btn)
         top.addWidget(self.search_btn)
         top.addSpacing(8)
         top.addWidget(self.status, 1)
+        top.addWidget(self.find, 1)                    # on the right, as on Inventory
+        top.addWidget(self.funnel)
         right_bar = QHBoxLayout()
         right_bar.addWidget(QLabel("Show"))
         right_bar.addWidget(self.view)
@@ -214,30 +220,32 @@ class ConfigsTab(QWidget):
     # ---------- the device list
     def refresh(self):
         keep = self.current_device()
-        devs = scope.keep(db.list_devices())
-        info = backup.summary()
-        self.names = [d["name"] for d in devs]
+        every = listed_devices(self.funnel)
+        devs = shown_devices(every, self.find, self.funnel)
+        with db.including_archived(wants_archived(self.funnel)):
+            info = backup.summary()
+        self.names = [d["key"] for d in devs]
+        self.devs.setColumnHidden(5, not db.several())        # the Organization column: Global lists every organization
         self.devs.blockSignals(True)
         self.devs.setRowCount(len(devs))
         for i, d in enumerate(devs):
-            s = info.get(d["name"], {})
+            s = info.get(d["key"], {})
             state = ("not supported" if not backup.supported(d) else
                      {"error": "last backup FAILED", "changed": "changed", "new": "ok", "unchanged": "ok"}.get(s.get("status"), "never backed up"))
             for j, v in enumerate([d["name"], display.vendor_name(d["vendor"]), str(s.get("versions", 0)),
-                                   (s.get("last", "") or "")[:16], state]):
+                                   (s.get("last", "") or "")[:16], state, db.org_name(d["org"])]):
                 it = QTableWidgetItem(v)
                 if j == 4 and state == "last backup FAILED":
                     it.setForeground(st.qink("FAIL"))
                 self.devs.setItem(i, j, it)
         self.devs.resizeColumnsToContents()
         self.devs.blockSignals(False)
-        self.hint.setVisible(not devs)
+        self.hint.setVisible(not every)
         self.devs.blockSignals(True)
         if keep in self.names:
             self.devs.selectRow(self.names.index(keep))
         self.devs.blockSignals(False)
         self.show_versions()                  # always reload: the selection may not have changed but the data did
-        self.group.set_labels(db.group_labels()[1:])
 
     def current_device(self):
         r = self.devs.currentRow() if self.devs.selectedItems() else -1
@@ -281,8 +289,8 @@ class ConfigsTab(QWidget):
         name = self.current_device()
         if len(rows) >= 2:                                           # compare any two versions
             a, b = self.versions[rows[-1]], self.versions[rows[0]]  # older, newer (list is newest first)
-            lines, ad, rm = backup.diff_lines(backup.get_text(a["id"]), backup.get_text(b["id"]),
-                                              f"{name} {a['taken_at']}", f"{name} {b['taken_at']}")
+            lines, ad, rm = backup.diff_lines(backup.get_text(a["id"], a["org"]), backup.get_text(b["id"], b["org"]),
+                                              f"{db.label(name)} {a['taken_at']}", f"{db.label(name)} {b['taken_at']}")
             self.highlighter.setDocument(self.text.document())
             self.text.setPlainText("\n".join(lines) if lines else "These two versions are identical.")
             self.note.setText(f"Comparing {a['taken_at']} with {b['taken_at']}:  +{ad} / -{rm}")
@@ -295,12 +303,12 @@ class ConfigsTab(QWidget):
                                        "Switch to 'Full configuration' to read it.")
                 self.note.setText(v["taken_at"])
             else:
-                lines, ad, rm = backup.diff_lines(backup.get_text(older["id"]), backup.get_text(v["id"]),
-                                                  f"{name} {older['taken_at']}", f"{name} {v['taken_at']}")
+                lines, ad, rm = backup.diff_lines(backup.get_text(older["id"], older["org"]), backup.get_text(v["id"], v["org"]),
+                                                  f"{db.label(name)} {older['taken_at']}", f"{db.label(name)} {v['taken_at']}")
                 self.text.setPlainText("\n".join(lines) if lines else "No difference.")
                 self.note.setText(f"{older['taken_at']} -> {v['taken_at']}:  +{ad} / -{rm}")
         else:
-            self.text.setPlainText(backup.get_text(v["id"]))
+            self.text.setPlainText(backup.get_text(v["id"], v["org"]))
             self.note.setText(f"{v['taken_at']}  ({v['lines']} lines)")
 
     def save_version(self):
@@ -310,19 +318,19 @@ class ConfigsTab(QWidget):
             return
         v = self.versions[rows[0]]
         stamp = v["taken_at"].replace(":", "").replace(" ", "_").replace("-", "")
-        path, _ = QFileDialog.getSaveFileName(self, "Save configuration", f"{name}_{stamp}.txt", "Text files (*.txt)")
+        path, _ = QFileDialog.getSaveFileName(self, "Save configuration", f"{db.label(name)}_{stamp}.txt", "Text files (*.txt)")
         if path:
             with open(path, "w", encoding="utf-8", newline="") as fh:
-                fh.write(backup.get_text(v["id"]))
+                fh.write(backup.get_text(v["id"], v["org"]))
 
     def prune(self):
         name = self.current_device()
         if name and len(self.versions) > 1 and QMessageBox.question(
                 self, "Delete older versions",
-                f"Keep only the newest copy of {name} and delete {len(self.versions) - 1} older version(s)?") \
+                f"Keep only the newest copy of {db.label(name)} and delete {len(self.versions) - 1} older version(s)?") \
                 == QMessageBox.StandardButton.Yes:
             backup.delete_versions(name, 1)
-            audit.log("config versions deleted", name)
+            audit.log("config versions deleted", db.label(name))
             self.refresh()
 
     # ---------- backing up
@@ -330,21 +338,25 @@ class ConfigsTab(QWidget):
         return bool(self.worker and self.worker.isRunning())
 
     def start(self):
-        self._start(self.group.selected(), scheduled=False)
+        """Back up the devices shown (the search box and the funnel decide; with neither, every device)."""
+        self._start([], scheduled=False, among=set(self.names))
 
     def start_scheduled(self, labels):
         if not self.running():
             self._start(labels, scheduled=True)
 
-    def _start(self, labels, scheduled, only=None):
+    def _start(self, labels, scheduled, only=None, among=None):
         if self.running():
             return
-        devices = [d for d in db.list_devices(enabled_only=True) if db.in_groups(d, labels) and (only is None or d["name"] == only)]
+        devices = [d for d in listed_devices(self.funnel, enabled_only=True) if db.in_groups(d, labels) and (only is None or d["key"] == only)
+                   and (among is None or d["key"] in among)]
+        if scheduled:                                        # a schedule covers the organization's own devices (Global's: its own and Shared)
+            devices = [d for d in devices if d.get("org", db.home()) == db.home()]
         if not scheduled:
             devices = scope.keep(devices)
         if not devices:
             if not scheduled:
-                toast(self, "No enabled devices in this group.")
+                toast(self, "No enabled devices are shown." if among is not None else "No enabled devices in this group.")
             return
         self.scheduled = scheduled
         self.run_btn.setEnabled(False)
@@ -352,7 +364,7 @@ class ConfigsTab(QWidget):
         self.status.setText(f"{'Scheduled backup: ' if scheduled else ''}backing up {len(devices)} device(s)...")
         self.done_count = 0
         self.total = len(devices)
-        self.ran = [d["name"] for d in devices]
+        self.ran = [d["key"] for d in devices]
         self.worker = BackupWorker(devices, min(5, int(db.get_setting("workers"))), db.runtime_options())
         self.worker.one.connect(self._one)
         self.worker.done.connect(self._done)

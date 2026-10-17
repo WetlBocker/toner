@@ -46,12 +46,20 @@ Or use the installer. Its first page asks how to set Toner up:
 From a script: `Toner-Setup-1.1.0.exe /VERYSILENT /MODE=portable /DIR="E:\Toner"`.
 
 **Your data stays on your computer.** The database is `%APPDATA%\NetCheck\netcheck.db` and the logs sit next to it. Passwords,
-tokens and SNMP communities are in Windows Credential Manager, never in the database. Because Credential Manager belongs to one
-computer, **Settings > Data and logs > Export saved passwords** writes them to one file encrypted with a password you choose
-(scrypt and AES-256-GCM), and **Import saved passwords** restores them on another computer.
+tokens and SNMP communities are in Toner's own encrypted vault, `netcheck.vault` beside the database, never in the database itself.
+The vault is locked with a master password you choose the first time Toner starts (at least 12 characters; scrypt and AES-256-GCM).
+**Remember on this computer** lets Toner and its scheduled service open it without asking; without it, Toner asks at every start.
+Change the master password, turn remembering on or off, or lock it in **Settings > Security**. If the master password is forgotten
+and it is not remembered, **Forgot it?** starts a new, empty vault (devices, sessions and settings stay). **Settings > Data and logs
+> Export saved passwords** still writes them to a separate file with its own password, for another copy of Toner.
 
 **Shortcuts:** **Ctrl+K** searches sections, tools, devices, Settings pages, limits, checks and actions. **Ctrl+1** to **Ctrl+9**
-switch sections. **Ctrl+B** folds the sidebar to icons and back (remembered). **Ctrl+F** searches the Inventory.
+switch sections. **Ctrl+B** folds the sidebar to icons and back (remembered). **Ctrl+F** goes to the search box of the page you are on.
+
+**Search and filter** work the same on every list: a search box on the right (several words must all match) and a funnel beside it
+with menus of tick boxes (Vendor, Location, Folder and Tag for devices; Status on Results; Type and Device on Sessions; Kind,
+Severity and Device on Listeners). Configs, Results, History, Command Runner, Playbooks and Topology have them; **Back up now**
+and **Run checks** act on the devices shown (all of them when nothing is typed or ticked).
 
 ## The sections
 
@@ -64,7 +72,7 @@ switch sections. **Ctrl+B** folds the sidebar to icons and back (remembered). **
 | **History** | Charts any checks over time; hover for values. Checks on very different scales get their own chart. Uptime shows restarts. |
 | **Reports** | CSV, HTML and PDF. The **Trend report** (7, 30 or 90 days) compares with the period before: availability, worst offenders, repeat failures, what is still wrong, configuration changes, busiest CPUs and growing disks. Settings > Reports can make one every week or month. |
 | **Tools** | Command runner (the same commands on many devices, read-only by default: Cisco, Juniper, Arista, HPE and MikroTik by SSH, Windows computers by PowerShell, Fortinet and Palo Alto firewalls by SSH with a login set on the device), ping, traceroute, DNS, live ping graph, path monitor (MTR), port scanner, TLS certificate checker, subnet calculator, device discovery, LLDP / CDP topology map, SNMP (v1, v2c, v3), syslog and trap receivers, MAC lookup, Wake-on-LAN, Wi-Fi scanner, file servers, SCP and xcopy, OpenSSL, iperf3, and the Ansible **Playbook Editor**. |
-| **Sessions** | Saved connections in a folder tree (drag, rename, search, duplicate): SSH, Telnet and Serial open in tabs inside Toner, follow Settings > Terminal, and are logged. An SSH session can keep its password in Credential Manager or use an inventory device's login, jump host and proxy. Serial has a Send break button for ROMMON. **Remote Desktop** runs inside a Toner tab, using the Remote Desktop control Windows ships (the one `mstsc.exe` is built on): Windows asks for the password and Toner never stores it. Fill the window or use a fixed size; clipboard, drives, printers, the console session and a gateway are options. Settings > Terminal can send it to Windows' own window instead. |
+| **Sessions** | Saved connections in a folder tree (drag, rename, search, duplicate): SSH, Telnet and Serial open in tabs inside Toner, follow Settings > Terminal, and are logged. An SSH session can keep its password in the vault or use an inventory device's login, jump host and proxy. Serial has a Send break button for ROMMON. **Remote Desktop** runs inside a Toner tab, using the Remote Desktop control Windows ships (the one `mstsc.exe` is built on): Windows asks for the password and Toner never stores it. Fill the window or use a fixed size; clipboard, drives, printers, the console session and a gateway are options. Settings > Terminal can send it to Windows' own window instead. **Sessions from other programs:** Inventory > More > Import... also reads a MobaXterm export (`.mobaconf`), a PuTTY export (`.reg`) and SecureCRT (its `.xml` export, or any `.ini` in its Sessions folder); More > Import PuTTY sessions on this computer reads PuTTY's own list. They become sessions (not devices), in the same folders (for MobaXterm the root every bookmark shares, such as `My Sessions`, is left out); one already there is skipped. A MobaXterm "Stored Passwords" export adds the SSH passwords to the vault (importing it again fills in sessions that have none). Browser, VNC, FTP and other kinds Toner does not open are counted and skipped. |
 | **Automation** | Runs **Ansible** playbooks on Inventory devices: pick a playbook and devices, check first (nothing changes), then run for real after a confirmation naming the playbook and devices. Output streams live, with a recap per device and a history. See [Automation (Ansible)](#automation-ansible). More will be added here. |
 | **Settings** | Thresholds (overrides per vendor, folder, tag or device), which checks run and when (Checks has tabs for the list, the schedule and your own checks), timeouts, config backups, notifications (email, Teams, Slack, Discord, ntfy, webhook, desktop), credential profiles, proxy, agents, maintenance, appearance, terminal, reports, security (host keys, and older SSH algorithms: ssh-rsa and SHA-1 key exchange for devices such as older Cisco ASAs that offer nothing newer, tried last and on unless turned off), audit log, data and logs. Pages with unsaved edits are marked, and Save and Revert list exactly what changes. |
 | **About** | Version, how this copy was installed, locations, library versions, license. **Copy details** puts it all on the clipboard for a bug report. |
@@ -176,7 +184,7 @@ body and never kept; only the key is saved. Proxmox gets a read-only token calle
 two-factor sign-in cannot be used. For other products paste a key made in their own interface.
 
 **Command line on firewalls.** Fortinet and Palo Alto are checked through their API, so for the Command Runner their device dialog also has an
-**SSH user name** and **SSH password** (Access tab; separate from the API key, kept in Credential Manager). Without them the firewall is listed greyed.
+**SSH user name** and **SSH password** (Access tab; separate from the API key, kept in the vault). Without them the firewall is listed greyed.
 Each SSH device's last Command Runner session is written to `ssh-logs\command-runner-<device>.log` next to Toner's data (passwords
 left out), and a failure says where it is; a failed SSH config backup leaves `ssh-logs\backup-<device>.log`, masked like a stored
 backup. A Cisco ASA is given time to show its prompt before the first command, since one that
@@ -255,7 +263,7 @@ cannot sign in again by itself, so checks that run by themselves use it while it
 
 For a proxy with two-step sign-in, set **One-time code**: Toner adds the current code to the end of the password (or sends it alone
 when there is no password). **Ask me for it when connecting** shows a box for the code; **Make it from a secret key** works the
-code out itself from the authenticator's secret key (kept in Credential Manager), which is what checks that run by themselves
+code out itself from the authenticator's secret key (kept in the vault), which is what checks that run by themselves
 need. When a proxy answers in a way Toner does not understand, the error says what it sent (for example an SSH banner or a sign-in
 method Toner cannot do) instead of "invalid response".
 
@@ -283,7 +291,7 @@ program if the computer has one (Git for Windows includes it). Toner stores none
 Each serves one folder you choose, nothing outside it, and is off until you start it. Read-only until you tick "Allow uploads";
 replacing or deleting needs a second tick; you can limit them to named devices; they stop after a time you set. Every transfer is
 listed, and starts, stops, uploads, deletions, refusals and logins go to the audit log. TFTP has no passwords by design, so name
-the devices in "Allowed clients" whenever uploads are on. SFTP needs a user name and password (in Credential Manager), has no
+the devices in "Allowed clients" whenever uploads are on. SFTP needs a user name and password (in the vault), has no
 shell, shows its fingerprint and locks an address out for five minutes after five wrong passwords. Whole drives and system folders
 are refused.
 
@@ -308,7 +316,7 @@ Ansible does not run on Windows, so Toner runs it somewhere that does and shows 
 - **This PC, through WSL.** Needs WSL with a Linux distribution that has Ansible (`wsl --install -d Ubuntu`, then
   `sudo apt install ansible` inside it). Toner never installs anything for you; **Test** says what is missing.
 - **A Linux server, over SSH.** Use an Inventory device as the server (its address, SSH port, user and saved password), or type the
-  address, user, key file and password (the password goes to Credential Manager). Toner copies the playbook folder to a private
+  address, user, key file and password (the password goes to the vault). Toner copies the playbook folder to a private
   temporary folder on the server, runs it and removes the folder.
 
 **Playbooks** are ordinary `.yml` files in a folder you can change (default: a `ansible\playbooks` folder in Toner's data folder; point
@@ -338,8 +346,8 @@ audit log.
 wrapper. **Settings > General > Keep running in the system tray** does the same while the window is closed. The installed program
 does it without Python: `Toner.exe cli service`, `Toner.exe cli run --json` (output goes to the console, or to `toner-service.log`
 in the data folder when there is none). The service also runs the agent receiver when it is on, makes the scheduled trend report and
-watches the agent certificate. It uses the data folder and Credential Manager of the account it runs as, so run it as the account you
-set Toner up with.
+watches the agent certificate. It uses the data folder of the account it runs as, and opens the vault only when it is remembered on this computer
+for that account, so run it as the account you set Toner up with.
 
 ## Updates and About
 

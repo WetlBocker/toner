@@ -1,9 +1,9 @@
 """Saved passwords in an encrypted file, so a portable copy (or a new computer) can have them.
 
-Toner keeps passwords, API tokens and community strings in Windows Credential Manager, which belongs to one computer and one
-user. A copy of Toner's data folder therefore arrives without them. Export writes every password Toner knows about into a file
-protected by a password of your choosing (scrypt to make the key, AES-256-GCM to seal it); Import puts them back on the other
-computer. The file is useless without that password, and Toner never stores it.
+Toner keeps passwords, API tokens and community strings in its vault (core/passvault.py), which a copy of the data folder carries
+along. Export still writes every password Toner knows about into a separate file protected by a password of your choosing (scrypt
+to make the key, AES-256-GCM to seal it), to hand them to another Toner with a vault of its own; Import puts them into this one.
+The file is useless without that password, and Toner never stores it.
 """
 import json
 import os
@@ -22,19 +22,30 @@ SERVICE_NAMES = ("service:proxy", "service:proxy-otp", "service:ssh-tunnel", "se
 
 
 def known_names():
-    """Every credential name Toner could have stored for what is in its database."""
+    """Every credential name Toner could have stored for what is in its databases: Global's and every organization's."""
     names = set(SERVICE_NAMES)
-    for d in db.list_devices():
-        names.update(db.secret_name(d["name"], k) for k in db.SECRET_KINDS)
-    for p in profiles.list_profiles():
+    for org in [db.GLOBAL] + [r["id"] for r in db.org_rows()]:
+        with db.within(org):
+            names |= _names_here()
+            names.add(db.qualify("service:agent-enroll"))       # each organization has its own agent sign-up key
+    return sorted(names)
+
+
+def _names_here():
+    names = set()
+    with db.connect() as c:
+        devices = [r[0] for r in c.execute("SELECT name FROM devices")]
+    for d in devices:
+        names.update(db.secret_name(d, k) for k in db.SECRET_KINDS)
+    for p in profiles._profiles_here():
         names.update(db.secret_name(f"profile:{p['name']}", k) for k in db.SECRET_KINDS)
-    for s in sessions.list_sessions():
+    for s in sessions._sessions_here():
         names.add(sessions.secret_name(s["id"]))
     for ch in notify.channels():
         for key, _label, kind, _extra in notify.CHANNEL_TYPES.get(ch.get("type"), {"fields": []})["fields"]:
             if kind == "secret":
                 names.add(notify._secret_name(ch["id"], key))
-    return sorted(names)
+    return names
 
 
 def collect():

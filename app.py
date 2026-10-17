@@ -92,6 +92,8 @@ class Main(QMainWindow):
         self.about = AboutTab()
         self.scheduler = Scheduler(self.results)
         self.backup_scheduler = BackupScheduler(self.configs)
+        self.scheduler.background_done.connect(self.on_background_run)         # other organizations' schedules
+        self.backup_scheduler.background_done.connect(self.on_background_run)
         # Windows pop-ups come from a tray icon, shown while a desktop channel is enabled or the app runs in the background.
         self.tray = QSystemTrayIcon(app_icon(), self)
         self.tray.setToolTip("Toner")
@@ -122,6 +124,8 @@ class Main(QMainWindow):
         self.inventory.changed.connect(self.reports.refresh)
         self.inventory.changed.connect(self.settings.refresh_dynamic)
         self.inventory.open_ssh.connect(self.open_ssh_console)
+        self.inventory.sessions_imported.connect(self.sessions.refresh)
+        self.inventory.orgs_created.connect(lambda: (self.refresh_orgs(), self.inventory.refresh(), self.settings.refresh_dynamic()))
         self.inventory.open_rdp_tab.connect(self.open_rdp_console)
         self.inventory.open_details.connect(self.open_device_view)
         self.inventory.open_agent_settings.connect(self.open_agent_settings)
@@ -171,9 +175,10 @@ class Main(QMainWindow):
             QShortcut(QKeySequence(f"Ctrl+{i + 1}"), self, activated=lambda i=i: tabs.setCurrentIndex(i))
         tabs.search_requested.connect(self.open_palette)
         self._add_headers()
-        tabs.client_changed.connect(self.set_client)
-        self.inventory.changed.connect(self.refresh_clients)
-        self.refresh_clients()
+        tabs.org_changed.connect(self.set_org)
+        tabs.leave_guard = lambda was, _to: tabs.stack.widget(was) is not self.settings or self.settings.confirm_leave()
+        self.settings.orgs_changed.connect(self.refresh_orgs)
+        self.refresh_orgs()
         tabs.currentChanged.connect(lambda _i: self.update_headers())
         self.results.run_finished.connect(self.update_headers)
         self.inventory.changed.connect(self.update_headers)
@@ -218,7 +223,7 @@ class Main(QMainWindow):
         except Exception:
             return
         on = [d for d in devs if d["enabled"]]
-        bad = {s: sum(1 for d in on if (health.get(d["name"]) or {}).get("status") == s) for s in ("FAIL", "ERROR", "WARN")}
+        bad = {s: sum(1 for d in on if (health.get(d["key"]) or {}).get("status") == s) for s in ("FAIL", "ERROR", "WARN")}
         bits = [f"{len(devs)} device{'s' if len(devs) != 1 else ''}"]
         if bad["FAIL"] + bad["ERROR"]:
             bits.append(f"{bad['FAIL'] + bad['ERROR']} failing")
@@ -229,7 +234,7 @@ class Main(QMainWindow):
         self.headers["inventory"].set_context("  ·  ".join(bits))
         try:
             from core import backup
-            mine = {d["name"] for d in devs}
+            mine = {d["key"] for d in devs}
             summ = {k: v for k, v in backup.summary().items() if k in mine}
             last = max((v.get("last") or "" for v in summ.values()), default="")
             n = sum(1 for v in summ.values() if v.get("versions"))
@@ -297,26 +302,47 @@ class Main(QMainWindow):
         self.inventory.refresh()
         self.inventory.changed.emit()
 
-    # ---------- the client being looked at
-    def refresh_clients(self):
-        """The sidebar's list of clients (top-level folders), after the folders changed."""
-        from core import scope
-        self.tabs.set_clients(scope.clients(), scope.current())
-        name = scope.name()
-        self.setWindowTitle(f"Toner - {name}" if name else "Toner")
+    # ---------- the organization being looked at
+    def refresh_orgs(self):
+        """The sidebar's list of organizations, after Settings > Organizations changed it (the open one may have been archived)."""
+        from core import orgs
+        was = db.home()
+        db.set_home(orgs.current())
+        self.tabs.set_orgs([(o["id"], o["name"], o["colour"]) for o in orgs.list_orgs(archived=False)], db.home())
+        if db.home() != was:
+            self._show_org()
+        else:
+            self.set_titles()
 
-    def set_client(self, fid):
-        """Narrow every section to one client (or show all), and say so in the window title."""
-        from core import scope
-        scope.set_current(fid)
-        name = scope.name()
-        self.setWindowTitle(f"Toner - {name}" if name else "Toner")
-        self.dashboard.refresh()
-        self.results.load_stored() if self.results.stored else self.results.repopulate()
-        self.inventory.refresh()
-        self.configs.refresh()
-        self.history.refresh()
-        self.reports.refresh()
+    def set_titles(self):
+        """Each section's title starts with the organization: 'Global - Overview', 'Acme - Inventory'."""
+        from core import orgs
+        org = orgs.name(db.home())
+        for attr, title in self.HEADERS:
+            self.headers[attr].title.setText(f"{org} - {title}")
+        self.dashboard.title.setText(f"{org} - Overview")
+        self.results.header.title.setText(f"{org} - Results")
+
+    def set_org(self, org):
+        """The switcher: every section shows that organization (Global: all of them). Unsaved settings belong to the one being left."""
+        from core import orgs
+        if org == db.home():
+            return
+        if not self.settings.confirm_leave("switching organization", reload=False):
+            self.tabs.set_orgs([(o["id"], o["name"], o["colour"]) for o in orgs.list_orgs(archived=False)], db.home())
+            return
+        orgs.set_current(org)
+        self._show_org()
+
+    def _show_org(self):
+        self.set_titles()
+        self.scheduler.apply()                         # the organization being looked at runs through the sections
+        self.backup_scheduler.apply()
+        self.settings.reload()
+        self.results.reset_view()
+        self.sessions.refresh()
+        self.inventory.org_switched()
+        self.inventory.changed.emit()                  # everything that follows the inventory refills itself
         self.update_headers()
 
     def _strip_go(self, section, page):
@@ -326,7 +352,7 @@ class Main(QMainWindow):
 
     def on_device_action(self, what, name):
         """What the Overview's Needs attention asks for on one device."""
-        dev = next((d for d in db.list_devices() if d["name"] == name), None)
+        dev = db.find_device(name)
         if dev is None:
             return
         if what == "open":
@@ -383,12 +409,13 @@ class Main(QMainWindow):
         self.settings.select_page("Agents")
 
     def open_device_by_name(self, name):
-        dev = next((d for d in db.list_devices() if d["name"] == name), None)
+        dev = db.find_device(name)                     # a key from Global's lists, or a plain name
         if dev:
             self.open_device_view(dev)
 
     def open_device_view(self, dev):
-        view = self.views.get(dev["name"])
+        key = dev.get("key") or dev["name"]
+        view = self.views.get(key)
         if view is None:
             view = DeviceView(dev, self)
             # what these open takes over the main window, so the details page gets out of the way (it would otherwise stay in front)
@@ -397,8 +424,8 @@ class Main(QMainWindow):
             view.tool_requested.connect(lambda name, d, v=view: (v.close(), self.open_tool(name, d)))
             view.edit_requested.connect(lambda d: self.inventory.edit_device(d))
             view.changed.connect(self._view_changed)
-            view.finished.connect(lambda _=0, n=dev["name"]: self.views.pop(n, None))
-            self.views[dev["name"]] = view
+            view.finished.connect(lambda _=0, n=key: self.views.pop(n, None))
+            self.views[key] = view
         else:
             view.reload()
         view.show()
@@ -433,11 +460,12 @@ class Main(QMainWindow):
                 entries.append((f"Playbook: {pb['name']}", "edit in Tools > Playbook Editor", lambda n=pb["name"]: self.edit_playbook(n)))
         except Exception:
             log.exception("could not list the playbooks for the search")
+        whose = (lambda x: f"  ({db.org_name(x['org'])})") if db.several() else (lambda x: "")      # Global: whose it is
         for s in sessions.list_sessions():
-            entries.append((f"Session: {s['name']}", " - ".join(x for x in (sessions.NAMES[s["kind"]], sessions.path_of(s)) if x),
-                            lambda s=s: (self.go("Sessions"), self.sessions.open_session(s["id"]))))
+            entries.append((f"Session: {s['name']}{whose(s)}", " - ".join(x for x in (sessions.NAMES[s["kind"]], sessions.path_of(s)) if x),
+                            lambda s=s: (self.go("Sessions"), self.sessions.open_session(s["id"], s["org"]))))
         for d in db.list_devices():
-            entries.append((f"Device: {d['name']}", d["host"], lambda d=d: self.open_device_view(d)))
+            entries.append((f"Device: {d['name']}{whose(d)}", d["host"], lambda d=d: self.open_device_view(d)))
             if d["vendor"] in ("cisco", "juniper", "arista", "hpe", "mikrotik"):
                 entries.append((f"SSH to {d['name']}", d["host"], lambda d=d: self.open_ssh_console(d)))
             if d["vendor"] == "windows":
@@ -491,6 +519,16 @@ class Main(QMainWindow):
 
     def on_run_finished(self):
         self.notifier.handle_run(self.results.results, self.results.last_ran, self.results.last_scheduled)
+
+    def on_background_run(self, results, ran):
+        """Another organization's scheduled checks or backups finished (stored already): alert, and refresh what Global shows."""
+        if results:
+            self.notifier.handle_run(results, ran, True)
+        if db.everything():
+            self.results.load_stored() if self.results.stored else None
+            self.dashboard.refresh()
+            self.history.refresh()
+            self.update_headers()
 
     def on_backup_finished(self, results, ran, scheduled):
         """Backups are recorded in history and run through the same alerting as health checks."""
@@ -549,6 +587,24 @@ class Main(QMainWindow):
             self._quitting = False
             event.ignore()
             return
+        from core import extstore, extvault
+        n = extstore.unsent()
+        if n:
+            name = extvault.LABELS[extstore.active()]
+            text = (f"1 change hasn't reached {name} yet and will be lost if Toner closes. Close anyway?" if n == 1 else
+                    f"{n} changes haven't reached {name} yet and will be lost if Toner closes. Close anyway?")
+            if QMessageBox.question(self, "Toner", text) != QMessageBox.StandardButton.Yes:
+                self._quitting = False
+                event.ignore()
+                return
+        if self.settings.unsaved_count():
+            if not self.isVisible():
+                self.show_window()                           # quitting from the tray: show what the question is about
+            self.go("Settings")
+            if not self.settings.confirm_leave("closing Toner", reload=False):
+                self._quitting = False
+                event.ignore()
+                return
         if self.automation.running() and QMessageBox.question(self, "A playbook is running", "Ansible is still running a playbook. Stop it and quit?") != QMessageBox.StandardButton.Yes:
             self._quitting = False
             event.ignore()
@@ -559,6 +615,8 @@ class Main(QMainWindow):
         self.automation.shutdown()     # stop a playbook that is still running
         self.sessions.shutdown()       # close every open terminal and finish its log
         self.configs.shutdown()
+        self.scheduler.shutdown()
+        self.backup_scheduler.shutdown()
         agents.stop()
         self.about.apply_on_exit()     # a downloaded update installs as Toner closes, if automatic updating is on
         self.about.shutdown()
@@ -590,6 +648,16 @@ def run_cli(args):
     """`Toner.exe cli service` and friends: Toner without a window (see cli.py), including the agent receiver."""
     console_streams()
     trust.install()
+    from core import passvault
+    passvault.install()                            # saved passwords come from Toner's vault...
+    passvault.unlock_remembered()                  # ...which opens by itself when it is remembered on this computer
+    try:
+        from core import extstore
+        if extstore.memory_only():                 # ...or only from the password manager: read them now, keep them in step
+            extstore.sync_once()
+            extstore.start()
+    except Exception:
+        log.exception("could not read the passwords from the password manager")
     try:
         db.init()                                  # cli.main does this too; the move below needs the database first
         tunnel.migrate()
@@ -600,6 +668,23 @@ def run_cli(args):
     return cli.main(args)
 
 
+def watch_password_manager(win):
+    """Keep the chosen password manager in step, and say so once at start when it can't be reached (Toner then uses its copies)."""
+    from core import extstore
+    if extstore.active() == "toner":
+        return
+    extstore.start()
+
+    def tell():
+        s = extstore.status()
+        if not s.get("at"):
+            QTimer.singleShot(1000, tell)                    # the first round is still running
+        elif not s.get("connected"):
+            from ui.toast import toast
+            toast(win, extstore.status_text(s))
+    QTimer.singleShot(1500, tell)
+
+
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "cli":
         sys.exit(run_cli(sys.argv[2:]))
@@ -608,6 +693,8 @@ def main():
     trust.install()                                # web requests also trust what Windows trusts (HTTPS inspection)
     legacyssh.apply()                              # ssh-rsa and SHA-1 key exchange for older devices, unless turned off
     tunnel.migrate()                               # 1.5.2-1.5.5: the SSH tunnel was a proxy type; it is its own section now
+    from core import orgs
+    orgs.start()                                   # the organization picked last time
     sessionlog.purge(int(db.get_setting("ssh_log_days")))
     audit.purge(max(365, int(db.get_setting("ssh_log_days"))))
     try:
@@ -617,6 +704,11 @@ def main():
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(True)
     apply_look(app)
+    from core import passvault
+    from ui import vaultdlg
+    passvault.install()                            # saved passwords live in Toner's vault (no longer in Windows Credential Manager)
+    if not vaultdlg.open_at_start():               # set a master password the first time, else unlock (or it is remembered)
+        sys.exit(0)
     otpprompt.install()
     win = Main()
     if "--minimized" in sys.argv and win.background_mode():
@@ -624,6 +716,7 @@ def main():
     else:
         win.show()
     win.about.start_background_checks()
+    watch_password_manager(win)                    # Bitwarden, Vaultwarden, Keeper or 1Password, when one is chosen
     if tunnel.enabled() and tunnel.settings()["autostart"]:
         QTimer.singleShot(1500, win.strip.connect_tunnel)          # Settings > Proxy > SSH Tunnel > Connect when Toner starts
     log.info("Toner started")

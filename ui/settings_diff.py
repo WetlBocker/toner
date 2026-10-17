@@ -1,7 +1,7 @@
-"""What Save and Revert are about to do, in words: each setting that differs, with what it is now and what it will become.
+"""What Save is about to do, in words: each setting that differs, with what it is now and what it will become.
 
 snapshot(page) reads the page's controls into {setting name: shown value}. The Settings tab keeps one taken when each page was loaded or
-saved; the difference between that and the page as it is now is the list shown before saving (old -> new) or reverting (edited -> stored)."""
+saved; the difference between that and the page as it is now is the list shown before saving (old -> new)."""
 import re
 
 from PySide6.QtWidgets import (QAbstractItemView, QAbstractButton, QAbstractSpinBox, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout,
@@ -24,10 +24,17 @@ def _in_table(w):
 
 
 def _is_input(w):
+    p = w
+    while p is not None:
+        if p.property("notSetting"):
+            return False
+        p = p.parentWidget()
     if isinstance(w, QLineEdit):
         return not isinstance(w.parentWidget(), (QAbstractSpinBox, QComboBox)) and not w.isReadOnly()      # the box inside a spin box is part of it
     if isinstance(w, QAbstractButton):
         return w.isCheckable() and not w.property("notSetting")
+    if isinstance(w, QComboBox) and w.property("notSetting"):
+        return False
     return isinstance(w, (QComboBox, QAbstractSpinBox, QPlainTextEdit, QTextEdit)) and not (hasattr(w, "isReadOnly") and w.isReadOnly())
 
 

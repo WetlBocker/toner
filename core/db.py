@@ -99,7 +99,7 @@ DEFAULT_SETTINGS = {
     # inventory view
     "inventory_view": "Folders", "inventory_expanded": [], "window_geometry": "", "ansible_backend": "wsl", "ansible_distro": "", "ansible_command": "ansible-playbook", "ansible_playbooks": "",
     "ansible_server_device": "", "ansible_server": {"host": "", "port": 22, "user": "", "key_file": ""}, "ansible_check_default": True, "ansible_keep_runs": 200,
-    "sidebar_collapsed": False, "acks": {}, "client_scope": None, "onboarding_done": False, "inventory_columns": None, "results_columns": None,
+    "sidebar_collapsed": False, "acks": {}, "client_scope": None, "org_current": 0, "onboarding_done": False, "inventory_columns": None, "results_columns": None,
     # configuration backups
     "backup_enabled": False, "backup_hours": 24, "backup_groups": [], "backup_keep": 50, "backup_mask": True,
     "backup_on_start": False,
@@ -111,7 +111,7 @@ DEFAULT_SETTINGS = {
     "snippets": [],
     # file servers and throughput tests (per computer: folders and paths)
     "fileserver": {}, "iperf_path": "", "openssl_path": "",
-    # proxy for every connection that can use one (see core/proxy.py; the proxy password is in Credential Manager)
+    # proxy for every connection that can use one (see core/proxy.py; the proxy password is in the vault)
     # updates (see core/updates.py)
     "sessions_expanded": [],
     "update_check": True, "update_auto_install": False, "update_last_check": "", "update_skip": "", "update_pending": {},
@@ -122,23 +122,234 @@ DEFAULT_SETTINGS = {
                    "autostart": False},
     # Windows agents (see core/agents.py): Toner listens for their reports while this is on
     "agent_cert_warned": "", "trend_schedule": "", "trend_last": "", "tls_sweep": False, "tls_sweep_ports": "443", "agent_enabled": False, "agent_enroll": False, "agent_token_days": 0, "agent_port": 8750, "agent_minutes": 5, "agent_push_minutes": False, "agent_bind": "0.0.0.0", "agent_address": "",
+    "vault_provider": "toner", "vault_config": {}, "vault_direct": False, "update_direct": False, "vault_keep_copies": True,   # (the last two: ignore the proxy)             # where passwords are kept: Toner's vault, or a password manager (core/extstore.py)
 }
 # Per-machine state that must not travel in an exported settings file (channel secrets stay in
-# Credential Manager, so an imported channel would be broken).
-NOT_PORTABLE = {"window_geometry", "ansible_distro", "ansible_playbooks", "ansible_server", "ansible_server_device", "sidebar_collapsed", "acks", "client_scope", "onboarding_done", "inventory_columns", "results_columns", "notify_channels", "notify_snooze_until", "inventory_expanded", "snippets", "fileserver", "iperf_path", "openssl_path",
+# the vault, so an imported channel would be broken).
+NOT_PORTABLE = {"vault_provider", "vault_config", "org_current", "window_geometry", "ansible_distro", "ansible_playbooks", "ansible_server", "ansible_server_device", "sidebar_collapsed", "acks", "client_scope", "onboarding_done", "inventory_columns", "results_columns", "notify_channels", "notify_snooze_until", "inventory_expanded", "snippets", "fileserver", "iperf_path", "openssl_path",
                 "update_last_check", "update_skip", "update_pending", "sessions_expanded", "agent_enabled", "agent_enroll", "agent_bind",
                 "agent_address"}
 
 DEVICE_FIELDS = ["name", "vendor", "host", "port", "platform", "username",
                  "site", "verify_ssl", "ha_expected", "enabled", "location", "details", "folder_id",
-                 "tags", "fields", "profile_id", "snmp", "jump", "proxy", "winopts", "checkopts"]
+                 "tags", "fields", "profile_id", "snmp", "jump", "proxy", "winopts", "checkopts", "shared"]
 ALL_DEVICES = "All devices"
 
 
-def db_path() -> Path:
+# ---------- organizations: one database file each ----------
+# The Global file (netcheck.db) holds the list of organizations, the Global settings, Global's own devices and everything marked
+# Shared. Each organization has its own file with the same tables. Which file a call reads or writes:
+#   - inside `with within(org):` that organization's file (0 = the Global file);
+#   - otherwise the organization picked in the sidebar (set_home).
+# Lists (devices, results, ...) read more than one file: an organization sees its own rows plus Global's Shared ones, and Global
+# with no organization picked sees every file (see _files).
+GLOBAL = 0
+_home = GLOBAL
+_local = threading.local()
+
+
+def base_path() -> Path:
+    """The Global file. Side files (logs, host keys, updates) live next to it."""
     if os.environ.get("NETCHECK_DB"):
         return Path(os.environ["NETCHECK_DB"])
     return paths.data_dir() / "netcheck.db"
+
+
+def org_path(org) -> Path:
+    base = base_path()
+    return base if not org else base.with_name(base.stem + ".orgs") / f"{int(org)}.db"
+
+
+def target():
+    """The organization whose file a write goes to (0 = Global)."""
+    org = getattr(_local, "org", None)
+    return _home if org is None else org
+
+
+def home():
+    """The organization picked in the sidebar (0 = Global)."""
+    return _home
+
+
+def set_home(org):
+    global _home
+    _home = int(org or 0)
+    _invalidate_folders()
+
+
+def everything():
+    """True while Global is picked and no `within` narrows it: lists cover every organization."""
+    return getattr(_local, "org", None) is None and _home == GLOBAL
+
+
+def several():
+    """everything(), and there are organizations: lists show an Organization column, filter and branches."""
+    return everything() and bool(org_rows())
+
+
+class within:
+    """`with db.within(org):` reads and writes that organization's file on this thread (None changes nothing)."""
+
+    def __init__(self, org):
+        self.org = None if org is None else int(org)
+
+    def __enter__(self):
+        self.prev = getattr(_local, "org", None)
+        if self.org is not None:
+            _local.org = self.org
+        return self
+
+    def __exit__(self, *exc):
+        _local.org = self.prev
+        return False
+
+
+_orgs_cache = {"key": None, "at": 0.0, "rows": []}
+show_archived = False                 # Global's Organization filter can ask for archived organizations too
+
+
+def org_rows():
+    """Every organization in the Global file: [{'id', 'name', 'code', 'colour', 'archived', 'created'}] by name. Cached briefly."""
+    key, now = str(base_path()), time.monotonic()
+    if _orgs_cache["key"] != key or now - _orgs_cache["at"] > SETTINGS_TTL:
+        try:
+            c = sqlite3.connect(base_path(), timeout=15)
+            c.row_factory = sqlite3.Row
+            try:
+                rows = [dict(r) for r in c.execute("SELECT * FROM orgs ORDER BY name COLLATE NOCASE")]
+            finally:
+                c.close()
+        except sqlite3.Error:
+            rows = []
+        _orgs_cache.update(key=key, at=now, rows=rows)
+    return [dict(r) for r in _orgs_cache["rows"]]
+
+
+def forget_orgs():
+    _orgs_cache["key"] = None
+
+
+def org_name(org):
+    if not org:
+        return "Global"
+    return next((r["name"] for r in org_rows() if r["id"] == int(org)), f"Organization {org}")
+
+
+class including_archived:
+    """`with db.including_archived(on):` Global's lists on this thread also cover archived organizations (Global's Organization
+    filter asked for one: an archived organization can still be looked at there)."""
+
+    def __init__(self, on=True):
+        self.on = bool(on)
+
+    def __enter__(self):
+        self.prev = getattr(_local, "archived", False)
+        _local.archived = self.on or self.prev
+        return self
+
+    def __exit__(self, *exc):
+        _local.archived = self.prev
+        return False
+
+
+def archived_ids():
+    return {r["id"] for r in org_rows() if r["archived"]}
+
+
+def _files():
+    """[(org, shared_only)]: the files a list reads right now. shared_only: just the rows marked Shared (Global's, seen from an organization)."""
+    org = getattr(_local, "org", None)
+    if org is None:
+        org = _home
+        if org == GLOBAL:
+            every = show_archived or getattr(_local, "archived", False)
+            return [(GLOBAL, False)] + [(r["id"], False) for r in org_rows() if every or not r["archived"]]
+    return [(org, False)] + ([(GLOBAL, True)] if org else [])
+
+
+def gather(here, shared=None):
+    """Run here() in every file the current view covers and join what comes back. Rows (dicts) get 'org' set to the file they came
+    from. Rows from Global seen from an organization are kept only when shared(row) says so (default: its 'shared' column)."""
+    out = []
+    keep = shared or (lambda r: bool(r.get("shared")))
+    for org, shared_only in _files():
+        with within(org):
+            rows = here()
+        for r in rows:
+            if shared_only and not keep(r):
+                continue
+            if isinstance(r, dict):
+                r["org"] = org
+            out.append(r)
+    return out
+
+
+def gather_own(here, shared=None):
+    """Like gather, but only the file being written to (plus Global's Shared rows, from an organization), even while Global lists
+    everything: for things Settings edits (credential profiles, custom checks, maintenance windows), which belong to one file."""
+    out = []
+    keep = shared or (lambda r: bool(r.get("shared")))
+    org = target()
+    for o, shared_only in [(org, False)] + ([(GLOBAL, True)] if org else []):
+        with within(o):
+            rows = here()
+        for r in rows:
+            if shared_only and not keep(r):
+                continue
+            if isinstance(r, dict):
+                r["org"] = o
+            out.append(r)
+    return out
+
+
+def listing(here):
+    """What a Settings list shows: in Global every organization's items (each with 'org'), in an organization its own plus
+    Global's Shared ones."""
+    return gather(here) if everything() else gather_own(here)
+
+
+def dkey(name, org=None):
+    """The key that tells two same-named devices apart when every organization is listed: 'edge-fw' in Global (and always in an
+    organization's own view), 'edge-fw@@3' for organization 3's device in the Global view. UniFi sub-device labels keep their tail."""
+    return qualified(name, org) if everything() else name
+
+
+def qualified(name, org):
+    """'edge-fw' of organization 3 -> 'edge-fw@@3' (Global's own stay plain); see dkey."""
+    if not org:
+        return name
+    base, sep, rest = (name or "").partition(" / ")
+    if "@@" in base:
+        return name
+    return f"{base}@@{int(org)}{sep}{rest}"
+
+
+def label(key):
+    """What to show for a device key: its name."""
+    return split_key(key)[0]
+
+
+def label_org(key):
+    """A device key as a person reads it: 'edge-fw', or 'edge-fw (Acme)' for another organization's device in Global's lists."""
+    name, org = split_key(key)
+    return f"{name} ({org_name(org)})" if org else name
+
+
+def split_key(key):
+    """'edge-fw@@3 / ap-1' -> ('edge-fw / ap-1', 3); a plain name -> (name, None)."""
+    base, sep, rest = (key or "").partition(" / ")
+    name, at, org = base.partition("@@")
+    if not at or not org.isdigit():
+        return key, None
+    return f"{name}{sep}{rest}", int(org)
+
+
+def key_of(dev):
+    return dkey(dev["name"], dev.get("org"))
+
+
+def db_path() -> Path:
+    return org_path(target())
 
 
 _wal_set = set()
@@ -147,7 +358,10 @@ _wal_set = set()
 def connect():
     """A connection to the database. WAL mode lets the window, the scheduler and the agent receiver read while one of them
     writes; a long busy timeout makes a competing write wait its turn instead of failing with 'database is locked'."""
-    c = sqlite3.connect(db_path(), timeout=15)
+    p = db_path()
+    if target() and not p.exists():
+        p.parent.mkdir(parents=True, exist_ok=True)
+    c = sqlite3.connect(p, timeout=15)
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA foreign_keys = ON")
     c.execute("PRAGMA busy_timeout = 15000")
@@ -220,13 +434,21 @@ def init():
             report TEXT DEFAULT '');
         CREATE TABLE IF NOT EXISTS audit (
             id INTEGER PRIMARY KEY, at TEXT NOT NULL, actor TEXT, action TEXT, detail TEXT);
+        CREATE TABLE IF NOT EXISTS orgs (
+            id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL COLLATE NOCASE, code TEXT UNIQUE NOT NULL COLLATE NOCASE,
+            colour TEXT DEFAULT '', archived INTEGER DEFAULT 0, created TEXT DEFAULT '');
         CREATE INDEX IF NOT EXISTS idx_backups_dev ON config_backups(device, id);
         CREATE INDEX IF NOT EXISTS idx_results_run ON results(run_id);
         CREATE INDEX IF NOT EXISTS idx_results_series ON results(device, check_name);
         """)
         _migrate(c)
     _invalidate_folders()
-    _settings["key"] = None
+    _forget_settings()
+    if target() == GLOBAL:                                # bring every organization's file up to date too
+        forget_orgs()
+        for r in org_rows():
+            with within(r["id"]):
+                init()
 
 
 def _m1_legacy_columns(c):
@@ -290,7 +512,18 @@ def _m5_ansible_runs(c):
     """)
 
 
-MIGRATIONS = [(1, _m1_legacy_columns), (2, _m2_agent_history), (3, _m3_agent_tokens), (4, _m4_device_checks), (5, _m5_ansible_runs)]
+SHAREABLE = ("devices", "profiles", "custom_checks", "maintenance", "sessions", "session_folders")
+
+
+def _m6_shared(c):
+    """Organizations: an item in the Global file can be marked Shared, so every organization sees it."""
+    for table in SHAREABLE:
+        if "shared" not in {r[1] for r in c.execute(f"PRAGMA table_info({table})")}:
+            c.execute(f"ALTER TABLE {table} ADD COLUMN shared INTEGER DEFAULT 0")
+
+
+MIGRATIONS = [(1, _m1_legacy_columns), (2, _m2_agent_history), (3, _m3_agent_tokens), (4, _m4_device_checks), (5, _m5_ansible_runs),
+              (6, _m6_shared)]
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 
 
@@ -309,7 +542,7 @@ def schema_version():
         return c.execute("PRAGMA user_version").fetchone()[0]
 
 
-# ---------- secrets (Windows Credential Manager) ----------
+# ---------- secrets (Toner's vault, core/passvault.py, reached through keyring) ----------
 def set_secret(name, secret):
     keyring.set_password(SERVICE, name, secret)
 
@@ -324,13 +557,25 @@ def move_secret(old, new):
     if s:
         keyring.set_password(SERVICE, new, s)
         delete_secret(old)
+    try:
+        from core import extstore
+        extstore.move_link(old, new)                     # a link to a password manager item follows the password
+    except Exception:
+        quiet.ignored()
 
 # A device can hold up to four secrets: its password/token, and an SNMP community or v3 auth/privacy passwords.
 SECRET_KINDS = {"main": "", "snmp": ":snmp", "snmp_auth": ":snmp-auth", "snmp_priv": ":snmp-priv", "proxy": ":proxy",
                 "agent": ":agent", "ssh": ":ssh", "proxy_otp": ":proxy-otp"}
 
+def qualify(name):
+    """A vault entry name for the organization being written to: Global keeps the plain name (so nothing stored before
+    organizations existed moves), an organization's entries start with 'org3/', so two organizations can each have an 'edge-fw'."""
+    org = target()
+    return f"org{org}/{name}" if org else name
+
+
 def secret_name(owner, kind="main"):
-    return owner + SECRET_KINDS[kind]
+    return qualify(owner + SECRET_KINDS[kind])
 
 def move_device_secrets(old, new):
     for kind in SECRET_KINDS:
@@ -342,10 +587,56 @@ def delete_device_secrets(name):
 
 
 # ---------- inventory ----------
-def list_devices(enabled_only=False):
+def _devices_here(enabled_only=False):
     q = "SELECT * FROM devices" + (" WHERE enabled=1" if enabled_only else "") + " ORDER BY name"
     with connect() as c:
         return [dict(r) for r in c.execute(q)]
+
+
+def list_devices(enabled_only=False):
+    """The devices of the current view, each with 'org' (the file it lives in) and 'key' (see dkey). Seen from an organization,
+    Global's Shared devices are included without a folder (their folder belongs to the Global file); saving one puts it back."""
+    rows = gather(lambda: _devices_here(enabled_only))
+    me = target()
+    for d in rows:
+        if d["org"] != me:
+            d["_folder_id"], d["folder_id"] = d.get("folder_id"), None
+        d["key"] = dkey(d["name"], d["org"])
+    if len({d["org"] for d in rows}) > 1:
+        rows.sort(key=lambda d: d["name"].lower())
+    return rows
+
+
+def find_device(key):
+    """The device a key (or plain name) from a list of the current view stands for, or None."""
+    with including_archived():
+        devs = list_devices()
+    return next((d for d in devs if d["key"] == key), None) or next((d for d in devs if d["name"] == key), None)
+
+
+class NameTaken(sqlite3.IntegrityError):
+    """A device name that is already used where it would clash: in the same organization, or by a Shared device."""
+
+
+def name_clash(name, org=None, ignore_id=None, shared=False):
+    """Where a device called `name` saved in `org` (default: the target) would clash, as an organization name, or None. Names only
+    have to be unique inside one organization, but a Shared device shows up in every organization, so it clashes with any of them."""
+    org = target() if org is None else int(org)
+    def taken(o, only_shared=False):
+        with within(o):
+            with connect() as c:
+                q = "SELECT id FROM devices WHERE name=? COLLATE NOCASE" + (" AND shared=1" if only_shared else "")
+                return [r["id"] for r in c.execute(q, (name,))]
+    ids = [i for i in taken(org) if i != ignore_id]
+    if ids:
+        return org_name(org)
+    if org and taken(GLOBAL, only_shared=True):
+        return "Global (Shared)"
+    if not org and shared:
+        for r in org_rows():
+            if taken(r["id"]):
+                return r["name"]
+    return None
 
 def group_labels():
     """Selectable groups: 'All devices', 'Vendor: x', 'Location: y', 'Folder: a/b'."""
@@ -380,8 +671,8 @@ def in_group(dev, label):
         return display.vendor_name(dev["vendor"]) == label[len("Vendor: "):]
     if label.startswith("Location: "):
         return (dev.get("location") or "") == label[len("Location: "):]
-    if label.startswith("Device: "):      # one device by name (the Overview's "Run checks" on a single device)
-        return dev["name"] == label[len("Device: "):]
+    if label.startswith("Device: "):      # one device by name or key (the Overview's "Run checks" on a single device)
+        return (dev.get("key") or dev["name"]) == label[len("Device: "):]
     if label.startswith("Folder: "):      # a folder includes everything in its subfolders
         want = label[len("Folder: "):].lower()
         have = (folder_paths().get(dev.get("folder_id")) or "").lower()
@@ -408,12 +699,30 @@ def location_of(device_label):
             return d.get("location") or ""
     return ""
 
-def get_device(dev_id):
-    with connect() as c:
-        row = c.execute("SELECT * FROM devices WHERE id=?", (dev_id,)).fetchone()
-    return dict(row) if row else None
+def get_device(dev_id, org=None):
+    with within(org):
+        with connect() as c:
+            row = c.execute("SELECT * FROM devices WHERE id=?", (dev_id,)).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        d["org"] = target()
+        d["key"] = dkey(d["name"], d["org"])
+        return d
 
 def save_device(dev: dict) -> int:
+    """Insert or update a device in its own organization's file (dev['org'], else the one being written to)."""
+    with within(dev.get("org")):
+        return _save_device(dev)
+
+def _save_device(dev):
+    if "_folder_id" in dev:                                  # a Shared device edited from an organization keeps its Global folder
+        dev = {**dev, "folder_id": dev["_folder_id"]}
+    shared = 1 if dev.get("shared") and target() == GLOBAL else 0
+    where = name_clash(dev.get("name") or "", None, dev.get("id"), bool(shared))
+    if where:
+        raise NameTaken(f"A device named {dev.get('name')} already exists in {where}.")
+    dev = {**dev, "shared": shared}
     fields = dev.get("fields") or ""
     if isinstance(fields, dict):
         fields = json.dumps(fields) if fields else ""
@@ -445,17 +754,17 @@ def save_device(dev: dict) -> int:
                         f"VALUES ({','.join('?' * len(DEVICE_FIELDS))})", vals)
         return cur.lastrowid
 
-def delete_device(dev_id):
-    with connect() as c:
-        c.execute("DELETE FROM devices WHERE id=?", (dev_id,))
+def delete_device(dev_id, org=None):
+    with within(org):
+        with connect() as c:
+            c.execute("DELETE FROM devices WHERE id=?", (dev_id,))
 
 
 # ---------- folders ----------
-_folder_cache = None
+_folder_cache = {}                  # file -> {folder id: path}
 
 def _invalidate_folders():
-    global _folder_cache
-    _folder_cache = None
+    _folder_cache.clear()
 
 def list_folders():
     with connect() as c:
@@ -463,9 +772,8 @@ def list_folders():
 
 def folder_paths():
     """{folder id: 'Parent/Child'}. Cached, because group matching asks for it once per device."""
-    global _folder_cache
     key = str(db_path())
-    if _folder_cache is None or _folder_cache[0] != key:
+    if key not in _folder_cache:
         rows = {f["id"]: f for f in list_folders()}
         out = {}
         for fid in rows:
@@ -475,8 +783,20 @@ def folder_paths():
                 parts.append(rows[cur]["name"])
                 cur = rows[cur]["parent_id"]
             out[fid] = "/".join(reversed(parts))
-        _folder_cache = (key, out)
-    return _folder_cache[1]
+        _folder_cache[key] = out
+    return _folder_cache[key]
+
+def path_of(dev):
+    """The device's folder path, read from its own organization's file ('' at the top, and for a Shared device seen from an
+    organization, which has no folder there)."""
+    if dev.get("folder_id") is None:
+        return ""
+    org = dev.get("org")
+    if org is None or org == target():
+        return folder_paths().get(dev["folder_id"]) or ""
+    with within(org):
+        return folder_paths().get(dev["folder_id"]) or ""
+
 
 def folder_descendants(fid):
     """The folder's own id plus every folder below it."""
@@ -564,34 +884,91 @@ def ensure_folder_path(path):
 
 
 # ---------- settings ----------
+# Settings: Global's apply everywhere; an organization's file holds only the ones it changes (Settings > ... while it is picked).
+# These are about this computer or the whole program, so they are always read from and written to the Global file:
+GLOBAL_ONLY = {"window_geometry", "sidebar_collapsed", "onboarding_done", "org_current",
+               "theme", "ui_style", "font_size", "accent", "color_preset", "status_colors",
+               "term_font", "rdp_embedded", "term_font_size", "term_scrollback", "term_scheme", "paging_cmd",
+               "hostkey_mode", "ssh_legacy_algorithms", "run_in_background", "metrics_port", "proxy", "ssh_tunnel",
+               "update_check", "update_auto_install", "update_last_check", "update_skip", "update_pending",
+               "ansible_backend", "ansible_distro", "ansible_command", "ansible_playbooks", "ansible_server_device", "ansible_server",
+               "ansible_check_default", "ansible_keep_runs", "fileserver", "iperf_path", "openssl_path", "snippets",
+               "ssh_log_days",
+               "agent_cert_warned", "agent_enabled", "agent_token_days", "agent_port", "agent_bind", "agent_address",
+               "vault_provider", "vault_config", "vault_direct", "update_direct", "vault_keep_copies"}
+# (agent sign-up, its interval and whether installed agents are told it are each organization's own: Settings > Agents)
+# ...and these belong to one organization's own lists, so an organization never borrows Global's:
+ORG_LOCAL = {"acks", "inventory_expanded", "sessions_expanded", "client_scope", "trend_last", "notify_snooze_until"}
+
+_settings = {}                      # file -> (read at, {key: raw json})
+_settings_lock = threading.Lock()
+SETTINGS_TTL = 2.0                  # seconds; another process (the service, the window) is noticed within this long
+
+
+def _forget_settings():
+    with _settings_lock:
+        _settings.clear()
+
+
+def _settings_of(org):
+    key, now = str(org_path(org)), time.monotonic()
+    with _settings_lock:
+        hit = _settings.get(key)
+        if hit is None or now - hit[0] > SETTINGS_TTL:
+            with within(org):
+                with connect() as c:
+                    data = {r["key"]: r["value"] for r in c.execute("SELECT key, value FROM settings")}
+            hit = _settings[key] = (now, data)
+        return hit[1]
+
+
+def _all_settings():
+    return _settings_of(target())
+
+
+def _home_of(key):
+    """The file a setting is read from first: Global for GLOBAL_ONLY ones, else the organization being written to."""
+    return GLOBAL if key in GLOBAL_ONLY else target()
+
+
+def _raw_setting(key):
+    org = _home_of(key)
+    raw = _settings_of(org).get(key)
+    if raw is None and org and key not in ORG_LOCAL:
+        raw = _settings_of(GLOBAL).get(key)
+    return raw
+
+
+def get_setting(key):
+    raw = _raw_setting(key)
+    # defaults are copied so callers can never modify the shared default list/dict
+    return json.loads(raw) if raw is not None else json.loads(json.dumps(DEFAULT_SETTINGS[key]))
+
+
 def get_thresholds():
-    with connect() as c:
-        row = c.execute("SELECT value FROM settings WHERE key='thresholds'").fetchone()
-    stored = json.loads(row["value"]) if row else {}
+    raw = _raw_setting("thresholds")
+    stored = json.loads(raw) if raw else {}
     return {k: {**v, **stored.get(k, {})} for k, v in DEFAULT_THRESHOLDS.items()}
 
 def set_thresholds(th):
     set_setting("thresholds", th)
 
-_settings = {"key": None, "at": 0.0, "data": {}}
-_settings_lock = threading.Lock()
-SETTINGS_TTL = 2.0                  # seconds; another process (the service, the window) is noticed within this long
+
+def overridden(key):
+    """True when the organization being written to has its own value for this setting (Global never 'overrides')."""
+    org = _home_of(key)
+    return bool(org) and key not in ORG_LOCAL and key in _settings_of(org)
 
 
-def _all_settings():
-    key, now = str(db_path()), time.monotonic()
-    with _settings_lock:
-        if _settings["key"] != key or now - _settings["at"] > SETTINGS_TTL:
-            with connect() as c:
-                data = {r["key"]: r["value"] for r in c.execute("SELECT key, value FROM settings")}
-            _settings.update(key=key, at=now, data=data)
-        return _settings["data"]
-
-
-def get_setting(key):
-    raw = _all_settings().get(key)
-    # defaults are copied so callers can never modify the shared default list/dict
-    return json.loads(raw) if raw is not None else json.loads(json.dumps(DEFAULT_SETTINGS[key]))
+def follow_global(key):
+    """Forget the organization's own value, so it follows Global again (Settings' Reset to Global)."""
+    org = _home_of(key)
+    if not org:
+        return
+    with within(org):
+        with connect() as c:
+            c.execute("DELETE FROM settings WHERE key=?", (key,))
+    _forget_settings()
 
 
 # ---------- per-device thresholds and runtime options ----------
@@ -729,16 +1106,44 @@ def import_settings(data):
     return applied, skipped
 
 def set_setting(key, value):
-    with connect() as c:
-        c.execute("INSERT INTO settings(key,value) VALUES(?,?) "
-                  "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, json.dumps(value)))
-    with _settings_lock:
-        _settings["key"] = None                           # the next read sees it
+    """Save a setting. In an organization, a value that is the same as Global's is not kept as the organization's own: it then
+    follows Global, including later changes there."""
+    org = _home_of(key)
+    if org and key not in ORG_LOCAL:
+        with within(GLOBAL):
+            try:
+                same = (get_thresholds() if key == "thresholds" else get_setting(key)) == json.loads(json.dumps(value))
+            except KeyError:
+                same = False
+        if same:
+            follow_global(key)
+            return
+    with within(org):
+        with connect() as c:
+            c.execute("INSERT INTO settings(key,value) VALUES(?,?) "
+                      "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, json.dumps(value)))
+    _forget_settings()                                    # the next read sees it
 
 
 # ---------- history ----------
 def save_run(results) -> int:
+    """Store a run. Results from devices in other organizations' files (Global listing everything, Shared devices) are stored
+    in those files, as runs of their own. Returns the id of the run in the file being written to (else the first one stored)."""
+    groups = {}
+    for r in results:
+        groups.setdefault(getattr(r, "org", None), []).append(r)
+    here = target()
+    if set(groups) <= {None, here}:
+        return _save_run_here(results)
+    ids = {}
+    for org, rows in groups.items():
+        with within(org):
+            ids[target()] = _save_run_here(rows)
+    return ids.get(here, next(iter(ids.values())))
+
+def _save_run_here(results):
     n = lambda s: sum(r.status == s for r in results)
+    results = [r if "@@" not in (r.device or "") else type(r)(**{**r.__dict__, "device": split_key(r.device)[0]}) for r in results]
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with connect() as c:
         cur = c.execute("INSERT INTO runs(started_at, ok, warn, fail, error) VALUES(?,?,?,?,?)",
@@ -754,30 +1159,85 @@ def save_run(results) -> int:
     return rid
 
 def list_runs(limit=200):
-    with connect() as c:
-        return [dict(r) for r in c.execute("SELECT * FROM runs ORDER BY id DESC LIMIT ?", (limit,))]
+    """Runs, newest first, each with 'org'. An organization lists its own; Global listing everything lists every file's."""
+    def here():
+        with connect() as c:
+            return [dict(r) for r in c.execute("SELECT * FROM runs ORDER BY id DESC LIMIT ?", (limit,))]
+    rows = gather(here)
+    if len({r["org"] for r in rows}) > 1:
+        rows.sort(key=lambda r: (r["started_at"], r["id"]), reverse=True)
+    return rows[:limit]
 
-def run_results(run_id):
-    with connect() as c:
-        return [dict(r) for r in c.execute(
-            "SELECT device, check_name, status, value, message FROM results WHERE run_id=? "
-            "ORDER BY device, check_name", (run_id,))]
+def run_results(run_id, org=None):
+    """A run's rows. In the Global view, device names of other organizations come back as keys (see dkey)."""
+    qualify_names = everything()
+    with within(org):
+        with connect() as c:
+            rows = [dict(r) for r in c.execute(
+                "SELECT device, check_name, status, value, message FROM results WHERE run_id=? "
+                "ORDER BY device, check_name", (run_id,))]
+        o = target()
+    if qualify_names and o:
+        for r in rows:
+            r["device"] = dkey(r["device"], o)
+    return rows
+
+def _shared_names():
+    with within(GLOBAL):
+        with connect() as c:
+            return {r[0] for r in c.execute("SELECT name FROM devices WHERE shared=1")}
+
+def _each_file():
+    """[(org, only)] for history reads: only = the Shared device names to keep from that file, or None for all of it."""
+    out = []
+    for org, shared_only in _files():
+        if shared_only:
+            names = _shared_names()
+            if names:
+                out.append((org, names))
+        else:
+            out.append((org, None))
+    return out
+
+def _per_device(here):
+    """Join {device: value} dicts from every file of the view, keyed with dkey."""
+    out = {}
+    for org, only in _each_file():
+        with within(org):
+            part = here()
+        for name, v in part.items():
+            if only is None or _base(name) in only:
+                out[dkey(name, org)] = v
+    return out
+
+per_device = _per_device                 # for other modules: {device: value} read from every file of the view, keyed with dkey
+
 
 def device_checks():
     """{device: [check, ...]} for checks that have numeric history."""
-    out = {}
-    with connect() as c:
-        for r in c.execute("SELECT DISTINCT device, check_name FROM results "
-                           "WHERE numeric IS NOT NULL ORDER BY device, check_name"):
-            out.setdefault(r["device"], []).append(r["check_name"])
-    return out
+    def here():
+        out = {}
+        with connect() as c:
+            for r in c.execute("SELECT DISTINCT device, check_name FROM results "
+                               "WHERE numeric IS NOT NULL ORDER BY device, check_name"):
+                out.setdefault(r["device"], []).append(r["check_name"])
+        return out
+    return _per_device(here)
 
 AGENT_COLUMNS = {"cpu": "cpu", "memory": "memory", "disks": "disk", "uptime": "uptime_h"}     # check name -> agent_metrics column
 
 
 def series(device, check, limit=200):
     """(time, value) points for one check, oldest first. A Windows agent reports far more often than checks run, so its
-    own reports are added in and the chart has a point per report."""
+    own reports are added in and the chart has a point per report. `device` can be a key from the Global view."""
+    device, org = split_key(device)
+    if org is not None or not everything():
+        with within(org):
+            return _series_here(device, check, limit)
+    with within(GLOBAL):                               # a plain name in the Global view is Global's own device
+        return _series_here(device, check, limit)
+
+def _series_here(device, check, limit):
     with connect() as c:
         rows = c.execute(
             "SELECT runs.started_at AS t, results.numeric AS v FROM results "
@@ -803,6 +1263,20 @@ def _base(label):
 
 
 def latest_results(exclude=("config backup",)):
+    """_latest_results_here for every file of the view; device labels from other organizations come back as keys (see dkey)."""
+    rows, newest = [], ""
+    for org, only in _each_file():
+        with within(org):
+            part, _at = _latest_results_here(exclude)
+        for r in part:
+            if only is None or _base(r["device"]) in only:
+                r["device"], r["org"] = dkey(r["device"], org), org
+                rows.append(r)
+                newest = max(newest, r["at"])
+    return rows, newest
+
+
+def _latest_results_here(exclude=("config backup",)):
     """([result rows], time of the newest run among them): every device's rows from the newest run that included it (the same reading as
     device_health), for the Results section to show before anything is run in this session. Rows: device, check_name, status, value,
     message, numeric, at."""
@@ -827,6 +1301,11 @@ def latest_results(exclude=("config backup",)):
 
 
 def device_health(exclude=("config backup",)):
+    """_device_health_here for every file of the view, keyed with dkey."""
+    return _per_device(lambda: _device_health_here(exclude))
+
+
+def _device_health_here(exclude=("config backup",)):
     """The latest known state of every device that has results: {device: {'status', 'at', 'checks', 'problems'}}
     where problems is [(check, status, message)] worst first. Each device is read from the newest run that
     included it, so a run of just one group does not wipe out the others."""
@@ -860,6 +1339,19 @@ def device_health(exclude=("config backup",)):
 
 
 def changes_since_previous():
+    """_changes_here for each file of the view (each compares its own last two runs)."""
+    out = {"worse": [], "better": []}
+    for org, only in _each_file():
+        with within(org):
+            part = _changes_here()
+        for k in out:
+            out[k] += [(dkey(d, org), was, now) for d, was, now in part[k] if only is None or d in only]
+    for k in out:
+        out[k].sort()
+    return out
+
+
+def _changes_here():
     """How devices moved between the last two runs: {'worse': [(device, was, now)], 'better': [(device, was, now)]}, for devices that were in both.
     A run of one group leaves other devices out of the comparison. Empty when there are fewer than two runs."""
     with connect() as c:
@@ -880,6 +1372,10 @@ def changes_since_previous():
 
 
 def availability(days=7, start=None, end=None):
+    return _per_device(lambda: _availability_here(days, start, end))
+
+
+def _availability_here(days=7, start=None, end=None):
     """{device: {'runs', 'reachable', 'healthy'}} over the last `days` days (or between two times). A run counts as 'reachable'
     when the device produced results without a 'connection' error, and 'healthy' when none of its checks was worse than WARN."""
     cutoff = start or (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
@@ -905,9 +1401,12 @@ def availability(days=7, start=None, end=None):
 
 
 def last_run():
-    with connect() as c:
-        row = c.execute("SELECT * FROM runs ORDER BY id DESC LIMIT 1").fetchone()
-    return dict(row) if row else None
+    def here():
+        with connect() as c:
+            row = c.execute("SELECT * FROM runs ORDER BY id DESC LIMIT 1").fetchone()
+        return [dict(row)] if row else []
+    rows = gather(here)
+    return max(rows, key=lambda r: r["started_at"]) if rows else None
 
 
 # ---------- raw device output kept when a parser fails, for bug reports ----------
@@ -919,6 +1418,11 @@ def save_diagnostic(device, check, body):
 
 
 def get_diagnostics(device, check=None, limit=5):
+    device, org = split_key(device)
+    with within(org):
+        return _diagnostics_here(device, check, limit)
+
+def _diagnostics_here(device, check, limit):
     q, args = "SELECT * FROM diagnostics WHERE device=?", [_base(device)]
     if check:
         q += " AND check_name=?"

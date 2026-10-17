@@ -6,9 +6,10 @@ from core import agents, audit, db
 
 
 class AgentScriptDialog(QDialog):
-    def __init__(self, device, parent=None):
+    def __init__(self, device, parent=None, org=None):
         super().__init__(parent)
         self.device = device
+        self.org = org                                   # the device's organization: its token is kept there
         self.setWindowTitle(f"Agent script for {device}")
         self.setMinimumWidth(560)
         self.host = QLineEdit(agents.address())
@@ -69,7 +70,8 @@ class AgentScriptDialog(QDialog):
                  "Toner is not listening yet: turn on Settings > Agents, or the agent will have nobody to report to."]
         if s["error"]:
             parts.append(s["error"])
-        report, age = agents.latest(self.device)
+        with db.within(self.org):
+            report, age = agents.latest(self.device)
         if report is not None:
             parts.append(f"This computer last reported {age:.0f} minute(s) ago.")
         self.status.setText(" ".join(parts))
@@ -84,7 +86,8 @@ class AgentScriptDialog(QDialog):
         ) != QMessageBox.StandardButton.Yes:
             return
         try:
-            self.script = agents.script_for(self.device, self.minutes.value(), host, self.port.value(), rotate=self.rotate.isChecked())
+            with db.within(self.org):
+                self.script = agents.script_for(self.device, self.minutes.value(), host, self.port.value(), rotate=self.rotate.isChecked())
         except Exception as e:
             QMessageBox.warning(self, "Agent script", f"The script could not be made: {e}")
             return
@@ -92,7 +95,8 @@ class AgentScriptDialog(QDialog):
         self.save_btn.setEnabled(True)
         self.copy_btn.setEnabled(True)
         self.rotate.setChecked(False)
-        audit.log("agent script created", self.device)
+        with db.within(self.org):
+            audit.log("agent script created", self.device)
 
     def save(self):
         path, _ = QFileDialog.getSaveFileName(self, "Save agent script", "toner-agent.ps1", "PowerShell script (*.ps1)")

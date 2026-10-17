@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 from core import checks, db, profiles
 from core import quiet
@@ -28,6 +28,7 @@ class Result:
     value: str = ""
     message: str = ""
     numeric: Optional[float] = None     # stored for trend charts
+    org: Optional[int] = field(default=None, compare=False, repr=False)    # the organization whose file the device lives in (None: the current one)
 
 def grade(value, warn, fail):
     """Higher value = worse."""

@@ -90,6 +90,8 @@ from PySide6.QtCore import Qt, QPoint, QPointF, QMimeData
 from PySide6.QtGui import QDropEvent
 from PySide6.QtWidgets import QApplication, QMessageBox, QInputDialog, QFileDialog
 app = QApplication([])
+from ui import orgassign as _oa
+_oa.OrgAssignDialog.exec = lambda self: True     # the import step (asked when an import has folders): keep its starting choices
 msgs = []
 QMessageBox.warning = staticmethod(lambda *a: msgs.append(("warn", a[2])) or QMessageBox.StandardButton.Ok)
 QMessageBox.information = staticmethod(lambda *a: msgs.append(("info", a[2])) or QMessageBox.StandardButton.Ok)
@@ -165,13 +167,13 @@ class FakeMenu(QMenu):
         captured.update(actions=[x.text() for x in self.actions() if x.text()], menu=self); return None
 INV.QMenu = FakeMenu
 vp = inv.table.viewport()
-pick(); inv.show_menu(QPoint(vp.width() - 5, vp.height() - 5)); check("empty space: New folder / Expand / Collapse", captured["actions"] == ["New folder...", "Expand all", "Collapse all"], captured["actions"])
+pick(); inv.show_menu(QPoint(vp.width() - 5, vp.height() - 5)); check("empty space: Add Device / New folder / Expand / Collapse", captured["actions"] == ["Add Device", "New folder...", "Expand all", "Collapse all"], captured["actions"])
 it = find_dev("loose"); inv.show_menu(inv.table.visualItemRect(it).center()); a = captured["actions"]
 check("a device: Edit, SSH, Move, Delete", a[:3] == ["Details...", "Edit...", "Open SSH session"] and "Move to folder" in a and a[-3] == "Delete..." and a[-2:] == ["Expand all", "Collapse all"], a)
 move = next(x for x in captured["menu"].actions() if x.text() == "Move to folder").menu()
 check("'Move to folder' lists top level and every folder", move.actions()[0].text() == "(top level)" and "Denver DC/Chicago" in [x.text() for x in move.actions()])
 it = find_folder("Denver DC"); inv.show_menu(inv.table.visualItemRect(it).center()); a = captured["actions"]
-check("a folder: subfolder, rename, move, delete", a[:2] == ["New subfolder...", "Rename..."] and "Move to folder" in a and a[-3] == "Delete folder..." and a[-2:] == ["Expand all", "Collapse all"], a)
+check("a folder: add device, subfolder, rename, move, delete", a[:3] == ["Add Device", "New subfolder...", "Rename..."] and "Move to folder" in a and a[-3] == "Delete folder..." and a[-2:] == ["Expand all", "Collapse all"], a)
 move = next(x for x in captured["menu"].actions() if x.text() == "Move to folder").menu()
 check("a folder cannot be moved into itself or its children", not any(x.text().startswith("Denver DC") for x in move.actions()), [x.text() for x in move.actions()])
 INV.QMenu = QMenu

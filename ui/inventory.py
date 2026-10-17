@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComb
                                QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSizePolicy, QSpinBox, QStyle, QTabWidget,
                                QStackedWidget, QToolButton, QTreeWidget,
                                QTreeWidgetItem, QVBoxLayout, QWidget, QWidgetAction)
-from core import agents, audit, bulk, db, display, importer, nettools, profiles, proxy, scope, sessions, vendors, winmon
+from core import agents, audit, bulk, db, display, importer, nettools, orgs, profiles, proxy, scope, sessionimport, sessions, vendors, winmon
 from ui import icons, theme
 from ui.agentfleet import AgentFleet
 from ui.columns import ColumnChooser
@@ -22,8 +22,17 @@ from ui import status as st
 
 
 
+from ui.orgfield import GLOBAL_ONLY_CHOICE, SHARED_CHOICE, choice_file, org_choices  # noqa: E402  (Sessions takes them from here too)
+
+
 class DeviceDialog(QDialog):
-    def __init__(self, dev=None, parent=None, folder_id=None):
+    def __init__(self, dev=None, parent=None, folder_id=None, org=None):
+        """org: for a new device, the organization picked in Global's tree (its folders, profiles and jump hosts are offered)."""
+        start = (dev or {}).get("org") if dev else choice_file(org)
+        with db.within(start):                       # the lists and stored passwords come from the device's own organization
+            self._build(dev, parent, folder_id, org)
+
+    def _build(self, dev, parent, folder_id, org):
         super().__init__(parent)
         self.dev = dev or {}
         self.setWindowTitle("Edit device" if dev else "Add device")
@@ -37,6 +46,8 @@ class DeviceDialog(QDialog):
         self.host.textEdited.connect(lambda _t: self.host.setStyleSheet("") or self.host.setToolTip(""))
         self.secret = QLineEdit()
         self.secret.setEchoMode(QLineEdit.EchoMode.Password)
+        from ui.linkitem import LinkRow
+        self.link_row = LinkRow()                                    # Link... to a password manager item (when one is chosen)
         self.secret.setPlaceholderText("leave blank to keep the stored value")
         self.get_key = QPushButton("Get API key from the firewall...")
         self.get_key.setToolTip("Sign in once with an administrator's user name and password: Toner asks the device for the key and fills it in.")
@@ -159,12 +170,20 @@ class DeviceDialog(QDialog):
             for label, widget in rows:
                 f.addRow(label, widget)
             return w, f
-        self.page_general, self.form = page((("Name", self.name), ("Vendor", self.vendor), ("Folder", self.folder),
+        self.org_pick = QComboBox()
+        org_choices(self.org_pick, self.dev if dev else None, org)
+        self.org_pick.setToolTip("Which organization the device belongs to. Shared devices are seen by every organization.")
+        if dev and not db.everything():
+            self.org_pick.setEnabled(False)                     # moved between organizations from Global
+        self._org_was = choice_file(self.org_pick.currentData())
+        self.org_pick.currentIndexChanged.connect(self._org_changed)
+        self.page_general, self.form = page((("Organization", self.org_pick), ("Name", self.name), ("Vendor", self.vendor), ("Folder", self.folder),
                                              ("Location", self.location), ("Popular pages", self.preset), ("Host / DNS name", self.host),
                                              ("Port", self.port), ("Platform", self.platform),
                                              ("Details", self.details), ("", self.enabled)))
+        self.form.setRowVisible(self.org_pick, bool(orgs.list_orgs()))      # nothing to choose before there are organizations
         self.page_access, self.access = page((("Credential profile", self.profile), ("Username", self.username), ("SSH password", self.ssh_pw),
-                                              ("Password", self.secret), ("", self.get_key), ("Site", self.site),
+                                              ("Password", self.secret), ("", self.link_row), ("", self.get_key), ("Site", self.site),
                                               ("Jump host", self.jump), ("Proxy", self.proxy_mode), ("Proxy Type", self.proxy_kind),
                                               ("Proxy Address", self.proxy_host), ("Proxy Port", self.proxy_port),
                                               ("Proxy User", self.proxy_user), ("Proxy Password", self.proxy_pw),
@@ -207,6 +226,8 @@ class DeviceDialog(QDialog):
 
         snmp_have = {}
         if dev:
+            with db.within(dev.get("org")):
+                self.link_row.load(db.secret_name(dev["name"]))
             self.name.setText(dev["name"])
             self.vendor.setCurrentIndex(max(0, self.vendor.findData(vendors.family(dev["vendor"]))))
             self.host.setText(dev["host"])
@@ -263,6 +284,33 @@ class DeviceDialog(QDialog):
         self.platform.currentIndexChanged.connect(lambda _: self._apply_type() if vendors.modes(self.vendor.currentData()) else self._windows_rows())
         self.adapt(self.vendor.currentData())
         self._start = self._snapshot()                           # how it was when it opened, to notice unsaved edits
+
+    def _org_changed(self, *_):
+        """Another organization: its folders, credential profiles, jump hosts and locations."""
+        new = choice_file(self.org_pick.currentData())
+        if new is None or new == self._org_was:
+            return
+        self._org_was = new
+        with db.within(new):
+            self.folder.clear()
+            self.folder.addItem("(top level)", None)
+            for fid, path in sorted(db.folder_paths().items(), key=lambda kv: kv[1].lower()):
+                self.folder.addItem(path, fid)
+            keep = self.profile.currentText()
+            self.profile.clear()
+            self.profile.addItem("(none - use the values below)", None)
+            for p in profiles.list_profiles():
+                self.profile.addItem(p["name"], p["id"])
+            self.profile.setCurrentIndex(max(0, self.profile.findText(keep)))
+            self.jump.clear()
+            self.jump.addItem("(connect directly)", "")
+            for d in db.list_devices():
+                if d["name"] != self.dev.get("name"):
+                    self.jump.addItem(d["name"], d["name"])
+            text = self.location.currentText()
+            self.location.clear()
+            self.location.addItems(sorted({d["location"] for d in db.list_devices() if d.get("location")}))
+            self.location.setCurrentText(text)
 
     def _vendor(self):
         """The type of device the dialog is describing: the vendor, or for a vendor with several ways to monitor it (UniFi) the way chosen."""
@@ -327,9 +375,15 @@ class DeviceDialog(QDialog):
         self.use_snmp.setVisible(not snmp_only and login)
         self._proxy_rows()
         self._windows_rows()
+        self._link_rows()
         if snmp_only:
             self.use_snmp.setChecked(True)
         self.snmp.setEnabled(self.use_snmp.isChecked())
+
+    def _link_rows(self):
+        """Link... sits under the password, while there is a password box and a password manager is chosen."""
+        from ui import linkitem
+        self.access.setRowVisible(self.link_row, linkitem.wanted() and self.access.isRowVisible(self.secret))
 
     def _windows_rows(self):
         """Windows devices: which settings apply depends on how the computer is monitored."""
@@ -346,6 +400,7 @@ class DeviceDialog(QDialog):
         self.win.setRowVisible(self.win_auth, winrm)
         self.win.setRowVisible(self.win_https, winrm)
         self.win.setRowVisible(self.win_script, how == "agent")
+        self._link_rows()
         if how == "local" and not self.host.text().strip():
             self.host.setText("localhost")
         self.win_script.setEnabled(bool(self.dev.get("id")))
@@ -361,7 +416,7 @@ class DeviceDialog(QDialog):
 
     def _agent_script(self):
         from ui.winagent import AgentScriptDialog
-        AgentScriptDialog(self.dev["name"], self).exec()
+        AgentScriptDialog(self.dev["name"], self, org=self.dev.get("org")).exec()
 
     def _proxy_rows(self):
         able = vendors.get(self._vendor()).get("kind") in ("ssh", "api", "status")     # not SNMP / UDP / local
@@ -421,7 +476,8 @@ class DeviceDialog(QDialog):
                 "snmp": self.snmp.settings() if snmp_on else "",
                 "jump": {"device": self.jump.currentData()} if self.jump.currentData() else "",
                 "proxy": self._proxy_values(), "winopts": self._win_values(),
-                "checkopts": self.checks_tab.values()}
+                "checkopts": self.checks_tab.values(),
+                "org": choice_file(self.org_pick.currentData()), "shared": int(self.org_pick.currentData() == SHARED_CHOICE)}
 
     def _snapshot(self):
         try:
@@ -524,6 +580,9 @@ class DeviceDialog(QDialog):
 
     def accept(self):
         v = self.values()
+        if self.org_pick.currentData() is None:
+            QMessageBox.warning(self, "Organization", "Choose the organization this device belongs to.")
+            return
         if not v["name"] or not v["host"]:
             QMessageBox.warning(self, "Missing data", "Name and host are required.")
             return
@@ -689,21 +748,27 @@ class DeviceTree(QTreeWidget):
     def dropEvent(self, e):
         # Qt would move the tree items itself; we move the data instead and rebuild from it.
         target = self.itemAt(e.position().toPoint())
-        tid = None
+        tid, where = None, db.target()
         if target is not None:
             kind, ident = self.owner.kind_of(target)
+            where = self.owner.org_of(target)
             if kind == "folder":
                 tid = ident
             elif kind == "device":
                 tid = self.owner.payload[target.data(0, ROLE)].get("folder_id")
-            else:
+            elif kind != "org":
                 e.ignore()
                 return
-        moves = [k for k in (self.owner.kind_of(i) for i in self.selectedItems()) if k[0] in ("device", "folder")]
+        items = [i for i in self.selectedItems() if self.owner.kind_of(i)[0] in ("device", "folder")]
         e.setDropAction(Qt.DropAction.IgnoreAction)
         e.accept()
+        if any(self.owner.org_of(i) != where for i in items) or not self.owner.editable(where):
+            toast(self.owner, "Use Move to organization to move devices between organizations." if self.owner.editable(where)
+                  else "Shared and archived devices are changed from Global.")
+            return
+        moves = [self.owner.kind_of(i) for i in items]
         if moves:
-            self.moved.emit(moves, tid)
+            self.moved.emit(moves, (where, tid))
 
 
 class InventoryTab(QWidget):
@@ -713,9 +778,12 @@ class InventoryTab(QWidget):
     open_rdp_tab = Signal(dict)
     scan_requested = Signal()                    # the empty inventory's "Scan the network": the discovery tool
     open_details = Signal(dict)
-    COLS = ["Name", "Vendor", "Platform", "Location", "Host", "Site", "Details", "Tags", "Status", "Last checked"]
+    sessions_imported = Signal()                 # sessions from MobaXterm, PuTTY or SecureCRT were added (the Sessions list reloads)
+    orgs_created = Signal()                      # an import made organizations from its folders (the switcher reloads)
+    COLS = ["Name", "Vendor", "Platform", "Location", "Host", "Site", "Details", "Tags", "Status", "Last checked", "Organization"]
     STATUS = 8
     CHECKED = 9
+    ORG = 10
 
     def __init__(self):
         super().__init__()
@@ -723,6 +791,7 @@ class InventoryTab(QWidget):
         self._building = False
         self.expanded = set(db.get_setting("inventory_expanded"))
         self.vendor_sel, self.location_sel, self.tag_sel = set(), set(), set()    # empty = all; location "" = none
+        self.org_sel = set()                    # Global: the organizations ticked in the filter (empty = all active ones)
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search devices  (Ctrl+F)")
         self.search.setClearButtonEnabled(True)
@@ -751,7 +820,8 @@ class InventoryTab(QWidget):
         self.table.itemDoubleClicked.connect(self.double_clicked)
         from ui.widgets import StatusDelegate
         self.table.setItemDelegateForColumn(self.STATUS, StatusDelegate(self.table))      # the same pill as Results and the Overview
-        self.columns = ColumnChooser(self.table, self.table.header(), "inventory_columns", self.COLS, locked=(0,), auto=self._empty_columns)
+        self.columns = ColumnChooser(self.table, self.table.header(), "inventory_columns", self.COLS, locked=(0,), auto=self._empty_columns,
+                                     org_col=self.ORG)
         self.table.itemExpanded.connect(lambda it: (self.remember(it, True), self._autosize()))
         self.table.itemCollapsed.connect(lambda it: (self.remember(it, False), self._autosize()))
         self.table.moved.connect(self.handle_moves)
@@ -772,7 +842,8 @@ class InventoryTab(QWidget):
         self.more = QPushButton("More")                  # what is used now and then, so the row never outgrows a narrow window
         more_menu = QMenu(self.more)
         self.more_actions = {}
-        for text, fn in (("Import...", self.import_file), ("Export...", self.export_file), (None, None),
+        for text, fn in (("Import...", self.import_file), ("Import PuTTY sessions on this computer...", self.import_putty_here),
+                         ("Export...", self.export_file), (None, None),
                          ("Expand all", self.expand_all), ("Collapse all", self.collapse_all)):
             if text is None:
                 more_menu.addSeparator()
@@ -847,7 +918,7 @@ class InventoryTab(QWidget):
         self.changed.emit()
 
     def _open_named(self, name):
-        d = next((x for x in db.list_devices() if x["name"] == name), None)
+        d = db.find_device(name)
         if d:
             self.open_details.emit(d)
 
@@ -886,7 +957,16 @@ class InventoryTab(QWidget):
         Several values can be ticked: any of the ticked vendors AND any of the ticked locations."""
         m = self.filter_menu
         m.clear()
-        devs = db.list_devices()
+        devs = self._listed()
+        if db.everything() and orgs.list_orgs():
+            sub = m.addMenu("Organization")
+            for text, val in [("Global", db.GLOBAL)] + [(o["name"] + ("  (archived)" if o["archived"] else ""), o["id"]) for o in orgs.list_orgs()]:
+                box = QCheckBox(text)
+                box.setChecked(val in self.org_sel)
+                box.toggled.connect(lambda on, val=val: self.toggle_filter("org_sel", val, on))
+                act = QWidgetAction(sub)
+                act.setDefaultWidget(box)
+                sub.addAction(act)
         for title, attr, values, shown in (
                 ("Vendor", "vendor_sel", {vendors.family(d["vendor"]) for d in devs}, display.vendor_name),
                 ("Location", "location_sel", {d["location"] for d in devs if d.get("location")}, str),
@@ -914,14 +994,14 @@ class InventoryTab(QWidget):
     def set_filter(self, attr, val):
         """Replace one filter with a single value (None = all), or clear both with attr=None."""
         if attr is None:
-            self.vendor_sel, self.location_sel, self.tag_sel = set(), set(), set()
+            self.vendor_sel, self.location_sel, self.tag_sel, self.org_sel = set(), set(), set(), set()
         else:
             setattr(self, attr, set() if val is None else {val})
         self._update_filter_btn()
         self.refresh()
 
     def _update_filter_btn(self):
-        parts = [display.vendor_name(v) for v in sorted(self.vendor_sel)] + \
+        parts = [db.org_name(o) for o in sorted(self.org_sel)] + [display.vendor_name(v) for v in sorted(self.vendor_sel)] + \
                 [loc or "(no location)" for loc in sorted(self.location_sel)] + sorted(self.tag_sel)
         self.filter_btn.setToolTip("Filter: " + ", ".join(parts) if parts else "Filter by vendor or location")
         self.filter_btn.setText(f" {len(parts)}" if parts else "")
@@ -945,39 +1025,76 @@ class InventoryTab(QWidget):
 
     @staticmethod
     def _haystack(d):
+        org = db.org_name(d["org"]) if db.everything() and d.get("org") is not None else ""
         return " ".join(str(x) for x in (d["name"], d["host"], display.vendor_name(d["vendor"]), d.get("location"), d.get("details"),
-                                         d.get("tags"), d.get("site"), d.get("platform"))
+                                         d.get("tags"), d.get("site"), d.get("platform"), org)
                         if x).lower()
+
+    def _listed(self):
+        """The devices of the view; in Global, archived organizations too when the filter ticks one."""
+        with db.including_archived(db.everything() and bool(self.org_sel & db.archived_ids())):
+            return db.list_devices()
 
     def _visible(self, devs):
         v, loc, tg = self.vendor_sel, self.location_sel, {x.lower() for x in self.tag_sel}
         words = self._words()
-        return [d for d in devs if (not v or vendors.family(d["vendor"]) in v) and (not loc or (d.get("location") or "") in loc)
+        og = self.org_sel if db.everything() else set()
+        return [d for d in devs if (not og or d.get("org", db.GLOBAL) in og)
+                and (not v or vendors.family(d["vendor"]) in v) and (not loc or (d.get("location") or "") in loc)
                 and (not tg or tg & {x.lower() for x in db.split_tags(d.get("tags"))})
                 and (not words or all(w in self._haystack(d) for w in words))]
 
     def kind_of(self, item):
+        """('device', id), ('folder', id), ('org', organization) or ('group', text). Keys of items from another organization's file
+        than the one being written to carry it: 'device:3:12' (see org_of)."""
         key = item.data(0, ROLE) or ""
         kind, _, ident = key.partition(":")
-        if kind == "folder":
-            return "folder", int(ident)
-        if kind == "device":
-            return "device", int(ident)
+        if kind in ("folder", "device"):
+            return kind, int(ident.rpartition(":")[2])
+        if kind == "org":
+            return "org", int(ident)
         return "group", ident
+
+    def org_of(self, item):
+        """The organization whose file a tree item belongs to."""
+        key = item.data(0, ROLE) or ""
+        kind, _, ident = key.partition(":")
+        if kind == "org":
+            return int(ident)
+        if kind in ("folder", "device") and ":" in ident:
+            return int(ident.partition(":")[0])
+        return db.target()
+
+    def _key(self, kind, org, ident):
+        return f"{kind}:{ident}" if org == db.target() else f"{kind}:{org}:{ident}"
+
+    def _ek(self, org, fid):
+        """How an open folder is remembered: its id in the file being written to, 'org:id' for another organization's."""
+        return fid if org == db.target() else f"{org}:{fid}"
+
+    def _keep_open(self):
+        db.set_setting("inventory_expanded", sorted(self.expanded, key=str))
+
+    def editable(self, org):
+        """Items of the organization being looked at can be changed here; Shared ones (from an organization) and archived ones cannot."""
+        if org in db.archived_ids():
+            return False
+        return db.everything() or org == db.home()
 
     def _device_values(self, d):
         site = d["site"] if vendors.get(d["vendor"]).get("site") else ""              # blank where it does not apply, not "N/A"
         platform = vendors.mode_label(d["vendor"]) or (display.platform_name(d.get("platform") or vendors.default_platform(d["vendor"]))
                                                        if vendors.platform_keys(d["vendor"]) else "")
-        state = self.health.get(d["name"]) if d["enabled"] else None
+        state = self.health.get(d.get("key", d["name"])) if d["enabled"] else None
+        org = db.org_name(d.get("org")) + (" (Shared)" if d.get("shared") else "")
         return [d["name"], display.vendor_name(d["vendor"]), platform, d.get("location") or "", d["host"], site,
-                d.get("details") or "", d.get("tags") or "", self._status_word(d), display.ago(state["at"]) if state else ""]
+                d.get("details") or "", d.get("tags") or "", self._status_word(d), display.ago(state["at"]) if state else "", org]
 
     def _status_word(self, d):
         """What the Status column says, in words as well as colour: OK, WARN, FAIL, ERROR, Not checked, or Disabled."""
         if not d["enabled"]:
             return "Disabled"
-        state = self.health.get(d["name"])
+        state = self.health.get(d.get("key", d["name"]))
         return state["status"] if state else "Not checked"
 
     def _empty_columns(self):
@@ -990,10 +1107,10 @@ class InventoryTab(QWidget):
 
     def _device_item(self, d):
         it = QTreeWidgetItem(self._device_values(d))
-        key = f"device:{d['id']}"
+        key = self._key("device", d.get("org", db.target()), d["id"])
         it.setData(0, ROLE, key)
         self.payload[key] = d
-        state = self.health.get(d["name"])
+        state = self.health.get(d.get("key", d["name"]))
         it.setIcon(0, self._device_icon(state["status"]) if state and d["enabled"] else self._icon("device"))
         if state and d["enabled"]:
             bad = state["problems"]
@@ -1022,7 +1139,7 @@ class InventoryTab(QWidget):
         return True
 
     def filtering(self):
-        return bool(self.vendor_sel or self.location_sel or self.tag_sel or self._words())
+        return bool(self.vendor_sel or self.location_sel or self.tag_sel or self._words() or (db.everything() and self.org_sel))
 
     def _empty_hint(self):
         """'No devices yet' with the three ways to start, or 'nothing matches' when a search or filter hides everything."""
@@ -1037,8 +1154,15 @@ class InventoryTab(QWidget):
             self.hint.set_actions([("Add device", self.add), ("Import...", self.import_file), ("Scan the network", self.scan_requested.emit)])
         return self.hint
 
+    def org_switched(self):
+        """Another organization was picked: its own open folders (refresh follows from the inventory's changed signal)."""
+        self.expanded = set(db.get_setting("inventory_expanded"))
+        self.org_sel = set()
+        self._update_filter_btn()
+        self.search.clear()
+
     def refresh(self):
-        devs = scope.keep(self._visible(db.list_devices()))
+        devs = scope.keep(self._visible(self._listed()))
         try:
             self.health = db.device_health()
         except Exception:
@@ -1067,7 +1191,50 @@ class InventoryTab(QWidget):
                 self.fleet.refresh()
 
     def _build_folders(self, devs, bold):
-        folders = db.list_folders()
+        """The folder tree. In Global each organization is a branch of its own (Global's own and Shared devices under Global); in an
+        organization, Global's Shared devices are in a Shared branch at the end."""
+        me = db.target()
+        if db.several():
+            files = [db.GLOBAL] + [o["id"] for o in orgs.list_orgs() if not o["archived"] or o["id"] in self.org_sel]
+            if self.org_sel:
+                files = [o for o in files if o in self.org_sel]
+            for org in files:
+                mine = [d for d in devs if d.get("org", me) == org]
+                if self.filtering() and not mine:
+                    continue
+                node = QTreeWidgetItem([f"{db.org_name(org)}  ({len(mine)})"])
+                key = f"org:{org}"
+                node.setData(0, ROLE, key)
+                self.payload[key] = {"org": org}
+                node.setFont(0, bold)
+                node.setIcon(0, self._icon("folder", True))
+                node.setFlags((node.flags() | Qt.ItemFlag.ItemIsDropEnabled) & ~Qt.ItemFlag.ItemIsDragEnabled)
+                if org in db.archived_ids():
+                    node.setText(0, node.text(0) + "  (archived)")
+                self.table.addTopLevelItem(node)
+                with db.within(org):
+                    folders = db.list_folders()
+                self._fill_tree(node, folders, mine, org, bold)
+                node.setExpanded(key in self.expanded or self.filtering() or len(files) == 1)
+            return
+        own = [d for d in devs if d.get("org", me) == me]
+        self._fill_tree(None, db.list_folders(), own, me, bold)
+        shared = [d for d in devs if d.get("org", me) != me]
+        if shared:
+            node = QTreeWidgetItem([f"Shared  ({len(shared)})"])
+            node.setData(0, ROLE, f"org:{db.GLOBAL}")
+            self.payload[f"org:{db.GLOBAL}"] = {"org": db.GLOBAL}
+            node.setFont(0, bold)
+            node.setIcon(0, self._icon("folder", True))
+            node.setToolTip(0, "Devices Global shares with every organization. They are changed from Global.")
+            node.setFlags(node.flags() & ~Qt.ItemFlag.ItemIsDragEnabled & ~Qt.ItemFlag.ItemIsDropEnabled)
+            self.table.addTopLevelItem(node)
+            for d in sorted(shared, key=lambda d: d["name"].lower()):
+                node.addChild(self._device_item(d))
+            node.setExpanded(f"org:{db.GLOBAL}" in self.expanded or self.filtering())
+
+    def _fill_tree(self, top, folders, devs, org, bold):
+        """One organization's folders and devices, under `top` (None: at the top of the tree)."""
         known = {f["id"] for f in folders}
         kids, by_folder = {}, {}
         for f in folders:
@@ -1075,10 +1242,6 @@ class InventoryTab(QWidget):
         for d in devs:
             fid = d.get("folder_id")
             by_folder.setdefault(fid if fid in known else None, []).append(d)
-        client = scope.current()
-        if client is not None:                    # one client: its folder is the only thing at the top
-            kids[None] = [f for f in folders if f["id"] == client]
-            by_folder[None] = []
 
         def count(fid):
             return len(by_folder.get(fid, [])) + sum(count(c["id"]) for c in kids.get(fid, []))
@@ -1087,7 +1250,7 @@ class InventoryTab(QWidget):
             """{status: devices} for the enabled devices in a folder and the ones under it (what the folder's row says when it is closed)."""
             out = {}
             for d in by_folder.get(fid, []):
-                state = self.health.get(d["name"]) if d["enabled"] else None
+                state = self.health.get(d.get("key", d["name"])) if d["enabled"] else None
                 if state and state["status"] != "OK":
                     out[state["status"]] = out.get(state["status"], 0) + 1
             for c in kids.get(fid, []):
@@ -1100,9 +1263,9 @@ class InventoryTab(QWidget):
                 if self.filtering() and not count(f["id"]):
                     continue                      # while filtering, hide folders with nothing to show
                 item = QTreeWidgetItem([f"{f['name']}  ({count(f['id'])})"])
-                key = f"folder:{f['id']}"
+                key = self._key("folder", org, f["id"])
                 item.setData(0, ROLE, key)
-                self.payload[key] = f
+                self.payload[key] = {**f, "org": org}
                 item.setFont(0, bold)
                 bad = roll(f["id"])
                 if bad:                               # a closed folder still shows that something inside it is wrong
@@ -1115,11 +1278,11 @@ class InventoryTab(QWidget):
                 item.setFlags(item.flags() | Qt.ItemFlag.ItemIsDragEnabled | Qt.ItemFlag.ItemIsDropEnabled)
                 (parent_item.addChild if parent_item else self.table.addTopLevelItem)(item)
                 fill(item, f["id"])
-                item.setExpanded(f["id"] in self.expanded or self.filtering() or f["id"] == client)
+                item.setExpanded(self._ek(org, f["id"]) in self.expanded or self.filtering())
             for d in sorted(by_folder.get(fid, []), key=lambda d: d["name"].lower()):
                 (parent_item.addChild if parent_item else self.table.addTopLevelItem)(self._device_item(d))
 
-        fill(None, None)
+        fill(top, None)
 
     def _autosize(self):
         """Keep every column wide enough for what is showing, so opening a folder never leaves text cut off."""
@@ -1132,9 +1295,10 @@ class InventoryTab(QWidget):
         if self._building:
             return
         kind, ident = self.kind_of(item)
-        if kind == "folder":
-            (self.expanded.add if open_ else self.expanded.discard)(ident)
-            db.set_setting("inventory_expanded", sorted(self.expanded))
+        if kind in ("folder", "org"):
+            key = self._ek(self.org_of(item), ident) if kind == "folder" else f"org:{ident}"
+            (self.expanded.add if open_ else self.expanded.discard)(key)
+            self._keep_open()
 
     def expand_folder(self, fid):
         """Open a folder and the ones above it."""
@@ -1153,9 +1317,9 @@ class InventoryTab(QWidget):
             todo.extend(it.child(i) for i in range(it.childCount()))
         return out
 
-    def select_device(self, dev_id):
+    def select_device(self, dev_id, org=None):
         for it in self._all_items():
-            if self.kind_of(it) == ("device", dev_id):
+            if self.kind_of(it) == ("device", dev_id) and (org is None or self.org_of(it) == org):
                 p = it.parent()
                 while p is not None:
                     p.setExpanded(True)
@@ -1171,6 +1335,13 @@ class InventoryTab(QWidget):
 
     def selected_folders(self):
         return [self.kind_of(i)[1] for i in self.table.selectedItems() if self.kind_of(i)[0] == "folder"]
+
+    def selected_org(self):
+        """The organization of everything selected (the only one), else the one being written to; None when they differ."""
+        found = {self.org_of(i) for i in self.table.selectedItems()}
+        if len(found) > 1:
+            return None
+        return found.pop() if found else db.target()
 
     def selected(self):
         """The one selected device, or None (no selection, several, or a folder)."""
@@ -1188,39 +1359,59 @@ class InventoryTab(QWidget):
         return None
 
     def update_buttons(self):
-        self.buttons["Edit"].setEnabled(self.selected() is not None)
+        org = self.selected_org()
+        can = org is not None and self.editable(org)
+        self.buttons["Edit"].setEnabled(self.selected() is not None and can)
         self.buttons["Details"].setEnabled(self.selected() is not None)
-        self.buttons["Delete"].setEnabled(bool(self.selected_devices()) or len(self.selected_folders()) == 1)
+        self.buttons["Delete"].setEnabled(can and (bool(self.selected_devices()) or len(self.selected_folders()) == 1))
+        self.buttons["New folder"].setEnabled(can)
+        tip = "" if can or org is None else ("Archived organizations can only be viewed." if org in db.archived_ids()
+                                             else "Shared devices are changed from Global.")
+        for b in ("Edit", "Delete"):
+            self.buttons[b].setToolTip(tip)
 
     def double_clicked(self, item, _col):
         if self.kind_of(item)[0] == "device":
-            self.edit()
+            self.edit() if self.editable(self.org_of(item)) else self.show_details()
 
     # ---------- devices ----------
-    def _save(self, dev, secret, old_name=None, extra_secrets=None):
+    def _save(self, dev, secret, old_name=None, extra_secrets=None, link=None):
+        org = dev.get("org")
         try:
             db.save_device(dev)
+        except db.NameTaken as e:
+            QMessageBox.warning(self, "Duplicate", str(e))
+            return False
         except sqlite3.IntegrityError:
             QMessageBox.warning(self, "Duplicate", f"A device named '{dev['name']}' already exists.")
-            return
-        if old_name and old_name != dev["name"]:
-            db.move_device_secrets(old_name, dev["name"])          # password, token and SNMP secrets follow the name
-            agents.rename(old_name, dev["name"])
-        if secret:
-            db.set_secret(dev["name"], secret)
-        for kind, value in (extra_secrets or {}).items():
-            if value:
-                db.set_secret(db.secret_name(dev["name"], kind), value)
-        audit.log("device " + ("edited" if old_name else "added"), dev["name"])
+            return False
+        with db.within(org):                                      # its passwords are kept under its own organization's names
+            if old_name and old_name != dev["name"]:
+                db.move_device_secrets(old_name, dev["name"])          # password, token and SNMP secrets follow the name
+                agents.rename(old_name, dev["name"])
+            if secret:
+                db.set_secret(db.secret_name(dev["name"]), secret)
+            for kind, value in (extra_secrets or {}).items():
+                if value:
+                    db.set_secret(db.secret_name(dev["name"], kind), value)
+            if link is not None:
+                link.apply(db.secret_name(dev["name"]))              # Link... / Unlink, chosen in the window
+            audit.log("device " + ("edited" if old_name else "added"), dev["name"])
         if dev.get("folder_id"):
-            self.expanded.add(dev["folder_id"])
+            self.expanded.add(self._ek(org if org is not None else db.target(), dev["folder_id"]))
+        if org is not None and org != db.target():
+            self.expanded.add(f"org:{org}")
         self.refresh()
         self.changed.emit()
+        return True
 
     def add(self):
-        dlg = DeviceDialog(parent=self, folder_id=self.current_folder() if self.folders_mode() else None)
+        org = self.selected_org() if db.everything() and self.table.selectedItems() else None
+        pre = None if org is None else (GLOBAL_ONLY_CHOICE if org == db.GLOBAL else org)
+        dlg = DeviceDialog(parent=self, folder_id=self.current_folder() if self.folders_mode() else None, org=pre)
         if dlg.exec():
-            self._save(dlg.values(), dlg.secret.text(), extra_secrets={**dlg.snmp_secrets(), **dlg.proxy_secrets(), **dlg.ssh_secrets()})
+            self._save(dlg.values(), dlg.secret.text(), extra_secrets={**dlg.snmp_secrets(), **dlg.proxy_secrets(), **dlg.ssh_secrets()},
+                       link=dlg.link_row)
 
     def edit(self):
         d = self.selected()
@@ -1228,9 +1419,24 @@ class InventoryTab(QWidget):
             self.edit_device(d)
 
     def edit_device(self, d):
+        if not self.editable(d.get("org", db.target())):
+            self.open_details.emit(d)
+            return
         dlg = DeviceDialog(d, self)
         if dlg.exec():
-            self._save(dlg.values(), dlg.secret.text(), old_name=d["name"], extra_secrets={**dlg.snmp_secrets(), **dlg.proxy_secrets(), **dlg.ssh_secrets()})
+            vals = dlg.values()
+            dest = vals["org"]
+            here = d.get("org", db.target())
+            if dest is not None and dest != here:                    # Global: the Organization field changed
+                vals.update(org=here, shared=0)
+                if not self._save(vals, dlg.secret.text(), old_name=d["name"], extra_secrets={**dlg.snmp_secrets(), **dlg.proxy_secrets(), **dlg.ssh_secrets()}):
+                    return
+                moved = db.get_device(d["id"], here)
+                if moved:
+                    self.move_to_org([moved], dest, shared=dlg.values()["shared"])
+                return
+            self._save(vals, dlg.secret.text(), old_name=d["name"], extra_secrets={**dlg.snmp_secrets(), **dlg.proxy_secrets(), **dlg.ssh_secrets()},
+                       link=dlg.link_row)
 
     def show_details(self):
         d = self.selected()
@@ -1245,10 +1451,11 @@ class InventoryTab(QWidget):
             if QMessageBox.question(self, "Delete", f"Delete {what}?") != QMessageBox.StandardButton.Yes:
                 return
             for d in devs:
-                db.delete_device(d["id"])
-                db.delete_device_secrets(d["name"])
-                agents.forget(d["name"])
-                audit.log("device deleted", d["name"])
+                with db.within(d.get("org")):
+                    db.delete_device(d["id"])
+                    db.delete_device_secrets(d["name"])
+                    agents.forget(d["name"])
+                    audit.log("device deleted", d["name"])
             self.refresh()
             self.changed.emit()
         elif len(self.selected_folders()) == 1:
@@ -1273,16 +1480,20 @@ class InventoryTab(QWidget):
         if not self.folders_mode():
             return
         parent = self.current_folder() if use_selection and parent_id is None else parent_id
+        org = self.selected_org() if self.table.selectedItems() else db.target()
+        if org is None or not self.editable(org):
+            return
         name = self._ask_name("New folder", "Folder name:")
         if not name:
             return
         try:
-            fid = db.create_folder(name, parent)
+            with db.within(org):
+                fid = db.create_folder(name, parent)
         except ValueError as e:
             QMessageBox.warning(self, "New folder", str(e))
             return
-        self.expanded.update({fid} | ({parent} if parent else set()))
-        db.set_setting("inventory_expanded", sorted(self.expanded))
+        self.expanded.update({self._ek(org, fid)} | ({self._ek(org, parent)} if parent else set()) | ({f"org:{org}"} if db.everything() else set()))
+        self._keep_open()
         self.refresh()
         self.changed.emit()
 
@@ -1290,12 +1501,15 @@ class InventoryTab(QWidget):
         folders = self.selected_folders()
         if len(folders) != 1 or self.selected_devices():
             return
-        fid = folders[0]
-        name = self._ask_name("Rename folder", "New name:", self.payload[f"folder:{fid}"]["name"])
+        fid, org = folders[0], self.selected_org()
+        if org is None or not self.editable(org):
+            return
+        name = self._ask_name("Rename folder", "New name:", self.payload[self._key("folder", org, fid)]["name"])
         if not name:
             return
         try:
-            db.rename_folder(fid, name)
+            with db.within(org):
+                db.rename_folder(fid, name)
         except ValueError as e:
             QMessageBox.warning(self, "Rename folder", str(e))
             return
@@ -1306,21 +1520,25 @@ class InventoryTab(QWidget):
         folders = self.selected_folders()
         if len(folders) != 1:
             return
-        fid = folders[0]
-        f = self.payload[f"folder:{fid}"]
-        kids = sum(1 for x in db.list_folders() if x["parent_id"] == fid)
-        devs = sum(1 for d in db.list_devices() if d.get("folder_id") == fid)
-        where = db.folder_paths().get(f["parent_id"], "") or "the top level"
+        fid, org = folders[0], self.selected_org()
+        if org is None or not self.editable(org):
+            return
+        f = self.payload[self._key("folder", org, fid)]
+        with db.within(org):
+            kids = sum(1 for x in db.list_folders() if x["parent_id"] == fid)
+            devs = sum(1 for d in db.list_devices() if d.get("folder_id") == fid and d["org"] == org)
+            where = db.folder_paths().get(f["parent_id"], "") or "the top level"
         if QMessageBox.question(self, "Delete folder", f"Delete the folder '{f['name']}'?\n\nIts {devs} device(s) and "
                                 f"{kids} subfolder(s) move up to {where}. No device is deleted.") \
                 != QMessageBox.StandardButton.Yes:
             return
         try:
-            db.delete_folder(fid)
+            with db.within(org):
+                db.delete_folder(fid)
         except ValueError as e:
             QMessageBox.warning(self, "Delete folder", str(e))
             return
-        self.expanded.discard(fid)
+        self.expanded.discard(self._ek(org, fid))
         self.refresh()
         self.changed.emit()
 
@@ -1329,20 +1547,25 @@ class InventoryTab(QWidget):
         self.handle_moves(moves, target_id)
 
     def handle_moves(self, moves, target_id):
-        """Move devices and folders into a folder (None = top level), reporting anything that cannot move."""
+        """Move devices and folders into a folder (None = top level) of their own organization, reporting anything that cannot move.
+        target_id can be (organization, folder id), from a drop."""
+        org, target_id = target_id if isinstance(target_id, tuple) else (self.selected_org(), target_id)
+        if org is None or not self.editable(org):
+            return
         problems, dev_ids = [], []
-        for kind, ident in moves:
-            if kind == "device":
-                dev_ids.append(ident)
-            else:
-                try:
-                    db.move_folder(ident, target_id)
-                except ValueError as e:
-                    problems.append(str(e))
-        db.move_devices(dev_ids, target_id)
+        with db.within(org):
+            for kind, ident in moves:
+                if kind == "device":
+                    dev_ids.append(ident)
+                else:
+                    try:
+                        db.move_folder(ident, target_id)
+                    except ValueError as e:
+                        problems.append(str(e))
+            db.move_devices(dev_ids, target_id)
         if target_id is not None:
-            self.expanded.add(target_id)
-            db.set_setting("inventory_expanded", sorted(self.expanded))
+            self.expanded.add(self._ek(org, target_id))
+            self._keep_open()
         self.refresh()
         self.changed.emit()
         if problems:
@@ -1355,29 +1578,42 @@ class InventoryTab(QWidget):
             self.table.clearSelection()
             item.setSelected(True)
         devs, folders = self.selected_devices(), self.selected_folders()
+        org = self.selected_org()
+        can = org is not None and self.editable(org)
         menu = QMenu(self)
+        if not devs and len(folders) <= 1 and can:          # an organization's branch, a folder, or empty space: a device goes there
+            menu.addAction("Add Device", self.add)
         if devs or folders:
             if len(devs) == 1 and not folders:
                 menu.addAction("Details...", self.show_details)
-                menu.addAction("Edit...", self.edit)
+                if can:
+                    menu.addAction("Edit...", self.edit)
                 if devs[0]["vendor"] == "windows":
                     menu.addAction("Open Remote Desktop", self.open_rdp)
                 else:
                     menu.addAction("Open SSH session", self.open_in_ssh)
-            if devs:
+            if devs and can:
                 menu.addAction("Edit selected..." if len(devs) > 1 else "Edit tags, folder, profile...", self.bulk_edit)
-            if len(folders) == 1 and not devs:
+            if len(folders) == 1 and not devs and can:
                 menu.addAction("New subfolder...", lambda: self.new_folder(folders[0], use_selection=False))
                 menu.addAction("Rename...", self.rename_folder)
-            if self.folders_mode():
+            if self.folders_mode() and can:
                 move = menu.addMenu("Move to folder")
-                banned = set().union(*(db.folder_descendants(f) for f in folders)) if folders else set()
+                with db.within(org):
+                    banned = set().union(*(db.folder_descendants(f) for f in folders)) if folders else set()
+                    paths = db.folder_paths()
                 move.addAction("(top level)", lambda: self.move_selected_to(None))
-                for fid, path in sorted(db.folder_paths().items(), key=lambda kv: kv[1].lower()):
+                for fid, path in sorted(paths.items(), key=lambda kv: kv[1].lower()):
                     if fid not in banned:
                         move.addAction(path, lambda fid=fid: self.move_selected_to(fid))
-            menu.addSeparator()
-            menu.addAction("Delete folder..." if folders and not devs else "Delete...", self.delete)
+            if devs and not folders and db.everything() and all(d.get("org") not in db.archived_ids() for d in devs):
+                to = menu.addMenu("Move to organization")
+                for text, dest in [("Global", db.GLOBAL)] + [(o["name"], o["id"]) for o in orgs.list_orgs(archived=False)]:
+                    act = to.addAction(text, lambda dest=dest: self.move_to_org(self.selected_devices(), dest))
+                    act.setEnabled(any(d.get("org") != dest for d in devs))
+            if can:
+                menu.addSeparator()
+                menu.addAction("Delete folder..." if folders and not devs else "Delete...", self.delete)
         else:
             if self.folders_mode():
                 menu.addAction("New folder...", lambda: self.new_folder(None, use_selection=False))
@@ -1386,10 +1622,42 @@ class InventoryTab(QWidget):
         menu.addAction("Collapse all", self.collapse_all)
         menu.exec(self.table.viewport().mapToGlobal(pos))
 
+    # ---------- moving devices between organizations (Global) ----------
+    def move_to_org(self, devs, dest, shared=0):
+        """Ask, then move devices to another organization: with their data (results, config backups, sessions) or without."""
+        devs = [d for d in devs if d.get("org") != dest]
+        if not devs:
+            return
+        n = len(devs)
+        box = QMessageBox(QMessageBox.Icon.Question, "Move to organization", f"Move {n} device{'s' if n != 1 else ''} to {db.org_name(dest)}?",
+                          parent=self)
+        both = box.addButton("Move Devices and Data", QMessageBox.ButtonRole.AcceptRole)
+        only = box.addButton("Move Devices Only", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() not in (both, only):
+            return
+        try:
+            orgs.move_devices(devs, dest, with_data=box.clickedButton() is both)
+        except ValueError as e:
+            QMessageBox.warning(self, "Move to organization", str(e))
+            return
+        if shared and dest == db.GLOBAL:
+            for d in devs:
+                with db.within(db.GLOBAL):
+                    row = next((x for x in db._devices_here() if x["name"] == d["name"]), None)
+                    if row:
+                        db.save_device({**row, "org": db.GLOBAL, "shared": 1})
+        audit.log("devices moved", f"{n} device(s) to {db.org_name(dest)}" + ("" if box.clickedButton() is both else " (without their data)"))
+        self.expanded.add(f"org:{dest}")
+        self.refresh()
+        self.changed.emit()
+        toast(self, f"Moved {n} device{'s' if n != 1 else ''} to {db.org_name(dest)}.")
+
     # ---------- export ----------
     def export_file(self):
         """Write the inventory (or just the selected devices) to a file. Passwords and keys are never included."""
-        devs = self.selected_devices() or self._visible(db.list_devices())
+        devs = self.selected_devices() or self._visible(self._listed())
         path, _ = QFileDialog.getSaveFileName(self, "Export devices", "devices.csv",
                                               "CSV (*.csv);;JSON (*.json);;YAML (*.yaml)")
         if not path:
@@ -1421,37 +1689,64 @@ class InventoryTab(QWidget):
 
     # ---------- import ----------
     def import_file(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Import devices", "", importer.FILE_FILTER)
+        both = "Device lists and sessions (*.yaml *.yml *.json *.csv " + " ".join("*" + e for e in sessionimport.EXTENSIONS) + ")"
+        path, _ = QFileDialog.getOpenFileName(self, "Import devices", "", f"{both};;{importer.FILE_FILTER};;{sessionimport.SESSION_FILTER}")
         if not path:
+            return
+        if sessionimport.is_session_file(path):               # MobaXterm, PuTTY or SecureCRT: these become sessions
+            try:
+                found = sessionimport.load(path)
+            except Exception as e:
+                QMessageBox.warning(self, "Import failed", f"Could not read the file:\n{e}")
+                return
+            self.import_sessions(found)
             return
         try:
             rows = importer.load_rows(path)
         except Exception as e:                       # unreadable file, bad syntax, wrong shape
             QMessageBox.warning(self, "Import failed", f"Could not read the file:\n{e}")
             return
-        existing = {d["name"].lower() for d in db.list_devices()}
-        added, dupes, bad = 0, [], []
+        from ui import orgassign
+        added, dupes, bad, ready = 0, [], [], []
         for i, raw in enumerate(rows, start=1):
             label = importer.label(raw, i)
             try:
                 dev, secret = importer.normalize(raw)
-                if dev["name"].lower() in existing:
-                    dupes.append(dev["name"])
-                    continue
                 community = importer.finalize(dev)
-                dev["folder_id"] = db.ensure_folder_path(dev.pop("folder", ""))
-                db.save_device(dev)
-            except sqlite3.IntegrityError:
-                dupes.append(dev["name"])
-                continue
             except ValueError as e:
                 bad.append(f"{label}: {e}")
                 continue
-            existing.add(dev["name"].lower())
-            if secret:
-                db.set_secret(dev["name"], secret)
-            if community:
-                db.set_secret(db.secret_name(dev["name"], "snmp"), community)
+            folder = [p for p in (dev.pop("folder", "") or "").replace("\\", "/").split("/") if p.strip()]
+            ready.append((label, dev, secret, community, folder))
+        made = []
+        picks = orgassign.choose([(dev["name"], folder, "Device") for _l, dev, _s, _c, folder in ready], self, made)   # Global: whose each one is
+        if picks is None:
+            return
+        if made:
+            self.orgs_created.emit()
+        existing = {}
+        for (label, dev, secret, community, folder), org in zip(ready, picks):
+            with db.within(org):                              # an import only adds to the organization it goes to
+                here = db.target()
+                if here not in existing:
+                    existing[here] = {d["name"].lower() for d in db.list_devices()}
+                if dev["name"].lower() in existing[here]:
+                    dupes.append(dev["name"])
+                    continue
+                try:
+                    dev["folder_id"] = db.ensure_folder_path("/".join(orgassign.strip_top(folder, org)))
+                    db.save_device({**dev, "org": here})
+                except sqlite3.IntegrityError:
+                    dupes.append(dev["name"])
+                    continue
+                except ValueError as e:
+                    bad.append(f"{label}: {e}")
+                    continue
+                existing[here].add(dev["name"].lower())
+                if secret:
+                    db.set_secret(db.secret_name(dev["name"]), secret)
+                if community:
+                    db.set_secret(db.secret_name(dev["name"], "snmp"), community)
             added += 1
         self.refresh()
         self.changed.emit()
@@ -1462,3 +1757,81 @@ class InventoryTab(QWidget):
             lines.append(f"\nSkipped, with reasons ({len(bad)}):")
             lines += [f"  \u2022 {b}" for b in bad[:12]] + ([f"  ...and {len(bad) - 12} more"] if len(bad) > 12 else [])
         QMessageBox.information(self, "Import", "\n".join(lines))
+        if made:
+            toast(self, orgassign.created_text(made))
+
+    # ---------------------------------------------------------------- sessions from other terminal programs
+    def import_putty_here(self):
+        found = sessionimport.putty_here()
+        if not found.items and not found.skipped:
+            QMessageBox.information(self, "Import", "No PuTTY sessions were found on this computer.")
+            return
+        self.import_sessions(found)
+
+    @staticmethod
+    def sessions_summary(found):
+        """'Found 1,661 sessions in 211 folders: 1,473 SSH, ... 45 browser sessions are skipped (Toner has no web sessions).'"""
+        counts = found.counts()
+        total = len(found.items) + sum(found.skipped.values())
+        kinds = ", ".join(f"{counts[k]:,} {label}" for k, label in (("ssh", "SSH"), ("rdp", "Remote Desktop"), ("telnet", "Telnet"),
+                                                                   ("serial", "Serial")) if counts.get(k))
+        text = f"Found {total:,} sessions in {len(found.folders()):,} folders: {kinds or 'none Toner can open'}."
+        for kind, n in found.skipped.most_common():
+            word = sessionimport.SKIPPED_NAMES.get(kind, kind)
+            why = "Toner has no web sessions" if kind == "browser" else f"Toner has no {word} sessions"
+            text += f" {n:,} {word} sessions are skipped ({why})."
+        return text
+
+    def import_sessions(self, found):
+        if not found.items:
+            QMessageBox.information(self, "Import", self.sessions_summary(found))
+            return
+        ask = self.sessions_summary(found) + " They go to Sessions, in the same folders. Import them?"
+        if QMessageBox.question(self, "Import sessions", ask) != QMessageBox.StandardButton.Yes:
+            return
+        passwords = {}
+        if found.source == "MobaXterm":
+            box = QMessageBox(QMessageBox.Icon.Question, "Import sessions",
+                              'Also import passwords from a MobaXterm "Stored Passwords" export? They are kept in Toner\'s vault, '
+                              "never in its database. Delete the exported file afterwards: it holds them in plain text.",
+                              parent=self)
+            choose = box.addButton("Choose file...", QMessageBox.ButtonRole.AcceptRole)
+            box.addButton("Not now", QMessageBox.ButtonRole.RejectRole)
+            box.exec()
+            if box.clickedButton() is choose:
+                pw_path, _ = QFileDialog.getOpenFileName(self, "MobaXterm stored passwords", "", "Text files (*.txt);;All files (*)")
+                if pw_path:
+                    try:
+                        passwords = sessionimport.mobaxterm_passwords(sessionimport.read_text(pw_path))
+                    except OSError as e:
+                        QMessageBox.warning(self, "Import failed", f"Could not read the file:\n{e}")
+                        return
+        from ui import orgassign
+        made = []
+        picks = orgassign.choose([(i["name"] or i["host"], list(i["folder"]), sessions.NAMES.get(i["kind"], i["kind"])) for i in found.items], self, made)
+        if picks is None:
+            return
+        if made:
+            self.orgs_created.emit()
+        by_org = {}
+        for item, org in zip(found.items, picks):
+            by_org.setdefault(org, []).append({**item, "folder": orgassign.strip_top(list(item["folder"]), org)})
+        r = {"added": 0, "existing": 0, "folders": 0, "passwords": 0, "bad": []}
+        for org, items in by_org.items():                     # each organization gets only its own sessions
+            with db.within(org):
+                part = sessionimport.save(sessionimport.Found(found.source, items), passwords)
+            for k in ("added", "existing", "folders", "passwords"):
+                r[k] += part[k]
+            r["bad"] += part["bad"]
+        audit.log("sessions imported", f"{found.source}: {r['added']} added, {r['passwords']} passwords")
+        self.sessions_imported.emit()
+        text = f"Imported {r['added']:,} sessions into Sessions ({r['folders']:,} folders created, {r['existing']:,} already there skipped)."
+        if passwords:
+            text += f" Passwords added for {r['passwords']:,} SSH sessions."
+        lines = [text]
+        if r["bad"]:
+            lines.append(f"\nSkipped, with reasons ({len(r['bad'])}):")
+            lines += [f"  \u2022 {b}" for b in r["bad"][:12]] + ([f"  ...and {len(r['bad']) - 12} more"] if len(r["bad"]) > 12 else [])
+        QMessageBox.information(self, "Import", "\n".join(lines))
+        if made:
+            toast(self, orgassign.created_text(made))

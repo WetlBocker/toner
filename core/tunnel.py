@@ -209,7 +209,7 @@ logging.getLogger(LOG_CHANNEL).addHandler(logging.NullHandler())     # outside a
 
 
 def log_path():
-    return db.db_path().parent / "ssh-tunnel.log"
+    return db.base_path().parent / "ssh-tunnel.log"
 
 
 class _SignInLog:

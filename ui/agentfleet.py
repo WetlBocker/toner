@@ -118,7 +118,7 @@ class AgentFleet(QWidget):
                 notes.append("reboot pending")
             if r["version"] and agents.agent_outdated(r["version"]):
                 notes.append("agent will update")
-            vals = (r["device"], r["computer"], r["os"].replace("Microsoft ", "") + (f"  ({r['domain']})" if r["domain"] else ""),
+            vals = (db.label_org(r["device"]), r["computer"], r["os"].replace("Microsoft ", "") + (f"  ({r['domain']})" if r["domain"] else ""),
                     self._when(r["received_at"]), self._age(age), r["source"], f"v{r['version']}" if r["version"] else "", ", ".join(notes))
             for j, v in enumerate(vals):
                 item = _Item(v)
@@ -130,7 +130,7 @@ class AgentFleet(QWidget):
                 if j == self.NOTES and ("silent" in v or "revoked" in v):
                     item.setForeground(st.qink("FAIL"))
                 self.table.setItem(i, j, item)
-        same = all((r["computer"] or "").lower() in ("", r["device"].lower()) for r in self.rows)
+        same = all((r["computer"] or "").lower() in ("", db.label(r["device"]).lower()) for r in self.rows)
         self.table.setColumnHidden(self.COMPUTER, bool(self.rows) and same)    # the same name twice is only clutter
         self.table.setSortingEnabled(True)
         self.table.sortByColumn(sort_col if sort_col >= 0 else 0, sort_order)
@@ -166,23 +166,27 @@ class AgentFleet(QWidget):
 
     def _revoke(self):
         names = self._selected()
-        if names and QMessageBox.question(self, "Revoke", "Stop accepting the agent on: " + ", ".join(names) + "?\n\nThe device stays in the "
+        if names and QMessageBox.question(self, "Revoke", "Stop accepting the agent on: " + ", ".join(db.label_org(n) for n in names) + "?\n\nThe device stays in the "
                                           "inventory. To start again, give the computer a new package or script.") == QMessageBox.StandardButton.Yes:
             for n in names:
                 agents.revoke(n)
-                audit.log("agent revoked", n)
+                with db.within(db.split_key(n)[1]):
+                    audit.log("agent revoked", db.label(n))
             self.refresh()
 
     def _remove(self):
         names = self._selected()
-        if not names or QMessageBox.question(self, "Remove", "Delete " + ", ".join(names) + " from Toner, with its reports and token?\n\n"
+        if not names or QMessageBox.question(self, "Remove", "Delete " + ", ".join(db.label_org(n) for n in names) + " from Toner, with its reports and token?\n\n"
                                              "The agent on the computer is not uninstalled.") != QMessageBox.StandardButton.Yes:
             return
         for n in names:
-            for d in [x for x in db.list_devices() if x["name"] == n]:
-                db.delete_device(d["id"])
-            db.delete_device_secrets(n)
-            agents.forget(n)
-            audit.log("agent removed", n)
+            name, org = db.split_key(n)
+            d = db.find_device(n)
+            with db.within(d["org"] if d else org):
+                if d:
+                    db.delete_device(d["id"])
+                db.delete_device_secrets(name)
+                agents.forget(name)
+                audit.log("agent removed", name)
         self.refresh()
         self.changed.emit()

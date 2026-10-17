@@ -15,9 +15,26 @@ _DT, _T = "%Y-%m-%d %H:%M", "%H:%M"
 FIELDS = ["name", "kind", "start_at", "end_at", "days", "start_time", "end_time", "scope", "enabled", "note"]
 
 
-def list_windows():
+def _windows_here():
     with db.connect() as c:
-        rows = [dict(r) for r in c.execute("SELECT * FROM maintenance ORDER BY name COLLATE NOCASE")]
+        return [dict(r) for r in c.execute("SELECT * FROM maintenance ORDER BY name COLLATE NOCASE")]
+
+
+def list_windows():
+    """The organization's windows plus Global's Shared ones (each with 'org')."""
+    rows = db.gather_own(_windows_here)
+    for r in rows:
+        for k in ("days", "scope"):
+            try:
+                r[k] = json.loads(r[k] or "[]")
+            except ValueError:
+                r[k] = []
+    return rows
+
+
+def listing():
+    """For Settings > Maintenance: in Global every organization's windows, in an organization its own and the Shared ones."""
+    rows = db.listing(_windows_here)
     for r in rows:
         for k in ("days", "scope"):
             try:
@@ -57,17 +74,16 @@ def save_window(w):
     row = {k: w.get(k) for k in FIELDS}
     row.update(name=name, days=json.dumps(sorted(set(w.get("days") or []))), scope=json.dumps(w.get("scope") or []),
                enabled=int(bool(w.get("enabled", 1))), note=w.get("note") or "")
-    with db.connect() as c:
+    with db.within(w.get("org")), db.connect() as c:
+        cols, vals = FIELDS + ["shared"], [row[k] for k in FIELDS] + [1 if w.get("shared") and db.target() == db.GLOBAL else 0]
         if w.get("id"):
-            c.execute("UPDATE maintenance SET " + ", ".join(f"{k}=?" for k in FIELDS) + " WHERE id=?",
-                      [row[k] for k in FIELDS] + [w["id"]])
+            c.execute("UPDATE maintenance SET " + ", ".join(f"{k}=?" for k in cols) + " WHERE id=?", vals + [w["id"]])
             return w["id"]
-        return c.execute(f"INSERT INTO maintenance ({','.join(FIELDS)}) VALUES ({','.join('?' * len(FIELDS))})",
-                         [row[k] for k in FIELDS]).lastrowid
+        return c.execute(f"INSERT INTO maintenance ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})", vals).lastrowid
 
 
-def delete_window(wid):
-    with db.connect() as c:
+def delete_window(wid, org=None):
+    with db.within(org), db.connect() as c:
         c.execute("DELETE FROM maintenance WHERE id=?", (wid,))
 
 
@@ -101,7 +117,18 @@ def window_for(dev, now=None, windows=None):
 
 
 def devices_in_maintenance(now=None):
-    """{inventory name: window} for every device covered by an active window right now."""
+    """{device key: window} for every device covered by an active window right now (each organization's windows cover its devices)."""
+    if not db.everything():
+        return _held_here(now)
+    out = {}
+    for org, _only in db._each_file():
+        with db.within(org):
+            part = _held_here(now)
+        out.update({db.dkey(name, org): w for name, w in part.items()})
+    return out
+
+
+def _held_here(now=None):
     wins = active_windows(now)
     if not wins:
         return {}

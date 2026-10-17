@@ -44,7 +44,11 @@ class CheckDialog(QDialog):
         self.scope.set_labels(db.group_labels()[1:])
         self.enabled = QCheckBox("Enabled")
         self.enabled.setChecked(True)
+        from ui.orgfield import OrgField, show_row
+        self.org = OrgField(self.chk)
         self.form = QFormLayout()
+        self.form.addRow("Organization", self.org)
+        show_row(self.form, self.org)
         self.target_label = QLabel("Command")
         for label, w in (("Name", self.name), ("Kind", self.kind), (self.target_label, self.target), ("Port", self.port),
                          ("Test length", self.seconds), ("Streams", self.streams), ("", self.reverse), ("", self.udp),
@@ -153,7 +157,7 @@ class CheckDialog(QDialog):
 
     def values(self):
         kind = self.kind.currentData()
-        return {"id": self.chk.get("id"), "name": self.name.text().strip(), "kind": kind,
+        return {"id": self.chk.get("id"), "org": self.org.file(), "shared": self.org.shared(), "name": self.name.text().strip(), "kind": kind,
                 "target": self.target.text().strip(), "port": self.port.value(),
                 "mode": self.mode.currentData() if kind in ("ssh", "snmp", "http") else "number",
                 "parse": self.parse.text().strip(), "expect": self.expect.text().strip(),
@@ -175,6 +179,9 @@ class CheckDialog(QDialog):
             return None
 
     def accept(self):
+        if not self.org.chosen():
+            QMessageBox.warning(self, "Organization", "Choose the organization this check belongs to.")
+            return
         if self._check():
             super().accept()
 
@@ -208,8 +215,8 @@ class CustomChecksPage(Page):
 
     def __init__(self):
         super().__init__()
-        self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["Name", "Kind", "What it checks", "Applies to", "On"])
+        self.table = QTableWidget(0, 6)
+        self.table.setHorizontalHeaderLabels(["Name", "Kind", "What it checks", "Applies to", "On", "Organization"])
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -234,14 +241,17 @@ class CustomChecksPage(Page):
         self.rows = []
 
     def refresh(self):
-        self.rows = custom.list_checks()
+        self.rows = custom.listing()
         self.hint.setVisible(not self.rows)
         kinds = dict(custom.KINDS)
         self.table.setRowCount(len(self.rows))
+        self.table.setColumnHidden(5, not db.several())
         for i, c in enumerate(self.rows):
             what = c["target"] if c["kind"] in ("ssh", "snmp", "http") else (f"port {c['port'] or 443}" if c["kind"] in ("tcp", "tls") else (f"iperf3 port {c['port'] or 5201}" if c["kind"] == "iperf" else ""))
-            for j, v in enumerate([c["name"], kinds.get(c["kind"], c["kind"]), what,
-                                   ", ".join(c["scope"]) or "all devices", "yes" if c["enabled"] else "no"]):
+            shared = "" if c["org"] == db.target() or db.everything() else "  (Shared)"
+            for j, v in enumerate([c["name"] + shared, kinds.get(c["kind"], c["kind"]), what,
+                                   ", ".join(c["scope"]) or "all devices", "yes" if c["enabled"] else "no",
+                                   db.org_name(c["org"]) + ("  (Shared)" if c.get("shared") else "")]):
                 self.table.setItem(i, j, QTableWidgetItem(v))
         self.table.resizeColumnsToContents()
 
@@ -258,7 +268,8 @@ class CustomChecksPage(Page):
         except ValueError as e:
             QMessageBox.warning(self, "Custom check", str(e))
             return
-        audit.log("custom check saved", dlg.values()["name"])
+        with db.within(dlg.values()["org"]):
+            audit.log("custom check saved", dlg.values()["name"])
         self.refresh()
 
     def add(self):
@@ -266,18 +277,25 @@ class CustomChecksPage(Page):
         if dlg.exec():
             self._save(dlg)
 
+    def _mine(self, c):
+        if c and not db.everything() and c.get("org") != db.target():
+            QMessageBox.information(self, "Custom check", "Shared items are changed from Global.")
+            return False
+        return bool(c)
+
     def edit(self):
         c = self.current()
-        if c:
+        if self._mine(c):
             dlg = CheckDialog(c, self)
             if dlg.exec():
                 self._save(dlg)
 
     def delete(self):
         c = self.current()
-        if c and QMessageBox.question(self, "Delete check", f"Delete '{c['name']}'?") == QMessageBox.StandardButton.Yes:
-            custom.delete_check(c["id"])
-            audit.log("custom check deleted", c["name"])
+        if self._mine(c) and QMessageBox.question(self, "Delete check", f"Delete '{c['name']}'?") == QMessageBox.StandardButton.Yes:
+            custom.delete_check(c["id"], c["org"])
+            with db.within(c["org"]):
+                audit.log("custom check deleted", c["name"])
             self.refresh()
 
     def refresh_dynamic(self):
@@ -341,10 +359,10 @@ class AuditPage(Page):
 
     def __init__(self):
         super().__init__()
-        self.search = QLineEdit()
-        self.search.setPlaceholderText("Filter by action, detail or user")
-        self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(["When", "Who", "What", "Detail"])
+        from ui.finder import SearchBox
+        self.search = SearchBox("Search the audit log", "Type part of an action, a detail or a user name.")    # Ctrl+F: Settings sends it here on this page
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(["When", "Who", "What", "Organization", "Detail"])
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.verticalHeader().setVisible(False)
@@ -356,9 +374,10 @@ class AuditPage(Page):
         refresh, export = QPushButton("Refresh"), QPushButton("Export CSV...")
         refresh.clicked.connect(self.refresh)
         export.clicked.connect(self.export)
-        bar.addWidget(self.search, 1)
         bar.addWidget(refresh)
         bar.addWidget(export)
+        bar.addStretch(1)
+        bar.addWidget(self.search, 1)                     # on the right, as on Inventory
         self.form.addRow(bar)
         self.form.addRow(self.table)
         self.form.addRow(self.info)
@@ -370,8 +389,9 @@ class AuditPage(Page):
     def refresh(self, *_):
         self.rows = audit.recent(1000, self.search.text().strip())
         self.table.setRowCount(len(self.rows))
+        self.table.setColumnHidden(3, not db.several())          # Global lists every organization's entries
         for i, r in enumerate(self.rows):
-            for j, v in enumerate([r["at"], r["actor"], r["action"], r["detail"]]):
+            for j, v in enumerate([r["at"], r["actor"], r["action"], db.org_name(r["org"]), r["detail"]]):
                 self.table.setItem(i, j, QTableWidgetItem(v or ""))
         self.table.resizeColumnsToContents()
         self.info.setText(f"{len(self.rows)} entr{'y' if len(self.rows) == 1 else 'ies'} shown (newest first).")
@@ -385,6 +405,7 @@ class AuditPage(Page):
         if path:
             with open(path, "w", newline="", encoding="utf-8") as fh:
                 w = csv.writer(fh)
-                w.writerow(["when", "who", "action", "detail"])
+                several = db.several()                     # the organization column only where there are organizations
+                w.writerow(["when", "who", "action"] + (["organization"] if several else []) + ["detail"])
                 for r in self.rows:
-                    w.writerow([r["at"], r["actor"], r["action"], r["detail"]])
+                    w.writerow([r["at"], r["actor"], r["action"]] + ([db.org_name(r["org"])] if several else []) + [r["detail"]])

@@ -38,7 +38,7 @@ def device_for(ip, cache={}):
         cache["_t"] = now
         for d in db.list_devices():
             try:
-                cache[socket.gethostbyname(d["host"])] = d["name"]
+                cache[socket.gethostbyname(d["host"])] = db.label_org(d["key"])      # Global: named with its organization
             except OSError:
                 pass
     return cache.get(ip, "")

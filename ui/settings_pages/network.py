@@ -10,7 +10,7 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QDateTimeEdit, QDialog, QDialogButtonBox,
                                QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QTableWidget,
                                QTableWidgetItem, QTimeEdit, QVBoxLayout, QWidget)
-from core import agents, audit, db, maintenance, proxy, tunnel
+from core import agents, audit, db, maintenance, orgs, proxy, tunnel
 from ui.widgets import GroupPicker
 from ui.settings_base import Collapsible, Page, compact_row, note, row_of, spin
 
@@ -177,7 +177,7 @@ class ProxyPage(Page):
             f"When the proxy asks for a second step, type the code from your authenticator app (or touch your YubiKey) when Toner "
             f"connects. {where} Checks that run by themselves cannot ask you, so use a secret key for those." if code == "ask" else
             f"Toner works out the current code itself from the secret key (the text shown beside the QR code when the account was "
-            f"set up). {where} The key is kept in Credential Manager."
+            f"set up). {where} The key is kept in Toner's vault."
             + (" A key is saved; leave the box empty to keep it." if self._have_key else "") if code == "totp" else "")
         on = self.t_enabled.isChecked()
         for w in self.t_fields:
@@ -282,7 +282,7 @@ class ProxyPage(Page):
         self.password.clear()
         self._forget = False
         have = bool(keyring.get_password(db.SERVICE, proxy.GLOBAL_SECRET))
-        self.pw_note.setText("A password is saved in Credential Manager. Leave the box empty to keep it." if have else "")
+        self.pw_note.setText("A password is saved in the vault. Leave the box empty to keep it." if have else "")
         self.form.setRowVisible(self.forget_row, have)                    # no empty rows when nothing is saved
         self.form.setRowVisible(self.pw_note, have)
         self.otp.setCurrentIndex(max(0, self.otp.findData(s.get("otp") or "")))
@@ -306,7 +306,7 @@ class ProxyPage(Page):
         self._t_forget = False
         self._t_have_pw = bool(keyring.get_password(db.SERVICE, tunnel.SECRET))
         self._t_have_key = bool(keyring.get_password(db.SERVICE, tunnel.OTP_SECRET))
-        self.t_pw_note.setText("A password is saved in Credential Manager. Leave the box empty to keep it." if self._t_have_pw else "")
+        self.t_pw_note.setText("A password is saved in the vault. Leave the box empty to keep it." if self._t_have_pw else "")
         self.tform.setRowVisible(self.t_forget_row, self._t_have_pw)
         self.tform.setRowVisible(self.t_pw_note, self._t_have_pw)
         self.adapt()
@@ -415,6 +415,10 @@ class AgentsPage(Page):
                              "Leave it off to keep each computer as it was installed. Only agents from this version of Toner on take it.")
         self.download = QPushButton("Download agent package...")
         self.download.setProperty("primary", True)
+        self.dest = QComboBox()                                           # Global: which organization the package signs computers up to
+        self.dest.setProperty("notSetting", True)
+        self.dest.setToolTip("The package carries that organization's sign-up key, so the computers it signs up are added there.")
+        self.dest_label = QLabel("Signs computers up to:")
         self.port = spin(1, 65535)
         self.port.setValue(agents.DEFAULT_PORT)
         self.bind = QLineEdit()
@@ -448,7 +452,7 @@ class AgentsPage(Page):
         self.form.addRow("Sign-up key", row_of(self.key, self.newkey))
         self.form.addRow("Report every", self.minutes)
         self.form.addRow("", self.push)
-        self.form.addRow("Package", self.download)
+        self.form.addRow("Package", compact_row(self.download, self.dest_label, self.dest))
         self.form.addRow("Computers", self.computers)
         adv = QWidget()                                                   # what most people never change
         af = QFormLayout(adv)
@@ -472,11 +476,22 @@ class AgentsPage(Page):
             "How to monitor: Agent, then use its Windows tab > Get agent script. Toner only receives reports while it is running (in the tray "
             "is fine). Windows may ask whether to allow Toner through its firewall the first time; allow it on the networks the agents are on.")
         self.lay.insertWidget(1, Collapsible("How agents work", self.intro))
+        for w in (self.enabled, self.port, self.bind, self.address, self.renew, self.token_days):
+            w.setProperty("globalOnly", True)                             # one receiver for every organization
         self.renew.clicked.connect(self._renew)
         self.newkey.clicked.connect(self._newkey)
         self.download.clicked.connect(self._download)
 
     def load(self):
+        inside = db.home() != db.GLOBAL
+        self.enroll.setText(f"Let computers sign themselves up to {db.org_name(db.home())} with the agent package" if inside
+                            else "Let computers sign themselves up with the agent package")
+        self.dest.clear()
+        self.dest.addItem("Global", db.GLOBAL)
+        for o in orgs.list_orgs(archived=False) if not inside else []:
+            self.dest.addItem(o["name"], o["id"])
+        self.dest.setVisible(self.dest.count() > 1)
+        self.dest_label.setVisible(self.dest.count() > 1)
         self.enabled.setChecked(bool(db.get_setting("agent_enabled")))
         self.enroll.setChecked(bool(db.get_setting("agent_enroll")))
         self.port.setValue(int(db.get_setting("agent_port") or agents.DEFAULT_PORT))
@@ -571,21 +586,28 @@ class AgentsPage(Page):
         if not self._stored_matches():
             QMessageBox.information(self, "Agent package", "Save your changes first: the package is made from the saved settings.")
             return
-        if not self.enroll.isChecked():
+        org = db.home() if db.home() != db.GLOBAL else (self.dest.currentData() or db.GLOBAL)    # whose key goes in it
+        with db.within(org):
+            enroll_on = bool(db.get_setting("agent_enroll"))
+            minutes = int(db.get_setting("agent_minutes") or 5)
+        if not enroll_on:
             if QMessageBox.question(self, "Agent package", "Sign-up is off, so computers cannot add themselves with this package. "
                                     "Make it anyway?") != QMessageBox.StandardButton.Yes:
                 return
-        path, _ = QFileDialog.getSaveFileName(self, "Save agent package", "Toner-Agent.zip", "Zip file (*.zip)")
+        suffix = f"-{agents.safe_name(db.org_name(org))}" if org != db.GLOBAL else ""
+        path, _ = QFileDialog.getSaveFileName(self, "Save agent package", f"Toner-Agent{suffix}.zip", "Zip file (*.zip)")
         if not path:
             return
         try:
-            data = agents.package_bytes(self.minutes.value())
+            with db.within(org):
+                data = agents.package_bytes(minutes)
             with open(path, "wb") as f:
                 f.write(data)
         except Exception as e:
             QMessageBox.warning(self, "Agent package", f"The package could not be made: {e}")
             return
-        audit.log("agent package downloaded", f"reports every {self.minutes.value()} min")
+        with db.within(org):
+            audit.log("agent package downloaded", f"reports every {minutes} min")
         QMessageBox.information(self, "Agent package", f"Saved {path}.\n\nCopy it to the Windows computer, unzip it, and double-click "
                                 f"Install-TonerAgent.cmd. The package holds the sign-up key: keep it private.")
 
@@ -632,7 +654,11 @@ class MaintenanceDialog(QDialog):
         self.scope.set_labels(db.group_labels()[1:])
         self.enabled = QCheckBox("Enabled")
         self.enabled.setChecked(True)
+        from ui.orgfield import OrgField, show_row
+        self.org = OrgField(self.win)
         self.form = QFormLayout()
+        self.form.addRow("Organization", self.org)
+        show_row(self.form, self.org)
         daybox = QWidget()
         dl = QHBoxLayout(daybox)
         dl.setContentsMargins(0, 0, 0, 0)
@@ -681,7 +707,8 @@ class MaintenanceDialog(QDialog):
             self.form.setRowVisible(w, once if key in ("start", "end") else not once)
 
     def values(self):
-        return {"id": self.win.get("id"), "name": self.name.text().strip(), "kind": self.kind.currentData(),
+        return {"id": self.win.get("id"), "org": self.org.file(), "shared": self.org.shared(),
+                "name": self.name.text().strip(), "kind": self.kind.currentData(),
                 "start_at": self.start.dateTime().toString("yyyy-MM-dd HH:mm"),
                 "end_at": self.end.dateTime().toString("yyyy-MM-dd HH:mm"),
                 "days": [i for i, c in enumerate(self.days) if c.isChecked()],
@@ -689,6 +716,9 @@ class MaintenanceDialog(QDialog):
                 "scope": self.scope.selected(), "enabled": int(self.enabled.isChecked()), "note": self.note.text().strip()}
 
     def accept(self):
+        if not self.org.chosen():
+            QMessageBox.warning(self, "Organization", "Choose the organization this window belongs to.")
+            return
         try:
             maintenance.validate(self.values())
         except ValueError as e:
@@ -703,8 +733,8 @@ class MaintenancePage(Page):
 
     def __init__(self):
         super().__init__()
-        self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["Name", "When", "Applies to", "State", "Note"])
+        self.table = QTableWidget(0, 6)
+        self.table.setHorizontalHeaderLabels(["Name", "When", "Applies to", "State", "Note", "Organization"])
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -730,16 +760,18 @@ class MaintenancePage(Page):
         self.rows = []
 
     def refresh(self):
-        self.rows = maintenance.list_windows()
+        self.rows = maintenance.listing()
         now = datetime.now()
         self.table.setRowCount(len(self.rows))
+        self.table.setColumnHidden(5, not db.several())
         active = 0
         for i, w in enumerate(self.rows):
             on = maintenance.is_active(w, now)
             active += on
             state = "ACTIVE" if on else ("off" if not w["enabled"] else "scheduled")
-            for j, v in enumerate([w["name"], maintenance.describe(w), ", ".join(w["scope"]) or "all devices", state,
-                                   w.get("note") or ""]):
+            shared = "" if w["org"] == db.target() or db.everything() else "  (Shared)"
+            for j, v in enumerate([w["name"] + shared, maintenance.describe(w), ", ".join(w["scope"]) or "all devices", state,
+                                   w.get("note") or "", db.org_name(w["org"]) + ("  (Shared)" if w.get("shared") else "")]):
                 it = QTableWidgetItem(v)
                 if on and j == 3:
                     it.setForeground(QColor("#e6a100"))
@@ -761,7 +793,8 @@ class MaintenancePage(Page):
         except ValueError as e:
             QMessageBox.warning(self, "Maintenance window", str(e))
             return
-        audit.log("maintenance window saved", f"{dlg.values()['name']} ({maintenance.describe(dlg.values())})")
+        with db.within(dlg.values()["org"]):
+            audit.log("maintenance window saved", f"{dlg.values()['name']} ({maintenance.describe(dlg.values())})")
         self.refresh()
 
     def add(self):
@@ -769,16 +802,23 @@ class MaintenancePage(Page):
         if dlg.exec():
             self._save(dlg)
 
+    def _mine(self, w):
+        if w and not db.everything() and w.get("org") != db.target():
+            QMessageBox.information(self, "Maintenance window", "Shared items are changed from Global.")
+            return False
+        return bool(w)
+
     def edit(self):
         w = self.current()
-        if w:
+        if self._mine(w):
             dlg = MaintenanceDialog(w, self)
             if dlg.exec():
                 self._save(dlg)
 
     def delete(self):
         w = self.current()
-        if w and QMessageBox.question(self, "Delete window", f"Delete '{w['name']}'?") == QMessageBox.StandardButton.Yes:
-            maintenance.delete_window(w["id"])
-            audit.log("maintenance window deleted", w["name"])
+        if self._mine(w) and QMessageBox.question(self, "Delete window", f"Delete '{w['name']}'?") == QMessageBox.StandardButton.Yes:
+            maintenance.delete_window(w["id"], w.get("org"))
+            with db.within(w.get("org")):
+                audit.log("maintenance window deleted", w["name"])
             self.refresh()

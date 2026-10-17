@@ -313,8 +313,14 @@ print("== a Serial session, end to end")
 sid_s = [x for x in sessions.list_sessions() if x["kind"] == "serial"][0]["id"]
 st.open_session(sid_s); p5 = st.tabs.currentWidget(); pump(lambda: p5.connected())
 check("a serial tab has a Send break button, and the others do not", not p5.break_btn.isHidden() and p5.break_btn.isEnabled() and p5.kind == "serial")
-p5.term.data_out.emit(b"enable\r"); pump(lambda: "enable" in screen(p5), 750)      # up to 15 s: the loopback echo can be slow on CI
+p5.term.data_out.emit(b"enable\r"); pump(lambda: "enable" in screen(p5))
 check("what you type goes out the port (a loopback sends it straight back)", "enable" in screen(p5), screen(p5))
+from core import serialconn
+early = serialconn.SerialSession("loop://", 115200); got = []
+early.data.connect(got.append)
+early.send(b"typed early\r")                      # before the port is open: as when someone types straight after Connect (and as CI hit)
+early.start(); pump(lambda: b"typed early" in b"".join(got)); early.stop(); early.wait(3000)
+check("what is typed while the port is still opening is sent once it is open, not lost", b"typed early" in b"".join(got), got)
 p5.break_btn.click(); check("Send break does no harm", p5.connected())
 check("the log says Serial, and shows the port", [x for x in sessionlog.list_sessions() if x["kind"] == "serial"] and "Opening loop://" in screen(p5) or "loop://" in p5.status.text())
 p5.disconnect_btn.click(); pump(lambda: not p5.connected()); check("Disconnect works", "Disconnected by user" in screen(p5)); st.close_tab(0)

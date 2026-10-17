@@ -7,7 +7,7 @@ import requests
 from core import checks, custom, db, profiles, reach, support, vendors, winmon
 from core.nettools import resolve_host
 from drivers import DRIVERS
-from drivers.base import AuthRejected, Driver, Result, ERROR
+from drivers.base import AuthRejected, Driver, Result, ERROR, WARN
 from core import quiet
 
 
@@ -42,10 +42,28 @@ def reachability(dev, opts):
         return []
 
 
+def stored_copy_note(dev):
+    """A 'credentials' WARN row when the device's password is linked to a password manager item that could not be read, so the
+    check used Toner's stored copy (core/extstore.py); [] otherwise."""
+    try:
+        from core import extstore
+        if extstore.active() == "toner":
+            return []
+        names = [db.secret_name(dev["name"])]
+        if dev.get("profile_id"):
+            p = profiles.of(dev)
+            if p:
+                names.append(db.secret_name(f"profile:{p['name']}"))
+        note = extstore.fallback_note(dev["name"], names)
+    except Exception:
+        return []
+    return [Result(dev["name"], "credentials", WARN, "stored copy", note)] if note else []
+
+
 def run_one(dev, thresholds, opts=None):
     opts = opts or db.runtime_options()
     opts = {**opts, "disabled": db.disabled_for(dev, opts.get("disabled", ()))}      # the device's own list of checks, if it has one
-    pre = reachability(dev, opts)
+    pre = reachability(dev, opts) + stored_copy_note(dev)
     attempts = 1 + max(0, int(opts.get("retries", 0)))
     for attempt in range(1, attempts + 1):
         try:
@@ -81,9 +99,30 @@ def run_all(devices, thresholds, on_results=None, workers=10, opts=None):
     """Run every device in parallel; call on_results(list) as each one finishes.
     `thresholds` is one dict for everyone, or a function dev -> dict (per-device overrides)."""
     for_dev = thresholds if callable(thresholds) else (lambda _d: thresholds)
+    here, per_org = db.target(), {}
+
+    def setup(d):
+        """A device from another organization's file (Global listing everything, or a Shared device) is checked with that
+        organization's thresholds, checks and timeouts."""
+        org = d.get("org")
+        if org is None or org == here:
+            return for_dev(d), opts
+        with db.within(org):
+            if org not in per_org:
+                per_org[org] = (db.get_thresholds(), db.get_setting("threshold_overrides"), db.runtime_options())
+            base, rules, own = per_org[org]
+            return db.thresholds_for(d, base, rules), own
+
+    def one(d, th, o):
+        with db.within(d.get("org")):                     # its baselines, secrets and history are in its own file
+            res = run_one(d, th, o)
+        for r in res:
+            r.org = d.get("org")
+        return res
+
     allres = []
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futs = [pool.submit(run_one, d, for_dev(d), opts) for d in devices]
+        futs = [pool.submit(one, d, *setup(d)) for d in devices]
         for f in as_completed(futs):
             res = f.result()
             allres.extend(res)

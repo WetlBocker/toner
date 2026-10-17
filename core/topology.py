@@ -17,14 +17,17 @@ def neighbours_of(dev):
     creds, port = snmp.credentials_for(dev)
     with snmp.Client(dev["host"], port, creds, timeout=4, retries=1) as c:
         rows = snmp.neighbors(c)
-    return [{"device": dev["name"], **r} for r in rows]
+    return [{"device": dev.get("key") or dev["name"], **r} for r in rows]       # Global: keyed apart from same-named devices
 
 
 def collect(devices, workers=6, on_done=None):
     """Ask each device for its neighbours. Returns (rows, errors) where errors is {device: message}."""
     rows, errors = [], {}
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        futs = {pool.submit(neighbours_of, d): d["name"] for d in devices}
+        def one(d):
+            with db.within(d.get("org")):                  # its SNMP settings and passwords are in its own organization
+                return neighbours_of(d)
+        futs = {pool.submit(one, d): d.get("key") or d["name"] for d in devices}
         for f in as_completed(futs):
             name = futs[f]
             try:
@@ -58,7 +61,8 @@ def build_graph(rows):
     """Turn neighbour rows into (nodes, links). A node is an inventory device or an outside neighbour; a link is
     one cable: the same cable reported from both ends is merged. nodes: {id: {'inventory': bool, 'addr': str}},
     links: [{'a','b','a_port','b_port','protocols'}]."""
-    inv = {_key(d["name"]): d["name"] for d in db.list_devices()}
+    inv = {_key(d["name"]): d["key"] for d in db.list_devices()}
+    inv.update({_key(d["key"]): d["key"] for d in db.list_devices()})
     nodes, links = {}, []
 
     def node(name, addr=""):
@@ -140,11 +144,4 @@ def layout(nodes, links, width=900, height=600, iterations=250, seed=7):
 
 def latest_status():
     """{device: worst status in the most recent run that included it}."""
-    from drivers.base import SEVERITY
-    out = {}
-    with db.connect() as c:
-        for r in c.execute("SELECT device, status FROM results WHERE run_id = (SELECT MAX(id) FROM runs)"):
-            base = (r["device"] or "").split(" / ")[0]
-            if SEVERITY.get(r["status"], 0) >= SEVERITY.get(out.get(base, "OK"), 0):
-                out[base] = r["status"]
-    return out
+    return {k: v["status"] for k, v in db.device_health().items()}

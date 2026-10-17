@@ -76,9 +76,8 @@ class ServicesDialog(QDialog):
         self.setWindowTitle(f"Services - {dev['name']}")
         self.resize(900, 620)
         self.setModal(False)
-        self.search = QLineEdit()
-        self.search.setPlaceholderText("Search services")
-        self.search.setClearButtonEnabled(True)
+        from ui.finder import SearchBox
+        self.search = SearchBox("Search services", page=self)
         self.filter = QComboBox()
         self.filter.addItems(FILTERS)
         self.refresh_btn = QPushButton("Refresh")

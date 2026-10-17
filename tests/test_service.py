@@ -69,9 +69,9 @@ srv.stop()
 print("== service (scheduler without a window)")
 log = []
 bk = []
-service.run_backups = lambda groups=None, do_notify=True, scheduled=True: bk.append(list(groups or [])) or [Result("core1", "config backup", "WARN", "changed")]
+service.run_backups = lambda groups=None, do_notify=True, scheduled=True, own=False: bk.append(list(groups or [])) or [Result("core1", "config backup", "WARN", "changed")]
 chk = []
-service.run_checks = lambda groups=None, do_notify=True, scheduled=True, on_result=None: chk.append(list(groups or [])) or [Result("core1", "cpu", "OK", "1%")]
+service.run_checks = lambda groups=None, do_notify=True, scheduled=True, on_result=None, own=False: chk.append(list(groups or [])) or [Result("core1", "cpu", "OK", "1%")]
 d = service.Daemon(log=log.append)
 db.set_setting("schedule_enabled", True); db.set_setting("schedule_minutes", 30); db.set_setting("backup_enabled", True); db.set_setting("backup_hours", 6)
 d._arm(); t0 = datetime.now()
@@ -93,7 +93,7 @@ th = threading.Thread(target=lambda: d4.run(poll=0.05), daemon=True); th.start()
 check("an error in one run is logged and the service keeps going", any("disk full" in l for l in log) and not th.is_alive())
 
 print("== command line")
-service.run_checks = lambda groups=None, do_notify=True, scheduled=True, on_result=None: [Result("core1", "cpu", "WARN", "85%", "high", numeric=85.0), Result("edge-fw", "cpu", "OK", "5%")]
+service.run_checks = lambda groups=None, do_notify=True, scheduled=True, on_result=None, own=False: [Result("core1", "cpu", "WARN", "85%", "high", numeric=85.0), Result("edge-fw", "cpu", "OK", "5%")]
 def run(*args):
     out = io.StringIO()
     with redirect_stdout(out):

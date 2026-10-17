@@ -2,22 +2,11 @@
 from core import db
 
 def _latest():
-    """The rows (device, check, status, value, message) of the newest run that included each device."""
-    out = []
-    with db.connect() as c:
-        newest = {}
-        for r in c.execute("SELECT device, MAX(run_id) rid FROM results WHERE check_name != 'config backup' GROUP BY device"):
-            b = (r["device"] or "").split(" / ")[0]
-            newest[b] = max(newest.get(b, 0), r["rid"])
-        runs = {}
-        for b, rid in newest.items():
-            runs.setdefault(rid, set()).add(b)
-        for rid, bases in runs.items():
-            for r in c.execute("SELECT device, check_name, status, value, message FROM results WHERE run_id=?", (rid,)):
-                if (r["device"] or "").split(" / ")[0] in bases and r["check_name"] != "config backup":
-                    out.append({"device": r["device"], "check": r["check_name"], "status": r["status"], "value": r["value"] or "",
-                                "message": r["message"] or ""})
-    return out
+    """The rows (device, check, status, value, message) of the newest run that included each device, in every file of the view
+    (device labels are keys, see db.dkey)."""
+    rows, _at = db.latest_results()
+    return [{"device": r["device"], "check": r["check_name"], "status": r["status"], "value": r["value"] or "", "message": r["message"] or ""}
+            for r in rows]
 
 
 # the groups the Overview shows, and their headings
@@ -28,17 +17,18 @@ SECTIONS = [("silent", "Not reporting"), ("reboot", "Waiting for a reboot"), ("d
 def summary():
     """{'computers': n, 'by': {'agent': n, ...}, 'sections': {key: [(device, text)]}} or None when there are no Windows computers."""
     from core import winmon
-    wins = [d for d in db.list_devices() if d["vendor"] == "windows" and d["enabled"]]
-    names = {d["name"] for d in db.list_devices()}
+    every = db.list_devices()
+    wins = [d for d in every if d["vendor"] == "windows" and d["enabled"]]
+    names = {d["key"] for d in every}
     by = {}
     for d in wins:
         by[winmon.transport(d)] = by.get(winmon.transport(d), 0) + 1
     sections = {k: [] for k, _ in SECTIONS}
-    win_names = {d["name"] for d in wins}
+    win_names = {d["key"] for d in wins}
     for r in _latest():
-        dev, check, status = r["device"], r["check"], r["status"]
-        is_win = dev in win_names
-        if check.startswith("certificate") and dev in names and status in ("WARN", "FAIL", "ERROR") and r["value"] != "no certificate":
+        key, check, status = r["device"], r["check"], r["status"]
+        is_win, dev = key in win_names, db.label_org(key)
+        if check.startswith("certificate") and key in names and status in ("WARN", "FAIL", "ERROR") and r["value"] != "no certificate":
             sections["certs"].append((dev, f"{r['value']}: {r['message']}" if r["message"] else r["value"]))
         if not is_win:
             continue

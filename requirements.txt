@@ -14,3 +14,4 @@ cryptography>=46
 PySocks>=1.7
 pyserial>=3.5
 pypsrp>=0.9
+keeper-secrets-manager-core>=17.3

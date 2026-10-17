@@ -58,7 +58,7 @@ class ChannelDialog(QDialog):
                 if kind == "secret":
                     w.setEchoMode(QLineEdit.EchoMode.Password)
                     if self.stored.get(key):
-                        w.setPlaceholderText("saved in Credential Manager - leave blank to keep it")
+                        w.setPlaceholderText("saved in the vault - leave blank to keep it")
             self.inputs[key] = (kind, w)
             form.addRow(label, w)
 

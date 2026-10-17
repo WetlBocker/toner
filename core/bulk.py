@@ -36,7 +36,7 @@ def apply(devices, ops):
             new["enabled"] = int(bool(ops["enabled"]))
         before = {k: d.get(k) for k in db.DEVICE_FIELDS}
         db.save_device(new)
-        after = {k: db.get_device(d["id"]).get(k) for k in db.DEVICE_FIELDS}
+        after = {k: db.get_device(d["id"], d.get("org")).get(k) for k in db.DEVICE_FIELDS}
         if before != after:
             changed += 1
     audit.log("bulk edit", f"{len(devices)} device(s): {', '.join(sorted(ops))}")

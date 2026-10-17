@@ -1,10 +1,11 @@
+import csv
 import threading
 from datetime import datetime
 
 import keyring
 from PySide6.QtCore import QObject, QProcess, QThread, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QFontDatabase
-from PySide6.QtWidgets import (QAbstractItemView, QApplication as _QApp, QCheckBox, QComboBox, QCompleter, QGroupBox, QHBoxLayout, QLabel,
+from PySide6.QtWidgets import (QAbstractItemView, QApplication as _QApp, QCheckBox, QComboBox, QCompleter, QFileDialog, QGroupBox, QHBoxLayout, QLabel,
                                QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QSpinBox, QSplitter,
                                QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
 from core import db, jump, nettools, profiles, reach, sessionlog, snmp, vendors
@@ -43,9 +44,10 @@ class DevicePicker(QComboBox):
         self.blockSignals(True)
         self.clear()
         self.addItem("(enter manually)", None)
-        paths = db.folder_paths()
+        several = db.several()
         for d in db.list_devices():
-            where = f"   [{paths[d['folder_id']]}]" if d.get("folder_id") in paths else ""
+            place = " / ".join(x for x in ((db.org_name(d["org"]) if several else ""), db.path_of(d)) if x)    # Global: whose it is
+            where = f"   [{place}]" if place else ""
             self.addItem(f"{d['name']}  —  {d['host']}{where}", d)
         i = self.findText(cur)
         self.setCurrentIndex(max(0, i))
@@ -460,6 +462,8 @@ class SnmpTab(QWidget):
         self.go.setProperty("primary", True)
         self.stop.setEnabled(False)
         self.copy_btn, self.clear_btn = QPushButton("Copy results"), QPushButton("Clear")
+        self.save_btn = QPushButton("Save...")
+        self.save_btn.setToolTip("Save the results as a CSV file")
         self.status = QLabel("")
         self.table = QTableWidget(0, len(self.RAW_COLS))
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -474,7 +478,7 @@ class SnmpTab(QWidget):
         lay.addWidget(self.v3)
         lay.addLayout(_row("Operation", self.op, "OID", self.oid))
         lay.addLayout(_row("Timeout", self.timeout, "Retries", self.retries, "Max rows", self.max_rows,
-                           self.go, self.stop, self.copy_btn, self.clear_btn))
+                           self.go, self.stop, self.copy_btn, self.save_btn, self.clear_btn))
         lay.addWidget(self.status)
         lay.addWidget(self.table, 1)
 
@@ -486,6 +490,7 @@ class SnmpTab(QWidget):
         self.go.clicked.connect(self.start)
         self.stop.clicked.connect(self.halt)
         self.copy_btn.clicked.connect(self.copy)
+        self.save_btn.clicked.connect(self.save)
         self.clear_btn.clicked.connect(self.clear)
         self.oid.returnPressed.connect(self.start)
         self._adapt()
@@ -555,6 +560,20 @@ class SnmpTab(QWidget):
         head = "\t".join(self.table.horizontalHeaderItem(c).text() for c in cols)
         body = ["\t".join(self.table.item(r, c).text() if self.table.item(r, c) else "" for c in cols) for r in sel]
         _QApp.clipboard().setText("\n".join([head] + body))
+
+    def save(self):
+        """Every row in the table (whatever the operation showed: OIDs, System info, Interfaces...) to a CSV file."""
+        host = "".join(ch if ch.isalnum() or ch in ".-_" else "-" for ch in self.host.text().strip()) or "snmp"
+        path, _ = QFileDialog.getSaveFileName(self, "Save SNMP results", f"snmp-{host}-{datetime.now():%Y%m%d-%H%M}.csv",
+                                              "CSV files (*.csv);;Text files (*.txt)")
+        if not path:
+            return
+        cols = range(self.table.columnCount())
+        with open(path, "w", encoding="utf-8-sig", newline="") as f:          # (a BOM, so Excel reads it as UTF-8)
+            out = csv.writer(f)
+            out.writerow([self.table.horizontalHeaderItem(c).text() for c in cols])
+            for r in range(self.table.rowCount()):
+                out.writerow([self.table.item(r, c).text() if self.table.item(r, c) else "" for c in cols])
 
     # ---------- running
     def running(self):

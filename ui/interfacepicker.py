@@ -17,9 +17,8 @@ class InterfacePicker(QDialog):
         gone = [(n, "Not on the device now") for n in chosen if n.lower() not in known]      # chosen before, but no longer there: kept, so it can be dropped on purpose
         self.rows = gone + list(interfaces)
         picked = {n.lower() for n in chosen}
-        self.search = QLineEdit()
-        self.search.setPlaceholderText("Filter by name")
-        self.search.setClearButtonEnabled(True)
+        from ui.finder import SearchBox
+        self.search = SearchBox("Search interfaces", "Type part of an interface name.", page=self)
         self.table = QTableWidget(len(self.rows), len(self.COLS))
         self.table.setHorizontalHeaderLabels(self.COLS)
         self.table.verticalHeader().setVisible(False)

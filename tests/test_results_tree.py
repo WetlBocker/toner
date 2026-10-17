@@ -68,12 +68,12 @@ check("open device stays open across a rebuild", d["quiet"].isExpanded() and d["
 w.table.expandAll(); check("expand all", all(t.isExpanded() for t in tops()))
 w.table.collapseAll(); check("collapse all", not any(t.isExpanded() for t in tops()) and not w.expanded)
 
-w.filter.setCurrentIndex(1)
+w.show_filter("problems")
 d = {t.text(0): t for t in tops()}
 check("problems only: all-OK device hidden", "quiet" not in d and set(d) == {"core-sw1", "dead", "edge-fw", "udm"}, list(d))
 check("problems only: only the problem checks inside", [d["core-sw1"].child(i).text(1) for i in range(d["core-sw1"].childCount())] == ["memory"]
       and d["udm"].childCount() == 1)
-w.filter.setCurrentIndex(0)
+w.show_filter("all")
 
 # live updates: arrival order, placeholders for devices still running, open rows stay open
 RES2 = list(RES)

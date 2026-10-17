@@ -21,7 +21,9 @@ def jump_device(dev):
     s = spec(dev)
     if not s:
         return None
-    for d in db.list_devices():
+    with db.within(dev.get("org")):                       # a jump host from the device's own organization (or a Shared one)
+        devs = db.list_devices()
+    for d in devs:
         if d["name"] == s["device"] and d["name"] != dev.get("name"):
             return profiles.resolve(d)
     raise ValueError(f"The jump host '{s['device']}' is no longer in the inventory.")

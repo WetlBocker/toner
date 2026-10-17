@@ -34,6 +34,26 @@ SVG = {
     # the four panes
     "desktop": '<rect x="6" y="6" width="25" height="25" rx="2" fill="#0078D4"/><rect x="33" y="6" width="25" height="25" rx="2" fill="#0078D4"/>'
                '<rect x="6" y="33" width="25" height="25" rx="2" fill="#0078D4"/><rect x="33" y="33" width="25" height="25" rx="2" fill="#0078D4"/>',
+    # ---- where passwords are kept (Settings > Security > Store passwords in)
+    # Toner's own vault: a padlock on a slate tile
+    "toner": '<rect width="64" height="64" rx="14" fill="#334155"/>'
+             '<path d="M22 29 V22 A10 10 0 0 1 42 22 V29" fill="none" stroke="#fff" stroke-width="5"/>'
+             '<rect x="16" y="28" width="32" height="24" rx="4" fill="#fff"/><circle cx="32" cy="39" r="4" fill="#334155"/>',
+    # a blue tile with a white shield, its right half lighter
+    "bitwarden": '<rect width="64" height="64" rx="14" fill="#175DDC"/>'
+                 '<path d="M16 12 H48 V34 Q48 46 32 54 Q16 46 16 34 Z" fill="#fff"/>'
+                 '<path d="M32 17 H43 V34 Q43 43 32 48 Z" fill="#175DDC" opacity=".35"/>',
+    # the same shield on a dark tile, with a cog for "your own server"
+    "vaultwarden": '<rect width="64" height="64" rx="14" fill="#1F2937"/>'
+                   '<path d="M16 12 H48 V34 Q48 46 32 54 Q16 46 16 34 Z" fill="#fff"/>'
+                   '<circle cx="32" cy="31" r="9" fill="none" stroke="#1F2937" stroke-width="4" stroke-dasharray="4 3"/>'
+                   '<circle cx="32" cy="31" r="3.5" fill="#1F2937"/>',
+    # a yellow tile with a black K
+    "keeper": '<rect width="64" height="64" rx="14" fill="#FFC700"/>'
+              '<path d="M20 14 H28 V29 L39 14 H48 L35 32 L48 50 H39 L28 35 V50 H20 Z" fill="#111"/>',
+    # a blue disc with a white keyhole
+    "onepassword": '<circle cx="32" cy="32" r="29" fill="#0572EC"/><circle cx="32" cy="32" r="21" fill="none" stroke="#fff" stroke-width="4"/>'
+                   '<rect x="28.5" y="19" width="7" height="26" rx="3.5" fill="#fff"/>',
 }
 _cache = {}
 
@@ -47,6 +67,11 @@ def _pixmap(name, size):
     QSvgRenderer(QByteArray(svg.encode())).render(p, QRectF(0, 0, size, size))
     p.end()
     return QPixmap.fromImage(img)
+
+
+def vault_icon(kind):
+    """The mark for a place passwords are kept: 'toner', 'bitwarden', 'vaultwarden', 'keeper', 'onepassword'."""
+    return channel_icon(kind if kind in SVG else "toner")
 
 
 def channel_icon(ctype):

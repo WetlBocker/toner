@@ -40,6 +40,7 @@ class StatusStrip(QWidget):
         self.probe_state, self._probing = None, False
         self.opening, self.tunnel_error = False, ""
         self.proxy = Part()
+        self.vault = Part()                             # where passwords are kept, and whether the password manager answers
         self.probed.connect(self._on_probe)
         self.tunnel_done.connect(self._on_tunnel_done)
         self.run, self.schedule, self.backups, self.receiver, self.notify = Part(), Part(), Part(), Part(), Part()
@@ -54,13 +55,14 @@ class StatusStrip(QWidget):
         lay.addWidget(self.run)
         lay.addWidget(self.progress)
         lay.addStretch()
-        for i, w in enumerate((self.proxy, self.schedule, self.backups, self.receiver, self.notify)):
+        for i, w in enumerate((self.proxy, self.vault, self.schedule, self.backups, self.receiver, self.notify)):
             if i:
                 dot = QLabel("·")
                 dot.setProperty("muted", True)
                 lay.addWidget(dot)
             lay.addWidget(w)
         self.proxy.clicked.connect(self._proxy_clicked)
+        self.vault.clicked.connect(self._vault_clicked)
         self.run.clicked.connect(lambda: self.navigate.emit("Results", ""))
         self.schedule.clicked.connect(lambda: self.navigate.emit("Settings", "Checks/Schedule"))
         self.backups.clicked.connect(lambda: self.navigate.emit("Settings", "Config backups"))
@@ -71,6 +73,10 @@ class StatusStrip(QWidget):
         self.timer.setInterval(30_000)
         self.timer.timeout.connect(self._tick)
         self.timer.start()
+        self.vault_timer = QTimer(self)           # the password manager is synced in the background: follow it closely
+        self.vault_timer.setInterval(2_000)
+        self.vault_timer.timeout.connect(self.show_vault)
+        self.vault_timer.start()
         self.restyle()
 
     def _tick(self):
@@ -162,6 +168,43 @@ class StatusStrip(QWidget):
         worked = f" The last connection through it worked {display.ago(datetime.fromtimestamp(last[1]).strftime('%Y-%m-%d %H:%M:%S'))}." if last and last[0] else ""
         return f"{dot('OK')} Proxy connected", f"{cfg.label()} answers. The sign-in is checked each time a connection is made.{worked} Settings > Proxy"
 
+    # ---------------------------------------------------------------- where passwords are kept
+    def _vault_part(self):
+        """(text, tooltip): Toner's vault, or the password manager and whether the last round with it worked."""
+        from core import extstore, extvault, passvault
+        kind = extstore.active()
+        if kind == "toner":
+            return "Passwords: Toner's vault", "Passwords are kept in Toner's encrypted vault. Settings > Security"
+        name = extvault.LABELS[kind]
+        if not passvault.is_open():
+            return f"{name}: connecting...", "Settings > Security"
+        s = extstore.status()
+        if not s.get("at") or s.get("kind") != kind:
+            return f"{name}: connecting...", f"Connecting to {name}. Settings > Security"
+        dot = lambda word: f"<span style='color:{st.ink(word)}'>&#9679;</span>"
+        line = extstore.status_text(s)
+        if not s.get("connected"):
+            return f"{dot('FAIL')} {name} disconnected", f"{line} Click to try again."
+        if s.get("problems"):
+            return f"{dot('WARN')} {name} connected, but a collection is missing", f"{line} Settings > Security"
+        n = s.get("waiting", 0)
+        if n:
+            return f"{dot('WARN')} {name} connected, {n} change{'s' if n != 1 else ''} waiting", f"{line} Settings > Security"
+        return f"{dot('OK')} {name} connected", f"{line} Settings > Security"
+
+    def show_vault(self):
+        text, tip = self._vault_part()
+        if self.vault.text() != text:
+            self.vault.setText(text)
+        self.vault.setToolTip(tip)
+
+    def _vault_clicked(self):
+        from core import extstore
+        s = extstore.status()
+        if extstore.active() != "toner" and s.get("at") and not s.get("connected"):
+            extstore.kick()                       # try again now
+        self.navigate.emit("Settings", "Security")
+
     # ---------------------------------------------------------------- the run going now
     def on_progress(self, done, total):
         self.running = (done, total) if done < total else None
@@ -196,6 +239,7 @@ class StatusStrip(QWidget):
         text, tip = self._proxy_part()
         self.proxy.setText(text)
         self.proxy.setToolTip(tip)
+        self.show_vault()
         nxt = getattr(getattr(self.main, "scheduler", None), "next_at", None)
         self.schedule.setText(f"Next run {self._when(nxt)}" if nxt else "Scheduled runs off")
         self.schedule.setToolTip("Settings > Checks > Schedule")

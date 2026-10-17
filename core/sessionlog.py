@@ -19,7 +19,7 @@ _CTRL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 
 
 def log_dir() -> Path:
-    p = db.db_path().parent / "ssh-logs"
+    p = db.base_path().parent / "ssh-logs"
     p.mkdir(parents=True, exist_ok=True)
     return p
 

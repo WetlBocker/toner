@@ -71,7 +71,7 @@ check("choosing a page shows it", st.current_title() == "Notifications" and st.s
 st.nav.setCurrentRow(0)
 check("clicking a heading does nothing", st.current_title() == "Notifications")
 check("pages can be looked up by name, and an unknown name is refused", st.select_page("Agents") and st.current_title() == "Agents" and not st.select_page("No such page"))
-check("the search box is there", st.search.placeholderText() == "Search settings" and st.search.isClearButtonEnabled())
+check("the search box is there", st.search.placeholderText() == "Search settings  (Ctrl+F)" and st.search.isClearButtonEnabled())
 n = st.filter_pages("proxy")
 visible = [st.nav.item(r).text() for r in range(st.nav.count()) if not st.nav.isRowHidden(r) and st._index_of(r) is not None]
 check("searching keeps the pages that mention it, and moves to the first one", "Proxy" in visible and len(visible) < len(titles) and st.current_title() in visible, visible)

@@ -228,9 +228,14 @@ AN.backend = nobackend; pg.start()
 check("with no way to run Ansible it says what is wrong and where to fix it", wait(lambda: pg.go.isEnabled()) and "WSL is not installed" in pg.status.text() and "Ansible settings" in pg.status.text(), pg.status.text())
 AN.backend = lambda: FB
 print("-- who and what is offered")
-scope.set_current(acme); pg.refresh()
-check("a chosen client narrows the devices", [pg.devs.item(i).text() for i in range(pg.devs.count())] == ["sw1", "sw2"])
-scope.set_current(None); pg.refresh()
+from core import orgs as ORGS
+o = ORGS.create("Acme", "ACME")
+with db.within(o):
+    db.save_device(dict(name="acme-sw", vendor="cisco", host="10.9.0.1", port=0, platform="", username="", site="default", verify_ssl=0,
+                        ha_expected=0, enabled=1, location="", details="", folder_id=None))
+db.set_home(o); pg.refresh()
+check("an organization offers only its own devices", [pg.devs.item(i).text() for i in range(pg.devs.count())] == ["acme-sw"])
+db.set_home(0); ORGS.remove(o); pg.refresh()
 pg._tick_all(False); pg.devs.item(0).setCheckState(Qt.CheckState.Checked); pg.refresh()
 check("a refresh keeps what was ticked", [d["name"] for d in pg.checked_devices()] == ["dc1"])
 print("-- history")
@@ -263,7 +268,7 @@ S.save()
 check("saving writes the choices", db.get_setting("ansible_backend") == "server" and db.get_setting("ansible_server") == {"host": "ansible.corp", "port": 2222, "user": "svc", "key_file": r"C:\keys\id"}
       and db.get_setting("ansible_command") == "/opt/ansible/bin/ansible-playbook" and db.get_setting("ansible_playbooks") == os.path.join(SP, "mine") and db.get_setting("ansible_check_default") is False and db.get_setting("ansible_keep_runs") == 50 and db.get_setting("ansible_server_device") == "")
 check("the password went to Credential Manager, not the database", STORE.get((db.SERVICE, AN.SERVER_SECRET)) == "s3cret!" and "s3cret!" not in json.dumps(db.get_setting("ansible_server")) and page.password.text() == "")
-check("the page says one is saved, and offers to remove it", "saved in Credential Manager" in page.pw_note.text() and page.forget.parentWidget().isVisible())
+check("the page says one is saved, and offers to remove it", "saved in the vault" in page.pw_note.text() and page.forget.parentWidget().isVisible())
 page.forget.click(); S.save()
 check("Remove saved password removes it", (db.SERVICE, AN.SERVER_SECRET) not in STORE and not page.forget.parentWidget().isVisible())
 AN.backend = REAL_BACKEND; w.automation.playbooks.refresh(); AN.backend = lambda: FB
@@ -298,6 +303,7 @@ AN.WslBackend.distros = staticmethod(lambda: []); page.find_distro.click()
 check("with none it says how to install one", wait(lambda: "wsl --install" in page.test_out.text()))
 
 print("== closing the window")
+w.settings.cancel()                                  # the Settings edits above are dropped (leaving Settings would ask about them)
 w.go("Tools"); ed.open_playbook("site/other.yml"); ed.editor.setPlainText("- hosts: z\n  tasks: []\n")
 ANSWER[0] = QMessageBox.StandardButton.Cancel; w._quitting = True
 ev = QCloseEvent(); w.closeEvent(ev)

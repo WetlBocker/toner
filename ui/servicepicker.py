@@ -17,9 +17,8 @@ class ServicePicker(QDialog):
         rows = [{"name": n, "display": "", "state": "Not on this computer", "start": ""} for n in chosen if n.lower() not in known]
         self.rows = rows + list(services)                       # what was typed before but is not installed stays visible
         picked = {n.lower() for n in chosen}
-        self.search = QLineEdit()
-        self.search.setPlaceholderText("Filter by name or display name")
-        self.search.setClearButtonEnabled(True)
+        from ui.finder import SearchBox
+        self.search = SearchBox("Search services", "Type part of a service's name or display name.", page=self)
         self.running = QCheckBox("Running only")
         self.auto = QCheckBox("Automatic startup only")
         self.table = QTableWidget(len(self.rows), len(self.COLS))
