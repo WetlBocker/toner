@@ -124,6 +124,8 @@ def signature(page):
 class SettingsTab(QWidget):
     changed = Signal()                    # emitted after a successful save (or an import)
     orgs_changed = Signal()               # Settings > Organizations created, renamed, archived or removed one
+    look_preview = Signal(str, str)       # Appearance: (theme, accent) shown at once, before Save
+    look_reset = Signal()                 # edits dropped (Cancel, Discard, reload): back to the saved look
 
     def __init__(self):
         super().__init__()
@@ -131,6 +133,9 @@ class SettingsTab(QWidget):
                       BackupsPage(), MaintenancePage(), NotificationsPage(), ProfilesPage(), AnsiblePage(), AppearancePage(), TerminalPage(), ReportsPage(), SecurityPage(),
                       AuditPage(), DataPage(self.reload), OrganizationsPage()]
         self.pages[-1].changed_orgs.connect(self.orgs_changed)
+        for p in self.pages:
+            if p.title == "Appearance":
+                p.preview.connect(self.look_preview)
         for p in self.pages:
             tidy(p)                                           # no drop-down or button stretches across a wide window
         self._texts = {}                                      # page index -> lower-case words on the page, for the search box
@@ -412,7 +417,8 @@ class SettingsTab(QWidget):
         toast(self, f"{KEY_LABELS.get(key, key)} follows Global again.")
 
     def reload(self):
-        """Show what is stored, discarding unsaved edits."""
+        """Show what is stored, discarding unsaved edits (and a look being previewed)."""
+        self.look_reset.emit()
         self.apply_org()
         for i in range(len(self.pages)):
             self._load_page(i)

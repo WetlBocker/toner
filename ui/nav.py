@@ -203,10 +203,10 @@ class NavStack(QWidget):
         self._fit_rows()
         for i, name in enumerate(self._icon_names):
             if name:
-                self.list.item(i).setIcon(icons.icon_with_dot(name, t["muted"], t["accent"]) if self._collapsed and i in self._badges
-                                          else icons.icon(name, t["muted"], t["accent"]))
-        self.fold.setIcon(icons.icon("panel", t["muted"], t["text"]))
-        self.quick.setIcon(icons.icon("search", t["muted"], t["text"]) if self._collapsed else QIcon())
+                self.list.item(i).setIcon(icons.icon_with_dot(name, t.get("icon", t["muted"]), t["accent"]) if self._collapsed and i in self._badges
+                                          else icons.icon(name, t.get("icon", t["muted"]), t["accent"]))
+        self.fold.setIcon(icons.icon("panel", t.get("icon", t["muted"]), t["text"]))
+        self.quick.setIcon(icons.icon("search", t.get("icon", t["muted"]), t["text"]) if self._collapsed else QIcon())
 
     def count(self):
         return self.stack.count()

@@ -778,6 +778,7 @@ class InventoryTab(QWidget):
     open_rdp_tab = Signal(dict)
     scan_requested = Signal()                    # the empty inventory's "Scan the network": the discovery tool
     open_details = Signal(dict)
+    run_checks = Signal(list)                    # right-click > Run Checks: these devices (their keys), now
     sessions_imported = Signal()                 # sessions from MobaXterm, PuTTY or SecureCRT were added (the Sessions list reloads)
     orgs_created = Signal()                      # an import made organizations from its folders (the switcher reloads)
     COLS = ["Name", "Vendor", "Platform", "Location", "Host", "Site", "Details", "Tags", "Status", "Last checked", "Organization"]
@@ -927,7 +928,7 @@ class InventoryTab(QWidget):
         t = theme.current()
         if not t:
             return QIcon()
-        key = (name, t["accent"] if accent else t["muted"])
+        key = (name, t["accent"] if accent else t.get("icon", t["muted"]))
         cache = self.__dict__.setdefault("_icons", {})
         if key not in cache:
             cache[key] = icons.icon(name, key[1])
@@ -941,10 +942,10 @@ class InventoryTab(QWidget):
         if not t:
             return QIcon()
         ink = st.ink(status)
-        key = ("dot", status, t["muted"], ink)
+        key = ("dot", status, t.get("icon", t["muted"]), ink)
         cache = self.__dict__.setdefault("_icons", {})
         if key not in cache:
-            cache[key] = icons.icon_with_dot("device", t["muted"], ink, shape=self.SHAPES.get(status, "circle"))
+            cache[key] = icons.icon_with_dot("device", t.get("icon", t["muted"]), ink, shape=self.SHAPES.get(status, "circle"))
         return cache[key]
 
     @staticmethod
@@ -1592,6 +1593,8 @@ class InventoryTab(QWidget):
                     menu.addAction("Open Remote Desktop", self.open_rdp)
                 else:
                     menu.addAction("Open SSH session", self.open_in_ssh)
+            if devs and not folders:
+                menu.addAction("Run Checks", lambda: self.run_checks.emit([d.get("key") or d["name"] for d in self.selected_devices()]))
             if devs and can:
                 menu.addAction("Edit selected..." if len(devs) > 1 else "Edit tags, folder, profile...", self.bulk_edit)
             if len(folders) == 1 and not devs and can:

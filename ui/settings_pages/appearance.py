@@ -2,8 +2,8 @@
 
 import os
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor, QFont, QIcon, QPixmap
 from PySide6.QtWidgets import QCheckBox, QColorDialog, QComboBox, QFileDialog, QFontComboBox, QLineEdit, QPushButton
 from core import db, reports, trends
 from ui import terminal, theme
@@ -14,6 +14,7 @@ from ui.settings_base import Page, compact_row, note, row_of, spin
 class AppearancePage(Page):
     title = "Appearance"
     STATUSES = ["OK", "WARN", "FAIL", "ERROR"]
+    preview = Signal(str, str)              # (theme, accent) to show at once, before Save; Settings puts it back if not saved
 
     def __init__(self):
         super().__init__()
@@ -29,8 +30,9 @@ class AppearancePage(Page):
             b = QPushButton(s)
             b.clicked.connect(lambda _=False, s=s: self.pick(s))
             self.swatch[s] = b
-        self.accent = QComboBox()
-        self.accent.addItems(theme.ACCENTS)
+        self.accent_value = theme.DEFAULT_ACCENT               # a named accent (from before) or a colour '#rrggbb'
+        self.accent = QPushButton("Choose...")                  # the same colour picker as an organization's colour
+        self.accent.clicked.connect(self.pick_accent)
         self.ui_style = QComboBox()
         for name, tip in (("Standard", "Roomy rows, rounded pills and large numbers"),
                           ("Ops console", "Dense and flat for watching many devices: 22 px rows, monospace data, small tags, a narrower sidebar")):
@@ -49,6 +51,23 @@ class AppearancePage(Page):
                                       "switched between dark and white automatically so it stays readable. "
                                       "The status word is always shown, so colour is never the only signal."))
         self.preset.currentTextChanged.connect(self.use_preset)
+        self.theme.currentTextChanged.connect(lambda _t: self.preview.emit(self.theme.currentText(), self.accent_value))
+
+    def _show_accent(self):
+        pm = QPixmap(14, 14)
+        pm.fill(QColor(theme.accent_colour(self.accent_value)))
+        self.accent.setIcon(QIcon(pm))
+
+    def pick_accent(self):
+        c = QColorDialog.getColor(QColor(theme.accent_colour(self.accent_value)), self, "Accent colour")
+        if c.isValid():
+            self.accent_value = c.name()
+            self._show_accent()
+            self.preview.emit(self.theme.currentText(), self.accent_value)
+
+    def describe_extra(self):
+        """The accent (a colour, not a box), for the unsaved mark and the list shown before saving."""
+        return [("Accent colour", self.accent_value)]
 
     def use_preset(self, name):
         self.colors = dict(reports.COLOR_PRESETS.get(name, reports.DEFAULT_COLORS))
@@ -68,8 +87,11 @@ class AppearancePage(Page):
 
     def load(self):
         self.ui_style.setCurrentText(db.get_setting("ui_style"))
+        self.theme.blockSignals(True)
         self.theme.setCurrentText(db.get_setting("theme"))
-        self.accent.setCurrentText(db.get_setting("accent"))
+        self.theme.blockSignals(False)
+        self.accent_value = db.get_setting("accent") or theme.DEFAULT_ACCENT
+        self._show_accent()
         self.font.setValue(int(db.get_setting("font_size")))
         self.preset.blockSignals(True)
         self.preset.setCurrentText(db.get_setting("color_preset"))
@@ -83,7 +105,7 @@ class AppearancePage(Page):
         base = reports.COLOR_PRESETS.get(preset, reports.DEFAULT_COLORS)
         db.set_setting("ui_style", self.ui_style.currentText())
         db.set_setting("theme", self.theme.currentText())
-        db.set_setting("accent", self.accent.currentText())
+        db.set_setting("accent", self.accent_value)
         db.set_setting("font_size", self.font.value())
         db.set_setting("color_preset", preset)
         db.set_setting("status_colors", {s: c for s, c in self.colors.items() if c != base[s]})

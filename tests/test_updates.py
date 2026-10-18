@@ -194,7 +194,7 @@ sys.executable = saved_exe; del sys.frozen
 print("== the About page")
 ab = AB.AboutTab(); ab.resize(900, 800); ab.show()
 details = dict(ab.details())
-check("it lists the version, how it is installed, folders, database, log and system", details["Version"] == VERSION and "source" in details["Installed as"].lower() and details["Data folder"] == str(db.db_path().parent) and "MB" in details["Database"] and details["Log file"].endswith("toner.log") and "Python" in details and "Windows" in details and "License" in details and details["Source code"].startswith("https://github.com/"), list(details))
+check("it lists the version, how it is installed, folders, database, log and system", details["Version"] == VERSION and "source" in details["Installed as"].lower() and details["Data folder"] == str(db.db_path().parent) and "MB" in details["Database"] and details["Log file"].endswith("toner.log") and "Python" in details and ("Windows" if sys.platform == "win32" else "Operating system") in details and "License" in details and details["Source code"].startswith("https://github.com/"), list(details))
 check("and the libraries it is built with, with versions", {n for n, v, _ in ab.libraries()} >= {"PySide6", "netmiko", "paramiko", "requests"} and all(v for n, v, _ in ab.libraries() if n in ("PySide6", "requests", "paramiko")), ab.libraries())
 check("the copyable summary has the essentials", ab.details_text().startswith(f"Toner {VERSION}") and "Data folder:" in ab.details_text() and "PySide6" in ab.details_text())
 QApplication.clipboard().clear(); ab.copy_btn.click(); check("Copy details puts it on the clipboard", QApplication.clipboard().text() == ab.details_text())

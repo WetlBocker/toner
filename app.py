@@ -128,6 +128,7 @@ class Main(QMainWindow):
         self.inventory.orgs_created.connect(lambda: (self.refresh_orgs(), self.inventory.refresh(), self.settings.refresh_dynamic()))
         self.inventory.open_rdp_tab.connect(self.open_rdp_console)
         self.inventory.open_details.connect(self.open_device_view)
+        self.inventory.run_checks.connect(self.results.run_devices)        # right-click > Run Checks (progress in the status bar)
         self.inventory.open_agent_settings.connect(self.open_agent_settings)
         self.results.open_device.connect(self.open_device_by_name)
         self.dashboard.open_device.connect(self.open_device_by_name)
@@ -141,6 +142,8 @@ class Main(QMainWindow):
         self.dashboard.backup_requested.connect(lambda: (self.go("Configs"), self.configs.start()))
         self.tools.inventory_changed.connect(self.inventory_reloaded)
         self.settings.changed.connect(self.settings_applied)
+        self.settings.look_preview.connect(self.preview_look)
+        self.settings.look_reset.connect(self.reset_look)
         self.settings.changed.connect(self.automation.refresh)
         self.inventory.changed.connect(self.automation.refresh)
         self.automation.edit_requested.connect(self.edit_playbook)
@@ -553,6 +556,26 @@ class Main(QMainWindow):
         self.settings.reload()
         self.settings_applied()
 
+    def preview_look(self, theme_name, accent):
+        """Settings > Appearance: show a theme or accent at once, before it is saved."""
+        app = QApplication.instance()
+        theme.apply(app, theme_name, int(db.get_setting("font_size")), accent, db.get_setting("ui_style"))
+        self._restyle()
+
+    def reset_look(self):
+        """Edits dropped: the saved look again."""
+        if theme.current().get("accent") is None:
+            return
+        apply_look(QApplication.instance())
+        self._restyle()
+
+    def _restyle(self):
+        app = QApplication.instance()
+        app.setWindowIcon(app_icon(theme.current().get("accent", "#2563eb")))
+        self.tabs.restyle()
+        self.strip.restyle()
+        self.inventory.refresh()
+
     def settings_applied(self):
         """Make a saved (or imported) settings change take effect everywhere, without a restart."""
         apply_look(QApplication.instance())
@@ -702,6 +725,9 @@ def main():
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(True)
     apply_look(app)
+    from ui.widgets import MenuPlacer
+    app._menu_placer = MenuPlacer(app)             # drop-down menus open upward when there is no room below
+    app.installEventFilter(app._menu_placer)
     from core import passvault
     from ui import vaultdlg
     passvault.install()                            # saved passwords live in Toner's vault (no longer in Windows Credential Manager)

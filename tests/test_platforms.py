@@ -325,6 +325,12 @@ check("an AppImage says so", dict(AB.AboutTab().details())["Installed as"] == "A
 AB.updates.installed_kind = real_kind
 row = AB._system_row()
 check("the system row names Windows on Windows, the system elsewhere", row[0] == ("Windows" if sys.platform == "win32" else "Operating system") and row[1], row)
+AB.updates.can_self_update, real_can = (lambda: False), AB.updates.can_self_update
+tab = AB.AboutTab(); tab.load()
+note = tab.auto_note.text() + " " + tab.earlier_note.text()
+check("on Linux the update notes speak of the AppImage, elsewhere of the installer",
+      ("AppImage" in note and "installer" not in note) if sys.platform.startswith("linux") else ("installer" in note and "AppImage" not in note), note)
+AB.updates.can_self_update = real_can
 
 print("== one process at a time (the vault's lock)")
 lock = Path(SP) / "t.lock"

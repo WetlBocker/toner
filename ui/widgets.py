@@ -1,6 +1,6 @@
-from PySide6.QtCore import QEvent, QPointF, QRect, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPen, QPixmap, QPolygonF
-from PySide6.QtWidgets import (QAbstractSpinBox, QApplication, QCheckBox, QComboBox, QHBoxLayout, QLabel, QLayout, QLineEdit,
+from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QFont, QIcon, QIconEngine, QPainter, QPalette, QPen, QPixmap, QPolygonF
+from PySide6.QtWidgets import (QAbstractButton, QAbstractSpinBox, QApplication, QCheckBox, QComboBox, QHBoxLayout, QLabel, QLayout, QLineEdit,
                                QMenu, QPushButton, QSizePolicy, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QToolButton,
                                QVBoxLayout, QWidget, QWidgetAction)
 from core import reports
@@ -131,19 +131,39 @@ def flow(*items):
     return row
 
 
+class _FunnelEngine(QIconEngine):
+    """Draws the funnel when it is shown, in the palette's text colour then, so it follows a change of theme."""
+
+    def paint(self, painter, rect, mode, state):
+        c = QApplication.palette().text().color()
+        if mode == QIcon.Mode.Disabled:
+            c = QApplication.palette().color(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text)
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        k = min(rect.width(), rect.height()) / 32.0
+        painter.translate(rect.x() + (rect.width() - 32 * k) / 2, rect.y() + (rect.height() - 32 * k) / 2)
+        painter.scale(k, k)
+        painter.setPen(QPen(c, 3.0, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawPolygon(QPolygonF([QPointF(5, 7), QPointF(27, 7), QPointF(18, 17), QPointF(18, 26), QPointF(14, 24),
+                                       QPointF(14, 17)]))
+        painter.restore()
+
+    def pixmap(self, size, mode, state):
+        pm = QPixmap(size)
+        pm.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pm)
+        self.paint(p, pm.rect(), mode, state)
+        p.end()
+        return pm
+
+    def clone(self):
+        return _FunnelEngine()
+
+
 def filter_icon():
     """The funnel used by every filter button."""
-    pm = QPixmap(32, 32)
-    pm.fill(Qt.GlobalColor.transparent)
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    p.setPen(QPen(QApplication.palette().text().color(), 2.4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
-                  Qt.PenJoinStyle.RoundJoin))
-    p.setBrush(Qt.BrushStyle.NoBrush)
-    p.drawPolygon(QPolygonF([QPointF(5, 7), QPointF(27, 7), QPointF(18, 17), QPointF(18, 26), QPointF(14, 24),
-                             QPointF(14, 17)]))
-    p.end()
-    return QIcon(pm)
+    return QIcon(_FunnelEngine())
 
 
 class FilterButton(QToolButton):
@@ -453,3 +473,30 @@ class GroupPicker(QToolButton):
         text = ", ".join(sel) if sel else self.all_text
         self.setText(text if len(text) <= 32 else f"{len(sel)} {self.noun} selected")
         self.setToolTip(", ".join(sel) if sel else self.all_text)
+
+
+class MenuPlacer(QObject):
+    """A menu that drops down from a button (New session, More, Add channel, the filters) opens above the button when there is
+    not room for it below, inside Toner's window as well as on the screen. Qt only checks the screen, and under WSLg (and some
+    Linux desktops) the screen it is told about is not the one shown, so a menu near the bottom was cut off."""
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.Show and isinstance(obj, QMenu):
+            button = obj.parentWidget()
+            if isinstance(button, QAbstractButton) and button.isVisible():
+                place_menu(obj, button)
+        return False
+
+
+def place_menu(menu, button):
+    """Put `menu` below `button`, or above it when it would not fit below (in the window and on the screen)."""
+    win = button.window()
+    top_left = button.mapToGlobal(QPoint(0, 0))
+    below, above = top_left.y() + button.height(), top_left.y()
+    h = menu.sizeHint().height()
+    bounds = win.geometry() if win is not None else None
+    screen = button.screen().availableGeometry() if button.screen() else None
+    limit = min(r.bottom() for r in (bounds, screen) if r is not None) if (bounds or screen) else None
+    if limit is not None and below + h > limit and above - h >= ((screen.top() if screen else 0)):
+        menu.move(menu.x(), above - h)
+

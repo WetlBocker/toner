@@ -78,6 +78,16 @@ class OrgAssignDialog(QDialog):
         lay.addLayout(bar)
         lay.addWidget(self.buttons)
         self.show_orgs()
+        self.tree.itemExpanded.connect(lambda _i: self._fit_names())
+        self._fit_names()
+
+    def _fit_names(self):
+        """The Name column wide enough for every name shown, and the window widened to match while the screen has room."""
+        self.tree.resizeColumnToContents(0)
+        want = self.tree.columnWidth(0) + 220                 # the Organization column, the borders and the scroll bar
+        screen = self.screen().availableGeometry().width() if self.screen() else 1600
+        if want > self.width():
+            self.resize(min(want, int(screen * 0.9)), self.height())
 
     def _name(self, org):
         if isinstance(org, str):

@@ -1,7 +1,7 @@
 """Small coloured marks for the notification services (Discord, Slack, Teams, ...), drawn from SVG so no image files ship.
 
-They are simplified glyphs in each service's usual colours, enough to tell the channels apart at a glance; they are not the
-services' official artwork.
+They are simplified glyphs in each service's usual colours, enough to tell the channels apart at a glance (Teams follows its
+own logo closely); drawn here rather than shipped as image files, so every system shows the same thing.
 """
 from PySide6.QtCore import QByteArray, QRectF, Qt
 from PySide6.QtGui import QIcon, QImage, QPainter, QPixmap
@@ -19,9 +19,13 @@ SVG = {
              '<rect x="34" y="25" width="24" height="10" rx="5" fill="#2EB67D"/><circle cx="44" cy="14" r="5.5" fill="#2EB67D"/>'
              '<rect x="29" y="34" width="10" height="24" rx="5" fill="#ECB22E"/><circle cx="50" cy="44" r="5.5" fill="#ECB22E"/>'
              '<rect x="6" y="29" width="24" height="10" rx="5" fill="#E01E5A"/><circle cx="20" cy="50" r="5.5" fill="#E01E5A"/>',
-    # a violet tile, a white T, and the lighter head-and-shoulders dot
-    "teams": '<rect width="64" height="64" rx="14" fill="#5059C9"/><circle cx="46" cy="18" r="8" fill="#7B83EB"/>'
-             '<path d="M12 22h30v8H31v22h-8V30H12z" fill="#fff"/>',
+    # Microsoft Teams: the purple T tile in front of two people (the back one darker), in Teams' own colours
+    "teams": '<circle cx="51" cy="15" r="6.5" fill="#5059C9"/>'
+             '<path d="M42 25h16.5a3.5 3.5 0 0 1 3.5 3.5V43a10 10 0 0 1-10 10h0a10 10 0 0 1-10-10z" fill="#5059C9"/>'
+             '<circle cx="34" cy="12.5" r="9" fill="#7B83EB"/>'
+             '<path d="M20 24h28a3 3 0 0 1 3 3v17a15 15 0 0 1-15 15h0a15 15 0 0 1-15-15z" fill="#7B83EB"/>'
+             '<rect x="3" y="16" width="32" height="32" rx="4" fill="#4B53BC"/>'
+             '<path d="M10 23.5h18v5h-6.5V42h-5V28.5H10z" fill="#fff"/>',
     "email": '<rect x="5" y="13" width="54" height="38" rx="6" fill="#3B82F6"/>'
              '<path d="M8 19 L32 38 L56 19" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>',
     # three joined nodes

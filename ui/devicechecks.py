@@ -147,16 +147,18 @@ class DeviceChecks(QWidget):
         off = set(db.get_setting("disabled_checks"))
         items = checks.CATALOG.get(self.vendor, [])
         self.listing.clear()
+        own = self.own.isChecked()
         for key, label in items:
             it = QListWidgetItem(label)
-            it.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+            # until 'Choose which checks run' is ticked the rows are greyed and can't be ticked, but the list still scrolls
+            it.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled if own else Qt.ItemFlag.NoItemFlags)
             on = (key in self._own) if (self.own.isChecked() and self._own is not None) else checks.key(self.vendor, key) not in off   # else today's global state
             it.setCheckState(Qt.CheckState.Checked if on else Qt.CheckState.Unchecked)
             it.setData(KEY, key)
             self.listing.addItem(it)
         usable = bool(items)
         self.own.setEnabled(usable)
-        self.listing.setEnabled(usable and self.own.isChecked())
+        self.listing.setEnabled(usable)
         self.state.setText("" if usable else "This kind of device has no checks to choose from.")
 
     def _own_toggled(self, on):

@@ -32,7 +32,7 @@ check("each draws something (not blank) at small and large sizes", all(not brand
 raw = {t: image(t).bits().tobytes() for t in types}
 check("no two channel types look alike", len(set(raw.values())) == len(types))
 color = lambda t, x, y: image(t).pixelColor(x, y).name()
-check("Discord is blurple, Teams is violet, ntfy is green, Windows is blue", color("discord", 4, 32) == "#5865f2" and color("teams", 4, 32) == "#5059c9" and color("ntfy", 4, 32) == "#338574"
+check("Discord is blurple, Teams is violet, ntfy is green, Windows is blue", color("discord", 4, 32) == "#5865f2" and color("teams", 4, 32) == "#4b53bc" and color("teams", 34, 12) == "#7b83eb" and color("ntfy", 4, 32) == "#338574"
       and color("desktop", 16, 16) == "#0078d4")
 check("Slack has all four of its colours", {color("slack", 28, 8), color("slack", 46, 30), color("slack", 33, 54), color("slack", 8, 34)} == {"#36c5f0", "#2eb67d", "#ecb22e", "#e01e5a"}, {color("slack", 28, 8), color("slack", 46, 30), color("slack", 33, 54), color("slack", 8, 34)})
 check("a corner of a rounded tile is transparent (it has a shape)", image("discord").pixelColor(0, 0).alpha() == 0)

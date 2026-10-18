@@ -127,13 +127,15 @@ warned = []
 QMessageBox.warning = staticmethod(lambda *a, **k: warned.append(a[2]))
 QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes)          # closing a dialog with edits asks first
 w = DeviceChecks(); w.set_vendor("cisco"); w.load(None)
-check("a new device follows the global settings: nothing chosen, nothing saved", w.values() == {} and not w.own.isChecked() and not w.listing.isEnabled())
+tickable = lambda: all(w.listing.item(i).flags() & Qt.ItemFlag.ItemIsUserCheckable for i in range(w.listing.count()))
+check("a new device follows the global settings: nothing chosen, nothing saved", w.values() == {} and not w.own.isChecked() and not tickable())
+check("the list still scrolls while it follows the global settings (the rows are locked, not the list)", w.listing.isEnabled())
 check("the list shows today's global state", all(w.listing.item(i).checkState() == Qt.CheckState.Checked for i in range(w.listing.count())) and w.listing.count() == len(checks.CATALOG["cisco"]))
 db.set_setting("disabled_checks", ["cisco:memory"]); w.load(None)
 mem = next(i for i in range(w.listing.count()) if w.listing.item(i).data(Qt.ItemDataRole.UserRole) == "memory")
 check("a check that is off globally shows as off", w.listing.item(mem).checkState() == Qt.CheckState.Unchecked)
 w.own.setChecked(True)
-check("choosing your own list starts from the global one and enables it", w.listing.isEnabled() and w.values()["checks"] == [k for k, _ in checks.CATALOG["cisco"] if k != "memory"])
+check("choosing your own list starts from the global one and enables it", tickable() and w.values()["checks"] == [k for k, _ in checks.CATALOG["cisco"] if k != "memory"])
 w.listing.item(mem).setCheckState(Qt.CheckState.Checked)
 for i in range(w.listing.count()):
     if w.listing.item(i).data(Qt.ItemDataRole.UserRole) not in ("cpu", "memory"): w.listing.item(i).setCheckState(Qt.CheckState.Unchecked)

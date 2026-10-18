@@ -31,7 +31,7 @@ def tokens(dark, accent=DEFAULT_ACCENT, style="Standard"):
     ops = style == OPS
     if ops and accent == DEFAULT_ACCENT:
         accent = "Teal"                                   # the console look is teal unless another accent is chosen
-    light_acc, dark_acc = ACCENTS.get(accent, ACCENTS[DEFAULT_ACCENT])
+    light_acc, dark_acc = accent_pair(accent)
     a = QColor(dark_acc if dark else light_acc)
     soft = QColor(a)
     soft.setAlpha(46 if dark else 30)
@@ -44,10 +44,11 @@ def tokens(dark, accent=DEFAULT_ACCENT, style="Standard"):
         accent_text="#0b0d10" if dark and a.lightness() > 150 else "#ffffff",
         accent_soft=f"rgba({a.red()},{a.green()},{a.blue()},{soft.alpha()})",
         input="#171a1f" if dark else "#ffffff", scroll="#3a404b" if dark else "#c7ccd4",
+        icon="#c4cad3" if dark else "#5f6773",            # icons: brighter than muted text in dark mode, so they don't wash out
     )
     if ops:
         t.update(dict(bg="#0a0d12", surface="#10141b", surface2="#161b24", border="#222a36", text="#d5dae3", muted="#7b8697", hover="#182030", input="#0c1017",
-                      scroll="#2b3442") if dark else
+                      scroll="#2b3442", icon="#b3bcc8") if dark else
                  dict(bg="#eceff3", surface="#ffffff", surface2="#f3f5f8", border="#d6dbe3", text="#161b22", muted="#5b6675", hover="#e8ecf1", input="#ffffff",
                       scroll="#c3cad4"))
     t["ops"] = ops
@@ -61,6 +62,27 @@ def tokens(dark, accent=DEFAULT_ACCENT, style="Standard"):
     t["check"] = icons.png_path("check", t["accent_text"])
     t["chev_up"] = icons.png_path("chev-up", t["muted"])
     return t
+
+
+def accent_pair(accent):
+    """(light-mode colour, dark-mode colour) for an accent: one of the named ACCENTS, or any colour '#rrggbb' chosen in Settings >
+    Appearance. A chosen colour that is too dark to read on the dark theme is lightened there."""
+    if accent in ACCENTS:
+        return ACCENTS[accent]
+    c = QColor(str(accent or ""))
+    if not c.isValid() or not str(accent).startswith("#"):
+        return ACCENTS[DEFAULT_ACCENT]
+    on_dark = QColor(c)
+    while on_dark.lightness() < 140 and on_dark.lightness() > 0:
+        on_dark = on_dark.lighter(125)
+    if on_dark.lightness() == 0:
+        on_dark = QColor("#9aa2ae")
+    return c.name(), on_dark.name()
+
+
+def accent_colour(accent):
+    """The colour an accent shows as in the light theme (Settings' swatch)."""
+    return accent_pair(accent)[0]
 
 
 def palette(t):

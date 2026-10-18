@@ -10,9 +10,12 @@ from PySide6.QtCore import QThread, QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QApplication, QCheckBox, QFormLayout, QFrame, QHBoxLayout, QLabel, QMessageBox,
                                QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QVBoxLayout, QWidget)
-from core import audit, db, display, updates
+from core import audit, db, display, platforms, updates
 from core.version import APP_NAME, LICENSE, TAGLINE, URL, VERSION
 from ui import logo
+
+_FILE = "AppImage" if platforms.LINUX else "installer"               # what an update arrives as here
+_STARTED = "The new AppImage" if platforms.LINUX else "The installer"
 
 LIBRARIES = [("PySide6", "Qt user interface"), ("netmiko", "SSH to network devices"), ("paramiko", "SSH and SFTP"),
              ("pysnmp", "SNMP"), ("requests", "web APIs and updates"), ("cryptography", "certificates"),
@@ -96,7 +99,7 @@ class RevertWorker(QThread):
         except updates.UpdateError as e:
             self.done.emit(False, str(e))
         except Exception as e:
-            self.done.emit(False, f"The installer could not be started: {type(e).__name__}: {e}")
+            self.done.emit(False, f"{_STARTED} could not be started: {type(e).__name__}: {e}")
 
 
 def _system_row():
@@ -302,8 +305,9 @@ class AboutTab(QWidget):
         self._can_update = updates.can_self_update()
         self.auto_install_box.setEnabled(self._can_update)
         if not self._can_update:
-            self.auto_note.setText("Automatic installing is only available in a copy set up with the Toner installer. This "
-                                   "copy can still check for updates and tell you where to download them.")
+            self.auto_note.setText(("Automatic installing is only available when Toner runs as its AppImage. " if platforms.LINUX else
+                                    "Automatic installing is only available in a copy set up with the Toner installer. ")
+                                   + "This copy can still check for updates and tell you where to download them.")
         self._show_last()
         self.refresh_earlier()
         if self.status.text() == "":
@@ -402,8 +406,9 @@ class AboutTab(QWidget):
         self.install_btn.setVisible(can)
         if not can:
             self.status.setText(self.status.text() + (
-                "  This copy was not set up with the installer, so it cannot update itself: download the new version from "
-                "the release page." if not self._can_update else "  The release has no installer attached."))
+                ("  This copy is not running as the AppImage" if platforms.LINUX else "  This copy was not set up with the installer")
+                + ", so it cannot update itself: download the new version from the release page." if not self._can_update
+                else f"  The release has no {_FILE} attached."))
 
     # ---------------------------------------------------------------- downloading and installing
     def download_and_install(self):
@@ -456,7 +461,7 @@ class AboutTab(QWidget):
         try:
             updates.launch_installer(pend["path"], relaunch=True)
         except OSError as e:
-            self.status.setText(f"The installer could not be started: {e}")
+            self.status.setText(f"{_STARTED} could not be started: {e}")
             return
         audit.log("update installing", f"{VERSION} -> {pend['version']}")
         db.set_setting("update_pending", {})                      # the installer owns the file now
@@ -488,14 +493,15 @@ class AboutTab(QWidget):
                     w.deleteLater()
         self.revert_btns = {}
         if not updates.can_self_update():
-            self.earlier_note.setText("Going back to an earlier version needs a copy set up with the Toner installer.")
+            self.earlier_note.setText("Going back to an earlier version needs Toner running as its AppImage." if platforms.LINUX
+                                      else "Going back to an earlier version needs a copy set up with the Toner installer.")
             return
         items = updates.earlier()
         if not items:
             self.earlier_note.setText("No earlier versions are kept yet. After the next update, the version you have now can "
                                       "be restored from here.")
             return
-        self.earlier_note.setText(f"Toner keeps the installers of the last {updates.KEEP} versions in its data folder, so you "
+        self.earlier_note.setText(f"Toner keeps the {_FILE}s of the last {updates.KEEP} versions in its data folder, so you "
                                   "can go back to one if an update causes trouble.")
         for item in items:
             row = QHBoxLayout()
@@ -512,14 +518,15 @@ class AboutTab(QWidget):
             return
         v = item["version"]
         if QMessageBox.question(self, f"Revert to version {v}",
-                                f"Toner will close, install version {v} over this copy and open again. Your inventory, history "
+                                (f"Toner will close, replace this AppImage with version {v} and open again. " if platforms.LINUX else
+                                 f"Toner will close, install version {v} over this copy and open again. ") + "Your inventory, history "
                                 f"and saved passwords are kept; settings and checks added after {v} are not used by it.\n\n"
                                 f"Version {VERSION} will not be offered as an update again; newer versions still will.\n\n"
                                 "Continue?") != QMessageBox.StandardButton.Yes:
             return
         for b in self.revert_btns.values():
             b.setEnabled(False)
-        self.earlier_status.setText(f"Checking the installer for {v}...")
+        self.earlier_status.setText(f"Checking the {_FILE} for {v}...")
         self.earlier_status.show()
         self.reverter = RevertWorker(item)
         self.reverter.done.connect(lambda ok, msg, v=v: self._reverted(ok, msg, v))
