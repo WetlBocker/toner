@@ -109,7 +109,7 @@ def name_of(oid):
 
 def _ticks(v):
     from core import display
-    return f"{int(v)} ({display.uptime(seconds=int(v) / 100)})"
+    return f"{int(v)} ({display.uptime(seconds=int(v) // 100)})"      # whole seconds gone by: 53 hundredths is not yet a second
 
 
 def format_value(value):

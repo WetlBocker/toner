@@ -4,7 +4,7 @@ import os as _os, sys as _sys, tempfile as _tmp
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-import asyncio, os, sys, threading, time
+import asyncio, os, re, sys, threading, time
 pass
 SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\snmp%d.db").replace("\\", os.sep) % int(time.time())
 from core import db, snmp
@@ -52,7 +52,15 @@ for bad_oid in ("", "nonsense.1", "1.3..6", "sys Descr"):
     try: snmp.parse_oid(bad_oid); check(f"rejects '{bad_oid}'", False)
     except ValueError: check(f"rejects '{bad_oid}'", True)
 check("reverse lookup", snmp.name_of("1.3.6.1.2.1.2.2.1.8.12") == "ifOperStatus.12" and snmp.name_of("1.3.6.1.2.1.1.5.0") == "sysName.0" and snmp.name_of("1.3.6.1.99.1") == "1.3.6.1.99.1")
-check("ticks", snmp.format_value(__import__("pysnmp.proto.rfc1902", fromlist=["x"]).TimeTicks(8640000 + 3661 * 100))[1].endswith("(1d 01:01:01)") or True)
+from pysnmp.proto.rfc1902 import TimeTicks
+check("ticks", snmp.format_value(TimeTicks(8640000 + 3661 * 100)) == ("TimeTicks", "9006100 (1:01:01:01)"), snmp.format_value(TimeTicks(9006100)))
+check("ticks under a second show no seconds", snmp.format_value(TimeTicks(53))[1] == "53 (0:00:00:00)" and snmp.format_value(TimeTicks(99))[1] == "99 (0:00:00:00)", snmp.format_value(TimeTicks(53)))
+check("ticks are not rounded up to the next day", snmp.format_value(TimeTicks(8639999))[1] == "8639999 (0:23:59:59)", snmp.format_value(TimeTicks(8639999)))
+def ticks_match(value):            # "9006100 (1:01:01:01)": the d:hh:mm:ss part is the ticks in whole seconds, however long the agent has been up
+    m = re.fullmatch(r"(\d+) \((\d+):(\d\d):(\d\d):(\d\d)\)", value or "")
+    if not m: return False
+    ticks, d, h, mi, s = map(int, m.groups())
+    return h < 24 and mi < 60 and s < 60 and d * 86400 + h * 3600 + mi * 60 + s == ticks // 100
 
 print("== live queries against a local agent")
 r = snmp.query("127.0.0.1", PORT, C, "get", "sysDescr.0", timeout=2, retries=0)
@@ -65,7 +73,7 @@ r2 = snmp.query("127.0.0.1", PORT, C, "bulkwalk", "system", timeout=2, retries=0
 check("bulk walk gives the same rows", [x.oid for x in r2.rows] == [x.oid for x in r.rows], (r2.error, len(r2.rows)))
 r = snmp.query("127.0.0.1", PORT, C, "system", timeout=2, retries=0)
 check("system info", not r.error and [x.name for x in r.rows][:3] == ["sysDescr.0", "sysObjectID.0", "sysUpTime.0"], (r.error, r.rows))
-check("uptime formatted", any(x.name == "sysUpTime.0" and "(" in x.value and x.value.endswith(":00:00:00)") for x in r.rows), [x.value for x in r.rows])
+check("uptime formatted", any(x.name == "sysUpTime.0" and ticks_match(x.value) for x in r.rows), [x.value for x in r.rows])
 got = []
 r = snmp.query("127.0.0.1", PORT, C, "walk", "mib-2", timeout=2, retries=0, max_rows=5, on_rows=got.extend)
 check("row cap stops a runaway walk", r.truncated and len(r.rows) == 5 and len(got) == 5, (len(r.rows), r.truncated))
