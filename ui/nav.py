@@ -138,8 +138,13 @@ class NavStack(QWidget):
         self._brand.setVisible(not on)
         if hasattr(self, "org"):
             self.org.setVisible(not on and self.org.count() > 1)
-        self.quick.setText("" if on else ("Search   Ctrl+K" if theme.is_ops() else "Search      Ctrl+K"))
         self.bottom.setDirection(QBoxLayout.Direction.TopToBottom if on else QBoxLayout.Direction.LeftToRight)
+        if on:
+            self.fold.setMinimumWidth(0)
+            self.fold.setMaximumWidth(16777215)                           # the strip: as wide as the strip
+        else:
+            self.fold.setFixedWidth(36)                                   # beside Search: just the icon
+        self._fit_quick()
         self.fold.setToolTip("Show the sidebar in full   (Ctrl+B)" if on else "Collapse the sidebar   (Ctrl+B)")
         self.quick.setToolTip("Search   (Ctrl+K)\nJump to a section, tool, device or action" if on else "Jump to a section, tool, device or action")
         for i, name in enumerate(self._names):
@@ -147,6 +152,22 @@ class NavStack(QWidget):
         self.restyle()
         if changed:
             self.collapsed_changed.emit(on)
+
+    QUICK_TEXTS = ("Search      Ctrl+K", "Search   Ctrl+K", "Search  Ctrl+K", "Search")
+
+    def _fit_quick(self):
+        """The Search button's words, as roomy as fit beside the collapse button (system fonts differ in width), so they are
+        never cut off."""
+        if self._collapsed:
+            self.quick.setText("")
+            return
+        texts = self.QUICK_TEXTS[1:] if theme.is_ops() else self.QUICK_TEXTS
+        m = self.side.layout().contentsMargins()
+        room = self.expanded_width() - m.left() - m.right() - self.bottom.spacing() - self.fold.maximumWidth()
+        fm = self.quick.fontMetrics()
+        self.quick.setText(texts[0])
+        pad = self.quick.sizeHint().width() - fm.horizontalAdvance(texts[0])      # the button's own padding and frame
+        self.quick.setText(next((t for t in texts if fm.horizontalAdvance(t) + pad <= room), texts[-1]))
 
     def _label(self, i):
         """What row i shows: its name, and a dot after it when something is new (the dot is on the icon when only icons show)."""
@@ -199,7 +220,7 @@ class NavStack(QWidget):
             return
         if not self._collapsed:
             self.side.setFixedWidth(self.expanded_width())              # the console style has a narrower sidebar
-            self.quick.setText("Search   Ctrl+K" if theme.is_ops() else "Search      Ctrl+K")
+            self._fit_quick()
         self._fit_rows()
         for i, name in enumerate(self._icon_names):
             if name:

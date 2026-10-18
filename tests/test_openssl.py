@@ -160,7 +160,7 @@ A.apply_look(app)
 from ui.tools import ToolsTab
 import ui.opensslui as U
 tools = ToolsTab()
-check("OpenSSL is in the Tools list under Certificates", "OpenSSL" in [tools.tabs.tabText(i) for i in range(tools.tabs.count())] and isinstance(tools.openssl, U.OpensslTab))
+check("OpenSSL is in the Tools list under Crypto", "OpenSSL" in [tools.tabs.tabText(i) for i in range(tools.tabs.count())] and isinstance(tools.openssl, U.OpensslTab))
 def pump(w, secs=60):
     end = time.time() + secs
     while time.time() < end:

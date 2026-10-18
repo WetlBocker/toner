@@ -49,6 +49,13 @@ check("unfolded, the dot is after the name again", n.list.item(i).text().endswit
 n.setBadge(w.about, False); check("and it clears", n.list.item(i).text() == "About")
 check("unfolding restores the names, brand and Search", n.list.item(0).text() == "Overview" and not n._brand.isHidden() and n.quick.text().startswith("Search") and n.side.width() == nav.EXPANDED_WIDTH)
 check("and the stored choice", db.get_setting("sidebar_collapsed") is False)
+app.processEvents()
+check("Search's words fit beside the collapse button, whatever the font", n.quick.width() >= n.quick.sizeHint().width() and n.fold.width() <= 40,
+      (n.quick.text(), n.quick.width(), n.quick.sizeHint().width(), n.fold.width()))
+big = n.quick.font(); big.setPointSize(16); n.quick.setFont(big); n._fit_quick(); app.processEvents()
+check("with a much wider font it drops the spacing (and then the shortcut) rather than being cut off",
+      n.quick.text() in nav.NavStack.QUICK_TEXTS[1:] and n.quick.width() >= n.quick.sizeHint().width() or n.quick.text() == "Search", (n.quick.text(), n.quick.width(), n.quick.sizeHint().width()))
+n.quick.setFont(w.font()); n._fit_quick()
 
 print("== Ctrl+B and the next start")
 QTest.keyClick(w, Qt.Key.Key_B, Qt.KeyboardModifier.ControlModifier); app.processEvents()

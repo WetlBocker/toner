@@ -684,6 +684,8 @@ class ToolsTab(QWidget):
         self.utilities = tools2.UtilitiesTab()
         from ui import opensslui, playbookeditor
         self.openssl = opensslui.OpensslTab()
+        from ui import sshkeysui
+        self.sshkeys = sshkeysui.SshKeysTab()
         self.playbooks = playbookeditor.PlaybookEditorTab()
         self.discovery.inventory_changed = self.inventory_changed.emit
         self.tabs = PageStack(width=228)          # wide enough for 'Ping / Traceroute / DNS' without cutting it short
@@ -696,7 +698,7 @@ class ToolsTab(QWidget):
                              ("SNMP and logs", ((self.snmp, "SNMP"), (self.listeners, "Syslog and Traps"))),
                              ("File transfer", ((self.tftp, "TFTP Server"), (self.sftp, "SFTP Server"), (self.scp, "SCP"),
                                                (self.xcopy, f"Copy Files ({self.xcopy.name})"))),
-                             ("Certificates", ((self.tls, "TLS Certificates"), (self.openssl, "OpenSSL"))),
+                             ("Crypto", ((self.tls, "TLS Certificates"), (self.openssl, "OpenSSL"), (self.sshkeys, "SSH Keys"))),
                              ("Automation", ((self.playbooks, "Playbook Editor"),)),
                              ("Utilities", ((self.utilities, "MAC and Wake-on-LAN"),))):
             self.tabs.addSection(title)
@@ -705,7 +707,7 @@ class ToolsTab(QWidget):
                 self.tabs.addTab(w, label)
         lay = QVBoxLayout(self)
         lay.addWidget(self.tabs)
-        self._pickers = (self.diag, self.scan, self.snmp, self.liveping, self.mtr, self.tls, self.iperf, self.scp)
+        self._pickers = (self.diag, self.scan, self.snmp, self.liveping, self.mtr, self.tls, self.iperf, self.scp, self.sshkeys)
         self._others = (self.runner, self.discovery, self.topology)
 
     def refresh(self):
@@ -733,5 +735,5 @@ class ToolsTab(QWidget):
 
     def shutdown(self):
         for t in (self.diag, self.scan, self.snmp, self.liveping, self.mtr, self.tls, self.runner,
-                  self.discovery, self.topology, self.listeners, self.utilities, self.tftp, self.sftp, self.iperf, self.wifi, self.scp, self.xcopy, self.openssl, self.playbooks):
+                  self.discovery, self.topology, self.listeners, self.utilities, self.tftp, self.sftp, self.iperf, self.wifi, self.scp, self.xcopy, self.openssl, self.sshkeys, self.playbooks):
             t.shutdown()

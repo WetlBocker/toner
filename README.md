@@ -20,6 +20,7 @@ A Windows desktop tool for checking, documenting and troubleshooting a multi-ven
   - [Wi-Fi and cloud status pages](#wi-fi-and-cloud-status-pages)
 - [Tools in detail](#tools-in-detail)
   - [OpenSSL](#openssl)
+  - [SSH keys](#ssh-keys)
   - [File servers (TFTP and SFTP)](#file-servers-tftp-and-sftp)
   - [SCP and xcopy](#scp-and-xcopy)
   - [iperf3](#iperf3)
@@ -121,7 +122,7 @@ and **Run checks** act on the devices shown (all of them when nothing is typed o
 | **Configs** | Backs up configurations (see below), keeps only versions that differ, shows diffs and searches every stored configuration. Passwords and keys are masked in stored copies by default. |
 | **History** | Charts any checks over time; hover for values. Checks on very different scales get their own chart. Uptime shows restarts. |
 | **Reports** | CSV, HTML and PDF. The **Trend report** (7, 30 or 90 days) compares with the period before: availability, worst offenders, repeat failures, what is still wrong, configuration changes, busiest CPUs and growing disks. Settings > Reports can make one every week or month. |
-| **Tools** | Command runner (the same commands on many devices, read-only by default: Cisco, Juniper, Arista, HPE and MikroTik by SSH, Windows computers by PowerShell, Fortinet and Palo Alto firewalls by SSH with a login set on the device), ping, traceroute, DNS, live ping graph, path monitor (MTR), port scanner, TLS certificate checker, subnet calculator, device discovery, LLDP / CDP topology map, SNMP (v1, v2c, v3), syslog and trap receivers, MAC lookup, Wake-on-LAN, Wi-Fi scanner, file servers, SCP and xcopy, OpenSSL, iperf3, and the Ansible **Playbook Editor**. |
+| **Tools** | Command runner (the same commands on many devices, read-only by default: Cisco, Juniper, Arista, HPE and MikroTik by SSH, Windows computers by PowerShell, Fortinet and Palo Alto firewalls by SSH with a login set on the device), ping, traceroute, DNS, live ping graph, path monitor (MTR), port scanner, TLS certificate checker, subnet calculator, device discovery, LLDP / CDP topology map, SNMP (v1, v2c, v3), syslog and trap receivers, MAC lookup, Wake-on-LAN, Wi-Fi scanner, file servers, SCP and xcopy, OpenSSL, SSH keys, iperf3, and the Ansible **Playbook Editor**. |
 | **Sessions** | Saved connections in a folder tree (drag, rename, search, duplicate): SSH, Telnet and Serial open in tabs inside Toner, follow Settings > Terminal, and are logged. An SSH session can keep its password in the vault or use an inventory device's login, jump host and proxy. Serial has a Send break button for ROMMON. **Remote Desktop** runs inside a Toner tab, using the Remote Desktop control Windows ships (the one `mstsc.exe` is built on): Windows asks for the password and Toner never stores it. Fill the window or use a fixed size; clipboard, drives, printers, the console session and a gateway are options. Settings > Terminal can send it to Windows' own window instead. **Sessions from other programs:** Inventory > More > Import... also reads a MobaXterm export (`.mobaconf`), a PuTTY export (`.reg`) and SecureCRT (its `.xml` export, or any `.ini` in its Sessions folder); More > Import PuTTY sessions on this computer reads PuTTY's own list. They become sessions (not devices), in the same folders (for MobaXterm the root every bookmark shares, such as `My Sessions`, is left out); one already there is skipped. A MobaXterm "Stored Passwords" export adds the SSH passwords to the vault (importing it again fills in sessions that have none). Browser, VNC, FTP and other kinds Toner does not open are counted and skipped. |
 | **Automation** | Runs **Ansible** playbooks on Inventory devices: pick a playbook and devices, check first (nothing changes), then run for real after a confirmation naming the playbook and devices. Output streams live, with a recap per device and a history. See [Automation (Ansible)](#automation-ansible). More will be added here. |
 | **Settings** | Thresholds (overrides per vendor, folder, tag or device), which checks run and when (Checks has tabs for the list, the schedule and your own checks), timeouts, config backups, notifications (email, Teams, Slack, Discord, ntfy, webhook, desktop), credential profiles, proxy, agents, maintenance, appearance, terminal, reports, security (host keys, and older SSH algorithms: ssh-rsa and SHA-1 key exchange for devices such as older Cisco ASAs that offer nothing newer, tried last and on unless turned off), audit log, data and logs. Pages with unsaved edits are marked, and Save and Revert list exactly what changes. |
@@ -330,11 +331,20 @@ method Toner cannot do) instead of "invalid response".
 
 ### OpenSSL
 
-Tools > Certificates works without installing anything. *Create* makes a private key (RSA 2048/3072/4096, ECDSA P-256/P-384,
+Tools > Crypto works without installing anything. *Create* makes a private key (RSA 2048/3072/4096, ECDSA P-256/P-384,
 Ed25519), a CSR with alternative names, or a self-signed or CA certificate. *Read* describes any certificate, request, key, DER
 file or .pfx, says whether a key belongs to a certificate, and can fetch what a server presents. *Convert* goes between PEM, DER and
 .pfx and adds or removes a passphrase. *Hash and random* does digests, base64 and random bytes. *openssl.exe* runs the real
 program if the computer has one (Git for Windows includes it). Toner stores none of the keys or results.
+
+### SSH keys
+
+Tools > Crypto > SSH Keys makes key pairs without installing anything: Ed25519 (recommended), RSA 2048/3072/4096 or ECDSA
+256/384/521, with a comment and an optional passphrase. *Save key pair* writes the private key (readable only by you) and the .pub
+beside it in OpenSSH's own format, and *Save for PuTTY* writes a .ppk for PuTTY and WinSCP. *Read a key* shows the type, size,
+fingerprint and public-key line of any private key, .ppk or public key, and changes or removes a private key's passphrase. *Put on
+a device* adds the public key to a Linux or other Unix-like device's ~/.ssh/authorized_keys over SSH, like ssh-copy-id, using the
+device's saved login, jump host and proxy. Toner stores none of the keys.
 
 ### File servers (TFTP and SFTP)
 
