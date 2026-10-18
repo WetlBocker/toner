@@ -22,7 +22,12 @@ def check(name, cond, extra=""):
 print("== ping / trace / MTR")
 ms = pinger.ping_once("127.0.0.1", 1000); check("ping localhost", ms is not None and ms >= 0, ms)
 check("no reply -> None", pinger.ping_once("192.0.2.1", 400) is None)
-hops = pinger.trace("127.0.0.1", max_hops=3, timeout_ms=300); check("traceroute to localhost is one hop", hops and hops[0][1] == "127.0.0.1", hops)
+import shutil as _shutil
+hops = pinger.trace("127.0.0.1", max_hops=3, timeout_ms=300)
+if _shutil.which(pinger.trace_args("x")[0]):
+    check("traceroute to localhost is one hop", hops and hops[0][1] == "127.0.0.1", hops)
+else:
+    check("without traceroute installed: no hops, and no crash", hops == [])
 h = pinger.HopStats(1, "10.0.0.1")
 for v in (10.0, None, 30.0): h.add(v)
 check("hop statistics", h.sent == 3 and h.lost == 1 and abs(h.loss - 33.33) < 0.1 and h.best == 10.0 and h.worst == 30.0 and h.avg == 20.0 and h.last == 30.0 and h.history == [10.0, None, 30.0])

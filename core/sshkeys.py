@@ -347,6 +347,22 @@ def write_private(path, text):
         os.chmod(path, 0o600)
     except OSError:
         pass
+    if os.name == "nt":
+        _owner_only(path)
+
+
+def _owner_only(path):
+    """Windows: drop the entries the file inherits from its folder and give this user full control, as Windows' OpenSSH asks
+    ('Bad permissions' otherwise, in folders that let others read)."""
+    import subprocess
+    from core.platforms import NO_WINDOW
+    user = os.environ.get("USERNAME") or getpass.getuser()
+    who = f"{os.environ['USERDOMAIN']}\\{user}" if os.environ.get("USERDOMAIN") else user
+    try:
+        subprocess.run(["icacls", path, "/inheritance:r", "/grant:r", f"{who}:F"], capture_output=True, timeout=30,
+                       creationflags=NO_WINDOW)
+    except (OSError, subprocess.SubprocessError):
+        pass
 
 
 def write_public(path, line):

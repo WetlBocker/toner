@@ -101,7 +101,8 @@ dlg.show(); dlg.tree.expandAll(); app.processEvents()
 need = dlg.tree.fontMetrics().horizontalAdvance("Building 7/" + long_name)
 check("the Name column fits the longest name", dlg.tree.columnWidth(0) >= need, (dlg.tree.columnWidth(0), need))
 check("the window grew to show it", dlg.width() > 640, dlg.width())
-check("but not past the screen", dlg.width() <= dlg.screen().availableGeometry().width())
+check("but not past the screen (unless the screen is narrower than the window can be)",
+      dlg.width() <= max(dlg.screen().availableGeometry().width(), dlg.minimumSizeHint().width()), (dlg.width(), dlg.screen().availableGeometry().width()))
 
 print(f"\nRESULT: {ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

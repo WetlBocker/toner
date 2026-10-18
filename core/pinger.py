@@ -73,8 +73,11 @@ def ping_once(host, timeout_ms=1000):
 def trace(host, max_hops=30, timeout_ms=800, cancel=None):
     """The router addresses on the way to `host`: [(hop number, ip or '*')]. Stops at the target."""
     hops = []
-    p = subprocess.Popen(trace_args(host, max_hops, timeout_ms), stdout=subprocess.PIPE,
-                         stderr=subprocess.STDOUT, text=True, creationflags=NO_WINDOW)
+    try:
+        p = subprocess.Popen(trace_args(host, max_hops, timeout_ms), stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT, text=True, creationflags=NO_WINDOW)
+    except OSError:                                # traceroute is not installed
+        return hops
     try:
         for line in p.stdout:
             if cancel is not None and cancel.is_set():

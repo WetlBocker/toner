@@ -7,6 +7,8 @@ import sys
 
 here = os.path.dirname(os.path.abspath(__file__))
 env = dict(os.environ, QT_QPA_PLATFORM="offscreen", PYTHONUTF8="1")
+if sys.platform != "win32":                       # never the desktop's own keyring (a build machine has none); tests that store fake it
+    env.setdefault("PYTHON_KEYRING_BACKEND", "keyring.backends.null.Keyring")
 files = sorted(glob.glob(os.path.join(here, "test_*.py")))
 if len(sys.argv) > 1:
     files = [f for f in files if any(a in os.path.basename(f) for a in sys.argv[1:])]

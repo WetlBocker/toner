@@ -225,7 +225,10 @@ _sh.which = lambda name, path=None: (r"C:\Toolsw.exe" if path == "SAVED" else N
 real_saved = extvault.saved_path; extvault.saved_path = lambda: "SAVED"
 check("a bw.exe added to PATH after Toner started is found (PATH as Windows has it saved now)", extvault.Bitwarden({}, {}).exe() == r"C:\Toolsw.exe")
 _sh.which = real_which; extvault.saved_path = real_saved
-check("the saved PATH is read from Windows", "system32" in extvault.saved_path().lower())
+if sys.platform == "win32":
+    check("the saved PATH is read from Windows", "system32" in extvault.saved_path().lower())
+else:
+    check("elsewhere the saved PATH is the PATH", extvault.saved_path() == os.environ.get("PATH", ""))
 print("== 1Password through op.exe")
 class FakeOp(extvault.OnePassword):
     def __init__(self, *a):

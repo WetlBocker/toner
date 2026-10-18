@@ -145,7 +145,8 @@ check("a damaged value is ignored, not fatal", w3.width() > 0)
 
 print("== Ctrl+K is visible")
 got = []; w.tabs.search_requested.connect(lambda: got.append(1)); w.tabs.quick.click()
-check("the sidebar has a Search button that shows the shortcut", "Ctrl+K" in w.tabs.quick.text() and got == [1])
+check("the sidebar has a Search button that shows the shortcut (on it, or in its tooltip when the font is too wide)",
+      ("Ctrl+K" in w.tabs.quick.text() or "Ctrl+K" in w.tabs.quick.toolTip()) and got == [1], (w.tabs.quick.text(), w.tabs.quick.toolTip()))
 check("each section's tooltip names its shortcut", "Ctrl+2" in w.tabs.list.item(1).toolTip() and "Ctrl+1" in w.tabs.list.item(0).toolTip())
 
 print(f"\n{ok} passed, {bad} failed")

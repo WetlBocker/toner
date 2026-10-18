@@ -207,11 +207,14 @@ AN.WslBackend.distros = staticmethod(lambda: [])
 ok1, msg = AN.WslBackend("", "ansible-playbook").check()
 check("with no distribution it says how to install one (and does not do it)", not ok1 and "wsl --install" in msg, msg)
 AN.WslBackend.distros = staticmethod(lambda: ["Ubuntu"])
+_real_which = AN.shutil.which
+AN.shutil.which = lambda name, *a, **k: r"C:\Windows\System32\wsl.exe" if name == "wsl.exe" else _real_which(name, *a, **k)   # as if WSL were installed
 ok1, msg = AN.WslBackend("Fedora").check(); check("a distribution that is not there is named, with what is", not ok1 and "Fedora" in msg and "Ubuntu" in msg, msg)
 AN.stream_process = lambda argv, on_line, cancel=None, env=None, cwd=None, timeout=None: (on_line("bash: ansible-playbook: command not found"), 127)[1]
 ok1, msg = AN.WslBackend("Ubuntu").check(); check("without ansible in it, it says what to install", not ok1 and "apt install" in msg, msg)
 AN.stream_process = lambda argv, on_line, cancel=None, env=None, cwd=None, timeout=None: (on_line("ansible-playbook [core 2.17.1]"), on_line("  config file = None"), 0)[2]
 ok1, msg = AN.WslBackend("Ubuntu").check(); check("and when it is there, the version is shown", ok1 and msg == "ansible-playbook [core 2.17.1]", msg)
+AN.shutil.which = _real_which
 AN.WslBackend.distros, AN.stream_process = real_distros, real_stream
 
 print("== on a server")

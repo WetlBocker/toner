@@ -168,6 +168,8 @@ class NavStack(QWidget):
         self.quick.setText(texts[0])
         pad = self.quick.sizeHint().width() - fm.horizontalAdvance(texts[0])      # the button's own padding and frame
         self.quick.setText(next((t for t in texts if fm.horizontalAdvance(t) + pad <= room), texts[-1]))
+        self.quick.setToolTip("Jump to a section, tool, device or action" if "Ctrl+K" in self.quick.text()
+                              else "Search   (Ctrl+K)\nJump to a section, tool, device or action")
 
     def _label(self, i):
         """What row i shows: its name, and a dot after it when something is new (the dot is on the icon when only icons show)."""
