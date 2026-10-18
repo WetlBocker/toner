@@ -112,6 +112,16 @@ os.chmod(p, 0o644); K.write_private(p, K.openssh_private(k, "c"))
 if os.name != "nt":
     check("rewriting one that others could read makes it private again", oct(os.stat(p).st_mode & 0o777) == "0o600")
 
+if os.name == "nt":
+    q = os.path.join(DIR, "acl_test")
+    K.write_private(q, "x")
+    subprocess.run(["icacls", q, "/grant", "*S-1-3-4:F", "/grant", "*S-1-1-0:R"], capture_output=True)   # others let in, as some folders do
+    K.write_private(q, K.openssh_private(k, "c"))
+    acl = subprocess.run(["icacls", q], capture_output=True, text=True).stdout
+    check("on Windows the private file is only yours (and SYSTEM's and Administrators'), whatever it had",
+          "S-1-3-4" not in acl and "OWNER RIGHTS" not in acl and "Everyone" not in acl and "S-1-1-0" not in acl
+          and acl.count("(F)") == 3 and "(I)" not in acl, acl)
+
 keygen = shutil.which("ssh-keygen")
 if keygen:
     print("== against OpenSSH's ssh-keygen", keygen)

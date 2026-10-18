@@ -351,18 +351,59 @@ def write_private(path, text):
         _owner_only(path)
 
 
-def _owner_only(path):
-    """Windows: drop the entries the file inherits from its folder and give this user full control, as Windows' OpenSSH asks
-    ('Bad permissions' otherwise, in folders that let others read)."""
-    import subprocess
-    from core.platforms import NO_WINDOW
-    user = os.environ.get("USERNAME") or getpass.getuser()
-    who = f"{os.environ['USERDOMAIN']}\\{user}" if os.environ.get("USERDOMAIN") else user
+def _user_sid():
+    """The SID of the user Toner runs as ('S-1-5-21-...'), or '' when it cannot be read."""
+    import ctypes
+    from ctypes import wintypes
+    advapi, kernel = ctypes.WinDLL("advapi32", use_last_error=True), ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.GetCurrentProcess.restype = wintypes.HANDLE
+    advapi.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+    advapi.GetTokenInformation.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
+    advapi.ConvertSidToStringSidW.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.LPWSTR)]
+    kernel.LocalFree.argtypes = [ctypes.c_void_p]
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    token = wintypes.HANDLE()
+    if not advapi.OpenProcessToken(kernel.GetCurrentProcess(), 0x0008, ctypes.byref(token)):          # TOKEN_QUERY
+        return ""
     try:
-        subprocess.run(["icacls", path, "/inheritance:r", "/grant:r", f"{who}:F"], capture_output=True, timeout=30,
-                       creationflags=NO_WINDOW)
-    except (OSError, subprocess.SubprocessError):
-        pass
+        size = wintypes.DWORD()
+        advapi.GetTokenInformation(token, 1, None, 0, ctypes.byref(size))                                  # TokenUser
+        buf = ctypes.create_string_buffer(size.value)
+        if not advapi.GetTokenInformation(token, 1, buf, size, ctypes.byref(size)):
+            return ""
+        text = wintypes.LPWSTR()
+        if not advapi.ConvertSidToStringSidW(ctypes.c_void_p.from_buffer(buf).value, ctypes.byref(text)):  # TOKEN_USER starts with the SID's address
+            return ""
+        try:
+            return text.value or ""
+        finally:
+            kernel.LocalFree(text)
+    finally:
+        kernel.CloseHandle(token)
+
+
+def _owner_only(path):
+    """Windows: the file's permissions become exactly this user, SYSTEM and Administrators, nothing inherited (what ssh-keygen
+    gives its keys). Windows' OpenSSH refuses a private key anyone else can open ('Bad permissions'), including entries a file
+    gets from its folder or from the defaults of the process that made it."""
+    import ctypes
+    from ctypes import wintypes
+    sid = _user_sid()
+    if not sid:
+        return
+    advapi, kernel = ctypes.WinDLL("advapi32", use_last_error=True), ctypes.WinDLL("kernel32", use_last_error=True)
+    advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p),
+                                                                           ctypes.c_void_p]
+    advapi.SetFileSecurityW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, ctypes.c_void_p]
+    kernel.LocalFree.argtypes = [ctypes.c_void_p]
+    sd = ctypes.c_void_p()
+    if not advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW(f"D:P(A;;FA;;;{sid})(A;;FA;;;SY)(A;;FA;;;BA)", 1,
+                                                                        ctypes.byref(sd), None):
+        return
+    try:
+        advapi.SetFileSecurityW(path, 0x00000004 | 0x80000000, sd)       # DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION
+    finally:
+        kernel.LocalFree(sd)
 
 
 def write_public(path, line):
