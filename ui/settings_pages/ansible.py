@@ -34,10 +34,15 @@ class AnsiblePage(Page):
         self._forget = False
         self._have_password = False
         self._jobs = []                                       # running workers (kept so none is dropped while running)
+        from core.platforms import WINDOWS
         self.where = QComboBox()
-        self.where.addItem("This PC, through WSL (Windows Subsystem for Linux)", "wsl")
+        if WINDOWS:
+            self.where.addItem("This PC, through WSL (Windows Subsystem for Linux)", "wsl")
+        else:
+            self.where.addItem("This computer", "wsl")              # (the same setting: run it here, not on a server)
         self.where.addItem("A Linux server, over SSH", "server")
-        self.where.setToolTip("Ansible does not run on Windows itself, so it runs in a Linux that does: one on this PC (WSL) or one you already have")
+        self.where.setToolTip("Ansible does not run on Windows itself, so it runs in a Linux that does: one on this PC (WSL) or one you already have"
+                              if WINDOWS else "Ansible runs on this computer itself, or on a Linux server you already have")
         self.command = QLineEdit()
         self.command.setPlaceholderText(AN.DEFAULT_COMMAND)
         self.command.setToolTip("The command that runs a playbook, if it is not on the path as ansible-playbook (for example /home/me/venv/bin/ansible-playbook)")
@@ -71,6 +76,9 @@ class AnsiblePage(Page):
         self.check_default.setToolTip("A check runs the playbook with --check --diff: it shows what would change. You can switch it off for a single run.")
         self.keep = spin(10, 5000)
         self.test_btn = QPushButton("Test")
+        from ui import installdlg
+        self.install_btn = installdlg.button("ansible", self, done=lambda: self.test())
+        self.install_btn.hide()                                    # shown when the test finds Ansible missing here
         self.test_out = QLabel("")
         self.test_out.setWordWrap(True)
         self.test_out.setTextInteractionFlags(self.test_out.textInteractionFlags() | self.test_out.textInteractionFlags().TextSelectableByMouse)
@@ -88,14 +96,16 @@ class AnsiblePage(Page):
         self.form.addRow("", compact_row(self.forget))
         self.form.addRow("", self.pw_note)
         self.form.addRow("Command", self.command)
-        self.form.addRow("Try it", compact_row(self.test_btn))
+        self.form.addRow("Try it", compact_row(self.test_btn, self.install_btn))
         self.form.addRow("", self.test_out)
         self.form.addRow("Playbook folder", row_of(self.folder, self.browse_folder, self.open_folder))
         self.form.addRow("", self.check_default)
         self.form.addRow("Keep the last", row_of(self.keep, QLabel("runs in the history")))
         self.lay.insertWidget(0, note(
-            "Toner writes, checks and runs Ansible playbooks. Ansible itself needs Linux, so a run happens in WSL on this PC or on a Linux server you "
-            "already have. Toner makes the inventory from the Inventory (every device with its login), uses it for the run and removes it afterwards: "
+            ("Toner writes, checks and runs Ansible playbooks. Ansible itself needs Linux, so a run happens in WSL on this PC or on a Linux server you "
+             "already have. " if WINDOWS else
+             "Toner writes, checks and runs Ansible playbooks, on this computer or on a Linux server you already have. ") +
+            "Toner makes the inventory from the Inventory (every device with its login), uses it for the run and removes it afterwards: "
             "no password is written into a playbook or kept on the server."))
         self.where.currentIndexChanged.connect(self.adapt)
         self.login.currentIndexChanged.connect(self.adapt)
@@ -108,9 +118,10 @@ class AnsiblePage(Page):
 
     # ---- showing the right boxes
     def adapt(self, *_):
+        from core.platforms import WINDOWS
         wsl = self.where.currentData() == "wsl"
         device = self.login.currentData() == "device"
-        self.form.setRowVisible(self.distro.parentWidget(), wsl)
+        self.form.setRowVisible(self.distro.parentWidget(), wsl and WINDOWS)
         self.form.setRowVisible(self.login, not wsl)
         for w in (self.device, self.device_note):
             self.form.setRowVisible(w, not wsl and device)
@@ -249,6 +260,8 @@ class AnsiblePage(Page):
         """The backend as the boxes show it now (before saving), for the test."""
         cmd = self.command.text().strip() or AN.DEFAULT_COMMAND
         if self.where.currentData() == "wsl":
+            if os.name != "nt":
+                return AN.LocalBackend(cmd)
             return AN.WslBackend(self.distro.currentData() or "", cmd)
         if self.login.currentData() == "device":
             login = AN.device_login(self.device.currentData() or "")
@@ -273,4 +286,6 @@ class AnsiblePage(Page):
             else:
                 ok, msg = res
                 self.test_out.setText(("OK: " if ok else "Failed: ") + (msg or ("Ansible is ready." if ok else "")))
+                from ui import installdlg
+                self.install_btn.setVisible(not ok and isinstance(back, AN.LocalBackend) and installdlg.offered("ansible"))
         self._job(back.check, then)

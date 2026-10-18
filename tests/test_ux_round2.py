@@ -8,7 +8,7 @@ _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import json, os, sys, time
 from datetime import datetime, timedelta
-SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + r"\ux2%d.db" % int(time.time()); os.environ["APPDATA"] = os.path.join(SP, "roamingux2%d" % int(time.time()))
+SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\ux2%d.db").replace("\\", os.sep) % int(time.time()); os.environ["APPDATA"] = os.path.join(SP, "roamingux2%d" % int(time.time()))
 from core import acks, db, display, notify, reports, scope
 db.init()
 import keyring

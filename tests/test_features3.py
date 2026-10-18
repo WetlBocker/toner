@@ -6,7 +6,7 @@ _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import json, os, sys, time
 from datetime import datetime, timedelta
-SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + r"\f3%d.db" % int(time.time()); os.environ["APPDATA"] = SP
+SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\f3%d.db").replace("\\", os.sep) % int(time.time()); os.environ["APPDATA"] = SP
 from core import alerts, custom, db, iperf, maintenance, notify, vendors, wifi
 db.init()
 import keyring
@@ -94,6 +94,8 @@ check("deleted", maintenance.list_windows() == [])
 
 # ================================================================ Wi-Fi
 print("== Wi-Fi")
+import core.platforms as _P
+_was_windows, _P.WINDOWS = _P.WINDOWS, True        # (netsh's answers, read as on Windows; Linux reads nmcli: test_platforms)
 IFACE = """
 There is 1 interface on the system:
 
@@ -187,6 +189,8 @@ r = run_wifi(OFF); check("not connected is a FAIL", list(r) == ["connection"] an
 r = run_wifi("There is no wireless interface on the system."); check("no adapter is a FAIL", r["connection"].status == "FAIL" and "no Wi-Fi adapter" in r["connection"].value)
 check("a check can be switched off in Settings", "signal" not in {x.check for x in DRIVERS["wifi"](d, th, {"disabled": frozenset({"wifi:signal"})}).run()} if (wifi.__dict__.update(_netsh=lambda *a, **k: IFACE) or True) else False)
 
+_P.WINDOWS = _was_windows
+
 # ================================================================ cloud status pages
 print("== cloud status pages")
 SUMMARY = {"status": {"indicator": "minor", "description": "Minor Service Outage"},
@@ -242,7 +246,7 @@ check("presets are real addresses", len(cloudmod.PRESETS) >= 5 and all("." in h 
 
 # ================================================================ throughput checks
 print("== scheduled throughput (iperf3 custom check)")
-fake = os.path.join(SP, "iperf3-f3.bat")
+fake = os.path.join(SP, "iperf3-f3.bat" if os.name == "nt" else "iperf3-f3.sh")
 def fake_iperf(mbps, retr=2, fail=False):
     if fail:
         body = "iperf3: error - unable to connect to server: Connection refused\r\n"
@@ -250,9 +254,15 @@ def fake_iperf(mbps, retr=2, fail=False):
         body = (f"@echo off\r\necho ARGS %*\r\necho [  5]   0.00-1.00   sec  11.2 MBytes  {mbps} Mbits/sec    0   63.4 KBytes\r\n"
                 f"echo [  5]   0.00-10.00  sec   112 MBytes  {mbps} Mbits/sec   {retr}             sender\r\n"
                 f"echo [  5]   0.00-10.04  sec   112 MBytes  {mbps} Mbits/sec                  receiver\r\n")
-    if fail:
+    if os.name != "nt" and fail:                  # Linux, macOS: iperf3's refusal, from a shell script
+        body = '#!/bin/sh\necho "iperf3: error - unable to connect to server: Connection refused"\nexit 1\n'
+    elif os.name != "nt":                         # Linux, macOS: the same lines from a shell script
+        body = "#!/bin/sh\n" + "".join(("echo ARGS \"$@\"" if l.startswith("echo ARGS") else 'echo "' + l[5:] + '"' if l.startswith("echo ") else l) + "\n"
+                                       for l in body.replace("\r\n", "\n").splitlines() if l and l != "@echo off")
+    if fail and os.name == "nt":
         body = "@echo off\r\necho iperf3: error - unable to connect to server: Connection refused\r\nexit /b 1\r\n"
     open(fake, "w").write(body)
+    os.chmod(fake, 0o755)                         # (Linux, macOS: a script runs only when it may)
 db.set_setting("iperf_path", fake)
 srv = dev("branch-router", "cisco", "10.5.5.5")
 chk = {"name": "WAN speed", "kind": "iperf", "target": "", "port": 5301, "warn": 80, "fail": 40, "higher_worse": 1, "scope": [], "options": {"seconds": 5, "streams": 2, "reverse": True}}

@@ -6,7 +6,7 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import json, os, subprocess, sys, time
-SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + r"\cmdr2%d.db" % int(time.time()); os.environ["APPDATA"] = os.path.join(SP, "roamingcmd%d" % int(time.time()))
+SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\cmdr2%d.db").replace("\\", os.sep) % int(time.time()); os.environ["APPDATA"] = os.path.join(SP, "roamingcmd%d" % int(time.time()))
 from core import cmdrun as C, db, vendors
 db.init()
 import keyring
@@ -59,16 +59,17 @@ cmds = ["hostname", "Get-Service NoSuchSvcXyz", "'it''s' + \" \"" , "Write-Outpu
 script = C.ps_script(cmds)
 check("commands travel as base64 and cannot break out of the script", "hostname" not in script and "NoSuchSvc" not in script and "FromBase64String" in script)
 nasty = ["'; Remove-Item C:\\ -Recurse; '", "$(calc)", "`n", "\"; calc; \"", "x' | Out-Null; 'y"]
-path = os.path.join(SP, "p.ps1"); open(path, "w", encoding="utf-8-sig").write("function T { " + C.ps_script(nasty) + " }")
-chk = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "$e=$null; [void][System.Management.Automation.Language.Parser]::ParseFile('" + path + "',[ref]$null,[ref]$e); $e.Count"],
-                     capture_output=True, text=True, timeout=90)
-check("the script is valid PowerShell whatever the commands are", chk.stdout.strip() == "0", chk.stdout + chk.stderr)
-r = C.run_on_device(lo, ["hostname", "Get-Service NoSuchSvcXyz", "Write-Output ('a' * 3)"], read_timeout=60)
-check("a real run on this PC: every command has its output", r["ok"] and [c for c, _o in r["outputs"]] == ["hostname", "Get-Service NoSuchSvcXyz", "Write-Output ('a' * 3)"], r)
-check("hostname is this computer's name", r["outputs"][0][1].strip().lower() == os.environ.get("COMPUTERNAME", "").lower(), r["outputs"][0])
-check("an error is part of the output, not a failure of the run", "NoSuchSvcXyz" in r["outputs"][1][1] and r["outputs"][2][1].strip() == "aaa", r["outputs"])
-r1 = C.run_on_device(lo, ["Get-Service | Select-Object -First 2 | Format-Table Name"], read_timeout=60)
-check("one command works too (PowerShell turns a list of one into the item)", r1["ok"] and len(r1["outputs"]) == 1 and "Name" in r1["outputs"][0][1], r1)
+if sys.platform == "win32":                     # real PowerShell on this PC
+    path = os.path.join(SP, "p.ps1"); open(path, "w", encoding="utf-8-sig").write("function T { " + C.ps_script(nasty) + " }")
+    chk = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "$e=$null; [void][System.Management.Automation.Language.Parser]::ParseFile('" + path + "',[ref]$null,[ref]$e); $e.Count"],
+                         capture_output=True, text=True, timeout=90)
+    check("the script is valid PowerShell whatever the commands are", chk.stdout.strip() == "0", chk.stdout + chk.stderr)
+    r = C.run_on_device(lo, ["hostname", "Get-Service NoSuchSvcXyz", "Write-Output ('a' * 3)"], read_timeout=60)
+    check("a real run on this PC: every command has its output", r["ok"] and [c for c, _o in r["outputs"]] == ["hostname", "Get-Service NoSuchSvcXyz", "Write-Output ('a' * 3)"], r)
+    check("hostname is this computer's name", r["outputs"][0][1].strip().lower() == os.environ.get("COMPUTERNAME", "").lower(), r["outputs"][0])
+    check("an error is part of the output, not a failure of the run", "NoSuchSvcXyz" in r["outputs"][1][1] and r["outputs"][2][1].strip() == "aaa", r["outputs"])
+    r1 = C.run_on_device(lo, ["Get-Service | Select-Object -First 2 | Format-Table Name"], read_timeout=60)
+    check("one command works too (PowerShell turns a list of one into the item)", r1["ok"] and len(r1["outputs"]) == 1 and "Name" in r1["outputs"][0][1], r1)
 ra = C.run_on_device(ag, ["hostname"])
 check("an agent computer is refused with the reason", not ra["ok"] and "agent" in ra["error"], ra)
 rm = C.run_on_device(mer, ["show x"])

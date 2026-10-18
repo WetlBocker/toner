@@ -6,7 +6,7 @@ _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import os, sys, time
 pass
-SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + r"\hm%d.db" % int(time.time())
+SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\hm%d.db").replace("\\", os.sep) % int(time.time())
 from core import db
 db.init()
 from drivers.base import Result
@@ -37,12 +37,12 @@ check("button text lists the ticked checks", w.chk.text() == "CPU, Memory", w.ch
 w.chk.set_selected(["CPU", "Memory", "Uptime", "BGP"]); w.chk._toggled()
 check("button text lists four short names", w.chk.text() == "BGP, CPU, Memory, Uptime", w.chk.text())
 check("mixed units draw (relative scale)", len(w.chart.series) == 4)
-w.chart.grab().save(SP + r"\history_multi.png")
+w.chart.grab().save(SP + (r"\history_multi.png").replace("\\", os.sep))
 w.chk.set_selected(["Uptime", "BGP"]); w.chk._toggled(); w.chart.grab()
 check("two non-percent checks share an axis", len(w.chart.series) == 2)
 w.chk.set_selected(["CPU"]); w.chk._toggled()
 check("back to one check keeps its thresholds", len(w.chart.series) == 1 and w.chart.th is not None and w.chart.th["warn"] == 70, w.chart.th)
-w.chart.grab().save(SP + r"\history_single.png")
+w.chart.grab().save(SP + (r"\history_single.png").replace("\\", os.sep))
 w.chk.clear()
 check("nothing ticked -> prompt, no series", w.chart.series == [] and w.chart.requested == 0)
 w.chart.grab()
@@ -86,13 +86,13 @@ check("tooltip lists each measured value", [(a, b) for a, b, _ in rows] == [("CP
 move(r.left() + 1, r.center().y()); check("left edge = first run", ch.hover == 0 and ch.hover_rows()[0][1] == "20%")
 move(r.right() + 5, r.center().y()); check("right edge = last run", ch.hover == n - 1 and ch.hover_rows()[0][1] == "55%")
 move(r.center().x(), r.bottom() + 200); check("pointer far outside the plot clears it", ch.hover is None and ch.hover_rows() == [])
-move(r.center().x(), r.center().y()); ch.grab().save(SP + r"\history_hover.png")
+move(r.center().x(), r.center().y()); ch.grab().save(SP + (r"\history_hover.png").replace("\\", os.sep))
 ch.leaveEvent(None); check("leaving the chart clears it", ch.hover is None)
 check("value formats", H.fmt_value("cpu", 85.0) == "85%" and H.fmt_value("memory", 85.46) == "85.5%" and H.fmt_value("temperature", 72.0) == "72 °C"
       and H.fmt_value("uptime", 100.0) == "4:04:00:00" and H.fmt_value("bgp", 2.0) == "2" and H.fmt_value("port errors", 10234.0) == "10,234" and H.fmt_value("channel util (ng)", 41.5) == "41.5%",
       [H.fmt_value("cpu", 85.0), H.fmt_value("temperature", 72.0), H.fmt_value("uptime", 100.0), H.fmt_value("bgp", 2.0), H.fmt_value("port errors", 10234.0)])
 w.chk.set_selected(["CPU", "Memory", "Uptime", "BGP"]); w.chk._toggled(); QApplication.processEvents()
-w.grab().save(SP + r"\history_stack.png")
+w.grab().save(SP + (r"\history_stack.png").replace("\\", os.sep))
 
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

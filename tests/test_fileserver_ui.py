@@ -5,7 +5,7 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import os, socket, struct, sys, time
-SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + r"\fu%d.db" % int(time.time()); os.environ["APPDATA"] = SP
+SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\fu%d.db").replace("\\", os.sep) % int(time.time()); os.environ["APPDATA"] = SP
 from core import audit, db
 db.init()
 import keyring
@@ -39,7 +39,8 @@ open(os.path.join(share, "fw.bin"), "wb").write(b"firmware" * 500)
 print("== TFTP page")
 t = T3.FileServerTab("tftp"); t.resize(1100, 700); t.show()
 check("nothing runs until asked, uploads are off, replacing is greyed out", t.server is None and not t.write.isChecked() and not t.replace.isEnabled() and t.port.value() == 69)
-t.folder.setText("C:\\"); t.start(); check("a whole drive is refused", t.server is None and "drive" in t.status.text())
+t.folder.setText("C:\\" if os.name == "nt" else "/"); t.start()
+check("a whole drive is refused", t.server is None and ("drive" in t.status.text() or "whole file system" in t.status.text()), t.status.text())
 t.folder.setText(os.path.join(SP, "missing")); t.start(); check("a missing folder is refused", t.server is None)
 t.folder.setText(share); t.allowed.setText("10.0.0.0/24, banana"); t.start(); check("a bad client list is explained", t.server is None and "banana" in t.status.text())
 t.allowed.setText(""); t.port.setRange(0, 65535); t.port.setValue(0)
@@ -64,7 +65,9 @@ check("turning uploads off turns replacing off", not t.replace.isChecked() and n
 t.write.setChecked(True); asked.clear(); t.start()
 check("uploads from anyone ask first, and say why", t.server is not None and asked and "no passwords" in asked[0])
 t.stop(); asked.clear(); t.allowed.setText("127.0.0.1"); t.start(); check("naming the devices removes the question", t.server is not None and not asked); t.stop()
-t.timer.stop(); t.minutes.setValue(1); t.start(); check("an automatic stop is armed", t.timer.isActive() and 59000 < t.timer.remainingTime() <= 60000); t.stop()
+t.timer.stop(); t.minutes.setValue(1); t.start()
+check("an automatic stop is armed", t.timer.isActive() and 55000 < t.timer.remainingTime() <= 61000, t.timer.remainingTime())   # (Linux timers round a little)
+t.stop()
 t.minutes.setValue(0); t.start(); check("'never' arms no timer", not t.timer.isActive()); t.stop()
 t.clear_rows(); check("clear empties the list", t.table.rowCount() == 0)
 t2 = T3.FileServerTab("tftp"); check("a new page remembers the last folder and settings", t2.folder.text() == share and t2.write.isChecked() and t2.allowed.text() == "127.0.0.1")
@@ -97,12 +100,20 @@ sf.stop(); sf2 = T3.FileServerTab("sftp"); check("the next time the saved passwo
 print("== iperf3 page")
 ip = T3.IperfTab(); ip.resize(1100, 700); ip.show()
 ip.exe = None; ip._where()
-check("without iperf3 it says what to do, and Start explains instead of failing", "not found" in ip.where.text() and "iperf.fr" in ip.where.text())
+check("without iperf3 it says what to do, and Start explains instead of failing", "not found" in ip.where.text()
+      and ("iperf.fr" if os.name == "nt" else "sudo apt install iperf3") in ip.where.text(), ip.where.text())
 ip.start(); check("...nothing starts", not ip.runner.running() and "not found" in ip.out.toPlainText())
-fake = os.path.join(SP, "iperf3-fake.bat")
-open(fake, "w").write("@echo off\r\necho ARGS %*\r\necho [  5]   0.00-1.00   sec  11.2 MBytes  94.1 Mbits/sec    0   63.4 KBytes\r\n"
-                      "echo [  5]   0.00-10.00  sec   112 MBytes  94.0 Mbits/sec   17             sender\r\n"
-                      "echo [  5]   0.00-10.04  sec   112 MBytes  93.6 Mbits/sec                  receiver\r\n")
+if os.name == "nt":
+    fake = os.path.join(SP, "iperf3-fake.bat")
+    open(fake, "w").write("@echo off\r\necho ARGS %*\r\necho [  5]   0.00-1.00   sec  11.2 MBytes  94.1 Mbits/sec    0   63.4 KBytes\r\n"
+                          "echo [  5]   0.00-10.00  sec   112 MBytes  94.0 Mbits/sec   17             sender\r\n"
+                          "echo [  5]   0.00-10.04  sec   112 MBytes  93.6 Mbits/sec                  receiver\r\n")
+else:                                             # Linux, macOS: a shell script stands in for iperf3
+    fake = os.path.join(SP, "iperf3-fake.sh")
+    open(fake, "w").write('#!/bin/sh\necho ARGS "$@"\necho "[  5]   0.00-1.00   sec  11.2 MBytes  94.1 Mbits/sec    0   63.4 KBytes"\n'
+                          'echo "[  5]   0.00-10.00  sec   112 MBytes  94.0 Mbits/sec   17             sender"\n'
+                          'echo "[  5]   0.00-10.04  sec   112 MBytes  93.6 Mbits/sec                  receiver"\n')
+    os.chmod(fake, 0o755)
 ip.exe = fake; ip._where(); check("the program being used is shown", fake in ip.where.text())
 ip.target.setText("10.1.2.3 -x"); ip.start(); check("a bad address is refused before anything runs", not ip.runner.running() and "Error" in ip.out.toPlainText())
 ip.target.setText("10.1.2.3"); ip.seconds.setValue(5); ip.streams.setValue(2); ip.reverse.setChecked(True); ip.start()

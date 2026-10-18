@@ -9,7 +9,7 @@ pass      # if anything blocks, print where and quit
 pass
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 SP = os.environ["SP"]; stamp = int(time.time())
-os.makedirs(SP + rf"\fold{stamp}"); os.environ["NETCHECK_DB"] = SP + rf"\fold{stamp}\netcheck.db"
+os.makedirs(SP + (rf"\fold{stamp}").replace("\\", os.sep)); os.environ["NETCHECK_DB"] = SP + (rf"\fold{stamp}\netcheck.db").replace("\\", os.sep)
 from core import db
 db.init()
 PASS = FAIL = 0
@@ -205,7 +205,7 @@ check("device pickers show the folder", any("[" in w.tools.diag.picker.itemText(
 
 print("== import with folders")
 import ui.inventory as INV2
-csv = SP + rf"\fold{stamp}\imp.csv"
+csv = SP + (rf"\fold{stamp}\imp.csv").replace("\\", os.sep)
 open(csv, "w", encoding="utf-8").write("name,vendor,host,folder\ni1,cisco,10.1.1.1,Branch/Austin/Core\ni2,cisco,10.1.1.2,Branch/Austin/Core\ni3,fortinet,10.1.1.3,Branch/Austin/Edge\ni4,unifi,10.1.1.4,\ni1,cisco,10.1.1.9,Branch/Dup\nbad,cisco,https://x/,Branch/Bad\n")
 QFileDialog.getOpenFileName = staticmethod(lambda *a, **k: (csv, "")); msgs.clear(); inv.import_file()
 paths = set(db.folder_paths().values())

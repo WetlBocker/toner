@@ -6,7 +6,11 @@ _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import hashlib, http.server, json, os, sys, threading, time
 from datetime import datetime, timedelta
-SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + r"\up%d.db" % int(time.time()); os.environ["APPDATA"] = SP
+SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\up%d.db").replace("\\", os.sep) % int(time.time()); os.environ["APPDATA"] = SP
+import core.updates as _U
+_U.SETUP = _U.WINDOWS_SETUP                      # (these are about the Windows installer; test_platforms covers the AppImage)
+import core.platforms as _P
+_P.WINDOWS, _P.MAC, _P.LINUX = True, False, False
 from core import audit, db, updates
 from core.version import VERSION, REPO
 db.init()

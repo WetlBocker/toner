@@ -6,7 +6,7 @@ import os as _os, sys as _sys, tempfile as _tmp
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 import datetime, http.server, ipaddress, os, ssl, sys, threading, time
-SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + r"\trust%d\t.db" % int(time.time())
+SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\trust%d\t.db").replace("\\", os.sep) % int(time.time())
 os.makedirs(os.path.dirname(os.environ["NETCHECK_DB"]), exist_ok=True)
 for v in ("REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"):
     os.environ.pop(v, None)

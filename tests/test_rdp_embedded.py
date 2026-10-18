@@ -6,8 +6,10 @@ import os as _os, sys as _sys, tempfile as _tmp
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+if _sys.platform != "win32":                       # Windows' own Remote Desktop control
+    print("skipped: this test is about Windows itself"); print("\n0 passed, 0 failed"); _sys.exit(0)
 import json, os, socket, subprocess, sys, textwrap, time
-SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + r"\rdpemb%d.db" % int(time.time()); os.environ["APPDATA"] = os.path.join(SP, "roamingrdp%d" % int(time.time()))
+SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\rdpemb%d.db").replace("\\", os.sep) % int(time.time()); os.environ["APPDATA"] = os.path.join(SP, "roamingrdp%d" % int(time.time()))
 from core import audit, db, sessions
 db.init()
 import keyring
@@ -165,7 +167,7 @@ real_make = RP.make_control; RP.make_control = factory
 real_begin = RP.RdpPane._begin_probe
 RP.RdpPane._begin_probe = lambda self: self._start_control()               # the device tabs use port 3389, which nothing here listens on
 launched = []; real_launch = sessions.launch_rdp
-sessions.launch_rdp = lambda s: (launched.append(s), sessions.rdp_path(s))[1]
+sessions.launch_rdp = lambda s, password=None: (launched.append(s), sessions.rdp_path(s))[1]
 win = db.save_device({"name": "dc-1", "vendor": "windows", "host": "127.0.0.1", "port": 0, "platform": "agent", "username": "", "site": "default", "verify_ssl": 0,
                       "ha_expected": 0, "enabled": 1, "location": "", "details": "", "folder_id": None})
 dev = db.get_device(win)

@@ -7,7 +7,7 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import json, os, subprocess, sys, time
-SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + r"\svcwin%d.db" % int(time.time()); os.environ["APPDATA"] = os.path.join(SP, "roamingsvc%d" % int(time.time()))
+SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\svcwin%d.db").replace("\\", os.sep) % int(time.time()); os.environ["APPDATA"] = os.path.join(SP, "roamingsvc%d" % int(time.time()))
 from core import db, winmon, winservices as WS
 db.init()
 import keyring
@@ -31,10 +31,11 @@ try: WS.action_script("delete", "x"); check("only start, stop and restart exist"
 except ValueError: check("only start, stop and restart exist", True)
 nasty = ["Spooler", "it's", "a;b", "$(calc)", "x`y", "name with spaces", "a\u2019; Remove-Item C:\\ -Recurse; '", "[x]*?"]
 text = "\n".join(f"function T{i} {{ {WS.action_script(a, n)} }}" for i, n in enumerate(nasty) for a in ("start", "stop", "restart"))
-path = os.path.join(SP, "parse.ps1"); open(path, "w", encoding="utf-8-sig").write(text)
-chk = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
-                      "$e=$null; [void][System.Management.Automation.Language.Parser]::ParseFile('" + path + "',[ref]$null,[ref]$e); $e.Count"], capture_output=True, text=True, timeout=90)
-check("every script, for every awkward name, is valid PowerShell", chk.stdout.strip() == "0", chk.stdout + chk.stderr)
+if sys.platform == "win32":                     # real PowerShell parses the scripts
+    path = os.path.join(SP, "parse.ps1"); open(path, "w", encoding="utf-8-sig").write(text)
+    chk = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+                          "$e=$null; [void][System.Management.Automation.Language.Parser]::ParseFile('" + path + "',[ref]$null,[ref]$e); $e.Count"], capture_output=True, text=True, timeout=90)
+    check("every script, for every awkward name, is valid PowerShell", chk.stdout.strip() == "0", chk.stdout + chk.stderr)
 check("a hostile name stays inside its quotes", "$n = '$(calc)'" in WS.action_script("stop", "$(calc)") and "$n = 'a''; Remove-Item" in WS.action_script("stop", "a\u2019; Remove-Item C:\\ -Recurse; '"))
 
 print("== reading the answer")
@@ -69,14 +70,15 @@ winmon.collect_winrm = real_winrm
 
 print("== for real, where nothing can change")
 local = {"name": "me", "host": "localhost", "platform": "local", "vendor": "windows"}
-r = WS.control(local, "start", "NoSuchServiceXyz", timeout=60)
-check("a service that does not exist is said so", r["ok"] is False and "there is no service called 'NoSuchServiceXyz'" in r["error"], r)
-r = WS.control(local, "stop", "it's not here", timeout=60)
-check("and a name with a quote in it is handled", r["ok"] is False and "it's not here" in r["error"], r)
-r = WS.control(local, "start", "EventLog", timeout=60)
-check("starting one that is already running leaves it running (or says why this account may not)", (r["ok"] and r["state"] == "Running") or ("administrator" in r["error"] and r["state"] == "Running"), r)
-svcs, note = WS.listing(local)
-check("the real list has what Windows has", len(svcs) > 20 and {"eventlog", "winmgmt"} <= {s["name"].lower() for s in svcs} and "this computer" in note.lower(), note)
+if sys.platform == "win32":                     # this PC's real Windows services
+    r = WS.control(local, "start", "NoSuchServiceXyz", timeout=60)
+    check("a service that does not exist is said so", r["ok"] is False and "there is no service called 'NoSuchServiceXyz'" in r["error"], r)
+    r = WS.control(local, "stop", "it's not here", timeout=60)
+    check("and a name with a quote in it is handled", r["ok"] is False and "it's not here" in r["error"], r)
+    r = WS.control(local, "start", "EventLog", timeout=60)
+    check("starting one that is already running leaves it running (or says why this account may not)", (r["ok"] and r["state"] == "Running") or ("administrator" in r["error"] and r["state"] == "Running"), r)
+    svcs, note = WS.listing(local)
+    check("the real list has what Windows has", len(svcs) > 20 and {"eventlog", "winmgmt"} <= {s["name"].lower() for s in svcs} and "this computer" in note.lower(), note)
 
 print("== the window")
 from PySide6.QtCore import Qt
@@ -240,17 +242,19 @@ for mode, word in (("auto", "auto"), ("delayed", "delayed-auto"), ("manual", "de
     check(f"{mode} is sc.exe config start= {word}", f"start= {word}" in WS.startup_script(mode, "Spooler") and "sc.exe config $n" in WS.startup_script(mode, "Spooler"))
 try: WS.startup_script("fast", "x"); check("only the four types exist", False)
 except ValueError: check("only the four types exist", True)
-text2 = chr(10).join(f"function T{i} {{ {WS.startup_script(m_, n)} }}" for i, n in enumerate(nasty) for m_ in WS.STARTUP)
-path2 = os.path.join(SP, "parse2.ps1"); open(path2, "w", encoding="utf-8-sig").write(text2)
-chk2 = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
-                       "$e=$null; [void][System.Management.Automation.Language.Parser]::ParseFile('" + path2 + "',[ref]$null,[ref]$e); $e.Count"], capture_output=True, text=True, timeout=90)
-check("every one is valid PowerShell for every awkward name", chk2.stdout.strip() == "0", chk2.stdout + chk2.stderr)
-r = real_start(local, "manual", "NoSuchServiceXyz", timeout=60)
-check("for real: a service that does not exist is said so, and nothing is changed", r["ok"] is False and "there is no service called 'NoSuchServiceXyz'" in r["error"], r)
+if sys.platform == "win32":                     # real PowerShell and real services
+    text2 = chr(10).join(f"function T{i} {{ {WS.startup_script(m_, n)} }}" for i, n in enumerate(nasty) for m_ in WS.STARTUP)
+    path2 = os.path.join(SP, "parse2.ps1"); open(path2, "w", encoding="utf-8-sig").write(text2)
+    chk2 = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+                           "$e=$null; [void][System.Management.Automation.Language.Parser]::ParseFile('" + path2 + "',[ref]$null,[ref]$e); $e.Count"], capture_output=True, text=True, timeout=90)
+    check("every one is valid PowerShell for every awkward name", chk2.stdout.strip() == "0", chk2.stdout + chk2.stderr)
+    r = real_start(local, "manual", "NoSuchServiceXyz", timeout=60)
+    check("for real: a service that does not exist is said so, and nothing is changed", r["ok"] is False and "there is no service called 'NoSuchServiceXyz'" in r["error"], r)
 check("sc.exe's refusals are put in words", "administrator" in WS.friendly("[SC] OpenService FAILED 5:" + chr(10) + "Access is denied.") and "no such service" in WS.friendly("[SC] OpenService FAILED 1060: The specified service does not exist as an installed service."))
 check("the list says which automatic services start late", WS.startup_label({"start": "Auto", "delayed": True}) == "Auto (Delayed)" and WS.startup_label({"start": "Auto"}) == "Auto" and WS.startup_label({"start": "Manual", "delayed": True}) == "Manual")
-real_rows, _n = real_listing(local)
-check("for real: the list carries the delayed flag", all("delayed" in x for x in real_rows) and any(x["start"] == "Auto" for x in real_rows))
+if sys.platform == "win32":                     # this PC's real Windows services
+    real_rows, _n = real_listing(local)
+    check("for real: the list carries the delayed flag", all("delayed" in x for x in real_rows) and any(x["start"] == "Auto" for x in real_rows))
 
 print("== a computer that reports by agent")
 log.clear(); asked.clear(); STORE.clear()

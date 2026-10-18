@@ -371,10 +371,8 @@ class Main(QMainWindow):
             self.tabs.setCurrentWidget(self.sessions)
             self.sessions.open_rdp_device(dev)
             return
-        try:
-            sessions.launch_rdp(sessions.rdp_for_device(dev))
-        except OSError as e:
-            QMessageBox.warning(self, "Remote Desktop", str(e))
+        from ui import rdpprompt
+        rdpprompt.start(self, sessions.rdp_for_device(dev))       # (Linux: FreeRDP, after asking for the password)
 
     def open_ssh_console(self, dev):
         """Inventory > right-click > Open SSH session, the device window and the palette: an SSH tab in Sessions."""
@@ -652,18 +650,18 @@ def run_cli(args):
     passvault.install()                            # saved passwords come from Toner's vault...
     passvault.unlock_remembered()                  # ...which opens by itself when it is remembered on this computer
     try:
+        db.init()                                  # cli.main does this too; the move below needs the database first
+        tunnel.migrate()
+        legacyssh.apply()
+    except Exception:
+        pass                                       # cli.main reports a database problem in its own words
+    try:
         from core import extstore
         if extstore.memory_only():                 # ...or only from the password manager: read them now, keep them in step
             extstore.sync_once()
             extstore.start()
     except Exception:
         log.exception("could not read the passwords from the password manager")
-    try:
-        db.init()                                  # cli.main does this too; the move below needs the database first
-        tunnel.migrate()
-        legacyssh.apply()
-    except Exception:
-        pass                                       # cli.main reports a database problem in its own words
     import cli
     return cli.main(args)
 

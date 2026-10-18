@@ -5,7 +5,7 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import base64, hashlib, os, socket, ssl, sys, threading, time
-SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + r"\ossl%d.db" % int(time.time()); os.environ["APPDATA"] = os.path.join(SP, "roamingssl%d" % int(time.time()))
+SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\ossl%d.db").replace("\\", os.sep) % int(time.time()); os.environ["APPDATA"] = os.path.join(SP, "roamingssl%d" % int(time.time()))
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, ed25519, rsa

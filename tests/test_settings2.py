@@ -6,7 +6,7 @@ _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import json, os, sys, time
 pass
-SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + r"\s2%d.db" % int(time.time()); os.environ["APPDATA"] = SP
+SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\s2%d.db").replace("\\", os.sep) % int(time.time()); os.environ["APPDATA"] = SP
 from core import db, profiles, custom, audit
 db.init()
 import keyring
@@ -103,9 +103,9 @@ check("entries newest first, with who and what", ap.table.rowCount() >= 3 and ap
 check("saving settings is itself recorded", any(ap.table.item(i, 2).text() == "settings saved" for i in range(ap.table.rowCount())))
 ap.search.setText("alice"); check("filter by user", ap.table.rowCount() == 1 and ap.table.item(0, 1).text() == "alice")
 ap.search.setText("zzzz"); check("filter with no match", ap.table.rowCount() == 0)
-ap.search.setText(""); S.QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (SP + r"\audit.csv", "")); ap.export()
+ap.search.setText(""); S.QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (SP + (r"\audit.csv").replace("\\", os.sep), "")); ap.export()
 import csv
-rows = list(csv.reader(open(SP + r"\audit.csv", encoding="utf-8")))
+rows = list(csv.reader(open(SP + (r"\audit.csv").replace("\\", os.sep), encoding="utf-8")))
 check("export CSV with a header", rows[0] == ["when", "who", "action", "detail"] and any(r[1] == "bob" for r in rows))
 audit.purge(0); check("old entries can be purged", audit.recent() == [] or True)
 print(f"\n{ok} passed, {bad} failed")

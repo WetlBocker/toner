@@ -7,6 +7,9 @@ How it works
     then is it run (silently, per-user installs stay per-user). A download with no published checksum is never run.
     The checksum comes from the same release, so it protects against a corrupted or swapped download, not against
     someone who controls the repository.
+
+    On Linux the release carries Toner-1.2.0-x86_64.AppImage. It is checked the same way and then put in place of the
+    AppImage Toner is running from ($APPIMAGE; the running copy keeps working until Toner closes), so there is no installer.
 """
 import hashlib
 import json
@@ -20,7 +23,7 @@ from urllib.parse import urlparse
 
 import requests
 
-from core import db, paths, proxy, trust
+from core import db, paths, platforms, proxy, trust
 from core.version import REPO, VERSION
 
 API = "https://api.github.com/repos/{repo}/releases/latest"
@@ -29,7 +32,9 @@ KEEP = 3                                                        # installers kep
 MANIFEST = "installers.json"                                    # their checksums, recorded when each was downloaded
 ALLOWED_HOSTS = ("github.com", "githubusercontent.com")        # the installer may only come from these (and subdomains)
 ALLOW_HTTP = False                                              # tests only
-SETUP = re.compile(r"^Toner-Setup-(\d+(?:\.\d+){1,3})\.exe$", re.I)
+WINDOWS_SETUP = re.compile(r"^Toner-Setup-(\d+(?:\.\d+){1,3})\.exe$", re.I)
+APPIMAGE = re.compile(r"^Toner-(\d+(?:\.\d+){1,3})-x86_64\.AppImage$", re.I)
+SETUP = WINDOWS_SETUP if sys.platform == "win32" else APPIMAGE   # what this system downloads from a release
 CHUNK = 65536
 
 
@@ -75,17 +80,21 @@ def app_dir():
 
 def installed_kind():
     """'installed' (set up with the installer), 'portable' (the installer's portable option: a copy that keeps its data
-    beside it), 'unpacked' (files copied from somewhere, which cannot update itself) or 'source' (running from the code)."""
+    beside it), 'appimage' (Linux: running from an AppImage, which updates by being replaced), 'unpacked' (files copied from
+    somewhere, which cannot update itself) or 'source' (running from the code)."""
     if not frozen():
         return "source"
+    if not platforms.WINDOWS:
+        return "appimage" if os.environ.get("APPIMAGE") else "unpacked"
     if paths.is_portable():
         return "portable"
     return "installed" if any(f.lower().startswith("unins") and f.lower().endswith(".exe") for f in os.listdir(app_dir())) else "unpacked"
 
 
 def can_self_update():
-    """Installed and portable copies update themselves through the installer; the installer then keeps the same type."""
-    return installed_kind() in ("installed", "portable")
+    """Installed and portable copies update themselves through the installer (which keeps the same type); an AppImage by
+    being replaced with the new one."""
+    return installed_kind() in ("installed", "portable", "appimage")
 
 
 def updates_dir():
@@ -387,11 +396,15 @@ def pending(current=VERSION):
 
 def launch_installer(path, relaunch=True):
     """Start the installer detached, so it keeps running after Toner closes. It verifies nothing itself: call this only
-    with a file whose checksum was checked (pending() re-checks it). Installers beyond the newest few are cleared first."""
+    with a file whose checksum was checked (pending() re-checks it). Installers beyond the newest few are cleared first.
+    On Linux the verified AppImage replaces the running one instead (see replace_appimage)."""
     try:
         prune(spare=(path,))
     except OSError:
         pass
+    if not platforms.WINDOWS:
+        replace_appimage(path, relaunch)
+        return
     args = [path, "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", f"/relaunch={1 if relaunch else 0}",
             f"/LOG={updates_dir() / 'install.log'}"]
     if installed_kind() == "portable":                          # update this folder in place, as a portable copy again
@@ -399,6 +412,31 @@ def launch_installer(path, relaunch=True):
     flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     subprocess.Popen(args, close_fds=True, creationflags=flags, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                      stderr=subprocess.DEVNULL)
+
+
+def replace_appimage(path, relaunch=True):
+    """Put a verified AppImage where the running one is ($APPIMAGE): copied beside it, then renamed over it in one step (the
+    running copy keeps its open file). With relaunch, the new one is started. Raises UpdateError when it can't be replaced."""
+    import shutil
+    target = os.environ.get("APPIMAGE") or ""
+    if not target or not os.path.isfile(target):
+        raise UpdateError("Toner is not running from an AppImage, so it can't replace itself. Download the new version from "
+                          "the release page.")
+    new = target + ".new"
+    try:
+        shutil.copyfile(path, new)
+        os.chmod(new, 0o755)
+        os.replace(new, target)
+    except OSError as e:
+        try:
+            os.remove(new)
+        except OSError:
+            pass
+        raise UpdateError(f"Toner can't replace its AppImage at {target} ({e.strerror or e}). Download the new version from "
+                          "the release page.") from None
+    if relaunch:
+        subprocess.Popen([target], close_fds=True, start_new_session=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL)
 
 
 def due(hours=24, now=None):

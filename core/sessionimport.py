@@ -101,7 +101,7 @@ def mobaxterm(text):
             continue
         kind = MOBA_TYPES.get(t.group(1), "other")
         fields = t.group(2).split("#", 1)[0].split("%")
-        if kind not in ("ssh", "telnet", "rdp"):
+        if kind not in ("ssh", "telnet", "rdp", "vnc"):
             found.skipped[kind] += 1
             continue
         host, port, user = (_moba(fields[i]) if len(fields) > i else "" for i in (0, 1, 2))
@@ -191,12 +191,12 @@ def putty_reg(text):
 
 
 def putty_here():
-    """The PuTTY sessions saved on this computer (the registry of the signed-in user)."""
+    """The PuTTY sessions saved on this computer: the signed-in user's registry on Windows, ~/.putty/sessions elsewhere."""
     found = Found("PuTTY")
     try:
         import winreg
     except ImportError:
-        return found
+        return putty_files(os.path.join(os.path.expanduser("~"), ".putty", "sessions"), found)
     try:
         root = winreg.OpenKey(winreg.HKEY_CURRENT_USER, PUTTY_KEY)
     except OSError:
@@ -225,6 +225,29 @@ def putty_here():
             item = _putty_item(unquote(sub), values, found)
             if item:
                 found.items.append(item)
+    return found
+
+
+def putty_files(folder, found=None):
+    """PuTTY on Linux and macOS: one file per session, named like the registry keys (percent-encoded), 'Key=Value' lines."""
+    found = found or Found("PuTTY")
+    try:
+        names = sorted(os.listdir(folder))
+    except OSError:
+        return found
+    for fname in names:
+        values = {}
+        try:
+            text = read_text(os.path.join(folder, fname))
+        except OSError:
+            continue
+        for line in text.splitlines():
+            key, sep, val = line.partition("=")
+            if sep:
+                values[key.strip()] = int(val) if val.strip().isdigit() else val
+        item = _putty_item(unquote(fname), values, found)
+        if item:
+            found.items.append(item)
     return found
 
 

@@ -7,7 +7,7 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import json, os, sys, threading, time
-SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + r"\ansc%d.db" % int(time.time()); os.environ["APPDATA"] = os.path.join(SP, "roamingans%d" % int(time.time()))
+SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\ansc%d.db").replace("\\", os.sep) % int(time.time()); os.environ["APPDATA"] = os.path.join(SP, "roamingans%d" % int(time.time()))
 from core import ansible as AN, db
 db.init()
 import yaml
@@ -188,8 +188,8 @@ files_text = {"inventory": "all: {}", "logins": "all:\n  hosts:\n    core_sw1:\n
 before = set(p for p in os.listdir(_tmp.gettempdir()) if p.startswith("toner_ansible_"))
 lines = []; rc = w.run(spec, files_text, lines.append)
 after = set(p for p in os.listdir(_tmp.gettempdir()) if p.startswith("toner_ansible_"))
-check("it runs ansible-playbook with env settings, the three files and the playbook as WSL paths", rc == 0 and "ansible-playbook" in seen["cmd"] and "ANSIBLE_NOCOLOR=1" in seen["cmd"] and "/mnt/" in seen["cmd"] and "--check --diff" in seen["cmd"]
-      and __import__("re").search(r"--limit '?@/mnt/", seen["cmd"]), seen["cmd"])      # quoted only when the temp path has a character the shell would take
+check("it runs ansible-playbook with env settings, the three files and the playbook as WSL paths", rc == 0 and "ansible-playbook" in seen["cmd"] and "ANSIBLE_NOCOLOR=1" in seen["cmd"] and ("/mnt/" in seen["cmd"] or sys.platform != "win32") and "--check --diff" in seen["cmd"]
+      and __import__("re").search(r"--limit '?@(/mnt/|/tmp)", seen["cmd"]), seen["cmd"])      # quoted only when the temp path has a character the shell would take
 check("the logins were on disk only for the run, in a folder of its own, and are gone", seen["secret_on_disk"] and (after - before) == set(), (after - before))
 check("a password is never on the command line", "S3cretIOS" not in seen["cmd"] and "S3cretIOS" not in " ".join(seen["argv"]))
 AN.stream_process = real_stream
@@ -295,7 +295,7 @@ db.set_setting("ansible_server_device", "gone")
 try: AN.server_login(); check("a device that has been deleted is said so", False)
 except AN.BackendError as e: check("a device that has been deleted is said so", "not in the Inventory" in str(e))
 db.set_setting("ansible_server_device", "")
-check("the settings choose the backend", isinstance(AN.backend(), AN.WslBackend) and (db.set_setting("ansible_backend", "server"), isinstance(AN.backend(), AN.ServerBackend))[1])
+check("the settings choose the backend", isinstance(AN.backend(), AN.WslBackend if sys.platform == "win32" else AN.LocalBackend) and (db.set_setting("ansible_backend", "server"), isinstance(AN.backend(), AN.ServerBackend))[1])
 db.set_setting("ansible_backend", "wsl")
 check("the server password is part of the saved-password export", "service:ansible-server" in __import__("core.vault", fromlist=["x"]).known_names())
 

@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 pass
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
-SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + r"\notify%d.db" % int(time.time())
+SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\notify%d.db").replace("\\", os.sep) % int(time.time())
 from core import db, alerts, notify
 db.init()
 PASS = FAIL = 0

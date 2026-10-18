@@ -8,7 +8,7 @@ _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import os, sys, time
 from datetime import datetime, timedelta
-SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + r"\orgm%d.db" % int(time.time()); os.environ["APPDATA"] = SP
+SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\orgm%d.db").replace("\\", os.sep) % int(time.time()); os.environ["APPDATA"] = SP
 import keyring
 STORE = {}
 keyring.set_password = lambda s, u, p: STORE.__setitem__((s, u), p)

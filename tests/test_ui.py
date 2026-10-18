@@ -8,7 +8,7 @@ import os, sys, time, json, socket, threading
 pass
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 SP = os.environ["SP"]; stamp = int(time.time())
-os.makedirs(SP + rf"\ui{stamp}"); os.environ["NETCHECK_DB"] = SP + rf"\ui{stamp}\netcheck.db"
+os.makedirs(SP + (rf"\ui{stamp}").replace("\\", os.sep)); os.environ["NETCHECK_DB"] = SP + (rf"\ui{stamp}\netcheck.db").replace("\\", os.sep)
 from core import db
 db.init()
 from PySide6.QtCore import Qt, QEventLoop
@@ -166,7 +166,11 @@ srv1, port = start_server(k1)
 got, why = connect(port, "Reject unknown hosts"); check("reject mode refuses an unknown host", not got and "not a known host" in why, why)
 got, why = connect(port, "Trust on first use"); check("first use: connects and remembers the key", bool(got) and len(nettools.list_host_keys()) == 1, why)
 got, why = connect(port, "Reject unknown hosts"); check("reject mode now connects (key is known)", bool(got), why)
-srv1.close(); srv2, _ = start_server(k2); srv2.close()
+def _close(sock):                                # (Linux: shut down first, or the port stays listening while accept() waits)
+    try: sock.shutdown(socket.SHUT_RDWR)
+    except OSError: pass
+    sock.close()
+_close(srv1); srv2, _ = start_server(k2); _close(srv2)
 # same host:port, different key: new server on the same port
 s3 = socket.socket(); s3.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 import time as _t; _t.sleep(0.3)
@@ -226,14 +230,14 @@ pane2.shutdown(); pane.shutdown()                 # finish the logs these two se
 
 print("== data & logs")
 D = P["Data and logs"]; D.refresh(); check("info panel shows paths and counts", "netcheck.db" in D.info.text() and "runs" in D.info.text())
-path = SP + rf"\ui{stamp}\settings.json"
+path = SP + (rf"\ui{stamp}\settings.json").replace("\\", os.sep)
 QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (path, "")); D.export_settings()
 data = json.load(open(path)); check("export excludes devices and secrets", "devices" not in data and "workers" in data and "thresholds" in data)
 db.set_setting("workers", 22); data["workers"] = 6; data["retries"] = "x"; json.dump(data, open(path, "w"))
 QFileDialog.getOpenFileName = staticmethod(lambda *a, **k: (path, "")); msgs.clear(); D.import_settings()
 check("import applies, ignores the bad value, refreshes the pages", db.get_setting("workers") == 6 and "retries" in msgs[-1][1] and g.workers.value() == 6, msgs[-1])
 open(path, "w").write("[1,2]"); D.import_settings(); check("import of a wrong-shaped file is refused", "Could not read" in msgs[-1][1])
-bk = SP + rf"\ui{stamp}\backup.db"; QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (bk, ""))
+bk = SP + (rf"\ui{stamp}\backup.db").replace("\\", os.sep); QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (bk, ""))
 D.backup(); import sqlite3 as sq; con = sq.connect(bk); n = con.execute("select count(*) from devices").fetchone()[0]; con.close()
 check("database backup is a valid copy", n == 3, n)
 db.save_run([Result("core", "cpu", "OK", "1%", numeric=1.0)]); D.clear_history()

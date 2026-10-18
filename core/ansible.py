@@ -440,6 +440,10 @@ def to_wsl_path(path):
 
 def _kill_tree(proc):
     try:
+        if os.name != "nt":                                   # Linux, macOS: the run is its own process group (stream_process)
+            import signal
+            os.killpg(proc.pid, signal.SIGTERM)
+            return
         subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, timeout=10, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except Exception:
         try:
@@ -459,7 +463,7 @@ def stream_process(argv, on_line, cancel=None, env=None, cwd=None, timeout=None)
     """Run a program, giving each line it prints to on_line as it comes. Returns the exit code (-1 when cancelled or out of time)."""
     env = dict(os.environ if env is None else env, WSL_UTF8="1")           # wsl.exe then speaks UTF-8 instead of UTF-16 for its own messages
     proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, cwd=cwd, stdin=subprocess.DEVNULL,
-                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0), start_new_session=os.name != "nt")
     started, stopped = time.time(), {"why": ""}
 
     def watch():
@@ -576,6 +580,45 @@ class WslBackend(Backend):
             env = environment()
             cmd = shlex.join(["env"] + [f"{k}={v}" for k, v in env.items()] + [self.command] + args)
             return stream_process(self._argv(cmd, cwd=Path(spec.playbook_path).parent), on_line, cancel)
+        finally:
+            shutil.rmtree(stage, ignore_errors=True)
+
+
+class LocalBackend(Backend):
+    """Ansible on this computer itself (Linux and macOS): the command is run directly, with the files in a private temp folder."""
+    name = "local"
+
+    def __init__(self, command=DEFAULT_COMMAND):
+        self.command = (command or DEFAULT_COMMAND).strip() or DEFAULT_COMMAND
+
+    def describe(self):
+        return "this computer"
+
+    def check(self):
+        exe = shutil.which(self.command)
+        if not exe:
+            return False, ("Ansible is not installed on this computer. Install it (for example: sudo apt install ansible, or "
+                           "pipx install ansible-core), then try again.")
+        lines = []
+        try:
+            code = stream_process([exe, "--version"], lines.append, timeout=60)
+        except OSError as e:
+            return False, f"Ansible could not be started: {e}"
+        text = "\n".join(lines)
+        return (True, _version_line(text)) if code == 0 else (False, text[:300])
+
+    def run(self, spec, files_text, on_line, cancel=None):
+        stage = Path(tempfile.mkdtemp(prefix="toner_ansible_")).resolve()
+        try:
+            os.chmod(stage, 0o700)                                   # the logins file holds passwords: this user only
+            files = {"playbook": str(spec.playbook_path)}
+            for key, fname in (("inventory", "inventory.yml"), ("logins", "logins.yml"), ("limit", "limit.txt")):
+                if files_text.get(key):
+                    p = stage / fname
+                    p.write_text(files_text[key], encoding="utf-8", newline="\n")
+                    files[key] = str(p)
+            env = {**os.environ, **environment()}
+            return stream_process([self.command] + build_args(spec, files), on_line, cancel, env=env, cwd=Path(spec.playbook_path).parent)
         finally:
             shutil.rmtree(stage, ignore_errors=True)
 
@@ -746,6 +789,8 @@ def backend():
     cmd = db.get_setting("ansible_command") or DEFAULT_COMMAND
     if db.get_setting("ansible_backend") == "server":
         return ServerBackend(server_login(), cmd)
+    if os.name != "nt":                                       # Linux and macOS run it themselves; WSL is Windows' way
+        return LocalBackend(cmd)
     return WslBackend(db.get_setting("ansible_distro") or "", cmd)
 
 

@@ -8,7 +8,7 @@ _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 _os.environ.setdefault("QT_QPA_FONTDIR", r"C:\Windows\Fonts")            # real text widths, as on a user's screen
 import os, sys, time
-SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + r"\lay%d.db" % int(time.time()); os.environ["APPDATA"] = SP
+SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\lay%d.db").replace("\\", os.sep) % int(time.time()); os.environ["APPDATA"] = SP
 from core import db
 db.init()
 import keyring

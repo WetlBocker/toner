@@ -5,7 +5,7 @@ import os as _os, sys as _sys, tempfile as _tmp
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 import os, sys, time
-SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + r"\org%d.db" % int(time.time()); os.environ["APPDATA"] = SP
+SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\org%d.db").replace("\\", os.sep) % int(time.time()); os.environ["APPDATA"] = SP
 import keyring
 STORE = {}
 keyring.set_password = lambda s, u, p: STORE.__setitem__((s, u), p)

@@ -1,5 +1,6 @@
-"""This computer's Wi-Fi, read from Windows (`netsh wlan`): the current connection and the networks in range.
-The labels are matched in English; the signal strength is also found by its '%' sign, so that still works elsewhere."""
+"""This computer's Wi-Fi: the current connection and the networks in range. Read from Windows' `netsh wlan` (the labels are
+matched in English; the signal strength is also found by its '%' sign, so that still works elsewhere), and on Linux from
+NetworkManager's `nmcli` (its terse output, the same fields in the same shape)."""
 import re
 import subprocess
 
@@ -56,6 +57,9 @@ def parse_interfaces(text):
 
 def interfaces():
     """(adapters, error text). An empty list with no error means this computer has no Wi-Fi adapter."""
+    from core.platforms import WINDOWS
+    if not WINDOWS:
+        return _nm_interfaces()
     try:
         text = _netsh("show", "interfaces")
     except (OSError, subprocess.TimeoutExpired) as e:
@@ -107,6 +111,9 @@ def parse_networks(text):
 
 def scan():
     """(access points, error text). Windows may need Location access switched on to list networks."""
+    from core.platforms import WINDOWS
+    if not WINDOWS:
+        return _nm_scan()
     try:
         text = _netsh("show", "networks", "mode=bssid", timeout=30)
     except (OSError, subprocess.TimeoutExpired) as e:
@@ -120,6 +127,105 @@ def scan():
         if "no wireless interface" in low or "wlan autoconfig service is not running" in low:
             return [], "This computer has no Wi-Fi adapter, or the WLAN AutoConfig service is not running."
         return [], "No networks were found."
+    return nets, ""
+
+
+# ---------------------------------------------------------------- Linux: NetworkManager (nmcli)
+NM_AP_FIELDS = "ACTIVE,SSID,BSSID,CHAN,FREQ,SIGNAL,RATE,SECURITY,DEVICE"
+NM_MISSING = "nmcli was not found. On Linux, Toner reads Wi-Fi through NetworkManager (nmcli)."
+
+
+def _nmcli(*args, timeout=20):
+    r = subprocess.run(["nmcli", "-t", *args], capture_output=True, text=True, timeout=timeout, errors="replace")
+    return r.stdout or "", r.returncode, (r.stderr or "").strip()
+
+
+def nm_fields(line):
+    """One line of nmcli's terse output, split on the colons it does not escape (a BSSID's colons have a backslash before them)."""
+    out, cur, i = [], "", 0
+    while i < len(line):
+        c = line[i]
+        if c == "\\" and i + 1 < len(line):
+            cur += line[i + 1]
+            i += 2
+            continue
+        if c == ":":
+            out.append(cur)
+            cur = ""
+        else:
+            cur += c
+        i += 1
+    out.append(cur)
+    return out
+
+
+def band_of_freq(freq):
+    mhz = _int(freq)
+    if not mhz:
+        return ""
+    return "2.4 GHz" if mhz < 3000 else "5 GHz" if mhz < 5925 else "6 GHz"
+
+
+def parse_nm_networks(text):
+    """`nmcli -t -f ACTIVE,SSID,BSSID,CHAN,FREQ,SIGNAL,RATE,SECURITY,DEVICE dev wifi list` -> one dict per access point."""
+    nets = []
+    for line in (text or "").splitlines():
+        f = nm_fields(line)
+        if len(f) < 9:
+            continue
+        active, ssid, bssid, chan, freq, signal, rate, security, device = f[:9]
+        nets.append({"ssid": ssid or "(hidden)", "bssid": bssid.lower(), "auth": security if security not in ("", "--") else "Open",
+                     "encryption": "", "signal": _int(signal), "channel": _int(chan), "radio": "",
+                     "band": band_of_freq(freq) or band_of(_int(chan)), "active": active == "yes", "rate": _int(rate),
+                     "device": device})
+    return nets
+
+
+def parse_nm_interfaces(dev_text, ap_text):
+    """`nmcli -t -f DEVICE,TYPE,STATE,CONNECTION device` and the access point list -> adapters, shaped like netsh's."""
+    aps = parse_nm_networks(ap_text)
+    out = []
+    for line in (dev_text or "").splitlines():
+        f = nm_fields(line)
+        if len(f) < 4 or f[1] != "wifi":
+            continue
+        name, _t, state, conn = f[:4]
+        ap = next((a for a in aps if a["active"] and a["device"] in ("", name)), None)
+        d = {"name": name, "state": state, "ssid": ap["ssid"] if ap else (conn if conn not in ("", "--") else ""),
+             "bssid": ap["bssid"] if ap else "", "signal": f"{ap['signal']}%" if ap and ap["signal"] is not None else "",
+             "channel": str(ap["channel"]) if ap and ap["channel"] else "", "authentication": ap["auth"] if ap else ""}
+        d["signal_pct"] = ap["signal"] if ap else None
+        d["connected"] = state.startswith("connected") and ap is not None
+        d["channel_no"] = ap["channel"] if ap else None
+        d["band_text"] = ap["band"] if ap else ""
+        d["rx"], d["tx"] = (ap["rate"] if ap else None), None
+        out.append(d)
+    return out
+
+
+def _nm_interfaces():
+    try:
+        devs, code, err = _nmcli("-f", "DEVICE,TYPE,STATE,CONNECTION", "device")
+        if code:
+            return [], err or "nmcli could not list the network devices."
+        aps, _c, _e = _nmcli("-f", NM_AP_FIELDS, "device", "wifi", "list", "--rescan", "no")
+    except FileNotFoundError:
+        return [], NM_MISSING
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return [], f"{type(e).__name__}: {e}"
+    return parse_nm_interfaces(devs, aps), ""
+
+
+def _nm_scan():
+    try:
+        text, code, err = _nmcli("-f", NM_AP_FIELDS, "device", "wifi", "list", "--rescan", "yes", timeout=40)
+    except FileNotFoundError:
+        return [], NM_MISSING
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return [], f"{type(e).__name__}: {e}"
+    nets = parse_nm_networks(text)
+    if not nets:
+        return [], err or "No networks were found."
     return nets, ""
 
 

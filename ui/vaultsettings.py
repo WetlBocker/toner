@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDia
                                QMessageBox, QPushButton, QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from core import audit, db, extstore, extvault, orgs, passvault
+from core.platforms import exe as platform_exe
 from ui.brandicons import vault_icon
 
 KEPT = "saved in the vault - leave blank to keep it"
@@ -49,10 +50,10 @@ class _Fields(QWidget):
             self._secret("client_secret", "Client secret")
             self._secret("master_password", "Master password")
             self._line("organization", "Organization", "the Bitwarden organization that holds the collections")
-            self._cli("Bitwarden CLI", "bw.exe")
+            self._cli("Bitwarden CLI", platform_exe("bw"))
         if kind == "onepassword":
             self._secret("token", "Service account token")
-            self._cli("1Password CLI", "op.exe")
+            self._cli("1Password CLI", platform_exe("op"))
         if kind == "keeper":
             self._combo("region", "Region", extvault.KEEPER_REGIONS)
             self._secret("token", "One-time access token")
@@ -90,6 +91,10 @@ class _Fields(QWidget):
         h.setContentsMargins(0, 0, 0, 0)
         h.addWidget(box, 1)
         h.addWidget(browse)
+        if self.kind in ("bitwarden", "vaultwarden"):              # Linux: npm install -g @bitwarden/cli, from here
+            from ui import installdlg
+            self.install = installdlg.button("bw", self, done=self.show_where)
+            h.addWidget(self.install)
         h.addWidget(get)
         self.boxes["cli"] = box
         self.form.addRow(label, row)
@@ -103,15 +108,19 @@ class _Fields(QWidget):
         if not hasattr(self, "where"):
             return
         exe = extvault.CLI_NAMES[self.kind]
+        file = platform_exe(exe)                                   # bw.exe on Windows, bw elsewhere
         box = self.boxes["cli"]
         found = extvault.find_cli(self.kind, box.text())
         # found on PATH: said inside the empty box; a chosen path shows itself; nothing found: the line below says how to get it
         box.setPlaceholderText(f"Using {exe}: {found}" if found and not box.text().strip() else
-                               f"{exe}.exe (found automatically when it is on the PATH)")
+                               f"{file} (found automatically when it is on the PATH)")
         self.where.setText("" if found else
-                           f"{exe}.exe was not found. Download the {extvault.CLI_LABELS[self.kind]}, then choose {exe}.exe with "
+                           f"{file} was not found. Download the {extvault.CLI_LABELS[self.kind]}, then choose {file} with "
                            "Browse..., or put it in a folder on your PATH.")
         self.where.setVisible(not found)
+        if getattr(self, "install", None) is not None:
+            from ui import installdlg
+            self.install.setVisible(not found and installdlg.offered("bw"))
 
     def _browse(self, box, exe):
         path, _ = QFileDialog.getOpenFileName(self, "Choose " + exe, "", f"{exe} ({exe});;Programs (*.exe)")

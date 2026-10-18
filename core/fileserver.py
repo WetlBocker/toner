@@ -52,8 +52,12 @@ def risky_root(path):
         return "Choose an existing folder."
     p = os.path.normcase(os.path.realpath(path)).rstrip("\\/")
     if os.path.splitdrive(p)[1] in ("", "\\", "/"):
-        return "That is a whole drive. Choose a dedicated folder, for example C:\\TFTP."
+        return ("That is a whole drive. Choose a dedicated folder, for example C:\\TFTP." if os.name == "nt" else
+                "That is the whole file system. Choose a dedicated folder, for example ~/tftp.")
     bad = [os.environ.get(v) for v in ("SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "ProgramData", "USERPROFILE", "APPDATA")]
+    if os.name != "nt":                          # Linux and macOS: the system's own folders, and the whole of a home
+        bad += ["/etc", "/usr", "/bin", "/sbin", "/lib", "/var", "/boot", "/opt", "/root", "/home", "/dev", "/proc", "/sys",
+                "/System", "/Library", "/Applications", "/Users", os.path.expanduser("~")]
     for b in bad:
         if b and os.path.normcase(os.path.realpath(b)).rstrip("\\/") == p:
             return f"{path} holds system or personal files. Choose a dedicated folder."

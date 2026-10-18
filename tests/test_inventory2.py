@@ -6,7 +6,7 @@ _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import csv, json, os, sys, time
 pass
-SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + r"\iv%d.db" % int(time.time())
+SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\iv%d.db").replace("\\", os.sep) % int(time.time())
 from core import db, importer, bulk, profiles
 db.init()
 import keyring
@@ -92,23 +92,23 @@ rows = importer.export_rows(db.list_devices())
 ra = next(r for r in rows if r["name"] == "a")
 check("export carries folder path, tags, profile and jump host by name, never secrets", ra["folder"] == "Racks" and ra["profile"] == "Net team" and ra["jump"] == "c" and "wan" in ra["tags"] and "SECRETPW" not in str(rows) and "COMM" not in str(rows), ra)
 for ext in ("csv", "json", "yaml"):
-    p = SP + rf"\inv_export.{ext}"
+    p = SP + (rf"\inv_export.{ext}").replace("\\", os.sep)
     importer.write_rows(rows, p)
     back = importer.load_rows(p)
     check(f"{ext}: file reads back with every device", sorted(r["name"] for r in back) == ["a", "b", "c"])
-try: importer.write_rows(rows, SP + r"\x.txt"); check("unknown extension refused", False)
+try: importer.write_rows(rows, SP + (r"\x.txt").replace("\\", os.sep)); check("unknown extension refused", False)
 except ValueError: check("unknown extension refused", True)
 # import into a fresh inventory
 for x in db.list_devices(): db.delete_device(x["id"])
 w2 = I.InventoryTab()
-I.QFileDialog.getOpenFileName = staticmethod(lambda *a, **k: (SP + r"\inv_export.csv", ""))
+I.QFileDialog.getOpenFileName = staticmethod(lambda *a, **k: (SP + (r"\inv_export.csv").replace("\\", os.sep), ""))
 # 'c' is the jump host of 'a' but sorts after it: import order matters, so the first pass reports it and a second import completes it
 w2.import_file(); names1 = {x["name"] for x in db.list_devices()}
 check("import reports a jump host that is not imported yet, and imports the rest", "b" in names1 and "c" in names1 and "a" not in names1, names1)
 w2.import_file(); d = {x["name"]: x for x in db.list_devices()}
 check("a second import adds the device that needed it; profile, folder, tags and jump are restored", "a" in d and d["a"]["profile_id"] == pid and json.loads(d["a"]["jump"]) == {"device": "c"} and d["a"]["tags"] == "wan, audited, PCI" and db.folder_paths()[d["a"]["folder_id"]] == "Racks", d.get("a"))
 # profile that does not exist
-p = SP + r"\inv_bad.csv"
+p = SP + (r"\inv_bad.csv").replace("\\", os.sep)
 with open(p, "w", newline="", encoding="utf-8") as fh:
     cw = csv.writer(fh); cw.writerow(["name", "vendor", "host", "profile", "tags", "snmp_community"]); cw.writerow(["z1", "snmp", "10.9.9.9", "No such profile", "t1", ""]); cw.writerow(["z2", "snmp", "10.9.9.8", "", "t1; t2", "comm9"])
 I.QFileDialog.getOpenFileName = staticmethod(lambda *a, **k: (p, ""))
@@ -116,10 +116,10 @@ w2.import_file(); names = {x["name"]: x for x in db.list_devices()}
 check("an unknown profile skips just that row", "z1" not in names and "z2" in names)
 check("tags with ';' are tidied; SNMP community stored as a secret; vendor snmp gets SNMP settings", names["z2"]["tags"] == "t1, t2" and STORE.get(("netcheck", "z2:snmp")) == "comm9" and json.loads(names["z2"]["snmp"])["version"] == "2c")
 print("== export button")
-I.QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (SP + r"\btn_export.json", ""))
-w2.export_file(); check("the Export button writes the visible devices", len(json.load(open(SP + r"\btn_export.json"))["devices"]) == len(db.list_devices()))
+I.QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (SP + (r"\btn_export.json").replace("\\", os.sep), ""))
+w2.export_file(); check("the Export button writes the visible devices", len(json.load(open(SP + (r"\btn_export.json").replace("\\", os.sep)))["devices"]) == len(db.list_devices()))
 w2.table.selectAll(); w2.set_filter("tag_sel", "t1"); w2.table.selectAll()
-w2.export_file(); check("a filter limits what is exported", len(json.load(open(SP + r"\btn_export.json"))["devices"]) == 1)
+w2.export_file(); check("a filter limits what is exported", len(json.load(open(SP + (r"\btn_export.json").replace("\\", os.sep)))["devices"]) == 1)
 
 print("== device dialog: profile, tags, fields, SNMP, jump host")
 for x in db.list_devices(): db.delete_device(x["id"])

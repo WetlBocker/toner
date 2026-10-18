@@ -13,6 +13,7 @@ unchanged: keyring.get_password(db.SERVICE, name) reads the vault's entry `name`
 import base64
 import json
 import os
+import sys
 import threading
 from contextlib import contextmanager
 
@@ -138,30 +139,10 @@ def _write(doc):
     _seen = _stat()
 
 
-class _FileLock:
+def _FileLock():
     """Toner's window and its scheduled service may both write: one at a time (a lock file beside the vault)."""
-
-    def __enter__(self):
-        import msvcrt
-        self.f = open(path().with_name(path().name + ".lock"), "a+b")
-        for _ in range(50):
-            try:
-                self.f.seek(0)
-                msvcrt.locking(self.f.fileno(), msvcrt.LK_NBLCK, 1)
-                return self
-            except OSError:
-                import time
-                time.sleep(0.1)
-        return self                                       # 5 s: go ahead rather than hang
-
-    def __exit__(self, *exc):
-        import msvcrt
-        try:
-            self.f.seek(0)
-            msvcrt.locking(self.f.fileno(), msvcrt.LK_UNLCK, 1)
-        except OSError:
-            pass
-        self.f.close()
+    from core.platforms import FileLock
+    return FileLock(path().with_name(path().name + ".lock"))
 
 
 def _fresh():
@@ -178,7 +159,8 @@ def _fresh():
 
 # ---------------------------------------------------------------- opening and closing
 def create(master, remember=True, carry=None):
-    """A new, empty vault (replacing any that is there) locked with `master`, and opened. `carry`: {name: secret} to put in it."""
+    """A new, empty vault (replacing any that is there) locked with `master`, and opened. `carry`: {name: secret} to put in it.
+    Returns False when it was to be remembered but this computer has no keyring for it (Linux or macOS), else True."""
     global _key, _data
     check_master(master)
     with _lock, _FileLock():
@@ -187,7 +169,11 @@ def create(master, remember=True, carry=None):
         data = dict(carry or {})
         _write({"format": FORMAT, "version": 1, "kdf": kdf, "key": wrapped, "data": _seal(key, data)})
         _key, _data = key, data
+    try:
         set_remembered(remember)
+    except NoKeyring:
+        return False
+    return True
 
 
 def unlock(master):
@@ -206,13 +192,13 @@ def unlock_remembered():
         return False
     try:
         with open(key_path(), "rb") as f:
-            key = dpapi_unprotect(f.read())
+            key = _unprotect(f.read())
         with _lock:
             doc = _read_file()
             _data, _key, _seen = _unseal(key, doc["data"]), key, _stat()
         return True
     except Exception:
-        return False                                      # another Windows user, another computer, or a vault made again since
+        return False                                      # another user, another computer, no keyring, or a vault made again since
 
 
 def lock():
@@ -222,14 +208,25 @@ def lock():
         _key, _data = None, None
 
 
+class NoKeyring(RuntimeError):
+    """Linux or macOS without a keyring Toner can use (no Secret Service running, say): the vault can't be remembered."""
+
+
 def set_remembered(on):
-    """Remember on this computer: keep the data key, protected by Windows for this user, beside the vault (or forget it)."""
+    """Remember on this computer: keep the data key, protected for this user (Windows' DPAPI; the Keychain on macOS; the
+    Secret Service keyring on Linux), with a file beside the vault saying so (or forget it). Raises NoKeyring."""
     if on:
         if _key is None:
             raise Locked("The vault is locked.")
         with open(key_path(), "wb") as f:
-            f.write(dpapi_protect(_key))
+            f.write(_protect(_key))
     else:
+        try:
+            with open(key_path(), "rb") as f:
+                if f.read().startswith(KEYRING_MARK):
+                    _native_keyring().delete_password(NATIVE_SERVICE, str(path()))
+        except Exception:
+            pass
         try:
             key_path().unlink()
         except FileNotFoundError:
@@ -334,6 +331,42 @@ def names():
         return sorted(_data)
 
 
+# ---------------------------------------------------------------- keeping the remembered key: DPAPI, or the system's keyring
+KEYRING_MARK = b"toner-keyring\n"          # the key file on Linux and macOS: the key itself is in the keyring
+NATIVE_SERVICE = "Toner vault"
+
+
+def _native_keyring():
+    """The system's own keyring (not Toner's vault, which keyring is pointed at once the vault is installed)."""
+    try:
+        if sys.platform == "darwin":
+            from keyring.backends import macOS
+            kr = macOS.Keyring()
+        else:
+            from keyring.backends import SecretService
+            kr = SecretService.Keyring()
+        kr.priority                                     # raises when it can't be used here
+        return kr
+    except Exception as e:
+        raise NoKeyring(str(e) or "no keyring") from None
+
+
+def _protect(key):
+    if sys.platform == "win32":
+        return dpapi_protect(key)
+    _native_keyring().set_password(NATIVE_SERVICE, str(path()), base64.b64encode(key).decode())
+    return KEYRING_MARK
+
+
+def _unprotect(blob):
+    if blob.startswith(KEYRING_MARK):
+        stored = _native_keyring().get_password(NATIVE_SERVICE, str(path()))
+        if not stored:
+            raise NoKeyring("the keyring has no key for this vault")
+        return base64.b64decode(stored)
+    return dpapi_unprotect(blob)
+
+
 # ---------------------------------------------------------------- Windows' protection of the remembered key (DPAPI)
 def _dpapi(data, protect):
     import ctypes
@@ -432,7 +465,7 @@ def left_in_credential_manager():
     """{name: secret} of the passwords an older Toner kept in Windows Credential Manager (read before the vault takes over)."""
     from core import vault
     backend = _old_backend
-    if backend is None:
+    if backend is None or sys.platform != "win32":       # (only Windows' Toner ever used Credential Manager)
         return {}
     out = {}
     for name in vault.known_names():

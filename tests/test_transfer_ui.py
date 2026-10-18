@@ -4,8 +4,10 @@ import os as _os, sys as _sys, tempfile as _tmp
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+if _sys.platform != "win32":                       # xcopy is Windows' (Linux would use rsync: not built yet)
+    print("skipped: this test is about Windows itself"); print("\n0 passed, 0 failed"); _sys.exit(0)
 import logging, os, sys, time
-SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + r"\tu%d.db" % int(time.time()); os.environ["APPDATA"] = SP
+SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\tu%d.db").replace("\\", os.sep) % int(time.time()); os.environ["APPDATA"] = SP
 from core import audit, db
 db.init()
 import keyring

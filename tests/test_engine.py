@@ -7,7 +7,7 @@ _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import os, sys, time, traceback, json
 pass
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
-SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + r"\eng%d.db" % int(time.time())
+SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\eng%d.db").replace("\\", os.sep) % int(time.time())
 from core import db
 db.init()
 from PySide6.QtWidgets import QApplication

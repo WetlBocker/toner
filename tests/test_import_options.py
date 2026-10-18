@@ -4,7 +4,7 @@ import os as _os, sys as _sys, tempfile as _tmp
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 import csv, json, os, sys, time
-SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + r"\imp%d.db" % int(time.time()); os.environ["APPDATA"] = SP
+SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\imp%d.db").replace("\\", os.sep) % int(time.time()); os.environ["APPDATA"] = SP
 from core import db, importer, proxy, winmon
 db.init()
 ok = bad = 0

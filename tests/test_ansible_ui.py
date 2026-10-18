@@ -7,7 +7,7 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import json, os, sys, threading, time
-SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + r"\ansui%d.db" % int(time.time()); os.environ["APPDATA"] = os.path.join(SP, "roamingansui%d" % int(time.time()))
+SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\ansui%d.db").replace("\\", os.sep) % int(time.time()); os.environ["APPDATA"] = os.path.join(SP, "roamingansui%d" % int(time.time()))
 from core import ansible as AN, db, scope
 db.init()
 import keyring
@@ -152,16 +152,16 @@ class CheckFB(Fake):
         self.spec = spec; on_line("playbook: " + str(spec.playbook_path)); return 0
 CFB = CheckFB(); AN.backend = lambda: CFB
 ed.open_playbook("site/other.yml"); ed.check_with_ansible()
-check("it runs, and the output shows", wait(lambda: not ed.checking()) and not ed.output.isHidden() and "playbook:" in ed.output.toPlainText() and CFB.spec.syntax_only and "passed" in ed.verdict.text(), ed.output.toPlainText())
+check("it runs, and the output shows", wait(lambda: not ed.checking() and ed.output.toPlainText() != "Checking...") and not ed.output.isHidden() and "playbook:" in ed.output.toPlainText() and CFB.spec.syntax_only and "passed" in ed.verdict.text(), ed.output.toPlainText())
 check("it needs no devices and is not put in the history", AN.list_runs() == [])
 class BadFB(Fake):
     def run(self, spec, files_text, on_line, cancel=None):
         on_line("ERROR! Syntax Error while loading YAML."); return 4
 AN.backend = lambda: BadFB(); ed.check_with_ansible()
-check("a failure is shown, with Ansible's words", wait(lambda: not ed.checking()) and "Syntax Error" in ed.output.toPlainText() and "found a problem" in ed.verdict.text())
+check("a failure is shown, with Ansible's words", wait(lambda: not ed.checking() and ed.output.toPlainText() != "Checking...") and "Syntax Error" in ed.output.toPlainText() and "found a problem" in ed.verdict.text())
 def nobackend(): raise AN.BackendError("WSL is not installed on this PC.")
 AN.backend = nobackend; ed.check_with_ansible()
-check("with no way to run Ansible it says so", wait(lambda: not ed.checking()) and "WSL is not installed" in ed.output.toPlainText())
+check("with no way to run Ansible it says so", wait(lambda: not ed.checking() and ed.output.toPlainText() != "Checking...") and "WSL is not installed" in ed.output.toPlainText())
 AN.backend = lambda: FB
 ed.editor.setPlainText("- hosts: z\n  tasks: []\n"); ASKED.clear(); ANSWER[0] = QMessageBox.StandardButton.No; ed.check_with_ansible()
 check("with unsaved edits it asks to save first (Ansible checks the saved file); No stops there", ASKED and "Save your changes first" in ASKED[-1][1] and not ed.checking())
@@ -249,7 +249,8 @@ check("Yes empties it", hp.table.rowCount() == 0 and hp.hint.isVisible() is not 
 print("== Settings > Ansible")
 w.go("Settings"); S = w.settings; S.select_page("Ansible"); page = next(p for p in S.pages if p.title == "Ansible"); app.processEvents()
 check("it is in its own group, between Alerts and reports and Look and feel", S.page_titles().index("Ansible") == S.page_titles().index("Config backups") + 1)
-check("it opens on WSL, with the server's boxes hidden", page.where.currentData() == "wsl" and not page.host.isVisible() and page.distro.isVisible())
+check("it opens on WSL (Linux: this computer), with the server's boxes hidden", page.where.currentData() == "wsl" and not page.host.isVisible()
+      and page.distro.isVisible() == (sys.platform == "win32"))
 check("... showing what is saved: check mode on, 200 runs, the default playbook folder", page.check_default.isChecked() and page.keep.value() == 200 and page.folder.text() == "")
 page.where.setCurrentIndex(1); app.processEvents()
 check("choosing a server shows how to sign in: an Inventory device by default if one is set, else typed", page.login.currentData() == "typed" and page.host.isVisible() and not page.device.isVisible() and not page.distro.isVisible())

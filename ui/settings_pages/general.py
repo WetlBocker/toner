@@ -20,9 +20,12 @@ class GeneralPage(Page):
         self.verify = QCheckBox("Verify SSL certificates on new devices by default")
         self.background = QCheckBox("Keep running in the system tray when the window is closed")
         self.background.setToolTip("Scheduled checks, backups and alerts keep working. Use the tray icon to open or quit.")
+        from core.platforms import LINUX
+        self.linux = LINUX                                  # (Windows' installer offers this; an AppImage has no installer)
+        self.at_login = QCheckBox("Start Toner when I sign in (waits in the tray if background running is turned on)")
         self.scan_over = spin(0, 10_000_000, " addresses")
         self.scan_over.setSpecialValueText("never ask")
-        for w in (self.ssh_logs, self.background):          # about this computer: an organization cannot change them
+        for w in (self.ssh_logs, self.background, self.at_login):   # about this computer: an organization cannot change them
             w.setProperty("globalOnly", True)
         def heading(text):
             title = QLabel(text.upper())
@@ -36,6 +39,8 @@ class GeneralPage(Page):
         heading("Running")
         self.form.addRow("Devices checked in parallel", self.workers)
         self.form.addRow("", self.background)
+        self.form.addRow("", self.at_login)
+        self.form.setRowVisible(self.at_login, self.linux)
         heading("Devices and scans")
         self.form.addRow("Default SSH port (console)", self.ssh_port)
         self.form.addRow("", self.verify)
@@ -49,6 +54,9 @@ class GeneralPage(Page):
         self.verify.setChecked(bool(db.get_setting("default_verify_ssl")))
         self.background.setChecked(bool(db.get_setting("run_in_background")))
         self.scan_over.setValue(int(db.get_setting("scan_confirm_over")))
+        if self.linux:
+            from core import autostart
+            self.at_login.setChecked(autostart.enabled())
 
     def save(self):
         for key, w in (("retention_days", self.retention), ("ssh_log_days", self.ssh_logs),
@@ -57,6 +65,13 @@ class GeneralPage(Page):
             db.set_setting(key, w.value())
         db.set_setting("default_verify_ssl", self.verify.isChecked())
         db.set_setting("run_in_background", self.background.isChecked())
+        if self.linux:
+            from core import autostart
+            if self.at_login.isChecked() != autostart.enabled():
+                try:
+                    autostart.set_enabled(self.at_login.isChecked())
+                except OSError:
+                    pass
 
 
 # ------------------------------------------------------------------ Connections

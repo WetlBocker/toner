@@ -1,11 +1,11 @@
-﻿# Run directly (python tests/test_x.py) or all together (python tests/run_all.py). Each test builds its own
+# Run directly (python tests/test_x.py) or all together (python tests/run_all.py). Each test builds its own
 # throw-away database and uses a fake credential store, so nothing on this computer is touched.
 import os as _os, sys as _sys, tempfile as _tmp
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import logging, os, socket, sys, threading, time
-SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + r"\su%d.db" % int(time.time()); os.environ["APPDATA"] = SP
+SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\su%d.db").replace("\\", os.sep) % int(time.time()); os.environ["APPDATA"] = SP
 from core import audit, db, sessionlog, sessions
 db.init()
 db.set_setting("hostkey_mode", "Always trust")
@@ -55,18 +55,19 @@ check("it starts with a welcome message and nothing saved", st.stack.currentWidg
 
 print("== the new session dialog")
 d = S.SessionDialog(parent=st)
-check("four types to choose from", [d.kind.itemText(i) for i in range(d.kind.count())] == ["SSH", "Telnet", "Remote Desktop (RDP)", "Serial"] and d.current_kind() == "ssh")
+check("five types to choose from", [d.kind.itemText(i) for i in range(d.kind.count())] == ["SSH", "Telnet", "Remote Desktop (RDP)", "VNC", "Serial"] and d.current_kind() == "ssh")
 vis = lambda dlg, key: dlg.form.isRowVisible(dlg.rows[key][0])
 check("SSH: host, port, user, password, remember and paging", all(vis(d, k) for k in ("host", "port", "user", "password", "remember", "paging", "device")) and not vis(d, "baud") and not vis(d, "fullscreen") and not vis(d, "serial_port"))
 d.kind.setCurrentIndex(d.kind.findData("telnet"))
 check("Telnet: host and port, no user name or password, a warning about encryption", vis(d, "host") and vis(d, "port") and not vis(d, "user") and not vis(d, "password") and "not encrypted" in d.about_kind.text() + d.note.text() or "without encryption" in d.note.text())
 d.kind.setCurrentIndex(d.kind.findData("rdp"))
-check("RDP: size, full screen, sharing options, gateway, and a button that says what it does", all(vis(d, k) for k in ("fullscreen", "width", "height", "clipboard", "drives", "printers", "admin", "gateway", "user")) and not vis(d, "password") and d.connect_btn.text() == "Connect" and "never stores" in d.note.text() and "tab inside Toner" in d.note.text())
+check("RDP: size, full screen, sharing options, gateway, and a button that says what it does", all(vis(d, k) for k in ("fullscreen", "width", "height", "clipboard", "drives", "printers", "admin", "gateway", "user")) and not vis(d, "password") and d.connect_btn.text() == "Connect" and "never stores" in d.note.text() and ("tab inside Toner" if sys.platform == "win32" else "FreeRDP") in d.note.text())
 d.kind.setCurrentIndex(d.kind.findData("serial"))
 check("Serial: port list, baud rate, data bits, parity, stop bits and flow control; no host", all(vis(d, k) for k in ("serial_port", "baud", "bits", "parity", "stop", "flow")) and not vis(d, "host") and d.connect_btn.text() == "Connect")
 check("the baud list has the usual speeds, 9600 first chosen", d.baud.findText("115200") >= 0 and d.baud.currentText() == "9600" and d.flow.count() == 3 and d.parity.count() == 5)
 import core.serialconn as SC
-if SC.ports(): check("this PC's COM ports are listed with their descriptions", d.serial_port.count() == len(SC.ports()) and "COM" in d.serial_port.itemText(0))
+if SC.ports(): check("this PC's serial ports are listed with their descriptions", d.serial_port.count() == len(SC.ports())
+                       and ("COM" if sys.platform == "win32" else "/dev/") in d.serial_port.itemText(0))
 d.serial_port.setCurrentText("COM7"); d.baud.setCurrentText("115200"); d.flow.setCurrentIndex(d.flow.findData("rtscts")); d.name.setText("Rack 4"); v = d.values()
 check("a typed port and a typed baud rate are taken", v["host"] == "COM7" and v["options"]["baud"] == 115200 and v["options"]["flow"] == "rtscts" and v["kind"] == "serial")
 if SC.ports():
@@ -330,15 +331,18 @@ check("a COM port that is not there is explained in the tab", "does not exist" i
 st.close_tab(0)
 
 print("== Remote Desktop")
+import core.platforms as _P
+_plat = (_P.WINDOWS, _P.MAC, _P.LINUX); _P.WINDOWS, _P.MAC, _P.LINUX = True, False, False      # (Windows' own client: mstsc)
 launched = []; real_launch = sessions.launch_rdp
-sessions.launch_rdp = lambda s: (launched.append(s), sessions.rdp_path(s))[1]
+sessions.launch_rdp = lambda s, password=None: (launched.append(s), sessions.rdp_path(s))[1]
 rid = [x for x in sessions.list_sessions() if x["kind"] == "rdp"][0]["id"]
 st.open_session(rid)
 check("opening starts Remote Desktop with the session's settings, and no terminal tab appears", launched and launched[0]["host"] == "10.5.5.5" and launched[0]["username"] == "CORP\\me" and launched[0]["options"]["clipboard"] is True and st.tabs.count() == 0, (launched[:1], st.tabs.count()))
 check("the page says what happened, and it is audited", "Started Remote Desktop to 10.5.5.5" in st.note.text() and any(a["action"] == "session opened" and "rdp" in a["detail"] for a in audit.recent()))
-sessions.launch_rdp = lambda s: (_ for _ in ()).throw(OSError("Windows' Remote Desktop client (mstsc.exe) was not found on this computer."))
+sessions.launch_rdp = lambda s, password=None: (_ for _ in ()).throw(OSError("Windows' Remote Desktop client (mstsc.exe) was not found on this computer."))
 warned.clear(); st.open_session(rid); check("no Remote Desktop client is explained", warned and "mstsc.exe" in warned[-1])
 sessions.launch_rdp = real_launch
+_P.WINDOWS, _P.MAC, _P.LINUX = _plat
 
 print("== around it")
 w.open_palette(); texts = [w.palette.list.item(i).text() for i in range(w.palette.list.count())]

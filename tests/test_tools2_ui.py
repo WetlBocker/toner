@@ -6,7 +6,7 @@ _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import datetime, os, socket, sys, time
 pass
-SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + r"\t2%d.db" % int(time.time()); os.environ["APPDATA"] = SP
+SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\t2%d.db").replace("\\", os.sep) % int(time.time()); os.environ["APPDATA"] = SP
 from core import db, discovery, topology, pinger, cmdrun, listeners, oui
 db.init()
 import keyring
@@ -40,7 +40,7 @@ QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.StandardButton.Y
 tools = T.ToolsTab(); tools.resize(1300, 800); tools.show()
 print("== Tools navigation")
 names = [tools.tabs.tabText(i) for i in range(tools.tabs.count())]
-check("every tool is listed, grouped under headings", len(names) == 20 and "OpenSSL" in names and "SSH Console" not in names and "Session Logs" not in names and "SCP" in names and "Copy Files (xcopy)" in names and "Wi-Fi Scanner" in names and "TFTP Server" in names and "SFTP Server" in names and "Throughput (iperf3)" in names and "Command Runner" in names and "Find Devices" in names and "SNMP" in names)
+check("every tool is listed, grouped under headings", len(names) == 20 and "OpenSSL" in names and "SSH Console" not in names and "Session Logs" not in names and "SCP" in names and ("Copy Files (xcopy)" if sys.platform == "win32" else "Copy Files (rsync)") in names and "Wi-Fi Scanner" in names and "TFTP Server" in names and "SFTP Server" in names and "Throughput (iperf3)" in names and "Command Runner" in names and "Find Devices" in names and "SNMP" in names)
 check("headings are not selectable", sum(1 for r in range(tools.tabs.list.count()) if not (tools.tabs.list.item(r).flags() & Qt.ItemFlag.ItemIsSelectable)) == 8)
 tools.tabs.setCurrentWidget(tools.mtr); check("switching tools", tools.tabs.currentWidget() is tools.mtr)
 dev("sw1", host="127.0.0.1")
@@ -92,8 +92,8 @@ items = P.map.scene().items()
 check("the map draws a box per device and a line per link", sum(1 for i in items if isinstance(i, T2.NodeItem)) == 3 and sum(1 for i in items if isinstance(i, T2.EdgeItem)) == 2)
 node = next(i for i in items if isinstance(i, T2.NodeItem) and i.name == "core1"); before = [e.line().p1() for e in node.edges]
 node.setPos(node.pos().x() + 50, node.pos().y()); check("dragging a box moves its links with it", [e.line().p1() for e in node.edges] != before or True)
-T2.QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (SP + r"\topo.png", "")); P.save_picture(); check("the picture can be saved", os.path.exists(SP + r"\topo.png") and os.path.getsize(SP + r"\topo.png") > 1000)
-tools.tabs.setCurrentWidget(P); P.grab().save(SP + r"\tools_topology.png")
+T2.QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (SP + (r"\topo.png").replace("\\", os.sep), "")); P.save_picture(); check("the picture can be saved", os.path.exists(SP + (r"\topo.png").replace("\\", os.sep)) and os.path.getsize(SP + (r"\topo.png").replace("\\", os.sep)) > 1000)
+tools.tabs.setCurrentWidget(P); P.grab().save(SP + (r"\tools_topology.png").replace("\\", os.sep))
 topology.snmp_devices = lambda: []
 P.go.click(); check("no SNMP devices -> explained, not a crash", P.go.isEnabled())
 
@@ -161,8 +161,8 @@ R.commands.setPlainText("show version\nshow clock"); R.save_snippet()
 check("snippets are saved and offered", any(s["name"] == "version check" for s in db.get_setting("snippets")) and R.snippets.currentText() == "version check")
 R.commands.clear(); R.load_snippet(); check("choosing a snippet fills the commands", R.commands.toPlainText() == "show version\nshow clock")
 R.delete_snippet(); check("snippets can be deleted", db.get_setting("snippets") == [])
-T2.QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (SP + r"\cmd_out.txt", "")); R.save_all()
-txt = open(SP + r"\cmd_out.txt", encoding="utf-8").read(); check("save-all writes a section per device", "===== r1" in txt and "FAILED: TimeoutError" in txt and "$ show version" in txt)
+T2.QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (SP + (r"\cmd_out.txt").replace("\\", os.sep), "")); R.save_all()
+txt = open(SP + (r"\cmd_out.txt").replace("\\", os.sep), encoding="utf-8").read(); check("save-all writes a section per device", "===== r1" in txt and "FAILED: TimeoutError" in txt and "$ show version" in txt)
 R.funnel.clear(); R.commands.clear(); R.go.click(); check("nothing to run is explained", "at least one" in R.status.text())
 
 print("== TLS")
@@ -192,8 +192,8 @@ Ls.funnel.clear(); Ls.filter.setText("logged"); check("text filter", Ls.table.ro
 Ls.funnel.set("kind", {"trap"}); check("type filter hides syslog when traps are chosen", Ls.table.rowCount() == 0); Ls.funnel.clear()
 Ls.pause.setChecked(True); tx.sendto(b"<14>while paused", ("127.0.0.1", port)); time.sleep(0.4); QCoreApplication.processEvents()
 check("paused: new messages are not added", Ls.table.rowCount() == 3); Ls.pause.setChecked(False)
-T2.QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (SP + r"\msgs.txt", "")); Ls.save_rows()
-check("messages can be saved", "disk failure" in open(SP + r"\msgs.txt", encoding="utf-8").read())
+T2.QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (SP + (r"\msgs.txt").replace("\\", os.sep), "")); Ls.save_rows()
+check("messages can be saved", "disk failure" in open(SP + (r"\msgs.txt").replace("\\", os.sep), encoding="utf-8").read())
 Ls.clear.click(); check("clear", Ls.table.rowCount() == 0 and not Ls.rows)
 Ls.sys_btn.click(); check("stop returns the button", Ls.syslog is None and Ls.sys_btn.text() == "Start syslog" and Ls.sys_port.isEnabled())
 busy = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -214,8 +214,8 @@ U.wol_mac.setText("aa:bb:cc:dd:ee:ff"); U.wol_bcast.setText("127.0.0.1"); U.wol_
 data, _ = rx.recvfrom(512); check("magic packet sent", len(data) == 102 and "102-byte" in U.wol_out.text())
 U.wol_mac.setText("nope"); U.wol_btn.click(); check("a bad MAC is explained", "12 hex" in U.wol_out.text())
 
-tools.tabs.setCurrentWidget(tools.discovery); tools.discovery.grab().save(SP + r"\tools_discovery.png")
-tools.tabs.setCurrentWidget(tools.runner); tools.runner.grab().save(SP + r"\tools_runner.png")
+tools.tabs.setCurrentWidget(tools.discovery); tools.discovery.grab().save(SP + (r"\tools_discovery.png").replace("\\", os.sep))
+tools.tabs.setCurrentWidget(tools.runner); tools.runner.grab().save(SP + (r"\tools_runner.png").replace("\\", os.sep))
 tools.shutdown()
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

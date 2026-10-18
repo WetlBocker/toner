@@ -51,6 +51,7 @@ def data_dir():
         if d in _confirmed or _writable(d):
             _confirmed.add(d)
             return d
-    d = Path(os.environ.get("APPDATA", Path.home())) / "NetCheck"
+    from core.platforms import user_data_root
+    d = user_data_root() / "NetCheck"          # %APPDATA%, ~/.local/share or ~/Library/Application Support
     d.mkdir(parents=True, exist_ok=True)
     return d

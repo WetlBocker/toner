@@ -6,7 +6,7 @@ _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import os, sys, time
 pass
-SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + r"\rt%d.db" % int(time.time())
+SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\rt%d.db").replace("\\", os.sep) % int(time.time())
 from core import db
 db.init()
 from PySide6.QtWidgets import QApplication
@@ -89,7 +89,7 @@ check("a device that returned nothing says so after the run", tops()[-1].text(0)
 # real colors in the screenshot
 w.last_ran = ["core-sw1", "edge-fw", "udm", "quiet", "dead"]; w.results = list(RES); w._active = False
 w.expanded = {"core-sw1", "edge-fw"}; w.repopulate(); w.show()
-w.grab().save(SP + r"\results_tree.png")
+w.grab().save(SP + (r"\results_tree.png").replace("\\", os.sep))
 
 print("== N/A rows (a check that does not apply)")
 NA_RES = [Result("quiet", "bgp", "N/A", "not configured", "BGP is not configured on this device"), Result("quiet", "cpu", "OK", "1%"),

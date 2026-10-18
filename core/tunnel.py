@@ -7,6 +7,7 @@ through that port while the tunnel is closed signs in first. Like PuTTY's, the p
 sign-in of its own, so programs on this computer can use it while it is open.
 """
 import json
+import os
 import logging
 import socket
 import struct
@@ -333,7 +334,9 @@ class Tunnel:
     def _listen(self):
         """The local SOCKS5 port, taken before signing in, so a port that is in use is found before anyone is asked for a code."""
         ls = socket.socket()
-        try:
+        if os.name != "nt":                      # Linux, macOS: a port closed a moment ago (TIME_WAIT) can be listened on again;
+            ls.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)    # one still listening is refused all the same.
+        try:                                     # (On Windows this option would let two take the same port, so it is left off.)
             ls.bind(("127.0.0.1", self.local_port))
         except OSError:
             ls.close()
@@ -375,6 +378,17 @@ class Tunnel:
                 trail.failed(msg)
                 client.close()
                 raise proxy.ProxyError(f"{msg}. {trail.where()}") from None
+            except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError) as e:
+                t = client.get_transport()
+                if t is None:                     # never connected at all
+                    trail.failed(e)
+                    client.close()
+                    raise proxy.ProxyError(f"could not reach the proxy {cfg.label()}: {str(e) or type(e).__name__}") from None
+                # connected, then the server hung up (Linux reports this as a reset where Windows ends the session)
+                msg = _before_sign_in(t, cfg, paramiko.SSHException("No existing session"), timeout)
+                trail.failed(msg)
+                client.close()
+                raise proxy.ProxyError(f"{msg}. {trail.where()}") from None
             except OSError as e:
                 trail.failed(e)
                 client.close()
@@ -388,6 +402,11 @@ class Tunnel:
 
     def close(self):
         ls, self.listener = self.listener, None
+        if ls is not None:
+            try:                                  # Linux: closing alone leaves the port listening while _accept waits in accept();
+                ls.shutdown(socket.SHUT_RDWR)     # shutting it down first wakes accept() and frees the port
+            except OSError:
+                pass
         for c in (ls, self.client):
             try:
                 if c:

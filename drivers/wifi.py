@@ -11,8 +11,9 @@ class WifiDriver(Driver):
             raise RuntimeError(err)
         a = wifi.current(adapters)
         if a is None:
-            return [self.result("connection", FAIL, "no Wi-Fi adapter", "this computer has no wireless adapter, or "
-                                                                          "the WLAN AutoConfig service is not running")]
+            from core.platforms import WINDOWS
+            return [self.result("connection", FAIL, "no Wi-Fi adapter", "this computer has no wireless adapter, or " +
+                                ("the WLAN AutoConfig service is not running" if WINDOWS else "NetworkManager is not running"))]
         out = []
         if not a["connected"]:
             return [self.result("connection", FAIL, "not connected", f"adapter {a.get('name', '')}: {a.get('state', '')}")]

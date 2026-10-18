@@ -1,10 +1,10 @@
-﻿# Run directly (python tests/test_x.py) or all together (python tests/run_all.py). Each test builds its own
+# Run directly (python tests/test_x.py) or all together (python tests/run_all.py). Each test builds its own
 # throw-away database and uses a fake credential store, so nothing on this computer is touched.
 import os as _os, sys as _sys, tempfile as _tmp
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 import os, sqlite3, sys, threading, time
-SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + r"\hard%d.db" % int(time.time()); os.environ["APPDATA"] = SP
+SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\hard%d.db").replace("\\", os.sep) % int(time.time()); os.environ["APPDATA"] = SP
 from core import db
 ok = bad = 0
 def check(name, cond, extra=""):
@@ -25,7 +25,7 @@ check("the tables added by later steps exist", {"agent_metrics", "agent_seen", "
 db.init(); check("running init again is harmless", db.schema_version() == db.SCHEMA_VERSION)
 
 print("== upgrading an old database")
-old = SP + r"\old%d.db" % int(time.time()); os.environ["NETCHECK_DB"] = old
+old = SP + (r"\old%d.db").replace("\\", os.sep) % int(time.time()); os.environ["NETCHECK_DB"] = old
 raw = sqlite3.connect(old)
 raw.executescript("""CREATE TABLE devices (id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL, vendor TEXT NOT NULL, host TEXT NOT NULL, port INTEGER DEFAULT 0,
   platform TEXT DEFAULT '', username TEXT DEFAULT '', site TEXT DEFAULT 'default', verify_ssl INTEGER DEFAULT 0, ha_expected INTEGER DEFAULT 0, enabled INTEGER DEFAULT 1);
@@ -37,13 +37,13 @@ with db.connect() as c:
     cols = {r[1] for r in c.execute("PRAGMA table_info(devices)")}
 check("every column added over the years is added, the data is kept, and it is stamped", {"location", "details", "folder_id", "tags", "fields", "profile_id", "snmp", "jump", "proxy", "winopts"} <= cols
       and db.list_devices()[0]["name"] == "legacy-sw" and db.schema_version() == db.SCHEMA_VERSION)
-newer = SP + r"\newer%d.db" % int(time.time()); os.environ["NETCHECK_DB"] = newer; db.init()
+newer = SP + (r"\newer%d.db").replace("\\", os.sep) % int(time.time()); os.environ["NETCHECK_DB"] = newer; db.init()
 with db.connect() as c: c.execute("PRAGMA user_version = 99")
 db.init()
 check("a database from a newer Toner is left alone (nothing is run, nothing is downgraded)", db.schema_version() == 99)
 
 print("== settings are cached")
-os.environ["NETCHECK_DB"] = SP + r"\cache%d.db" % int(time.time()); db.init()
+os.environ["NETCHECK_DB"] = SP + (r"\cache%d.db").replace("\\", os.sep) % int(time.time()); db.init()
 calls = []
 real_connect = db.connect
 def counting():
@@ -58,11 +58,11 @@ db.connect = real_connect
 check("defaults are still copies nobody can modify", db.get_setting("snippets") == [] and db.get_setting("snippets") is not db.get_setting("snippets"))
 other = sqlite3.connect(os.environ["NETCHECK_DB"]); other.execute("UPDATE settings SET value='9' WHERE key='workers'"); other.commit(); other.close()
 check("a change made by another program is picked up within the cache time", (time.sleep(db.SETTINGS_TTL + 0.3), db.get_setting("workers"))[1] == 9)
-first = db.get_setting("workers"); os.environ["NETCHECK_DB"] = SP + r"\cache2_%d.db" % int(time.time()); db.init()
+first = db.get_setting("workers"); os.environ["NETCHECK_DB"] = SP + (r"\cache2_%d.db").replace("\\", os.sep) % int(time.time()); db.init()
 check("a different database does not see the cached values of the last one", db.get_setting("workers") == db.DEFAULT_SETTINGS["workers"] and first == 9)
 
 print("== writers do not trip over each other")
-os.environ["NETCHECK_DB"] = SP + r"\busy%d.db" % int(time.time()); db.init()
+os.environ["NETCHECK_DB"] = SP + (r"\busy%d.db").replace("\\", os.sep) % int(time.time()); db.init()
 errors = []
 def writer(i):
     try:

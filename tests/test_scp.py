@@ -5,7 +5,7 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import logging, os, shlex, shutil, socket, subprocess, sys, threading, time
-SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + r"\scp%d.db" % int(time.time()); os.environ["APPDATA"] = SP
+SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\scp%d.db").replace("\\", os.sep) % int(time.time()); os.environ["APPDATA"] = SP
 from core import db, scp, xcopy
 db.init()
 import keyring
@@ -40,7 +40,7 @@ def client(server=None, **kw):
 print("== helpers")
 check("plain paths are sent as they are (network devices expect flash:/x)", scp.quote("flash:/image.bin") == "flash:/image.bin" and scp.quote("/etc/hosts") == "/etc/hosts" and scp.quote("dir/sub-1_a.cfg") == "dir/sub-1_a.cfg")
 check("paths with spaces or shell characters are quoted", scp.quote("my file.txt") == "'my file.txt'" and scp.quote("a;rm -rf /") == "'a;rm -rf /'" and scp.quote("it's") == "'it'\\''s'" and scp.quote("$(x)") == "'$(x)'")
-for bad_name in ("../x", "a/b", "a\\b", "..", ".", "", "x\ny", "C:evil", "f.txt:stream"):
+for bad_name in ("../x", "a/b", "a\\b", "..", ".", "", "x\ny") + (("C:evil", "f.txt:stream") if os.name == "nt" else ()):
     try: scp.safe_name(bad_name); check(f"unsafe name refused: {bad_name!r}", False)
     except scp.ScpError: check(f"unsafe name refused: {bad_name!r}", True)
 check("ordinary names pass", scp.safe_name("running-config.cfg") == "running-config.cfg" and scp.safe_name("my file (1).txt"))
@@ -132,66 +132,67 @@ try: scp.connect("127.0.0.1", srv.port, "u", "wrong", timeout=8); check("a wrong
 except paramiko.AuthenticationException: check("a wrong password is refused", True)
 
 # ================================================================ against the real scp.exe (legacy protocol)
-print("== the server side agrees with the real Windows scp.exe (so the client is tested against the real protocol)")
-exe = shutil.which("scp")
-if exe:
-    key = paramiko.RSAKey.generate(2048); kf = os.path.join(base, "id_rsa"); key.write_private_key_file(kf)
-    try:
-        subprocess.run(["icacls", kf, "/inheritance:r", "/grant:r", f"{os.environ['USERNAME']}:F"], capture_output=True)
-    except OSError: pass
-    rs = ScpServer(share, pubkey=key)
-    def real(*args):
-        r = subprocess.run([exe, "-O", "-q", "-P", str(rs.port), "-i", kf, "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=" + os.path.join(base, "known_hosts"), "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", *args],
-                           capture_output=True, text=True, timeout=60)
-        return r.returncode, (r.stdout + r.stderr).strip()
-    rc, out = real(os.path.join(mine, "hello.txt"), "u@127.0.0.1:real-up.txt")
-    if rc == 0 and "denied" not in out.lower():
-        check("real scp.exe uploads to the test server", read("real-up.txt") == b"hello world\n", out)
-        rc, out = real("u@127.0.0.1:run.cfg", os.path.join(dl, "real-down.cfg")); check("real scp.exe downloads from it", rc == 0 and open(os.path.join(dl, "real-down.cfg"), "rb").read() == b"hostname sw1\n", out)
-        rc, out = real("-r", "u@127.0.0.1:logs", os.path.join(dl, "real-tree")) if os.makedirs(os.path.join(dl, "real-tree"), exist_ok=True) is None else (1, "")
-        check("real scp.exe downloads a folder", rc == 0 and os.path.exists(os.path.join(dl, "real-tree", "logs", "two", "deep.log")), out)
-        rc, out = real("-r", tree, "u@127.0.0.1:dest"); check("real scp.exe uploads a folder", rc == 0 and read("dest/configs/sub/deep/c.cfg") == b"CCC", out)
-        c2, extra = scp.connect("127.0.0.1", rs.port, "u", "pw", timeout=10); c2.close()
-        check("and this app talks to the same server the real client does", True)
+if sys.platform == "win32":                     # Windows' own scp.exe and xcopy.exe
+    print("== the server side agrees with the real Windows scp.exe (so the client is tested against the real protocol)")
+    exe = shutil.which("scp")
+    if exe:
+        key = paramiko.RSAKey.generate(2048); kf = os.path.join(base, "id_rsa"); key.write_private_key_file(kf)
+        try:
+            subprocess.run(["icacls", kf, "/inheritance:r", "/grant:r", f"{os.environ['USERNAME']}:F"], capture_output=True)
+        except OSError: pass
+        rs = ScpServer(share, pubkey=key)
+        def real(*args):
+            r = subprocess.run([exe, "-O", "-q", "-P", str(rs.port), "-i", kf, "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=" + os.path.join(base, "known_hosts"), "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", *args],
+                               capture_output=True, text=True, timeout=60)
+            return r.returncode, (r.stdout + r.stderr).strip()
+        rc, out = real(os.path.join(mine, "hello.txt"), "u@127.0.0.1:real-up.txt")
+        if rc == 0 and "denied" not in out.lower():
+            check("real scp.exe uploads to the test server", read("real-up.txt") == b"hello world\n", out)
+            rc, out = real("u@127.0.0.1:run.cfg", os.path.join(dl, "real-down.cfg")); check("real scp.exe downloads from it", rc == 0 and open(os.path.join(dl, "real-down.cfg"), "rb").read() == b"hostname sw1\n", out)
+            rc, out = real("-r", "u@127.0.0.1:logs", os.path.join(dl, "real-tree")) if os.makedirs(os.path.join(dl, "real-tree"), exist_ok=True) is None else (1, "")
+            check("real scp.exe downloads a folder", rc == 0 and os.path.exists(os.path.join(dl, "real-tree", "logs", "two", "deep.log")), out)
+            rc, out = real("-r", tree, "u@127.0.0.1:dest"); check("real scp.exe uploads a folder", rc == 0 and read("dest/configs/sub/deep/c.cfg") == b"CCC", out)
+            c2, extra = scp.connect("127.0.0.1", rs.port, "u", "pw", timeout=10); c2.close()
+            check("and this app talks to the same server the real client does", True)
+        else:
+            print("  note  real scp.exe could not authenticate here (", out[:120], "); interoperability check skipped")
+        rs.stop()
     else:
-        print("  note  real scp.exe could not authenticate here (", out[:120], "); interoperability check skipped")
-    rs.stop()
-else:
-    print("  note  scp.exe is not installed; interoperability check skipped")
+        print("  note  scp.exe is not installed; interoperability check skipped")
 
-# ================================================================ xcopy
-print("== xcopy")
-check("xcopy.exe is found", xcopy.find_xcopy() and xcopy.find_xcopy().lower().endswith("xcopy.exe"))
-a = xcopy.build_args(os.path.join(mine, "configs"), os.path.join(base, "out"))
-check("the default arguments: folder destination, no prompts, sub-folders, keep going", a[2:] == ["/I", "/Y", "/E", "/C"], a)
-a = xcopy.build_args(os.path.join(mine, "configs"), os.path.join(base, "out"), subfolders=False, existing=xcopy.NEWER, hidden=True, keep_readonly=True, keep_going=False, verify=True, preview=True)
-check("every option maps to its switch", a[2:] == ["/I", "/Y", "/D", "/H", "/K", "/V", "/L", "/F"], a)
-check("a trailing backslash is removed (it would escape the closing quote)", xcopy.clean("C:\\TFTP\\") == "C:\\TFTP" and xcopy.clean('"D:\\x y\\"') == "D:\\x y" and xcopy.clean("C:\\") == "C:\\" and xcopy.clean("") == "")
-for src_, dst_, why in (("", base, "Choose the folder"), (mine, "", "where to copy"), (os.path.join(base, "nope"), base, "does not exist"), (mine, mine, "same"), (mine, 'x"y', "not allowed"), (mine + "|x", base, "")):
-    try: xcopy.check_paths(src_, dst_); check(f"refused: {why or src_[-4:]}", False)
-    except ValueError as e: check(f"refused: {why or 'a bad character'}", why in str(e) or not why, str(e))
-check("a wildcard source is allowed when its folder exists", xcopy.check_paths(os.path.join(mine, "*.txt"), base)[0].endswith("*.txt"))
-check("the file count is read from xcopy's last line", xcopy.count_copied("a\nb\n3 File(s) copied\n") == 3 and xcopy.count_copied("2 File(s)") == 2 and xcopy.count_copied("nothing") is None)
-check("exit codes are explained", "No files" in xcopy.describe_exit(1) and "disk write" in xcopy.describe_exit(5) and xcopy.describe_exit(0, "4 File(s) copied") == "Done: 4 file(s)." and "exit code 9" in xcopy.describe_exit(9))
-def run_x(*args):
-    r = subprocess.run([xcopy.find_xcopy(), *args], capture_output=True, text=True, timeout=60, errors="replace"); return r.returncode, r.stdout
-out = os.path.join(base, "out"); rc, text = run_x(*xcopy.build_args(tree, out))
-check("it copies a folder tree, empty folders included", rc == 0 and open(os.path.join(out, "sub", "deep", "c.cfg"), "rb").read() == b"CCC" and os.path.isdir(os.path.join(out, "empty")) and xcopy.count_copied(text) == 3, text[-200:])
-out2 = os.path.join(base, "out2"); rc, text = run_x(*xcopy.build_args(tree, out2, preview=True))
-check("a preview lists the files and copies nothing", rc == 0 and not os.path.exists(out2) and "a.cfg" in text and xcopy.count_copied(text) == 3, text[-200:])
-rc, text = run_x(*xcopy.build_args(tree, out, existing=xcopy.NEWER)); check("'only if newer' copies nothing the second time", rc == 0 and xcopy.count_copied(text) == 0, text[-200:])
-open(os.path.join(tree, "a.cfg"), "wb").write(b"A2"); os.utime(os.path.join(tree, "a.cfg"), (time.time() + 100, time.time() + 100))
-rc, text = run_x(*xcopy.build_args(tree, out, existing=xcopy.NEWER)); check("...and copies the changed one", xcopy.count_copied(text) == 1 and open(os.path.join(out, "a.cfg"), "rb").read() == b"A2")
-open(os.path.join(out, "a.cfg"), "wb").write(b"OLD"); rc, text = run_x(*xcopy.build_args(tree, out))
-check("replace mode never stops to ask (/Y)", rc == 0 and open(os.path.join(out, "a.cfg"), "rb").read() == b"A2")
-rc, text = run_x(*xcopy.build_args(os.path.join(tree, "sub"), os.path.join(base, "flat"), subfolders=False))
-check("without sub-folders only the files at the top are copied", rc == 0 and os.path.exists(os.path.join(base, "flat", "b.cfg")) and not os.path.exists(os.path.join(base, "flat", "deep")))
-spaced = os.path.join(base, "with space"); put("x y.txt", b"s", spaced); rc, text = run_x(*xcopy.build_args(spaced, os.path.join(base, "out space")))
-check("paths with spaces work", rc == 0 and open(os.path.join(base, "out space", "x y.txt"), "rb").read() == b"s", text[-200:])
-rc, text = run_x(*xcopy.build_args(os.path.join(tree, "*.zzz"), os.path.join(base, "o3")))
-check("a pattern that matches nothing is explained, whichever exit code xcopy gives", (rc == 1 and "No files" in xcopy.describe_exit(rc, text)) or (rc == 0 and xcopy.describe_exit(rc, text) == "Nothing needed copying (0 files)."), (rc, text))
-os.makedirs(os.path.join(base, "emptysrc")); rc, text = run_x(*xcopy.build_args(os.path.join(base, "emptysrc"), os.path.join(base, "o4"), subfolders=False))
-check("an empty folder copies zero files, said plainly", rc == 0 and xcopy.describe_exit(rc, text) == "Nothing needed copying (0 files).", (rc, text))
+    # ================================================================ xcopy
+    print("== xcopy")
+    check("xcopy.exe is found", xcopy.find_xcopy() and xcopy.find_xcopy().lower().endswith("xcopy.exe"))
+    a = xcopy.build_args(os.path.join(mine, "configs"), os.path.join(base, "out"))
+    check("the default arguments: folder destination, no prompts, sub-folders, keep going", a[2:] == ["/I", "/Y", "/E", "/C"], a)
+    a = xcopy.build_args(os.path.join(mine, "configs"), os.path.join(base, "out"), subfolders=False, existing=xcopy.NEWER, hidden=True, keep_readonly=True, keep_going=False, verify=True, preview=True)
+    check("every option maps to its switch", a[2:] == ["/I", "/Y", "/D", "/H", "/K", "/V", "/L", "/F"], a)
+    check("a trailing backslash is removed (it would escape the closing quote)", xcopy.clean("C:\\TFTP\\") == "C:\\TFTP" and xcopy.clean('"D:\\x y\\"') == "D:\\x y" and xcopy.clean("C:\\") == "C:\\" and xcopy.clean("") == "")
+    for src_, dst_, why in (("", base, "Choose the folder"), (mine, "", "where to copy"), (os.path.join(base, "nope"), base, "does not exist"), (mine, mine, "same"), (mine, 'x"y', "not allowed"), (mine + "|x", base, "")):
+        try: xcopy.check_paths(src_, dst_); check(f"refused: {why or src_[-4:]}", False)
+        except ValueError as e: check(f"refused: {why or 'a bad character'}", why in str(e) or not why, str(e))
+    check("a wildcard source is allowed when its folder exists", xcopy.check_paths(os.path.join(mine, "*.txt"), base)[0].endswith("*.txt"))
+    check("the file count is read from xcopy's last line", xcopy.count_copied("a\nb\n3 File(s) copied\n") == 3 and xcopy.count_copied("2 File(s)") == 2 and xcopy.count_copied("nothing") is None)
+    check("exit codes are explained", "No files" in xcopy.describe_exit(1) and "disk write" in xcopy.describe_exit(5) and xcopy.describe_exit(0, "4 File(s) copied") == "Done: 4 file(s)." and "exit code 9" in xcopy.describe_exit(9))
+    def run_x(*args):
+        r = subprocess.run([xcopy.find_xcopy(), *args], capture_output=True, text=True, timeout=60, errors="replace"); return r.returncode, r.stdout
+    out = os.path.join(base, "out"); rc, text = run_x(*xcopy.build_args(tree, out))
+    check("it copies a folder tree, empty folders included", rc == 0 and open(os.path.join(out, "sub", "deep", "c.cfg"), "rb").read() == b"CCC" and os.path.isdir(os.path.join(out, "empty")) and xcopy.count_copied(text) == 3, text[-200:])
+    out2 = os.path.join(base, "out2"); rc, text = run_x(*xcopy.build_args(tree, out2, preview=True))
+    check("a preview lists the files and copies nothing", rc == 0 and not os.path.exists(out2) and "a.cfg" in text and xcopy.count_copied(text) == 3, text[-200:])
+    rc, text = run_x(*xcopy.build_args(tree, out, existing=xcopy.NEWER)); check("'only if newer' copies nothing the second time", rc == 0 and xcopy.count_copied(text) == 0, text[-200:])
+    open(os.path.join(tree, "a.cfg"), "wb").write(b"A2"); os.utime(os.path.join(tree, "a.cfg"), (time.time() + 100, time.time() + 100))
+    rc, text = run_x(*xcopy.build_args(tree, out, existing=xcopy.NEWER)); check("...and copies the changed one", xcopy.count_copied(text) == 1 and open(os.path.join(out, "a.cfg"), "rb").read() == b"A2")
+    open(os.path.join(out, "a.cfg"), "wb").write(b"OLD"); rc, text = run_x(*xcopy.build_args(tree, out))
+    check("replace mode never stops to ask (/Y)", rc == 0 and open(os.path.join(out, "a.cfg"), "rb").read() == b"A2")
+    rc, text = run_x(*xcopy.build_args(os.path.join(tree, "sub"), os.path.join(base, "flat"), subfolders=False))
+    check("without sub-folders only the files at the top are copied", rc == 0 and os.path.exists(os.path.join(base, "flat", "b.cfg")) and not os.path.exists(os.path.join(base, "flat", "deep")))
+    spaced = os.path.join(base, "with space"); put("x y.txt", b"s", spaced); rc, text = run_x(*xcopy.build_args(spaced, os.path.join(base, "out space")))
+    check("paths with spaces work", rc == 0 and open(os.path.join(base, "out space", "x y.txt"), "rb").read() == b"s", text[-200:])
+    rc, text = run_x(*xcopy.build_args(os.path.join(tree, "*.zzz"), os.path.join(base, "o3")))
+    check("a pattern that matches nothing is explained, whichever exit code xcopy gives", (rc == 1 and "No files" in xcopy.describe_exit(rc, text)) or (rc == 0 and xcopy.describe_exit(rc, text) == "Nothing needed copying (0 files)."), (rc, text))
+    os.makedirs(os.path.join(base, "emptysrc")); rc, text = run_x(*xcopy.build_args(os.path.join(base, "emptysrc"), os.path.join(base, "o4"), subfolders=False))
+    check("an empty folder copies zero files, said plainly", rc == 0 and xcopy.describe_exit(rc, text) == "Nothing needed copying (0 files).", (rc, text))
 
 srv.stop()
 print(f"\n{ok} passed, {bad} failed")

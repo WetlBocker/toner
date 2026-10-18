@@ -6,6 +6,8 @@ from core import audit, passvault
 
 REMEMBER_TEXT = "Remember on this computer"
 REMEMBER_NOTE = "Toner and its scheduled service open the vault without asking."       # under the tick box (it cannot wrap)
+NO_KEYRING_TEXT = ("This computer has no keyring Toner can keep the vault's key in, so Toner will ask for the master password "
+                   "each time it starts.")
 FORGOT_WARNING = ("If you forget the master password and Toner doesn't remember it on this computer, the passwords in the vault "
                   "cannot be recovered.")
 
@@ -133,7 +135,8 @@ class UnlockDialog(QDialog):
             return
         dlg = MasterDialog("reset", self)
         if dlg.exec():
-            passvault.create(dlg.master(), dlg.remember.isChecked())
+            if not passvault.create(dlg.master(), dlg.remember.isChecked()):
+                QMessageBox.information(self, "Set a master password", NO_KEYRING_TEXT)
             audit.log("vault started again", "the master password was forgotten; saved passwords were cleared")
             self.reset_done = True
             super().accept()
@@ -146,7 +149,8 @@ def open_at_start(parent=None):
         if not dlg.exec():
             return False
         carry = passvault.left_in_credential_manager()        # an older Toner's passwords come along (nothing to say: they just work)
-        passvault.create(dlg.master(), dlg.remember.isChecked(), carry)
+        if not passvault.create(dlg.master(), dlg.remember.isChecked(), carry):
+            QMessageBox.information(parent, "Set a master password", NO_KEYRING_TEXT)
         passvault.forget_credential_manager(carry)
         audit.log("vault created", f"{len(carry)} password(s) moved from Credential Manager" if carry else "")
         return True

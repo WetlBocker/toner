@@ -66,11 +66,20 @@ passvault.unlock("a brand new master pw")
 check("the new one does, and the passwords are unchanged", passvault.get("edge-fw") == "s3cret-pw")
 
 print("== Remember on this computer")
+if sys.platform != "win32":                       # Linux and macOS keep the remembered key in the system keyring: a stand-in
+    class _NativeKeyring:
+        d = {}
+        def set_password(self, s, u, p): self.d[(s, u)] = p
+        def get_password(self, s, u): return self.d.get((s, u))
+        def delete_password(self, s, u): self.d.pop((s, u), None)
+    _nk = _NativeKeyring(); passvault._native_keyring = lambda: _nk
 check("not remembered: Toner cannot open it alone", not passvault.remembered() and (passvault.lock() or not passvault.unlock_remembered()))
 passvault.unlock("a brand new master pw")
 passvault.set_remembered(True)
 keyfile = open(passvault.key_path(), "rb").read()
-check("remembered: a key file beside the vault, protected by Windows (not the key itself)", passvault.remembered() and len(keyfile) > 100)
+check("remembered: a key file beside the vault, protected by Windows (not the key itself)" if sys.platform == "win32" else
+      "remembered: the key is in the system keyring, and the file beside the vault says so",
+      passvault.remembered() and (len(keyfile) > 100 if sys.platform == "win32" else keyfile == passvault.KEYRING_MARK and _nk.d))
 passvault.lock()
 check("...so Toner (and its scheduled service) open it without asking", passvault.unlock_remembered() and passvault.get("edge-fw") == "s3cret-pw")
 open(passvault.key_path(), "wb").write(b"not a windows-protected key")
@@ -116,9 +125,13 @@ db.save_device(dict(name="core-sw", vendor="cisco", host="10.0.0.1", port=0, pla
                     ha_expected=0, enabled=1, location="", details="", folder_id=None))
 old.d.update({"core-sw": "old-pw", "service:proxy": "proxy-pw", "unrelated-app": "keep"})
 carry = passvault.left_in_credential_manager()
-check("Toner's own entries are found (and nothing else)", carry == {"core-sw": "old-pw", "service:proxy": "proxy-pw"}, carry)
-passvault.forget_credential_manager(carry)
-check("...and removed from Credential Manager once moved", old.d == {"unrelated-app": "keep"})
+if sys.platform == "win32":
+    check("Toner's own entries are found (and nothing else)", carry == {"core-sw": "old-pw", "service:proxy": "proxy-pw"}, carry)
+    passvault.forget_credential_manager(carry)
+    check("...and removed from Credential Manager once moved", old.d == {"unrelated-app": "keep"})
+else:
+    check("off Windows there is no Credential Manager to bring passwords from", carry == {})
+    old.d.pop("core-sw"); old.d.pop("service:proxy")
 
 print("== the windows")
 from PySide6.QtWidgets import QApplication, QMessageBox
@@ -168,7 +181,8 @@ print("== the first start")
 os.remove(passvault.path()); passvault.lock()
 old.d.update({"core-sw": "old-pw"})
 check("with no vault, the master password is asked and the vault made", vaultdlg.open_at_start() and passvault.exists() and passvault.is_open())
-check("an older Toner's password came along, quietly, and left Credential Manager", passvault.get("core-sw") == "old-pw" and "core-sw" not in old.d)
+check("an older Toner's password came along, quietly, and left Credential Manager", passvault.get("core-sw") == "old-pw" and "core-sw" not in old.d
+      if sys.platform == "win32" else passvault.get("core-sw") is None and "core-sw" in old.d)
 passvault.lock()
 vaultdlg.UnlockDialog.exec = lambda self: 0
 check("next start, not remembered: Unlock is asked, and Quit stops Toner", passvault.remembered() or not vaultdlg.open_at_start())

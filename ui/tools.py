@@ -79,7 +79,8 @@ class Runner(QObject):
             self.proc.waitForFinished(1000)
 
     def _read(self):
-        self.output.emit(bytes(self.proc.readAllStandardOutput()).decode("oem", "replace").replace("\r\n", "\n"))
+        from core.platforms import WINDOWS                         # Windows' console programs write in its OEM code page
+        self.output.emit(bytes(self.proc.readAllStandardOutput()).decode("oem" if WINDOWS else "utf-8", "replace").replace("\r\n", "\n"))
 
     def _done(self, code, _status):
         self._read()
@@ -245,7 +246,8 @@ class DiagnosticsTab(QWidget):
 
     def ping(self):
         if not self.via_proxy.isChecked():
-            self._run("ping", ["-n", "4"], "ping")
+            from core.platforms import WINDOWS
+            self._run("ping", ["-n", "4"] if WINDOWS else ["-c", "4"], "ping")       # four echoes (-c elsewhere)
             return
         try:
             target = nettools.check_target(self.target.text())
@@ -262,7 +264,11 @@ class DiagnosticsTab(QWidget):
         self.tcp.start()
 
     def trace(self):
-        self._run("tracert", ["-d", "-h", "30"], "tracert")
+        from core.platforms import WINDOWS
+        if WINDOWS:
+            self._run("tracert", ["-d", "-h", "30"], "tracert")
+        else:
+            self._run("traceroute", ["-n", "-m", "30"], "traceroute")
 
     def dns(self):
         self._run("nslookup", [], "nslookup")
@@ -313,13 +319,19 @@ class ScanTab(QWidget):
         self.runner.output.connect(self.out.add)
         self.runner.finished.connect(lambda: self._busy(False))
 
+        from core.platforms import WINDOWS
+        from ui import installdlg
         self.engine = QLabel(
             f"Engine: nmap ({self.nmap})" if self.nmap else
             "nmap is not installed, so the built-in TCP scanner is used (single host or up to a /24; "
-            "blank ports = 30 common ports). For full nmap scans run: winget install Insecure.Nmap")
+            "blank ports = 30 common ports). " + ("For full nmap scans run: winget install Insecure.Nmap" if WINDOWS else
+                                                  "For full nmap scans install nmap (for example: sudo apt install nmap)."))
         self.engine.setWordWrap(True)
+        self.install_nmap = installdlg.button("nmap", self, done=self._nmap_installed)
+        self.install_nmap.setVisible(not self.nmap and installdlg.offered("nmap"))
         lay = QVBoxLayout(self)
         lay.addWidget(self.engine)
+        lay.addWidget(self.install_nmap, 0, Qt.AlignmentFlag.AlignLeft)
         lay.addLayout(_row("Device", self.picker, "Target", self.target))
         lay.addLayout(_row("Profile", self.profile, "Ports", self.ports, self.go, self.stop))
         lay.addWidget(self.out, 1)
@@ -328,6 +340,12 @@ class ScanTab(QWidget):
         self.stop.clicked.connect(self.halt)
         self.picker.currentIndexChanged.connect(
             lambda: self.picker.currentData() and self.target.setText(self.picker.currentData()["host"]))
+
+    def _nmap_installed(self):
+        self.nmap = nettools.find_nmap()
+        if self.nmap:
+            self.engine.setText(f"Engine: nmap ({self.nmap})")
+            self.install_nmap.hide()
 
     def _busy(self, on):
         self.go.setEnabled(not on)
@@ -677,7 +695,7 @@ class ToolsTab(QWidget):
                              ("Discover", ((self.discovery, "Find Devices"), (self.topology, "Topology"))),
                              ("SNMP and logs", ((self.snmp, "SNMP"), (self.listeners, "Syslog and Traps"))),
                              ("File transfer", ((self.tftp, "TFTP Server"), (self.sftp, "SFTP Server"), (self.scp, "SCP"),
-                                               (self.xcopy, "Copy Files (xcopy)"))),
+                                               (self.xcopy, f"Copy Files ({self.xcopy.name})"))),
                              ("Certificates", ((self.tls, "TLS Certificates"), (self.openssl, "OpenSSL"))),
                              ("Automation", ((self.playbooks, "Playbook Editor"),)),
                              ("Utilities", ((self.utilities, "MAC and Wake-on-LAN"),))):

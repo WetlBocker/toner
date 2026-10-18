@@ -98,6 +98,9 @@ class SecurityPage(Page):
             passvault.set_remembered(on)
         except passvault.Locked:
             pass
+        except passvault.NoKeyring:
+            from ui.vaultdlg import NO_KEYRING_TEXT
+            QMessageBox.information(self, "Remember on this computer", NO_KEYRING_TEXT)
         audit.log("vault " + ("remembered on this computer" if on else "no longer remembered on this computer"))
         self.show_vault()
 

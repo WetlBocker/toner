@@ -6,7 +6,7 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import http.server, json, logging, os, socket, sys, threading, time
-SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + r"\tun%d.db" % int(time.time()); os.environ["APPDATA"] = SP
+SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\tun%d.db").replace("\\", os.sep) % int(time.time()); os.environ["APPDATA"] = SP
 from core import db, proxy, tunnel
 db.init()
 import keyring
@@ -292,7 +292,9 @@ check("Connect signs in again", tunnel.is_open() and len(asked) == 1 and "Connec
 page.t_host.setText("localhost"); page.save()
 check("saving a different server closes it", not tunnel.is_open())
 page.t_host.setText("127.0.0.1"); page.save()
-blocker = socket.socket(); blocker.bind(("127.0.0.1", LP)); blocker.listen(1)
+blocker = socket.socket()
+if os.name != "nt": blocker.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)     # (Linux: past the closed port's TIME_WAIT)
+blocker.bind(("127.0.0.1", LP)); blocker.listen(1)
 asked.clear(); page.connect_tunnel()
 check("a local port already in use (PuTTY open on it) is said so, before anyone is asked for a code",
       not tunnel.is_open() and "already in use" in page.t_status.text() and not asked, page.t_status.text())

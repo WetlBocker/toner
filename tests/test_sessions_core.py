@@ -5,7 +5,7 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import json, os, socket, sys, threading, time
-SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + r"\sc%d.db" % int(time.time()); os.environ["APPDATA"] = SP
+SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\sc%d.db").replace("\\", os.sep) % int(time.time()); os.environ["APPDATA"] = SP
 from core import db, serialconn, sessions, sessionlog
 from core import telnet as T
 db.init()
@@ -28,7 +28,8 @@ def refused(s, word):
 
 # ================================================================ saved sessions
 print("== saved sessions")
-check("four kinds, with their usual ports", [k for k, *_ in sessions.KINDS] == ["ssh", "telnet", "rdp", "serial"] and sessions.DEFAULT_PORT == {"ssh": 22, "telnet": 23, "rdp": 3389, "serial": 0})
+check("five kinds, with their usual ports", [k for k, *_ in sessions.KINDS] == ["ssh", "telnet", "rdp", "vnc", "serial"]
+      and sessions.DEFAULT_PORT == {"ssh": 22, "telnet": 23, "rdp": 3389, "vnc": 5900, "serial": 0})
 chi, den = sessions.create_folder("Chicago"), sessions.create_folder("Denver")
 ssh = {"name": "Core switch", "kind": "ssh", "host": "10.0.0.2", "port": 22, "username": "admin", "folder_id": chi}
 for s, word, why in (({**ssh, "name": ""}, "name", "no name"), ({**ssh, "kind": "ftp"}, "type", "unknown type"), ({**ssh, "host": "http://x"}, "host", "bad host"),
@@ -103,7 +104,7 @@ except ValueError as e: check("deleting is refused if moving the contents up wou
 check("the folder is still there after a refused delete", clash_parent in sessions.folder_paths())
 
 print("== old 'Group' names become folders")
-real_db = os.environ["NETCHECK_DB"]; os.environ["NETCHECK_DB"] = SP + r"\old%d.db" % int(time.time()); db.init()
+real_db = os.environ["NETCHECK_DB"]; os.environ["NETCHECK_DB"] = SP + (r"\old%d.db").replace("\\", os.sep) % int(time.time()); db.init()
 with db.connect() as con:
     for n, g in (("one", "Lab"), ("two", "Lab"), ("three", "Rack 9"), ("four", "")):
         con.execute("INSERT INTO sessions(name, kind, group_name, host, port, options) VALUES(?,?,?,?,?,?)", (n, "ssh", g, "h", 22, "{}"))
@@ -126,6 +127,8 @@ full = sessions.rdp_file_text({**s, "options": {"fullscreen": True}}).split("\r\
 check("full screen leaves out the window size", "screen mode id:i:2" in full and not any(l.startswith("desktopwidth") for l in full) and not any(l.startswith("drivestoredirect") for l in full) and not any(l.startswith("gateway") for l in full))
 check("no user name, no username line", not any(l.startswith("username") for l in sessions.rdp_file_text({**s, "username": ""}).split("\r\n")))
 launched = []
+import core.platforms as _P
+_plat = (_P.WINDOWS, _P.MAC, _P.LINUX); _P.WINDOWS, _P.MAC, _P.LINUX = True, False, False      # (mstsc is Windows')
 sessions.subprocess.Popen = lambda args, **kw: launched.append(args)
 sessions.shutil.which = lambda n: r"C:\Windows\System32\mstsc.exe"
 p = sessions.launch_rdp({**s, "name": "Jump server / prod"})
@@ -133,6 +136,7 @@ check("it starts mstsc with the generated file, named safely, under the data fol
 sessions.shutil.which = lambda n: None
 try: sessions.launch_rdp(s); check("no Remote Desktop client on this PC is explained", False)
 except OSError as e: check("no Remote Desktop client on this PC is explained", "mstsc.exe" in str(e))
+_P.WINDOWS, _P.MAC, _P.LINUX = _plat
 
 # ================================================================ Telnet protocol
 print("== Telnet protocol")

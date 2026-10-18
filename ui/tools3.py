@@ -370,8 +370,11 @@ class IperfTab(QWidget):
         self.bind = QLineEdit()
         self.bind.setPlaceholderText("listen on one address (optional)")
         self.one_off = QCheckBox("Stop after one test")
+        from core.platforms import exe as _exe
+        from ui import installdlg
         self.where = _muted("")
-        self.choose = QPushButton("Choose iperf3.exe...")
+        self.choose = QPushButton(f"Choose {_exe('iperf3')}...")
+        self.install_iperf = installdlg.button("iperf3", self, done=self._iperf_installed)
         self.go = _primary("Start test")
         self.stop = QPushButton("Stop")
         self.stop.setEnabled(False)
@@ -398,7 +401,7 @@ class IperfTab(QWidget):
 
         lay = QVBoxLayout(self)
         lay.addWidget(self.where)
-        lay.addLayout(self._left(self.choose))
+        lay.addLayout(self._left(self.choose, self.install_iperf))
         lay.addWidget(self.mode)
         lay.addWidget(self.client_box)
         lay.addWidget(self.server_box)
@@ -425,10 +428,19 @@ class IperfTab(QWidget):
         return h
 
     def _where(self):
+        from core.platforms import WINDOWS
         self.where.setText(
             f"Using iperf3: {self.exe}" if self.exe else
             "iperf3 was not found. Toner runs the free iperf3 program (it is not bundled): download iperf3 for Windows "
-            "from iperf.fr, then choose iperf3.exe below, or put it in a folder on your PATH.")
+            "from iperf.fr, then choose iperf3.exe below, or put it in a folder on your PATH." if WINDOWS else
+            "iperf3 was not found. Install iperf3 (for example: sudo apt install iperf3), or choose the iperf3 program below.")
+        if hasattr(self, "install_iperf"):
+            from ui import installdlg
+            self.install_iperf.setVisible(not self.exe and installdlg.offered("iperf3"))
+
+    def _iperf_installed(self):
+        self.exe = iperf.find_iperf3(db.get_setting("iperf_path"))
+        self._where()
 
     def _mode(self):
         self.client_box.setVisible(self.mode.currentIndex() == 0)
@@ -532,13 +544,18 @@ class WifiTab(QWidget):
             bar.addWidget(w)
         bar.addStretch(1)
         bar.addWidget(self.filter, 1)                     # on the right, as on Inventory
+        from core.platforms import WINDOWS
+        from ui import installdlg
+        self.install_nm = installdlg.button("nmcli", self, done=self.scan)
+        self.install_nm.hide()                                     # shown when NetworkManager is missing (Linux)
         lay = QVBoxLayout(self)
         lay.addWidget(_muted("The Wi-Fi networks this computer can hear, strongest first, with the channel each one uses. "
-                             "Use it to find a crowded channel, a weak spot, or an access point that is not yours. "
-                             "Windows needs Location access switched on to list networks."))
+                             "Use it to find a crowded channel, a weak spot, or an access point that is not yours."
+                             + (" Windows needs Location access switched on to list networks." if WINDOWS else "")))
         lay.addLayout(bar)
         lay.addWidget(self.me)
         lay.addWidget(self.summary)
+        lay.addWidget(self.install_nm, 0, Qt.AlignmentFlag.AlignLeft)
         lay.addWidget(self.table, 1)
         self.scan_btn.clicked.connect(self.scan)
         self.auto.toggled.connect(lambda on: (self.timer.start() if on else self.timer.stop(), on and self.scan()))
@@ -566,6 +583,8 @@ class WifiTab(QWidget):
         else:
             self.me.setText("This computer is not connected to Wi-Fi." if mine else "")
         self.summary.setText(err if err else self._summary())
+        from ui import installdlg
+        self.install_nm.setVisible(err == wifi.NM_MISSING and installdlg.offered("nmcli"))
         self.show_rows()
 
     def _summary(self):
@@ -811,21 +830,32 @@ class ScpTab(QWidget):
 
 # =============================================================================== xcopy (copy folders on this computer or a share)
 class XcopyTab(QWidget):
+    """Copy Files: Windows' xcopy, or rsync on Linux and macOS (core/rsync.py: the same options and calls)."""
+
     def __init__(self):
         super().__init__()
-        self.exe = xcopy.find_xcopy()
+        from core import rsync
+        from core.platforms import WINDOWS
+        self.windows = WINDOWS
+        self.tool = xcopy if WINDOWS else rsync
+        self.name = "xcopy" if WINDOWS else "rsync"
+        self.exe = xcopy.find_xcopy() if WINDOWS else rsync.find()
         self.buffer = ""
         self.source, self.dest = QLineEdit(), QLineEdit()
-        self.source.setPlaceholderText(r"C:\TFTP   or   \\fileserver\share\configs   or   C:\TFTP\*.cfg")
-        self.dest.setPlaceholderText(r"D:\Backups\network   or   \\fileserver\backup")
+        if WINDOWS:
+            self.source.setPlaceholderText(r"C:\TFTP   or   \\fileserver\share\configs   or   C:\TFTP\*.cfg")
+            self.dest.setPlaceholderText(r"D:\Backups\network   or   \\fileserver\backup")
+        else:
+            self.source.setPlaceholderText("/srv/tftp   or   /mnt/fileserver/configs   or   /srv/tftp/*.cfg")
+            self.dest.setPlaceholderText("/mnt/backup/network")
         self.src_file, self.src_folder, self.dst_folder = QPushButton("File..."), QPushButton("Folder..."), QPushButton("Folder...")
         self.subfolders = QCheckBox("Include sub-folders, even empty ones")
         self.subfolders.setChecked(True)
         self.existing = QComboBox()
         self.existing.addItem("Replace files that already exist", xcopy.REPLACE)
         self.existing.addItem("Replace only if the source is newer", xcopy.NEWER)
-        self.hidden = QCheckBox("Include hidden and system files")
-        self.readonly = QCheckBox("Keep the read-only attribute")
+        self.hidden = QCheckBox("Include hidden and system files" if WINDOWS else "Include hidden files (names starting with a dot)")
+        self.readonly = QCheckBox("Keep the read-only attribute" if WINDOWS else "Keep permissions")
         self.keep_going = QCheckBox("Keep going after an error")
         self.keep_going.setChecked(True)
         self.verify = QCheckBox("Verify each file after writing")
@@ -843,15 +873,26 @@ class XcopyTab(QWidget):
         self.runner.finished.connect(self._finished)
         self._preview = False
 
+        from ui import installdlg
+        self.install = installdlg.button("rsync", self, done=self._rsync_installed)
+        self.install.setVisible(not WINDOWS and not self.exe and installdlg.offered("rsync"))
         lay = QVBoxLayout(self)
-        lay.addWidget(_muted(
+        self.intro = _muted(
             "Copy a folder, or files matching a pattern, on this computer or to and from a network share, using Windows "
             "xcopy. The contents of the source folder are copied into the destination folder. Use Preview first to see "
-            "what would be copied without copying anything." + ("" if self.exe else "  xcopy.exe was not found on this computer.")))
+            "what would be copied without copying anything." + ("" if self.exe else "  xcopy.exe was not found on this computer.")
+            if WINDOWS else
+            "Copy a folder, or files matching a pattern, on this computer or to and from a mounted network share, using rsync. "
+            "The contents of the source folder are copied into the destination folder. Use Preview first to see what would "
+            "be copied without copying anything." + ("" if self.exe else "  rsync was not found on this computer."))
+        lay.addWidget(self.intro)
+        lay.addWidget(self.install, 0, Qt.AlignmentFlag.AlignLeft)
         lay.addLayout(_row("Copy from", self.source, self.src_file, self.src_folder))
         lay.addLayout(_row("Copy to", self.dest, self.dst_folder))
         lay.addLayout(_row("If a file already exists", self.existing, self.subfolders))
         lay.addLayout(_row(self.hidden, self.readonly, self.keep_going, self.verify))
+        self.keep_going.setVisible(WINDOWS)                     # rsync always carries on, and checks what it writes
+        self.verify.setVisible(WINDOWS)
         lay.addLayout(_row(self.preview, self.go, self.stop))
         lay.addWidget(self.result)
         lay.addWidget(self.out, 1)
@@ -879,16 +920,16 @@ class XcopyTab(QWidget):
         if self.runner.running():
             return
         if not self.exe:
-            self.out.line("Error: xcopy.exe was not found on this computer.")
+            self.out.line("Error: xcopy.exe was not found on this computer." if self.windows else "Error: rsync was not found on this computer.")
             return
         try:
-            args = xcopy.build_args(self.source.text(), self.dest.text(), self.subfolders.isChecked(),
+            args = self.tool.build_args(self.source.text(), self.dest.text(), self.subfolders.isChecked(),
                                     self.existing.currentData(), self.hidden.isChecked(), self.readonly.isChecked(),
                                     self.keep_going.isChecked(), self.verify.isChecked(), preview)
         except ValueError as e:
             self.out.line(f"Error: {e}")
             return
-        dest = args[1]
+        dest = args[1] if self.windows else args[-1].rstrip("/")
         if (not preview and self.existing.currentData() == xcopy.REPLACE and os.path.isdir(dest) and os.listdir(dest)
                 and QMessageBox.question(self, "Replace files?", f"Files in {dest} with the same names as the ones being "
                                          "copied will be replaced.\n\nCopy anyway? (Preview shows what would be copied.)")
@@ -896,9 +937,9 @@ class XcopyTab(QWidget):
             return
         self._preview, self.buffer = preview, ""
         self.result.setText("")
-        self.out.line(f"\n> xcopy {' '.join(args)}")
+        self.out.line(f"\n> {self.name} {' '.join(args)}")
         if not preview:
-            audit.log("xcopy", f"{args[0]} -> {args[1]} ({self.existing.currentText().lower()})")
+            audit.log(self.name, f"{self.source.text().strip()} -> {dest} ({self.existing.currentText().lower()})")
         self._busy(True)
         self.runner.start(self.exe, args)
 
@@ -910,10 +951,17 @@ class XcopyTab(QWidget):
         self._busy(False)
         m = re.findall(r"\[finished, exit code (-?\d+)\]", self.buffer)
         code = int(m[-1]) if m else -1
-        text = xcopy.describe_exit(code, self.buffer)
-        if self._preview and code == 0 and xcopy.count_copied(self.buffer):
-            text = f"Preview: {xcopy.count_copied(self.buffer)} file(s) would be copied. Nothing was copied."
+        text = self.tool.describe_exit(code, self.buffer)
+        if self._preview and code == 0 and self.tool.count_copied(self.buffer):
+            text = f"Preview: {self.tool.count_copied(self.buffer)} file(s) would be copied. Nothing was copied."
         self.result.setText(text)
+
+    def _rsync_installed(self):
+        from core import rsync
+        self.exe = rsync.find()
+        if self.exe:
+            self.install.hide()
+            self.intro.setText(self.intro.text().replace("  rsync was not found on this computer.", ""))
 
     def refresh(self):
         pass

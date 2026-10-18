@@ -5,7 +5,7 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import json, os, sys, time
-SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + r"\devchk%d.db" % int(time.time()); os.environ["APPDATA"] = os.path.join(SP, "roamingchk%d" % int(time.time()))
+SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\devchk%d.db").replace("\\", os.sep) % int(time.time()); os.environ["APPDATA"] = os.path.join(SP, "roamingchk%d" % int(time.time()))
 from core import agents, checks, db, importer, runner, winmon
 from drivers.base import Driver, Result
 db.init()
@@ -107,11 +107,12 @@ agents.store("agent-pc", {"v": 1, "at": "x", "computer": "AGENT-PC", "os": "Wind
 svc, note = winmon.list_services(wdev)
 check("an agent's last report supplies the names and states", {(s["name"], s["state"]) for s in svc} == {("Spooler", "Running"), ("W32Time", "Stopped")} and "last report" in note, (svc, note))
 check("with display names where the report has them", {s["name"]: s["display"] for s in svc}["W32Time"] == "Windows Time")
-local = dev("this-pc", "windows", platform="local", host="localhost")
-real_svc, note = winmon.list_services(local)
-names = {s["name"].lower() for s in real_svc}
-check("this computer's real services are listed (real PowerShell)", len(real_svc) > 20 and {"eventlog", "winmgmt"} <= names and all(s["state"] for s in real_svc), len(real_svc))
-check("each has a display name, a state and a startup type", all(s["display"] and s["start"] in ("Auto", "Manual", "Disabled", "Boot", "System") for s in real_svc[:30]))
+if sys.platform == "win32":                     # this PC's real Windows services
+    local = dev("this-pc", "windows", platform="local", host="localhost")
+    real_svc, note = winmon.list_services(local)
+    names = {s["name"].lower() for s in real_svc}
+    check("this computer's real services are listed (real PowerShell)", len(real_svc) > 20 and {"eventlog", "winmgmt"} <= names and all(s["state"] for s in real_svc), len(real_svc))
+    check("each has a display name, a state and a startup type", all(s["display"] and s["start"] in ("Auto", "Manual", "Disabled", "Boot", "System") for s in real_svc[:30]))
 
 print("== the dialogs")
 from PySide6.QtWidgets import QApplication, QMessageBox

@@ -93,6 +93,11 @@ class SessionDialog(QDialog):
         self.admin = QCheckBox("Connect to the console (administrative) session")
         self.gateway = QLineEdit()
         self.gateway.setPlaceholderText("optional Remote Desktop gateway")
+        self.client = QComboBox()                                    # Windows: its own Remote Desktop, or FreeRDP (xrdp on Linux)
+        self.client.addItem("Windows Remote Desktop", "windows")
+        self.client.addItem("FreeRDP", "freerdp")
+        # vnc
+        self.vnc_full, self.vnc_viewonly = QCheckBox("Full screen"), QCheckBox("View only")
         # serial
         self.serial_port = QComboBox()
         self.serial_port.setEditable(True)
@@ -125,10 +130,12 @@ class SessionDialog(QDialog):
                 ("org", "Organization", self.org_pick, "all"),
                 ("kind", "Type", self.kind, "all"), ("about", "", self.about_kind, "all"), ("name", "Name", self.name, "all"),
                 ("folder", "Folder", folder_row, "all"),
-                ("device", "Inventory device", self.device, ("ssh", "telnet", "rdp")),
-                ("host", "Host", self.host, ("ssh", "telnet", "rdp")), ("port", "Port", self.port, ("ssh", "telnet", "rdp")),
+                ("device", "Inventory device", self.device, ("ssh", "telnet", "rdp", "vnc")),
+                ("host", "Host", self.host, ("ssh", "telnet", "rdp", "vnc")), ("port", "Port", self.port, ("ssh", "telnet", "rdp", "vnc")),
                 ("user", "User name", self.user, ("ssh", "rdp")), ("password", "Password", self.password, ("ssh",)),
                 ("remember", "", self.remember, ("ssh",)), ("link", "", self.link_row, ("ssh",)), ("paging", "", self.paging, ("ssh",)),
+                ("client", "Client", self.client, ("rdp",)), ("vnc_full", "", self.vnc_full, ("vnc",)),
+                ("vnc_viewonly", "", self.vnc_viewonly, ("vnc",)),
                 ("fullscreen", "", self.fullscreen, ("rdp",)), ("width", "Window width", self.width_, ("rdp",)),
                 ("height", "Window height", self.height_, ("rdp",)), ("clipboard", "", self.clipboard, ("rdp",)),
                 ("drives", "", self.drives, ("rdp",)), ("printers", "", self.printers, ("rdp",)), ("admin", "", self.admin, ("rdp",)),
@@ -153,6 +160,7 @@ class SessionDialog(QDialog):
         self.kind.setCurrentIndex(max(0, self.kind.findData(self.session.get("kind") or kind)))
         self._load()
         self.kind.currentIndexChanged.connect(self._adapt)
+        self.client.currentIndexChanged.connect(self._adapt)              # (the note says where it opens)
         self.device.currentIndexChanged.connect(self._from_device)
         self.refresh_ports.clicked.connect(self._fill_ports)
         self.new_folder_btn.clicked.connect(self._new_folder)
@@ -170,17 +178,28 @@ class SessionDialog(QDialog):
         k = self.current_kind()
         from core import orgs
         from ui.linkitem import wanted
+        from core.platforms import WINDOWS
         for key, (widget, kinds) in self.rows.items():
             self.form.setRowVisible(widget, (kinds == "all" or k in kinds) and (key != "org" or bool(orgs.list_orgs()))
-                                    and (key != "link" or wanted()))
+                                    and (key != "link" or wanted()) and (key != "client" or WINDOWS))
         info = next(t for kk, _, _, t in sessions.KINDS if kk == k)
         self.about_kind.setText(info)
         self.connect_btn.setText("Connect")
         self.note.setText({"ssh": "A password left empty is asked for when you connect, or taken from the inventory device.",
                            "telnet": "Telnet sends everything, passwords included, without encryption.",
-                           "rdp": "Opens in a tab inside Toner. Windows asks for the password when the connection starts; Toner never stores it.",
+                           "rdp": self._rdp_note(),
+                           "vnc": "Opens in the VNC viewer, which asks for the password. Toner never stores it.",
                            "serial": "Enter sends a carriage return, as consoles expect. Use Send break from the session tab for ROMMON."}[k])
         self.adjustSize()
+
+    def _rdp_note(self):
+        """Where a Remote Desktop session opens: Windows' tab, or FreeRDP in its own window (Toner asks for the password on Linux)."""
+        s = {"options": {"client": self.client.currentData()}}
+        if sessions.rdp_client(s) == "windows":
+            return "Opens in a tab inside Toner. Windows asks for the password when the connection starts; Toner never stores it."
+        if sessions.asks_for_password(s):
+            return "Opens in FreeRDP, in its own window. Toner asks for the password and never stores it."
+        return "Opens in FreeRDP, in its own window. Toner never stores the password."
 
     def _fill_folders(self, select=None):
         self.folder.clear()
@@ -268,6 +287,9 @@ class SessionDialog(QDialog):
         self.printers.setChecked(bool(o.get("printers")))
         self.admin.setChecked(bool(o.get("admin")))
         self.gateway.setText(o.get("gateway") or "")
+        self.client.setCurrentIndex(max(0, self.client.findData(o.get("client") or "windows")))
+        self.vnc_full.setChecked(bool(o.get("fullscreen")) if s.get("kind") == "vnc" else False)
+        self.vnc_viewonly.setChecked(bool(o.get("viewonly")))
         self.baud.setCurrentText(str(o.get("baud", 9600)))
         self.bits.setCurrentIndex(max(0, self.bits.findData(int(o.get("bytesize", 8)))))
         self.parity.setCurrentIndex(max(0, self.parity.findData(o.get("parity", "N"))))
@@ -281,7 +303,7 @@ class SessionDialog(QDialog):
         from ui.orgfield import choice_file, SHARED_CHOICE
         v = {"id": self.session.get("id"), "kind": k, "name": self.name.text().strip(),
              "org": choice_file(self.org_pick.currentData()), "shared": int(self.org_pick.currentData() == SHARED_CHOICE),
-             "folder_id": self.folder.currentData(), "device": self.device.currentData() if k in ("ssh", "telnet", "rdp") else "",
+             "folder_id": self.folder.currentData(), "device": self.device.currentData() if k in ("ssh", "telnet", "rdp", "vnc") else "",
              "host": self.host.text().strip(), "port": self.port.value(), "username": self.user.text().strip() if k in ("ssh", "rdp") else "",
              "options": {}}
         if k == "ssh":
@@ -289,7 +311,10 @@ class SessionDialog(QDialog):
         elif k == "rdp":
             v["options"] = {"fullscreen": self.fullscreen.isChecked(), "width": self.width_.value(), "height": self.height_.value(),
                             "clipboard": self.clipboard.isChecked(), "drives": self.drives.isChecked(),
-                            "printers": self.printers.isChecked(), "admin": self.admin.isChecked(), "gateway": self.gateway.text().strip()}
+                            "printers": self.printers.isChecked(), "admin": self.admin.isChecked(), "gateway": self.gateway.text().strip(),
+                            "client": self.client.currentData()}
+        elif k == "vnc":
+            v["options"] = {"fullscreen": self.vnc_full.isChecked(), "viewonly": self.vnc_viewonly.isChecked()}
         elif k == "serial":
             port = self._serial_port()
             try:
@@ -784,7 +809,7 @@ class SessionsTab(QWidget):
         self._buttons()
 
     def _session_item(self, s, org):
-        host = s["host"] if s["kind"] != "rdp" or s["port"] == 3389 else f"{s['host']}:{s['port']}"
+        host = s["host"] if s["kind"] not in ("rdp", "vnc") or s["port"] == sessions.DEFAULT_PORT[s["kind"]] else f"{s['host']}:{s['port']}"
         item = QTreeWidgetItem([s["name"], KIND_TEXT.get(s["kind"], s["kind"]), host])
         key = self._key("session", org, s["id"])
         item.setData(0, ROLE, key)
@@ -1196,17 +1221,23 @@ class SessionsTab(QWidget):
         return self.tabs.currentWidget() if self.tabs.count() else None
 
     def open_spec(self, spec):
+        if spec["kind"] == "vnc":
+            from ui import rdpprompt
+            if rdpprompt.start_vnc(self, {"name": spec["name"], "host": spec["host"], "port": spec["port"], "options": spec["options"]}):
+                audit.log("session opened", f"vnc {spec['name']} ({spec['host']})")
+                self.note.setText(f"Started VNC to {spec['host']}.")
+            return
         if spec["kind"] == "rdp":
-            if sessions.use_embedded() and self._open_rdp_tab(spec) is not None:
+            if sessions.use_embedded(spec) and self._open_rdp_tab(spec) is not None:
                 return
-            try:
-                path = sessions.launch_rdp({"name": spec["name"], "host": spec["host"], "port": spec["port"],
-                                            "username": spec["username"], "options": spec["options"]})
-            except OSError as e:
-                QMessageBox.warning(self, "Remote Desktop", str(e))
+            from ui import rdpprompt
+            path = rdpprompt.start(self, {"name": spec["name"], "host": spec["host"], "port": spec["port"],
+                                          "username": spec["username"], "options": spec["options"]})
+            if path is False:
                 return
             audit.log("session opened", f"rdp {spec['name']} ({spec['host']})")
-            self.note.setText(f"Started Remote Desktop to {spec['host']} (settings in {path.name}).")
+            self.note.setText(f"Started Remote Desktop to {spec['host']} (settings in {path.name})." if path else
+                              f"Started Remote Desktop to {spec['host']}.")
             return
         pane = SessionPane(spec)
         pane.state_changed.connect(self._retitle)

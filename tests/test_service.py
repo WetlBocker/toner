@@ -8,7 +8,7 @@ import io, json, os, sys, time, urllib.request
 from contextlib import redirect_stdout
 from datetime import datetime, timedelta
 pass
-SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + r"\sv%d.db" % int(time.time()); os.environ["APPDATA"] = SP
+SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\sv%d.db").replace("\\", os.sep) % int(time.time()); os.environ["APPDATA"] = SP
 from core import db, service, backup, alerts
 db.init()
 import keyring

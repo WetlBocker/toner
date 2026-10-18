@@ -7,7 +7,7 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import os, sys, time, io, json, zipfile
-SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + r"\orgr3%d.db" % int(time.time()); os.environ["APPDATA"] = SP
+SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\orgr3%d.db").replace("\\", os.sep) % int(time.time()); os.environ["APPDATA"] = SP
 import keyring
 STORE = {}
 keyring.set_password = lambda s, u, p: STORE.__setitem__((s, u), p)

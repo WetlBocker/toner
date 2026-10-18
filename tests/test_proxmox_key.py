@@ -6,7 +6,7 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import json, os, sys, time
-SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + r"\pvekey%d.db" % int(time.time()); os.environ["APPDATA"] = os.path.join(SP, "roamingpv%d" % int(time.time()))
+SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\pvekey%d.db").replace("\\", os.sep) % int(time.time()); os.environ["APPDATA"] = os.path.join(SP, "roamingpv%d" % int(time.time()))
 from core import agents, db, pvekey
 db.init()
 import keyring

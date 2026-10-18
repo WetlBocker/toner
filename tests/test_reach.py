@@ -6,7 +6,7 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import json, os, socket, sys, threading, time
-SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + r"\reach%d.db" % int(time.time()); os.environ["APPDATA"] = SP
+SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\reach%d.db").replace("\\", os.sep) % int(time.time()); os.environ["APPDATA"] = SP
 from core import checks, custom, db, proxy, reach, runner, tunnel
 db.init()
 import keyring
@@ -86,7 +86,10 @@ p = reach.probe(dev(port=22, proxy_cfg=via(refusing)))
 check("the device refused (SOCKS5 reply 5): up", p.state == "refused" and p.up and p.via_proxy, p)
 p = reach.probe(dev(port=22, proxy_cfg=via(unreachable)))
 check("host unreachable (reply 4): down, saying so", p.state == "down" and p.reason == "host unreachable", p)
-dead = Socks5(); dead.sock.close()
+dead = Socks5()
+try: dead.sock.shutdown(socket.SHUT_RDWR)            # (Linux: wakes the accept() it waits in; Windows refuses, and needs none)
+except OSError: pass
+dead.sock.close()
 p = reach.probe(dev(port=22, proxy_cfg=json.dumps({"mode": "custom", "kind": "socks5", "host": "127.0.0.1", "port": dead.port, "username": ""})), timeout=2)
 check("the proxy itself cannot be reached: down, saying so", p.state == "down" and "proxy" in p.reason, p)
 

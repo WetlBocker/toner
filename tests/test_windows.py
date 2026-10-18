@@ -4,8 +4,10 @@ import os as _os, sys as _sys, tempfile as _tmp
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+if _sys.platform != "win32":                       # the Windows agent and real PowerShell (the receiver is also tested in test_orgs_more and test_orgs_round3)
+    print("skipped: this test is about Windows itself"); print("\n0 passed, 0 failed"); _sys.exit(0)
 import json, os, shutil, ssl, subprocess, sys, tempfile, time, urllib.request, urllib.error
-SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + r"\win%d.db" % int(time.time()); os.environ["APPDATA"] = os.path.join(SP, "roaming%d" % int(time.time()))
+SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\win%d.db").replace("\\", os.sep) % int(time.time()); os.environ["APPDATA"] = os.path.join(SP, "roaming%d" % int(time.time()))
 from core import agents, checks, db, display, runner, vendors, winmon
 from drivers import DRIVERS
 from drivers.base import OK, WARN, FAIL, ERROR

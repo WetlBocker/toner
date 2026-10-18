@@ -17,7 +17,9 @@ from core.folders import FolderTree
 
 KINDS = [("ssh", "SSH", 22, "Encrypted command line to a switch, router, firewall or server."),
          ("telnet", "Telnet", 23, "Plain-text command line. Not encrypted: use it only on networks you trust."),
-         ("rdp", "Remote Desktop (RDP)", 3389, "Windows' Remote Desktop client, as a tab inside Toner (or in its own window, see Settings > Terminal)."),
+         ("rdp", "Remote Desktop (RDP)", 3389, "Windows' Remote Desktop client, as a tab inside Toner (or in its own window, see Settings > Terminal)."
+          if sys.platform == "win32" else "Remote Desktop through FreeRDP, in its own window."),
+         ("vnc", "VNC", 5900, "A remote screen through a VNC viewer. The viewer asks for the password."),
          ("serial", "Serial", 0, "A console cable on a COM port (or a network serial server).")]
 NAMES = {k: label for k, label, _, _ in KINDS}
 DEFAULT_PORT = {k: p for k, _, p, _ in KINDS}
@@ -28,7 +30,8 @@ DEFAULTS = {
     "ssh": {"paging": True, "remember": False},
     "telnet": {},
     "rdp": {"fullscreen": False, "width": 1280, "height": 800, "clipboard": True, "drives": False, "printers": False,
-            "admin": False, "gateway": ""},
+            "admin": False, "gateway": "", "client": ""},          # client: "windows" or "freerdp" ("" = this system's own)
+    "vnc": {"fullscreen": False, "viewonly": False},
     "serial": {"baud": 9600, "bytesize": 8, "parity": "N", "stopbits": 1, "flow": "none"},
 }
 FIELDS = ["name", "kind", "folder_id", "host", "port", "username", "device", "options"]
@@ -93,7 +96,7 @@ def validate(s):
     if not (s.get("name") or "").strip():
         raise ValueError("Give the session a name so it can be found again.")
     o = {**DEFAULTS[kind], **(s.get("options") or {})}
-    if kind in ("ssh", "telnet", "rdp"):
+    if kind in ("ssh", "telnet", "rdp", "vnc"):
         nettools.check_host(s.get("host"))
         port = int(s.get("port") or DEFAULT_PORT[kind])
         if not 1 <= port <= 65535:
@@ -239,17 +242,112 @@ def find_mstsc():
     return shutil.which("mstsc")
 
 
+FREERDP = ("xfreerdp3", "xfreerdp", "sdl-freerdp3", "sdl-freerdp", "wlfreerdp3", "wlfreerdp")
+
+
+WINDOWS_FREERDP = ("sdl3-freerdp", "sdl-freerdp3", "sdl-freerdp", "wfreerdp")
+
+
+def find_freerdp():
+    """FreeRDP's client: on PATH, or (Windows) where its installer puts it. None when it is not installed."""
+    from core.platforms import WINDOWS
+    names = WINDOWS_FREERDP if WINDOWS else FREERDP
+    found = next((p for p in (shutil.which(n) for n in names) if p), None)
+    if found or not WINDOWS:
+        return found
+    for base in (os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)")):
+        for n in names:
+            cand = os.path.join(base or "", "FreeRDP", n + ".exe")
+            if base and os.path.isfile(cand):
+                return cand
+    return None
+
+
+def rdp_client(s=None):
+    """'windows' (Windows' own Remote Desktop: the tab or mstsc) or 'freerdp'. Only Windows has a choice (the session's Client);
+    Linux uses FreeRDP; macOS gives the .rdp file to Microsoft's Windows App."""
+    from core.platforms import MAC, WINDOWS
+    if MAC:
+        return "mac"
+    if not WINDOWS:
+        return "freerdp"
+    chosen = ((s or {}).get("options") or {}).get("client") or "windows"
+    return chosen if chosen in ("windows", "freerdp") else "windows"
+
+
+def find_rdp_client(s=None):
+    """The Remote Desktop client for a session: mstsc, FreeRDP, or `open` on macOS. None when there is none."""
+    kind = rdp_client(s)
+    if kind == "windows":
+        return find_mstsc()
+    if kind == "mac":
+        return shutil.which("open")
+    return find_freerdp()
+
+
+def asks_for_password(s=None):
+    """True when Toner must ask for the password itself: FreeRDP's X11 and Wayland clients have no window of their own to ask
+    in (its SDL client and its Windows client do)."""
+    if rdp_client(s) != "freerdp":
+        return False
+    exe = os.path.basename(find_freerdp() or "")
+    return exe.startswith(("xfreerdp", "wlfreerdp"))
+
+
+def freerdp_args(s, exe=""):
+    """FreeRDP's arguments for a session (never the password: that goes to it on standard input)."""
+    o = {**DEFAULTS["rdp"], **(s.get("options") or {})}
+    domain, user = split_user(s.get("username"))
+    args = [f"/v:{s['host']}:{int(s.get('port') or 3389)}", "/cert:tofu"]          # a new server's certificate: trust on first use
+    if user:
+        args.append(f"/u:{user}")
+    if domain:
+        args.append(f"/d:{domain}")
+    args += ["/f"] if o["fullscreen"] else [f"/size:{int(o['width'])}x{int(o['height'])}"]
+    args.append("+clipboard" if o["clipboard"] else "-clipboard")
+    if o["drives"]:
+        args.append(f"/drive:home,{os.path.expanduser('~')}")
+    if o["printers"]:
+        args.append("/printer")
+    if o["admin"]:
+        args.append("/admin")
+    if (o.get("gateway") or "").strip():
+        three = "3" in os.path.basename(exe or "")
+        args.append(f"/gateway:g:{o['gateway'].strip()}" if three else f"/g:{o['gateway'].strip()}")
+    return args
+
+
 def rdp_path(s):
     d = db.base_path().parent / "rdp"
     d.mkdir(parents=True, exist_ok=True)
     return d / (re.sub(r"[^A-Za-z0-9._-]", "_", s.get("name") or s["host"])[:60] + ".rdp")
 
 
-def launch_rdp(s):
-    """Write the .rdp file and start Remote Desktop. Returns the file's path. Raises OSError if Windows has no client."""
-    exe = find_mstsc()
+def launch_rdp(s, password=None):
+    """Start Remote Desktop in a client of its own. Returns the .rdp file's path (mstsc, macOS) or None (FreeRDP, which is given
+    the session on its command line and, where Toner asked for it, the password on standard input). Raises OSError when there
+    is no client."""
+    from core.platforms import WINDOWS
+    client = rdp_client(s)
+    exe = find_rdp_client(s)
     if not exe:
-        raise OSError("Windows' Remote Desktop client (mstsc.exe) was not found on this computer.")
+        raise OSError("Windows' Remote Desktop client (mstsc.exe) was not found on this computer." if client == "windows" else
+                      "FreeRDP was not found. Install it from freerdp.com, or choose Windows Remote Desktop as the Client."
+                      if client == "freerdp" and WINDOWS else
+                      "No Remote Desktop client was found. Install FreeRDP (for example: sudo apt install freerdp3-x11), "
+                      "then try again." if client == "freerdp" else
+                      "No Remote Desktop client was found. Install Microsoft's Windows App from the App Store, then try again.")
+    if client == "freerdp":
+        args = [exe] + freerdp_args(s, exe) + (["/from-stdin:force"] if password is not None else [])
+        p = subprocess.Popen(args, close_fds=True, stdin=subprocess.PIPE if password is not None else subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True)
+        if password is not None:
+            try:
+                p.stdin.write(password + "\n")
+                p.stdin.close()
+            except OSError:
+                pass
+        return None
     path = rdp_path(s)
     path.write_text(rdp_file_text(s), encoding="utf-8")
     subprocess.Popen([exe, str(path)], close_fds=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -273,9 +371,69 @@ def embedded_available():
     return True
 
 
-def use_embedded():
-    """Settings > Terminal > Remote Desktop: inside Toner (the default) when that is possible."""
-    return bool(db.get_setting("rdp_embedded")) and embedded_available()
+def use_embedded(s=None):
+    """Settings > Terminal > Remote Desktop: inside Toner (the default) when that is possible, and the session's Client is
+    Windows Remote Desktop."""
+    return bool(db.get_setting("rdp_embedded")) and embedded_available() and rdp_client(s) == "windows"
+
+
+# ---------------------------------------------------------------- VNC
+# Linux viewers in the order they are tried; TigerVNC's takes 'host::port', -FullScreen and -ViewOnly.
+VNC_VIEWERS = ("vncviewer", "xtigervncviewer", "tigervnc", "xtightvncviewer", "gvncviewer", "remmina", "krdc")
+WINDOWS_VNC = (("TigerVNC", ("vncviewer64.exe", "vncviewer.exe")), ("RealVNC", ("vncviewer.exe",)),
+               ("RealVNC\\VNC Viewer", ("vncviewer.exe",)), ("TightVNC", ("tvnviewer.exe",)), ("uvnc bvba\\UltraVNC", ("vncviewer.exe",)))
+
+
+def find_vnc_viewer():
+    """A VNC viewer: on Linux the first of VNC_VIEWERS on PATH; on Windows TigerVNC, RealVNC, TightVNC or UltraVNC where they
+    install (or on PATH); on macOS `open` (its built-in Screen Sharing takes vnc:// addresses). None when there is none."""
+    from core.platforms import MAC, WINDOWS
+    if MAC:
+        return shutil.which("open")
+    if not WINDOWS:
+        return next((p for p in (shutil.which(n) for n in VNC_VIEWERS) if p), None)
+    found = shutil.which("vncviewer") or shutil.which("tvnviewer")
+    if found:
+        return found
+    for base in (os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)")):
+        for folder, names in WINDOWS_VNC:
+            for n in names:
+                cand = os.path.join(base or "", folder, n)
+                if base and os.path.isfile(cand):
+                    return cand
+    return None
+
+
+def vnc_args(s, exe):
+    """The viewer's command line for a session (never a password: the viewer asks for it)."""
+    o = {**DEFAULTS["vnc"], **(s.get("options") or {})}
+    host, port = s["host"], int(s.get("port") or 5900)
+    name = re.split(r"[\\/]", exe)[-1].lower()                 # (a Windows path is split the same way on any system)
+    if name == "open":                                              # macOS Screen Sharing
+        return [exe, f"vnc://{host}:{port}"]
+    if name in ("remmina",):
+        return [exe, "-c", f"vnc://{host}:{port}"]
+    if name in ("krdc", "gvncviewer"):
+        return [exe, f"{host}:{port}" if name == "krdc" else f"{host}:{port - 5900 if 5900 <= port < 6000 else port}"]
+    if name.startswith("tvnviewer"):                                # TightVNC for Windows
+        return [exe, f"-host={host}", f"-port={port}"] + (["-viewonly=yes"] if o["viewonly"] else [])
+    args = [exe]                                                    # TigerVNC, RealVNC, UltraVNC and the like
+    if o["fullscreen"]:
+        args.append("-FullScreen")
+    if o["viewonly"]:
+        args.append("-ViewOnly")
+    return args + [f"{host}::{port}"]
+
+
+def launch_vnc(s):
+    """Open a VNC session in the viewer. Raises OSError when there is none."""
+    from core.platforms import MAC, WINDOWS
+    exe = find_vnc_viewer()
+    if not exe:
+        raise OSError("No VNC viewer was found. Install TigerVNC from tigervnc.org, then try again." if WINDOWS else
+                      "No VNC viewer was found. Install TigerVNC (for example: sudo apt install tigervnc-viewer), then try again."
+                      if not MAC else "macOS could not open its Screen Sharing.")
+    subprocess.Popen(vnc_args(s, exe), close_fds=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def split_user(username):

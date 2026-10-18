@@ -9,6 +9,8 @@ platforms [(netmiko device_type, shown name)]; the first is the default
 paging    command that switches off paging in an interactive SSH session ("" = none needed)
 login     False when the device needs no password, token or SNMP (a public status page, this computer's Wi-Fi)
 """
+import sys
+
 
 VENDORS = {
     "cisco": dict(name="Cisco", kind="ssh", secret="Password", username=True, site="", ha=False,
@@ -46,8 +48,8 @@ VENDORS = {
     "cloud": dict(name="Cloud status page", kind="status", secret="", username=False, site="", ha=False,
                   platforms=[], paging="", login=False),
     "windows": dict(name="Windows", kind="windows", secret="Password", username=True, site="", ha=False,
-                    platforms=[("agent", "Agent (reports to Toner)"), ("winrm", "WinRM (Toner connects)"),
-                               ("local", "This computer")], paging=""),
+                    platforms=[("agent", "Agent (reports to Toner)"), ("winrm", "WinRM (Toner connects)")]
+                    + ([("local", "This computer")] if sys.platform == "win32" else []), paging=""),   # (Toner reading Windows itself)
     "wifi": dict(name="This PC's Wi-Fi", kind="local", secret="", username=False, site="", ha=False,
                  platforms=[], paging="", login=False),
 }

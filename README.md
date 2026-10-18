@@ -45,6 +45,56 @@ Or use the installer. Its first page asks how to set Toner up:
 
 From a script: `Toner-Setup-1.1.0.exe /VERYSILENT /MODE=portable /DIR="E:\Toner"`.
 
+### On Linux
+
+Download `Toner-<version>-x86_64.AppImage` from the release, put it somewhere you can write to (for example
+`~/Applications/Toner.AppImage`), make it runnable and start it:
+
+    chmod +x ~/Applications/Toner.AppImage
+    ~/Applications/Toner.AppImage
+
+Everything is in that one file. Data is kept in `~/.local/share/NetCheck`. Toner updates the AppImage in place, keeping its name.
+**Settings > General > Start Toner when I sign in** adds it to your desktop's autostart.
+
+Some tools use programs the system provides. Where one is missing, an **Install...** button beside the message installs it with
+apt, pip (pipx) or npm, and the system asks for the administrator password in its own window:
+
+| For | Program | Ubuntu / Debian |
+|---|---|---|
+| Remote Desktop | FreeRDP | `sudo apt install freerdp3-x11` |
+| VNC | TigerVNC | `sudo apt install tigervnc-viewer` |
+| Port scans | nmap | `sudo apt install nmap` |
+| Throughput | iperf3 | `sudo apt install iperf3` |
+| Copy Files | rsync | `sudo apt install rsync` |
+| Wi-Fi | NetworkManager | `sudo apt install network-manager` |
+| Ansible | Ansible | `sudo apt install ansible` or `pipx install ansible-core` |
+| Bitwarden, Vaultwarden | Bitwarden CLI | `npm install -g @bitwarden/cli` |
+
+**Differences from Windows:**
+- **Remote Desktop:** opens in FreeRDP in its own window. Toner asks for the password and hands it over without storing it. The
+  tab inside Toner is Windows-only.
+- **"This computer" monitoring of Windows:** Windows-only. Agents and WinRM work the same.
+- **Remember on this computer:** keeps the vault's key in the system keyring (GNOME Keyring, KWallet). Without a keyring, Toner
+  asks for the master password at each start.
+- **The tray icon:** needs a desktop that shows tray icons. On GNOME, that's the AppIndicator extension.
+
+**The scheduled service with systemd.** To run scheduled checks without the window:
+
+1. Save this as `~/.config/systemd/user/toner.service`:
+
+       [Unit]
+       Description=Toner scheduled checks
+       [Service]
+       ExecStart=%h/Applications/Toner.AppImage cli service
+       Restart=on-failure
+       [Install]
+       WantedBy=default.target
+
+2. Run `systemctl --user enable --now toner`.
+3. Run `loginctl enable-linger $USER` so it keeps running while you're signed out.
+
+The service can read saved passwords only when the vault is remembered on this computer.
+
 **Your data stays on your computer.** The database is `%APPDATA%\NetCheck\netcheck.db` and the logs sit next to it. Passwords,
 tokens and SNMP communities are in Toner's own encrypted vault, `netcheck.vault` beside the database, never in the database itself.
 The vault is locked with a master password you choose the first time Toner starts (at least 12 characters; scrypt and AES-256-GCM).

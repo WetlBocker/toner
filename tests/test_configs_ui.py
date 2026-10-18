@@ -6,7 +6,7 @@ _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import os, sys, time
 pass
-SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + r"\cf%d.db" % int(time.time())
+SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\cf%d.db").replace("\\", os.sep) % int(time.time())
 from core import db, backup, alerts
 db.init()
 import keyring
@@ -99,10 +99,10 @@ print("== pruning and saving")
 import ui.configs as CC
 CC.QMessageBox.question = staticmethod(lambda *a, **k: CC.QMessageBox.StandardButton.Yes)
 w.prune(); check("delete older versions keeps the newest", len(backup.list_backups("sw1")) == 1)
-saved = SP + r"\saved_cfg.txt"
+saved = SP + (r"\saved_cfg.txt").replace("\\", os.sep)
 CC.QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (saved, ""))
 w.devs.selectRow(1); QCoreApplication.processEvents(); w.vers.selectRow(0); w.save_version()
 check("save writes the stored text", open(saved, encoding="utf-8").read() == backup.get_text(backup.latest("sw1")["id"]))
-w.grab().save(SP + r"\configs_tab.png")
+w.grab().save(SP + (r"\configs_tab.png").replace("\\", os.sep))
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

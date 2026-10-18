@@ -9,7 +9,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 pass
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
-SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + r"\nui%d.db" % int(time.time())
+SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\nui%d.db").replace("\\", os.sep) % int(time.time())
 from core import db, alerts, notify
 db.init()
 from PySide6.QtCore import Qt, QEventLoop

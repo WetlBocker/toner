@@ -293,15 +293,14 @@ def cert_info(der):
 def run_ping(chk, dev, timeout=8):
     if (chk.get("options") or {}).get("tcp") and proxy.for_device(dev, dev["host"]):
         return _ping_by_tcp(chk, dev)
-    r = subprocess.run(["ping", "-n", "4", "-w", "1500", dev["host"]], capture_output=True, text=True,
+    from core import pinger
+    r = subprocess.run(pinger.ping_args(dev["host"], 4, 1500), capture_output=True, text=True,
                        timeout=timeout + 8, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    out = r.stdout or ""
-    m = re.search(r"\((\d+)% loss\)", out)
-    loss = int(m.group(1)) if m else 100
-    avg = re.search(r"Average = (\d+)ms", out)
+    loss, avg = pinger.parse_summary(r.stdout)
+    loss = int(round(loss))
     if loss >= 100:
         return Result(dev["name"], chk["name"], FAIL, "no reply", "100% packet loss")
-    ms = float(avg.group(1)) if avg else 0.0
+    ms = avg if avg is not None else 0.0
     res = _measured({**chk, "higher_worse": 1}, dev["name"], ms, " ms")
     if loss and res.status == OK:
         res.status = WARN

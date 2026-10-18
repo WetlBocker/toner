@@ -6,7 +6,7 @@ _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import os, sys, time
 pass
-SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + r"\db%d.db" % int(time.time()); os.environ["APPDATA"] = SP
+SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\db%d.db").replace("\\", os.sep) % int(time.time()); os.environ["APPDATA"] = SP
 from core import db, backup, profiles
 db.init()
 import keyring
@@ -91,12 +91,12 @@ dash.open_device.connect(got.append); dash.goto.connect(got.append); dash.show_r
 dash.attention.selectRow(1); dash._open(); dash.cards["fail"].clicked.emit(); dash.cards["changes"].clicked.emit()
 check("double-clicking a problem opens the device; cards navigate (Failing to Results, showing what fails)", got == ["edge-fw", "Results:fail", "Configs"], got)
 dash.period.setCurrentIndex(0); check("changing the period refreshes", dash.bars.rows is not None)
-dash.grab().save(SP + r"\dashboard.png")
+dash.grab().save(SP + (r"\dashboard.png").replace("\\", os.sep))
 for n in [x["name"] for x in db.list_devices()]: pass
-empty_db = SP + r"\empty%d.db" % int(time.time()); os.environ["NETCHECK_DB"] = empty_db; db.init()
+empty_db = SP + (r"\empty%d.db").replace("\\", os.sep) % int(time.time()); os.environ["NETCHECK_DB"] = empty_db; db.init()
 d2 = D.DashboardTab()
 check("a fresh install is welcoming, not blank", d2.cards["devices"].value.text() == "0" and not d2.hint.isHidden() and "No checks run yet" in d2.when.text())
-os.environ["NETCHECK_DB"] = SP + r"\db_main.db"; db.init()
+os.environ["NETCHECK_DB"] = SP + (r"\db_main.db").replace("\\", os.sep); db.init()
 
 print("== command palette")
 import ui.palette as P
@@ -110,7 +110,7 @@ pal.box.setText("snmp"); pal.run_item(pal.list.item(0)); check("running an item 
 
 print("== main window")
 for k in list(STORE): STORE.pop(k)
-os.environ["NETCHECK_DB"] = SP + r"\main%d.db" % int(time.time()); db.init()
+os.environ["NETCHECK_DB"] = SP + (r"\main%d.db").replace("\\", os.sep) % int(time.time()); db.init()
 for n in ("core1", "edge-fw"): dev(n, "fortinet" if n == "edge-fw" else "cisco")
 db.save_run([Result("core1", "cpu", "WARN", "85%", numeric=85.0), Result("edge-fw", "wan links", "OK", "2/2")])
 w = A.Main(); w.show()
@@ -166,7 +166,7 @@ for _ in range(100):
     QCoreApplication.processEvents(); time.sleep(0.02)
     if V.buttons["checks"].isEnabled(): break
 check("backup from the device window", "unchanged" in V.status.text())
-V.grab().save(SP + r"\device_view.png")
+V.grab().save(SP + (r"\device_view.png").replace("\\", os.sep))
 V.close(); QCoreApplication.processEvents(); check("closing forgets the window so it can be reopened", "core1" not in w.views)
 
 print("== results context menu")

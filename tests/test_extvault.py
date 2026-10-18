@@ -373,6 +373,7 @@ env = proxy.child_env({}, "pw.internal")
 check("an address on the bypass list is reached directly", "HTTPS_PROXY" not in env and env["NO_PROXY"] == "*")
 import core.extvault as EV
 seen_env = []
+real_run = EV.subprocess.run
 EV.subprocess.run = lambda args, **k: (seen_env.append(k["env"]), type("P", (), {"returncode": 0, "stdout": "{}", "stderr": ""})())[1]
 tool = extvault.Bitwarden({"cli": sys.executable}, {})
 tool.run("status")
@@ -380,6 +381,7 @@ check("the password manager follows Settings > Proxy by default", seen_env[-1].g
 db.set_setting("vault_direct", True)
 tool.run("status")
 check("...and connects directly once its tick box is on", "HTTPS_PROXY" not in seen_env[-1] and seen_env[-1]["NO_PROXY"] == "*")
+EV.subprocess.run = real_run
 posted = []
 import requests as _rq
 real_post = _rq.post
@@ -412,6 +414,7 @@ v.kind.setCurrentIndex(v.kind.findData("toner")); app.processEvents()
 check("it is not offered for Toner's vault (nothing to connect to)", not v.direct.isVisibleTo(sec))
 print("== which bw.exe / op.exe, and the indicator at the bottom")
 fake_bw = os.path.join(SP, "bw.exe"); open(fake_bw, "w").close()
+from core import platforms
 bwf = v.fields["bitwarden"]
 bwf.boxes["cli"].setText(fake_bw)
 check("a chosen bw.exe shows in its box, with no line under it", bwf.boxes["cli"].text() == fake_bw and bwf.where.isHidden())
@@ -422,9 +425,9 @@ check("one found on PATH is named inside the empty box", bwf.boxes["cli"].placeh
       bwf.boxes["cli"].placeholderText())
 _sh.which = lambda name, path=None: None
 bwf.boxes["cli"].setText(""); bwf.show_where()            # (the box was already empty: look again, as opening the page does)
-check("...or, when there is none, the line under it says how to get one", not bwf.where.isHidden() and bwf.boxes["cli"].placeholderText() == "bw.exe (found automatically when it is on the PATH)" and bwf.where.text() == "bw.exe was not found. Download the Bitwarden CLI, then choose bw.exe with Browse..., or put it in a folder on your PATH.", bwf.where.text())
+check("...or, when there is none, the line under it says how to get one", not bwf.where.isHidden() and bwf.boxes["cli"].placeholderText() == f"{platforms.exe('bw')} (found automatically when it is on the PATH)" and bwf.where.text().replace(".exe", "") == "bw was not found. Download the Bitwarden CLI, then choose bw with Browse..., or put it in a folder on your PATH.", bwf.where.text())
 opf = v.fields["onepassword"]; opf.show_where()
-check("the same for op.exe", opf.where.text().startswith("op.exe was not found. Download the 1Password CLI, then choose op.exe"), opf.where.text())
+check("the same for op.exe", opf.where.text().replace(".exe", "").startswith("op was not found. Download the 1Password CLI, then choose op"), opf.where.text())
 _sh.which = real_which
 check("Keeper has no CLI line", not hasattr(v.fields["keeper"], "where"))
 import types

@@ -852,7 +852,7 @@ class InventoryTab(QWidget):
         self.more.setMenu(more_menu)
         bar.addWidget(self.more)
         bar.addStretch()
-        self.search.setMinimumWidth(120)
+        self.search.setMinimumWidth(96)                 # (Linux fonts are wider: the row still fits a 900-pixel window)
         self.search.setMaximumWidth(280)
         bar.addWidget(self.search, 1)
         bar.addWidget(self.filter_btn)
@@ -1773,8 +1773,8 @@ class InventoryTab(QWidget):
         """'Found 1,661 sessions in 211 folders: 1,473 SSH, ... 45 browser sessions are skipped (Toner has no web sessions).'"""
         counts = found.counts()
         total = len(found.items) + sum(found.skipped.values())
-        kinds = ", ".join(f"{counts[k]:,} {label}" for k, label in (("ssh", "SSH"), ("rdp", "Remote Desktop"), ("telnet", "Telnet"),
-                                                                   ("serial", "Serial")) if counts.get(k))
+        kinds = ", ".join(f"{counts[k]:,} {label}" for k, label in (("ssh", "SSH"), ("rdp", "Remote Desktop"), ("vnc", "VNC"),
+                                                                   ("telnet", "Telnet"), ("serial", "Serial")) if counts.get(k))
         text = f"Found {total:,} sessions in {len(found.folders()):,} folders: {kinds or 'none Toner can open'}."
         for kind, n in found.skipped.most_common():
             word = sessionimport.SKIPPED_NAMES.get(kind, kind)
