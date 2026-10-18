@@ -308,6 +308,24 @@ if real_frozen is None: del sys.frozen
 else: sys.frozen = real_frozen
 platforms.WINDOWS = real_win
 
+print("== the About page, for every kind of copy")
+import ui.about as AB
+real_kind = AB.updates.installed_kind
+for kind in ("installed", "portable", "appimage", "unpacked", "source"):
+    AB.updates.installed_kind = lambda k=kind: k
+    try:
+        rows = dict(AB.AboutTab().details())
+        ok_ = bool(rows.get("Installed as"))
+    except Exception as e:
+        ok_, rows = False, {"error": repr(e)}
+    check(f"it opens for a copy that is {kind}", ok_, rows.get("error", ""))
+AB.updates.installed_kind = real_kind
+AB.updates.installed_kind = lambda: "appimage"
+check("an AppImage says so", dict(AB.AboutTab().details())["Installed as"] == "AppImage (it updates itself in place)")
+AB.updates.installed_kind = real_kind
+row = AB._system_row()
+check("the system row names Windows on Windows, the system elsewhere", row[0] == ("Windows" if sys.platform == "win32" else "Operating system") and row[1], row)
+
 print("== one process at a time (the vault's lock)")
 lock = Path(SP) / "t.lock"
 with platforms.FileLock(lock) as a:

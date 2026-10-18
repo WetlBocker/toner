@@ -99,6 +99,20 @@ class RevertWorker(QThread):
             self.done.emit(False, f"The installer could not be started: {type(e).__name__}: {e}")
 
 
+def _system_row():
+    """('Windows', 'Windows 11  (10.0.26300)'), or ('Operating system', 'Ubuntu 26.04.1 LTS  (6.6.87.2-...)') on Linux and macOS."""
+    if sys.platform == "win32":
+        return "Windows", f"{display.windows_name(platform.system(), platform.release())}  ({platform.version()})"
+    name = ""
+    try:
+        name = platform.freedesktop_os_release().get("PRETTY_NAME", "")      # Linux
+    except (OSError, AttributeError):
+        pass
+    if not name and sys.platform == "darwin":
+        name = f"macOS {platform.mac_ver()[0]}"
+    return "Operating system", f"{name or platform.system()}  ({platform.release()})"
+
+
 class AboutTab(QWidget):
     update_available = Signal(str)                   # a newer version was found (for the badge and the tray)
     update_cleared = Signal()
@@ -246,7 +260,8 @@ class AboutTab(QWidget):
     def details(self):
         kind = updates.installed_kind()
         what = {"installed": "Installed with the installer", "portable": "Portable copy (its data is kept beside the program)",
-                "unpacked": "Unpacked copy (not installed)", "source": "Running from source code"}[kind]
+                "appimage": "AppImage (it updates itself in place)",
+                "unpacked": "Unpacked copy (not installed)", "source": "Running from source code"}.get(kind, kind)
         try:
             size = os.path.getsize(db.db_path())
             dbtext = f"{db.db_path()}  ({size / 1048576:.1f} MB)"
@@ -260,7 +275,7 @@ class AboutTab(QWidget):
                 ("Data folder", str(db.db_path().parent)), ("Database", dbtext),
                 ("Log file", str(db.db_path().parent / "toner.log")),
                 ("Python", f"{platform.python_version()}  ({platform.architecture()[0]})"),
-                ("Qt / PySide6", pyside), ("Windows", f"{display.windows_name(platform.system(), platform.release())}  ({platform.version()})"),
+                ("Qt / PySide6", pyside), _system_row(),
                 ("Inventory", f"{len(db.list_devices())} device(s)"), ("License", LICENSE), ("Source code", URL)]
 
     def libraries(self):
