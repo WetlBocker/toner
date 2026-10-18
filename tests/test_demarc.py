@@ -681,6 +681,8 @@ from ui.settings_pages.demarc import DemarcPage, INTRO
 from ui import settings as S
 check("the page is listed under Connections", "Demarc" in dict(S.GROUPS)["Connections"])
 check("it is managed by Global", "Demarc" in S.GLOBAL_PAGES)
+started = []
+demarc.apply = lambda: started.append(1)                       # the page starts the real sender; here the test sends instead
 demarc.disconnect(q)
 check("disconnecting forgets the token and stops", not STORE.get((db.SERVICE, demarc.TOKEN_SECRET)) and demarc.status_lines(q) == [demarc.T_NOT_CONNECTED])
 with db.within(db.GLOBAL):
@@ -702,6 +704,7 @@ check("Connect shows the fingerprint and waits for the person to confirm it", as
 check("connected from the page", demarc.connected() and page.disconnect_btn.isEnabled() and page.cert.text() == server.fingerprint
       and page.status.text().startswith("Connected to Demarc"))
 check("the code box is emptied", page.code.text() == "")
+check("connecting starts the sender", started)
 server.codes["UI-CODE-0002"] = "ok"
 page.code.setText("UI-CODE-0002")
 page.ask = lambda title, text, yes: False
