@@ -34,12 +34,13 @@ from ui.settings_pages.checks import CheckDialog, row_of_layout, CustomChecksPag
 from ui.settings_pages.network import ProxyPage, AgentsPage, MaintenanceDialog, MaintenancePage  # noqa: F401
 from ui.settings_pages.ansible import AnsiblePage  # noqa: F401
 from ui.settings_pages.orgs import OrganizationsPage  # noqa: F401
+from ui.settings_pages.demarc import DemarcPage  # noqa: F401
 
 
 
 # The order and grouping of the list on the left. A page that is not named here still appears, under "Other".
 GROUPS = [("Monitoring", ["General", "Thresholds", "Checks", "Maintenance"]),
-          ("Connections", ["Connections", "Proxy", "Credentials", "Agents"]),
+          ("Connections", ["Connections", "Proxy", "Credentials", "Agents", "Demarc"]),
           ("Alerts and reports", ["Notifications", "Reports", "Config backups"]),
           ("Automation", ["Ansible"]),
           ("Look and feel", ["Appearance", "Terminal"]),
@@ -50,7 +51,7 @@ GROUPS = [("Monitoring", ["General", "Thresholds", "Checks", "Maintenance"]),
 DIRTY = Qt.ItemDataRole.UserRole + 1          # on a list entry: the page has edits that are not saved yet
 
 # Pages about this computer or the whole program: an organization sees them, read-only, as "Managed by Global".
-GLOBAL_PAGES = {"Proxy", "Ansible", "Appearance", "Terminal", "Security", "Data and logs"}   # (Agents: only the receiver part)
+GLOBAL_PAGES = {"Proxy", "Ansible", "Appearance", "Terminal", "Security", "Data and logs", "Demarc"}   # (Agents: only the receiver part)
 GLOBAL_ONLY_PAGES = {"Organizations"}               # shown in Global only
 
 # What an organization's own value of a setting is called on its page's "Reset to Global" line.
@@ -129,13 +130,15 @@ class SettingsTab(QWidget):
 
     def __init__(self):
         super().__init__()
-        self.pages = [GeneralPage(), ThresholdsPage(), ChecksPage(), ConnectionsPage(), ProxyPage(), AgentsPage(),
+        self.pages = [GeneralPage(), ThresholdsPage(), ChecksPage(), ConnectionsPage(), ProxyPage(), AgentsPage(), DemarcPage(),
                       BackupsPage(), MaintenancePage(), NotificationsPage(), ProfilesPage(), AnsiblePage(), AppearancePage(), TerminalPage(), ReportsPage(), SecurityPage(),
                       AuditPage(), DataPage(self.reload), OrganizationsPage()]
         self.pages[-1].changed_orgs.connect(self.orgs_changed)
-        for p in self.pages:
+        for i, p in enumerate(self.pages):
             if p.title == "Appearance":
                 p.preview.connect(self.look_preview)
+            if p.title == "Demarc":
+                p.acted.connect(lambda i=i: self.rebase(only={i}))
         for p in self.pages:
             tidy(p)                                           # no drop-down or button stretches across a wide window
         self._texts = {}                                      # page index -> lower-case words on the page, for the search box

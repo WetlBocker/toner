@@ -201,6 +201,8 @@ class Daemon:
                     agents.check_cert()
                 except Exception as e:
                     self.log(f"agent certificate check failed: {e}")
+        from core import demarc
+        demarc.apply()                                   # sends to Demarc when it is connected
         self.log("Toner service started. "
                  + ("Checks every %s min. " % db.get_setting("schedule_minutes") if self.next_checks else "Scheduled checks are off (Settings > Checks > Schedule). ")
                  + ("Backups every %s h." % db.get_setting("backup_hours") if self.next_backup else "Scheduled backups are off."))
@@ -213,5 +215,6 @@ class Daemon:
 
     def stop(self):
         self.stop_event.set()
-        from core import agents
+        from core import agents, demarc
         agents.stop()
+        demarc.stop()

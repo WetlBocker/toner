@@ -17,6 +17,7 @@ A Windows desktop tool for checking, documenting and troubleshooting a multi-ven
   - [Certificates](#certificates)
   - [Maintenance windows](#maintenance-windows)
   - [Proxy](#proxy)
+  - [Demarc](#demarc)
   - [Wi-Fi and cloud status pages](#wi-fi-and-cloud-status-pages)
 - [Tools in detail](#tools-in-detail)
   - [OpenSSL](#openssl)
@@ -317,6 +318,13 @@ when there is no password). **Ask me for it when connecting** shows a box for th
 code out itself from the authenticator's secret key (kept in the vault), which is what checks that run by themselves
 need. When a proxy answers in a way Toner does not understand, the error says what it sent (for example an SSH banner or a sign-in
 method Toner cannot do) instead of "invalid response".
+
+### Demarc
+
+Toner can send its organizations, devices and check results to Demarc, a separate server that shows every organization in one
+browser view. In Demarc, create an enrollment code under Toners. In Toner, open Settings > Connections > Demarc, enter Demarc's
+address and the code, and check the certificate fingerprint before you confirm. Toner always connects out to Demarc over HTTPS and
+never sends passwords or other secrets from its vault. If Demarc can't be reached, changes wait for up to 7 days or 500 MB.
 
 ### Wi-Fi and cloud status pages
 

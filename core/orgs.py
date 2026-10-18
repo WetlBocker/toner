@@ -20,7 +20,7 @@ DEVICE_TABLES = ("counter_baseline", "alert_state", "diagnostics", "agent_report
 
 
 def list_orgs(archived=True):
-    """[{'id', 'name', 'code', 'colour', 'archived', 'created'}] by name."""
+    """[{'id', 'name', 'code', 'colour', 'archived', 'created', 'uid'}] by name. 'uid' never changes (Demarc knows it by that)."""
     return [r for r in db.org_rows() if archived or not r["archived"]]
 
 
@@ -91,8 +91,8 @@ def create(name_, code, colour=""):
     colour = colour or COLOURS[len(db.org_rows()) % len(COLOURS)]
     with db.within(GLOBAL):
         with db.connect() as c:
-            org = c.execute("INSERT INTO orgs(name, code, colour, archived, created) VALUES(?,?,?,0,?)",
-                            (name_, code, colour, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))).lastrowid
+            org = c.execute("INSERT INTO orgs(name, code, colour, archived, created, uid) VALUES(?,?,?,0,?,?)",
+                            (name_, code, colour, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), db.new_uid())).lastrowid
     db.forget_orgs()
     with db.within(org):
         db.init()

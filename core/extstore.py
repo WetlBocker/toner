@@ -16,7 +16,8 @@ only Toner's own login for the manager: the passwords are read from the manager 
 runs (_mem), changes wait in memory until they are sent (_mem_pending), and nothing is available while the manager can't be
 reached.
 
-The vault entries this module keeps for itself start with '~ext/', which no Toner password name can.
+The vault entries this module keeps for itself start with '~ext/', which no Toner password name can. Entries that start with
+'~toner/' stay in Toner's vault only and never go to the manager either.
 """
 import json
 import threading
@@ -25,6 +26,7 @@ import time
 from core import db, extvault, passvault
 
 INTERNAL = "~ext/"
+LOCAL = "~toner/"                      # kept only in Toner's vault, never sent to the manager (Demarc's token)
 PENDING = INTERNAL + "pending"
 INTERVAL = 300                         # seconds between tries
 _lock = threading.RLock()
@@ -104,7 +106,7 @@ def keep_new_secrets(kind, conn):
 
 # ---------------------------------------------------------------- names
 def is_internal(name):
-    return name.startswith(INTERNAL)
+    return name.startswith((INTERNAL, LOCAL))
 
 
 def local_names():

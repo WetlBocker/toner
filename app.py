@@ -8,7 +8,7 @@ from pathlib import Path
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence, QPainter, QPixmap, QShortcut
 from PySide6.QtWidgets import QApplication, QMainWindow, QMenu, QMessageBox, QSystemTrayIcon
-from core import agents, audit, checks, db, display, legacyssh, notify, paths, reports, sessionlog, sessions, trends, trust, tunnel, updates
+from core import agents, audit, checks, db, demarc, display, legacyssh, notify, paths, reports, sessionlog, sessions, trends, trust, tunnel, updates
 from ui import theme
 from ui.about import AboutTab
 from ui.configs import ConfigsTab
@@ -194,6 +194,7 @@ class Main(QMainWindow):
         self.backup_scheduler.apply(first=True)
         self.update_tray()
         agents.apply()                                  # the Windows agent receiver, if it is turned on
+        demarc.apply()                                  # sends to Demarc once it is connected (Settings > Connections > Demarc)
         self.housekeeping = QTimer(self)                # things that happen now and then: a scheduled trend report, the agent certificate
         self.housekeeping.setInterval(30 * 60 * 1000)
         self.housekeeping.timeout.connect(self.do_housekeeping)
@@ -639,6 +640,7 @@ class Main(QMainWindow):
         self.scheduler.shutdown()
         self.backup_scheduler.shutdown()
         agents.stop()
+        demarc.stop()
         self.about.apply_on_exit()     # a downloaded update installs as Toner closes, if automatic updating is on
         self.about.shutdown()
         super().closeEvent(event)

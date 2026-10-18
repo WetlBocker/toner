@@ -123,12 +123,14 @@ DEFAULT_SETTINGS = {
     # Windows agents (see core/agents.py): Toner listens for their reports while this is on
     "agent_cert_warned": "", "trend_schedule": "", "trend_last": "", "tls_sweep": False, "tls_sweep_ports": "443", "agent_enabled": False, "agent_enroll": False, "agent_token_days": 0, "agent_port": 8750, "agent_minutes": 5, "agent_push_minutes": False, "agent_bind": "0.0.0.0", "agent_address": "",
     "vault_provider": "toner", "vault_config": {}, "vault_direct": False, "update_direct": False, "vault_keep_copies": True,   # (the last two: ignore the proxy)             # where passwords are kept: Toner's vault, or a password manager (core/extstore.py)
+    # Demarc (see core/demarc.py): this install's permanent ID, and the Demarc it sends to (its token is in the vault)
+    "install_uid": "", "demarc": {"address": "", "pin": "", "trusted": False, "enabled": False},
 }
 # Per-machine state that must not travel in an exported settings file (channel secrets stay in
 # the vault, so an imported channel would be broken).
 NOT_PORTABLE = {"vault_provider", "vault_config", "org_current", "window_geometry", "ansible_distro", "ansible_playbooks", "ansible_server", "ansible_server_device", "sidebar_collapsed", "acks", "client_scope", "onboarding_done", "inventory_columns", "results_columns", "notify_channels", "notify_snooze_until", "inventory_expanded", "snippets", "fileserver", "iperf_path", "openssl_path",
                 "update_last_check", "update_skip", "update_pending", "sessions_expanded", "agent_enabled", "agent_enroll", "agent_bind",
-                "agent_address"}
+                "agent_address", "install_uid", "demarc"}
 
 DEVICE_FIELDS = ["name", "vendor", "host", "port", "platform", "username",
                  "site", "verify_ssl", "ha_expected", "enabled", "location", "details", "folder_id",
@@ -209,7 +211,7 @@ show_archived = False                 # Global's Organization filter can ask for
 
 
 def org_rows():
-    """Every organization in the Global file: [{'id', 'name', 'code', 'colour', 'archived', 'created'}] by name. Cached briefly."""
+    """Every organization in the Global file: [{'id', 'name', 'code', 'colour', 'archived', 'created', 'uid'}] by name. Cached briefly."""
     key, now = str(base_path()), time.monotonic()
     if _orgs_cache["key"] != key or now - _orgs_cache["at"] > SETTINGS_TTL:
         try:
@@ -522,8 +524,22 @@ def _m6_shared(c):
             c.execute(f"ALTER TABLE {table} ADD COLUMN shared INTEGER DEFAULT 0")
 
 
+def _m7_org_uids(c):
+    """A permanent ID for each organization, so Demarc can tell them apart (the number is only this install's, and can come back
+    after an organization is removed)."""
+    if "uid" not in {r[1] for r in c.execute("PRAGMA table_info(orgs)")}:
+        c.execute("ALTER TABLE orgs ADD COLUMN uid TEXT DEFAULT ''")
+    for (oid,) in c.execute("SELECT id FROM orgs WHERE IFNULL(uid, '') = ''").fetchall():
+        c.execute("UPDATE orgs SET uid=? WHERE id=?", (new_uid(), oid))
+
+
+def new_uid():
+    import uuid
+    return str(uuid.uuid4())
+
+
 MIGRATIONS = [(1, _m1_legacy_columns), (2, _m2_agent_history), (3, _m3_agent_tokens), (4, _m4_device_checks), (5, _m5_ansible_runs),
-              (6, _m6_shared)]
+              (6, _m6_shared), (7, _m7_org_uids)]
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 
 
@@ -895,7 +911,7 @@ GLOBAL_ONLY = {"window_geometry", "sidebar_collapsed", "onboarding_done", "org_c
                "ansible_check_default", "ansible_keep_runs", "fileserver", "iperf_path", "openssl_path", "snippets",
                "ssh_log_days",
                "agent_cert_warned", "agent_enabled", "agent_token_days", "agent_port", "agent_bind", "agent_address",
-               "vault_provider", "vault_config", "vault_direct", "update_direct", "vault_keep_copies"}
+               "vault_provider", "vault_config", "vault_direct", "update_direct", "vault_keep_copies", "install_uid", "demarc"}
 # (agent sign-up, its interval and whether installed agents are told it are each organization's own: Settings > Agents)
 # ...and these belong to one organization's own lists, so an organization never borrows Global's:
 ORG_LOCAL = {"acks", "inventory_expanded", "sessions_expanded", "client_scope", "trend_last", "notify_snooze_until"}
