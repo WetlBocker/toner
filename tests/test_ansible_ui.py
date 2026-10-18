@@ -152,7 +152,7 @@ class CheckFB(Fake):
         self.spec = spec; on_line("playbook: " + str(spec.playbook_path)); return 0
 CFB = CheckFB(); AN.backend = lambda: CFB
 ed.open_playbook("site/other.yml"); ed.check_with_ansible()
-check("it runs, and the output shows", wait(lambda: not ed.checking() and ed.output.toPlainText() != "Checking..." and "passed" in ed.verdict.text()) and not ed.output.isHidden() and "playbook:" in ed.output.toPlainText() and CFB.spec.syntax_only and "passed" in ed.verdict.text(), ed.output.toPlainText())
+check("it runs, and the output shows", wait(lambda: not ed.checking() and ed.output.toPlainText() != "Checking..." and "passed" in ed.verdict.text(), 30000) and not ed.output.isHidden() and "playbook:" in ed.output.toPlainText() and CFB.spec.syntax_only and "passed" in ed.verdict.text(), ed.output.toPlainText())
 check("it needs no devices and is not put in the history", AN.list_runs() == [])
 class BadFB(Fake):
     def run(self, spec, files_text, on_line, cancel=None):

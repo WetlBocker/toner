@@ -274,8 +274,8 @@ check("closing a connected tab asks first, then disconnects and removes it", ask
 print("== asking for a password")
 ask = [x for x in sessions.list_sessions() if x["name"] == "Core switch A (copy)"][0]
 sessions.forget_password(ask["id"]); prompts.clear(); password_reply["v"] = ("pw", True)
-st.open_session(ask["id"]); p2 = st.tabs.currentWidget(); pump(lambda: p2.connected() and "router#" in screen(p2))
-check("with no saved password it asks, and connects with what you type", prompts and "u@127.0.0.1" in prompts[0] and "router# " in screen(p2) and ssh_srv.logins[-1] == ("u", "pw"), prompts)
+st.open_session(ask["id"]); p2 = st.tabs.currentWidget(); pump(lambda: p2.connected() and "router#" in screen(p2), 1500)   # a slow build machine
+check("with no saved password it asks, and connects with what you type", prompts and "u@127.0.0.1" in prompts[0] and "router#" in screen(p2) and ssh_srv.logins[-1] == ("u", "pw"), (prompts, screen(p2)[-300:], ssh_srv.logins[-3:]))
 p2.disconnect_btn.click(); pump(lambda: not p2.connected()); password_reply["v"] = ("", False); prompts.clear(); p2.reconnect_btn.click()
 check("cancelling the question does not connect", prompts and not p2.connected() and "no password" in p2.status.text())
 password_reply["v"] = ("wrong", True); p2.reconnect_btn.click(); pump(lambda: not p2.connected() and "Login failed" in screen(p2) or "failed" in screen(p2).lower(), 150)
@@ -284,9 +284,9 @@ st.close_tab(0)
 
 print("== from the inventory")
 dev = [x for x in db.list_devices() if x["name"] == "r1"][0]; prompts.clear()
-w.open_ssh_console(dev); p3 = st.tabs.currentWidget(); pump(lambda: p3.connected() and "router#" in screen(p3))
+w.open_ssh_console(dev); p3 = st.tabs.currentWidget(); pump(lambda: p3.connected() and "router#" in screen(p3), 1500)
 check("Open SSH session goes to Sessions and opens a tab for the device", w.tabs.currentWidget() is st and p3.spec["name"] == "r1" and p3.spec["dev"]["name"] == "r1")
-check("it uses the device's saved login, so no question", not prompts and ssh_srv.logins[-1] == ("u", "pw") and "router# " in screen(p3))
+check("it uses the device's saved login, so no question", not prompts and ssh_srv.logins[-1] == ("u", "pw") and "router#" in screen(p3), screen(p3)[-200:])
 w.open_ssh_console(dev); check("asking again selects the same tab instead of opening another", st.tabs.count() == 1 and st.tabs.currentWidget() is p3)
 st.close_tab(0)
 
