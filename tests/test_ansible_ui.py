@@ -154,6 +154,29 @@ CFB = CheckFB(); AN.backend = lambda: CFB
 ed.open_playbook("site/other.yml"); ed.check_with_ansible()
 check("it runs, and the output shows", wait(lambda: not ed.checking() and ed.output.toPlainText() != "Checking..." and "passed" in ed.verdict.text(), 30000) and not ed.output.isHidden() and "playbook:" in ed.output.toPlainText() and CFB.spec.syntax_only and "passed" in ed.verdict.text(), ed.output.toPlainText())
 check("it needs no devices and is not put in the history", AN.list_runs() == [])
+print("-- a YAML check still waiting never replaces Ansible's answer")
+def settle(ms):
+    t0 = time.time()
+    while time.time() - t0 < ms / 1000:
+        app.processEvents(); time.sleep(0.01)
+ed.editor.setPlainText(AN.read("site/other.yml") + "# more\n"); ed.save()
+interval = ed.live.interval()
+ed.live.start(5000)                                                 # the YAML check of that edit is still waiting...
+ed.check_with_ansible()                                             # ...when Ansible's check starts
+check("it is done first, so Ansible's answer is the one left showing", not ed.live.isActive()
+      and wait(lambda: not ed.checking() and "passed" in ed.verdict.text(), 30000), ed.verdict.text())
+settle(600)
+check("...and stays there", "passed" in ed.verdict.text(), ed.verdict.text())
+ed.live.start(5000)                                                 # a check waiting for text that is about to be replaced
+ed._show("site/other.yml", AN.read("site/other.yml"))              # what opening a playbook does (open_playbook calls it)
+check("opening a playbook drops a YAML check that was waiting for the old text", not ed.live.isActive() and ed.verdict.text() == "The YAML is valid.")
+ed.check_with_ansible()
+ed.live.setInterval(interval)                                      # (start(ms) also changed the interval)
+check("so a check started right after opening keeps Ansible's answer", wait(lambda: not ed.checking() and "passed" in ed.verdict.text(), 30000)
+      and (settle(600) or "passed" in ed.verdict.text()), ed.verdict.text())
+ed.editor.setPlainText(ed.editor.toPlainText() + "# typed\n")
+check("typing afterwards checks the YAML again, as before", wait(lambda: ed.verdict.text() == "The YAML is valid.", 5000), ed.verdict.text())
+ed.revert()
 class BadFB(Fake):
     def run(self, spec, files_text, on_line, cancel=None):
         on_line("ERROR! Syntax Error while loading YAML."); return 4

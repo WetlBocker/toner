@@ -290,6 +290,7 @@ class PlaybookEditorTab(QWidget):
         return True
 
     def _show(self, name, text=""):
+        self.live.stop()                          # a YAML check still waiting was for the text being replaced (this one is checked below)
         self._loading = True
         self.current = name
         self._saved_text = text
@@ -423,6 +424,9 @@ class PlaybookEditorTab(QWidget):
             ask = QMessageBox.question(self, "Check with Ansible", "Ansible checks the saved playbook. Save your changes first?")
             if ask != QMessageBox.StandardButton.Yes or not self.save():
                 return
+        if self.live.isActive():                  # a YAML check still waiting goes now, so it can't replace Ansible's answer later
+            self.live.stop()
+            self.check_now()
         self.output.clear()
         self.output.setVisible(True)
         self.output.setPlainText("Checking...")
