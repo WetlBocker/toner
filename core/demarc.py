@@ -9,7 +9,7 @@ What is sent (an allowlist: only the fields in BODIES, which are exactly the one
   * org             each organization, and Global, by its permanent ID (org_uid)
   * device          name, address, platform (the vendor), folder, groups (its location), tags, notes (the Details text)
   * device_removed  a device that was removed or renamed
-  * result          every check result, with the time of its run
+  * result          every check result, with the time of its run, and its value to graph (to Demarc 0.0.3 or newer)
 Passwords, user names, SNMP and proxy settings, custom fields and everything else in the vault are never sent.
 
 How it is sent:
@@ -27,6 +27,7 @@ import gzip
 import hashlib
 import json
 import logging
+import math
 import secrets
 import socket
 import sqlite3
@@ -53,13 +54,14 @@ QUEUE_BYTES = 500 * 1024 * 1024
 COLLECT_SECONDS = 5                      # how often changes are looked for (Live organizations are sent this quickly)
 RETRY_FIRST, RETRY_MOST = 15, 300        # after a failed send: 15 s, then twice as long each time, up to 5 minutes
 STATUSES = {"OK", "WARN", "FAIL", "ERROR", "N/A"}
+NUMERIC_FROM = (0, 0, 3)                 # the first Demarc that takes a result's value; older ones refuse the field
 
 # The allowlist: each kind of item, its fields, and the longest text Demarc keeps for each (core of Demarc's ingest.py).
 BODIES = {
     "org": {"name": 255, "code": 50, "colour": 20, "archived": None},
     "device": {"name": 255, "address": 255, "platform": 100, "folder": 1000, "groups": 100, "tags": 100, "notes": 10000},
     "device_removed": {"name": 255},
-    "result": {"device": 255, "check": 255, "status": None, "value": 1000, "message": 4000, "ran_at": None},
+    "result": {"device": 255, "check": 255, "status": None, "value": 1000, "message": 4000, "ran_at": None, "numeric": None},
 }
 
 # ---------------------------------------------------------------- wording (approved)
@@ -177,9 +179,27 @@ def device_body(dev, folders):
 
 def result_body(row):
     status = row["status"] if row["status"] in STATUSES else "N/A"
-    return allowed("result", {"device": row["device"], "check": row["check_name"], "status": status,
-                              "value": "" if row["value"] is None else row["value"], "message": row["message"] or "",
-                              "ran_at": utc_of(row["started_at"])})
+    body = {"device": row["device"], "check": row["check_name"], "status": status,
+            "value": "" if row["value"] is None else row["value"], "message": row["message"] or "", "ran_at": utc_of(row["started_at"])}
+    if isinstance(row["numeric"], (int, float)) and math.isfinite(row["numeric"]):
+        body["numeric"] = float(row["numeric"])
+    return allowed("result", body)
+
+
+def takes_numeric(version):
+    """True when Demarc `version` ('0.0.3') takes a result's value. Unknown or unreadable: False, so nothing is refused."""
+    try:
+        return tuple(int(x) for x in str(version or "").split(".")[:3]) >= NUMERIC_FROM
+    except ValueError:
+        return False
+
+
+def fit(items, numeric):
+    """Items as this Demarc takes them: without the results' values when it is older than 0.0.3."""
+    if numeric:
+        return items
+    return [dict(it, body={k: v for k, v in it["body"].items() if k != "numeric"}) if it["kind"] == "result" else it
+            for it in items]
 
 
 # ---------------------------------------------------------------- reading Toner's data
@@ -213,7 +233,7 @@ def devices_of(org):
             return {d["name"]: device_body(dict(d), folders) for d in c.execute("SELECT * FROM devices") if d["name"]}
 
 
-RESULT_SQL = ("SELECT r.id, r.device, r.check_name, r.status, r.value, r.message, u.started_at FROM results r "
+RESULT_SQL = ("SELECT r.id, r.device, r.check_name, r.status, r.value, r.message, r.numeric, u.started_at FROM results r "
               "JOIN runs u ON u.id = r.run_id ")
 
 
@@ -516,7 +536,8 @@ def enroll(found, code, queue=None):
         save_config(address=found.url, pin=pin, trusted=found.trusted, enabled=True)
         q = queue or Queue()
         q.reset()
-        q.set(demarc_version=str(data.get("demarc_version", ""))[:40], last_contact=_local_now())
+        q.set(demarc_version=str(data.get("demarc_version", ""))[:40], numeric=takes_numeric(data.get("demarc_version")),
+              last_contact=_local_now())
         with db.within(db.GLOBAL):
             audit.log(T_AUDIT_CONNECTED.format(address=found.url))
         kick()
@@ -596,10 +617,15 @@ class Sender:
                    error={"code": code, "reason": reason, "since": since})
 
     def _contact(self, c, data, **more):
-        """A good reply: remember Demarc's settings for each organization and that it answered."""
+        """A good reply: remember Demarc's settings for each organization, its version (named in replies from 0.0.3: so after
+        Demarc is upgraded, or put back to an older one, Toner knows) and that it answered."""
         values = dict(fails=None, next_try=None, error=None, last_contact=_local_now(), **more)
         if isinstance(data.get("settings"), dict):
             values["settings"] = data["settings"]
+        version = data.get("demarc_version")
+        values["numeric"] = takes_numeric(version)
+        if version:
+            values["demarc_version"] = str(version)[:40]
         self.q.set(c, **values)
 
     def _refused(self, status, data):
@@ -710,7 +736,7 @@ class Sender:
         """Number what is due, then send the outbox in batches until it is empty (or Demarc refuses)."""
         self.number(now)
         for _ in range(rounds):
-            items = self._outbox(self.limit)
+            items = fit(self._outbox(self.limit), self.q.get("numeric", False))
             if not items:
                 return True
             status, data = client.post("/ingest/v1/batch", {"sent_at": iso(), "items": items})
@@ -823,7 +849,9 @@ class Sender:
         with self.q.tx() as c:
             c.execute("DELETE FROM pending")
             c.execute("DELETE FROM outbox")
+        numeric = self.q.get("numeric", False)
         for i, part in enumerate(parts, 1):
+            part[:] = fit(part, numeric)
             self.q.set(snapshot={"part": i, "parts": len(parts)})
             for _try in range(5):
                 status, data = client.post("/ingest/v1/snapshot", {"snapshot_id": sid, "part": i, "parts": len(parts), "seq": seq,

@@ -324,7 +324,7 @@ method Toner cannot do) instead of "invalid response".
 Toner can send its organizations, devices and check results to Demarc, a separate server that shows every organization in one
 browser view. In Demarc, create an enrollment code under Toners. In Toner, open Settings > Connections > Demarc, enter Demarc's
 address and the code, and check the certificate fingerprint before you confirm. Toner always connects out to Demarc over HTTPS and
-never sends passwords or other secrets from its vault. If Demarc can't be reached, changes wait for up to 7 days or 500 MB.
+never sends passwords or other secrets from its vault. If Demarc can't be reached, changes wait for up to 7 days or 500 MB. With Demarc 0.0.3 or newer, each check result's value goes too, for Demarc's graphs.
 
 ### Wi-Fi and cloud status pages
 

@@ -17,7 +17,7 @@ keyring.set_password = lambda s, u, p: STORE.__setitem__((s, u), p)
 keyring.get_password = lambda s, u: STORE.get((s, u))
 keyring.delete_password = lambda s, u: STORE.pop((s, u), None)
 
-import gzip, hashlib, json, re, socket, sqlite3, ssl, threading
+import gzip, hashlib, json, math, re, socket, sqlite3, ssl, threading
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from core import audit, db, demarc, extstore, orgs
@@ -39,7 +39,7 @@ def dev(name, **kw):
 DEMARC_BODIES = {"org": {"name", "code", "colour", "archived"},
                  "device": {"name", "address", "platform", "folder", "groups", "tags", "notes"},
                  "device_removed": {"name"},
-                 "result": {"device", "check", "status", "value", "message", "ran_at"}}
+                 "result": {"device", "check", "status", "value", "message", "ran_at", "numeric"}}     # numeric: from Demarc 0.0.3
 LATER = {"folder", "problem_state", "schedule", "backup", "backup_log"}
 SECRET_LIKE = re.compile(r"(?i)pass|secret|token|key|credential|community|psk|private")    # the same test Demarc runs on its side
 TZ = re.compile(r"(Z|[+-]\d\d:\d\d)$")
@@ -75,6 +75,7 @@ class FakeDemarc:
         self.orgs, self.devices, self.latest, self.results = {}, {}, {}, []
         self.settings = {}                  # org_uid -> {'live', 'interval_minutes', 'unmasked_configs'}
         self.parts, self.not_demarc, self.stored_batches = {}, False, 0
+        self.version = "0.0.1"              # from 0.0.3 Demarc names its version in every reply and takes a result's value
         self.bad = []                       # what the server refused, and why (a test fails if Toner sent anything wrong)
         fake = self
 
@@ -146,9 +147,11 @@ class FakeDemarc:
                 continue
             if it["kind"] not in DEMARC_BODIES:
                 return self.refuse(f"items.{i}.kind")
-            extra = set(it["body"]) - DEMARC_BODIES[it["kind"]]
+            extra = set(it["body"]) - (DEMARC_BODIES[it["kind"]] - (set() if self.numeric() else {"numeric"}))
             if extra:
                 return self.refuse(f"items.{i}.body: {sorted(extra)}")
+            if "numeric" in it["body"] and not (isinstance(it["body"]["numeric"], (int, float)) and math.isfinite(it["body"]["numeric"])):
+                return self.refuse(f"items.{i}.body.numeric")
             if it["kind"] == "result" and (it["body"]["status"] not in ("OK", "WARN", "FAIL", "ERROR", "N/A") or not TZ.search(it["body"]["ran_at"])):
                 return self.refuse(f"items.{i}.body.status/ran_at")
         return None
@@ -170,9 +173,13 @@ class FakeDemarc:
                 self.latest[(uid, b["device"], b["check"])] = b
         return None
 
+    def numeric(self):
+        return tuple(map(int, self.version.split("."))) >= (0, 0, 3)
+
     def reply(self, **more):
+        named = {"demarc_version": self.version} if self.numeric() else {}
         return {"acked_seq": self.last_seq, "server_time": "2026-10-18T12:00:00Z", "settings": dict(self.settings),
-                "ignored_older": 0, "skipped_kinds": {}, **more}
+                "ignored_older": 0, "skipped_kinds": {}, **named, **more}
 
     def handle(self, path, headers, p):
         if path == "/ingest/v1/enroll":
@@ -185,7 +192,7 @@ class FakeDemarc:
                 return 403, {"error": "code_expired"}
             self.token, self.last_seq, self.revoked = "dmt_" + "x" * 40, 0, False
             self.install = p
-            return 200, {"token": self.token, "demarc_version": "0.0.1", "server_time": "2026-10-18T12:00:00Z", "acked_seq": 0}
+            return 200, {"token": self.token, "demarc_version": self.version, "server_time": "2026-10-18T12:00:00Z", "acked_seq": 0}
         auth = headers.get("Authorization", "")
         if not self.token or auth != "Bearer " + self.token:
             return 401, {"error": "bad_token"}
@@ -248,7 +255,7 @@ class FakeDemarc:
         return [p for _path, _h, p, _gz in self.requests]
 
 
-STATE = ("token", "last_seq", "revoked", "orgs", "devices", "latest", "results", "settings", "codes")
+STATE = ("token", "last_seq", "revoked", "orgs", "devices", "latest", "results", "settings", "codes", "version")
 
 
 def restart(old):
@@ -661,6 +668,47 @@ times = [it["changed_at"] for p in everything for it in p.get("items", [])] + [p
 check("every time sent has a time zone (UTC)", times and all(t.endswith("Z") for t in times))
 check("every request was gzipped and carried the token", SEEN_GZ and getattr(server, "gzipped", True)
       and all(h.get("Authorization") == "Bearer " + server.token for p, h, _x, _g in server.requests if p != "/ingest/v1/enroll"))
+
+# ================================================================ values to graph
+print("== a result's value, for Demarc 0.0.3 and newer")
+def results_sent():
+    return [it["body"] for p in server.payloads() for it in p.get("items", []) if it["kind"] == "result"]
+check("Demarc 0.0.1 doesn't take them, so none was ever sent to it", "numeric" not in allkeys)
+server.version = "0.0.3"                                     # Demarc upgraded where it is: Toner isn't told
+server.requests.clear()
+with db.within(acme):
+    db.save_run([Result("edge-fw", "cpu", "OK", "33%", "", 33.0)])
+snd.step()
+check("the first batch after the upgrade goes without values", [b.get("numeric", "none") for b in results_sent()] == ["none"])
+check("its reply names the new version, so Toner knows", q.get("numeric") is True and q.get("demarc_version") == "0.0.3"
+      and demarc.status_lines(q)[0].startswith("Connected to Demarc 0.0.3 at"), demarc.status_lines(q))
+server.requests.clear()
+with db.within(acme):
+    db.save_run([Result("edge-fw", "cpu", "WARN", "91%", "busy", 91.0), Result("edge-fw", "uptime", "OK", "3 days", ""),
+                 Result("edge-fw", "temp", "OK", "?", "", float("inf"))])
+snd.step()
+sent = {b["check"]: b for b in results_sent()}
+check("from then on each result carries its value", sent["cpu"].get("numeric") == 91.0, sent)
+check("a result without a value carries none", "numeric" not in sent["uptime"])
+check("nor one whose value isn't a finite number", "numeric" not in sent["temp"])
+check("and Demarc took them", server.latest[(uids[acme], "edge-fw", "cpu")].get("numeric") == 91.0 and not server.bad, server.bad)
+q.drop()
+server.requests.clear()
+snd.step()
+snap = [it["body"] for p, _h, x, _g in server.requests if p == "/ingest/v1/snapshot" for it in x["items"] if it["kind"] == "result"]
+check("a full copy carries them too", any(b.get("numeric") == 91.0 for b in snap) and not server.bad, server.bad)
+server.version = "0.0.2"                                     # put back to an older Demarc, which names no version
+db.save_device(dev("after-downgrade"))
+snd.step()
+check("a reply that names no version stops the values", q.get("numeric") is False)
+server.requests.clear()
+with db.within(acme):
+    db.save_run([Result("edge-fw", "cpu", "OK", "20%", "", 20.0)])
+snd.step()
+check("so the older Demarc takes the next results", results_sent() and all("numeric" not in b for b in results_sent())
+      and not server.bad, server.bad)
+check("which version takes them", (demarc.takes_numeric("0.0.3"), demarc.takes_numeric("0.1.0"), demarc.takes_numeric("0.0.2"),
+                                    demarc.takes_numeric(""), demarc.takes_numeric("x.y")) == (True, True, False, False, False))
 
 # ================================================================ one sender at a time
 print("== one Toner process sends at a time")
