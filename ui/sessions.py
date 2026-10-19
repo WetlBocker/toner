@@ -447,9 +447,11 @@ class SessionPane(QWidget):
         dev = sp.get("dev")
         password = ""
         if kind == "ssh":
-            if not sp.get("username"):
-                self._say("\nThis session has no user name. Edit it and add one.\n")
-                return
+            if not sp.get("username"):                         # imported or saved without one: ask, as for the password
+                user, ok = QInputDialog.getText(self, "User name", f"User name for {sp['host']}:")
+                if not ok or not user.strip():
+                    return
+                sp["username"] = user.strip()
             password = self._password()
             if password is None:
                 self.status.setText("Not connected: no password was entered.")

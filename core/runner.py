@@ -7,7 +7,7 @@ import requests
 from core import checks, custom, db, profiles, reach, support, vendors, winmon
 from core.nettools import resolve_host
 from drivers import DRIVERS
-from drivers.base import AuthRejected, Driver, Result, ERROR, WARN
+from drivers.base import AuthRejected, Driver, Result, ERROR, NA, WARN
 from core import quiet
 
 
@@ -33,7 +33,7 @@ def sweepable(dev):
 
 def reachability(dev, opts):
     """The Reachable row (a TCP connection to the management port, through the proxy when there is one), before the login."""
-    if dev["vendor"] not in reach.VENDORS or checks.key(dev["vendor"], "reachability") in opts.get("disabled", ()):
+    if dev["vendor"] and dev["vendor"] not in reach.VENDORS or checks.key(dev["vendor"], "reachability") in opts.get("disabled", ()):     # no vendor yet: its SSH port
         return []
     try:
         return [reach.row(dev, timeout=min(5, int(opts.get("ssh_timeout", 5)) or 5))]
@@ -60,10 +60,16 @@ def stored_copy_note(dev):
     return [Result(dev["name"], "credentials", WARN, "stored copy", note)] if note else []
 
 
+NO_VENDOR = "No vendor chosen. Edit the device to choose one. Until then only its ping and port checks run."
+
+
 def run_one(dev, thresholds, opts=None):
     opts = opts or db.runtime_options()
     opts = {**opts, "disabled": db.disabled_for(dev, opts.get("disabled", ()))}      # the device's own list of checks, if it has one
     pre = reachability(dev, opts) + stored_copy_note(dev)
+    if not dev.get("vendor"):                # imported without one: nothing knows how to sign in, so only what needs no sign-in
+        return pre + [Result(dev["name"], "vendor", NA, "", NO_VENDOR)] + custom.run_network(
+            dev, [c for c in custom.for_device(dev, opts.get("custom")) if c["kind"] in ("http", "tcp", "tls", "ping", "iperf")])
     attempts = 1 + max(0, int(opts.get("retries", 0)))
     for attempt in range(1, attempts + 1):
         try:

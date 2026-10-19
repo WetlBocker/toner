@@ -83,17 +83,18 @@ print("== saving")
 r = SI.save(f, pw)
 saved = {s["name"]: s for s in sessions.list_sessions()}
 paths = sessions.folder_paths()
-check("the sessions are added in their folders", r["added"] == 6 and paths[saved["core-sw1.acero.example"]["folder_id"]] == "Acero Charter"
+check("the sessions are added in their folders", r["added"] == 7 and paths[saved["core-sw1.acero.example"]["folder_id"]] == "Acero Charter"
       and paths[saved["br-sw1"]["folder_id"]] == "Acero Charter/Branch;East", (r, {n: paths.get(s["folder_id"]) for n, s in saved.items()}))
 check("folders are created once", r["folders"] == 3 and len(sessions.list_folders()) == 3, (r, sessions.list_folders()))
-check("an SSH session without a user name is skipped, with the reason", any(b.startswith("nouser-switch") and "user name" in b for b in r["bad"]), r["bad"])
+check("an SSH session without a user name is added too, with the user name left blank (asked when connecting)", not r["bad"]
+      and saved["nouser-switch"]["username"] == "", r["bad"])
 check("passwords go to Credential Manager, and the session remembers it", r["passwords"] == 3 and sessions.password(saved["fw1.acero.example"]["id"]) == "Fw pass = with equals"
       and saved["fw1.acero.example"]["options"]["remember"] is True and not saved["lab-sw"]["options"]["remember"], r)
 check("no password is kept in the database", "Core!pass" not in open(db.db_path(), "rb").read().decode("latin-1"))
 check("Remote Desktop and Telnet keep their kind and port", saved["dc01.acero.example"]["kind"] == "rdp" and saved["dc01.acero.example"]["port"] == 3389
       and saved["old-router"]["kind"] == "telnet")
 r2 = SI.save(f, pw)
-check("importing the same file again adds nothing", r2["added"] == 0 and r2["existing"] == 6 and r2["folders"] == 0, r2)
+check("importing the same file again adds nothing", r2["added"] == 0 and r2["existing"] == 7 and r2["folders"] == 0, r2)
 clash = SI.Found("MobaXterm", [{"kind": "ssh", "name": "core-sw1.acero.example", "folder": ["Acero Charter"], "host": "10.1.1.99", "port": 22,
                                 "username": "netadmin", "options": {}}])
 r3 = SI.save(clash)
@@ -218,6 +219,8 @@ from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
 app = QApplication([])
 from ui import orgassign as _oa
 _oa.OrgAssignDialog.exec = lambda self: True     # the import step (asked when an import has folders): keep its starting choices
+from ui import vendorassign as _va
+_va.VendorAssignDialog.exec = lambda self: _va.SESSIONS_ONLY     # the vendor step: sessions only here (tests/test_moba_devices.py adds devices)
 import app as A
 A.apply_look(app)
 import ui.inventory as INV
@@ -237,8 +240,8 @@ picks[:] = [os.path.join(SP, "export.mobaconf"), pwfile]
 inv.import_file()
 check("it says what it found, in the agreed words, before importing", asked and asked[-1] == "Found 8 sessions in 3 folders: 5 SSH, 1 Remote Desktop, 1 Telnet. "
       "1 browser sessions are skipped (Toner has no web sessions). They go to Sessions, in the same folders. Import them?", asked[-1:])
-check("then the result, with the passwords", told and told[-1].startswith("Imported 6 sessions into Sessions (3 folders created, 0 already there skipped). "
-      "Passwords added for 3 SSH sessions.") and "Skipped, with reasons (1):" in told[-1], told[-1:])
+check("then the result, with the passwords", told and told[-1].startswith("Imported 7 sessions into Sessions (3 folders created, 0 already there skipped). "
+      "Passwords added for 3 SSH sessions.") and "Skipped" not in told[-1], told[-1:])
 check("the Sessions list shows them straight away, in their folders", w.sessions.tree.topLevelItemCount() >= 2
       and any(w.sessions.tree.topLevelItem(i).text(0).startswith("Acero Charter") for i in range(w.sessions.tree.topLevelItemCount())),
       [w.sessions.tree.topLevelItem(i).text(0) for i in range(w.sessions.tree.topLevelItemCount())])

@@ -6,6 +6,7 @@ why. Folders keep their structure; for MobaXterm the root folder every bookmark 
 Nothing here writes anything until save() is called. Passwords go only to Toner's vault (sessions.set_password)."""
 import os
 import re
+import sqlite3
 import xml.etree.ElementTree as ET
 from collections import Counter
 from dataclasses import dataclass, field
@@ -391,4 +392,87 @@ def _save(found, passwords):
             sessions.set_password(sid, pw)
             out["passwords"] += 1
     out["folders"] = len({f["id"] for f in sessions.list_folders()} - before)
+    return out
+
+
+# ---------------------------------------------------------------- the same entries as devices to monitor
+DEVICE_KINDS = ("ssh", "telnet", "rdp")       # VNC stays a session only
+
+
+def device_items(found):
+    """The entries that can also be devices, as [(index in found.items, item)]: SSH, Telnet and Remote Desktop with a usable
+    address (an invalid one is skipped, as it is for the session)."""
+    from core import nettools
+    out = []
+    for i, item in enumerate(found.items):
+        if item["kind"] not in DEVICE_KINDS:
+            continue
+        try:
+            nettools.check_host(item["host"])
+        except ValueError:
+            continue
+        out.append((i, item))
+    return out
+
+
+def first_vendor(item):
+    """What the vendor window starts with: Windows for a Remote Desktop session, else none (MobaXterm doesn't say)."""
+    return "windows" if item["kind"] == "rdp" else ""
+
+
+def device_password(item, stored):
+    """The stored password for an entry, for its device: its protocol and port ('ssh22:'), its protocol alone ('rdp:'), else
+    the line without a protocol."""
+    if not item.get("username"):
+        return ""
+    user, host = item["username"].lower(), item["host"].lower()
+    return (stored.get((item["kind"], str(item["port"]), user, host)) or stored.get((item["kind"], "", user, host))
+            or stored.get(("", "", user, host)) or "")
+
+
+def add_devices(items, passwords=None):
+    """Add entries to the device list of the organization being written to, in their folders. Each item is a session entry plus
+    'vendor' ('' = none yet: added anyway, to choose later) and optionally 'platform'. A device already there at the same
+    address is skipped. Returns {'added', 'existing', 'no_vendor', 'bad': [reasons]}."""
+    from core import db, nettools, vendors
+    from core.passvault import batch
+    out = {"added": 0, "existing": 0, "no_vendor": 0, "bad": []}
+    here = db._devices_here()
+    hosts = {(d.get("host") or "").lower() for d in here}
+    names = {d["name"].lower() for d in here}
+    with batch():
+        for item in items:
+            try:
+                host = nettools.check_host(item["host"])
+            except ValueError:
+                continue                                             # skipped as a session already, with its reason
+            if host.lower() in hosts:
+                out["existing"] += 1
+                continue
+            vendor = item.get("vendor") or ""
+            platform = item.get("platform") or ("winrm" if vendor == "windows" else vendors.default_platform(vendor))
+            port = int(item.get("port") or 0)
+            if item["kind"] != "ssh" or not vendor or vendors.get(vendor).get("kind") != "ssh" or port == 22:
+                port = 0                                             # the vendor's own port (Telnet and RDP ports are not how Toner monitors)
+            base = (item.get("name") or host).strip()
+            name, n = base, 2
+            while name.lower() in names:
+                name, n = f"{base} ({n})", n + 1
+            dev = {"name": name, "vendor": vendor, "host": host, "port": port, "platform": platform,
+                   "username": (item.get("username") or "").strip(), "site": "default", "verify_ssl": 0, "ha_expected": 0,
+                   "enabled": 1, "location": "", "details": "", "folder_id": None}
+            try:
+                if item.get("folder"):
+                    dev["folder_id"] = db.ensure_folder_path("/".join(item["folder"]))
+                db.save_device(dev)
+            except (ValueError, sqlite3.IntegrityError) as e:
+                out["bad"].append(f"{name}: {e}")
+                continue
+            pw = device_password(item, passwords or {})
+            if pw:
+                db.set_secret(db.secret_name(name), pw)
+            hosts.add(host.lower())
+            names.add(name.lower())
+            out["added"] += 1
+            out["no_vendor"] += 0 if vendor else 1
     return out

@@ -101,8 +101,6 @@ def validate(s):
         port = int(s.get("port") or DEFAULT_PORT[kind])
         if not 1 <= port <= 65535:
             raise ValueError("The port must be between 1 and 65535.")
-    if kind == "ssh" and not (s.get("username") or "").strip() and not s.get("device"):
-        raise ValueError("Enter the user name for this device.")
     if kind == "rdp":
         if o["fullscreen"] is False and not (320 <= int(o["width"]) <= 8192 and 200 <= int(o["height"]) <= 8192):
             raise ValueError("The window size must be between 320 x 200 and 8192 x 8192.")

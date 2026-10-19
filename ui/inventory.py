@@ -229,6 +229,8 @@ class DeviceDialog(QDialog):
             with db.within(dev.get("org")):
                 self.link_row.load(db.secret_name(dev["name"]))
             self.name.setText(dev["name"])
+            if not dev.get("vendor"):                         # imported without one: it stays so until a vendor is chosen
+                self.vendor.insertItem(0, "(no vendor)", "")
             self.vendor.setCurrentIndex(max(0, self.vendor.findData(vendors.family(dev["vendor"]))))
             self.host.setText(dev["host"])
             self.location.setCurrentText(dev.get("location") or "")
@@ -1819,6 +1821,14 @@ class InventoryTab(QWidget):
         by_org = {}
         for item, org in zip(found.items, picks):
             by_org.setdefault(org, []).append({**item, "folder": orgassign.strip_top(list(item["folder"]), org)})
+        as_devices = sessionimport.device_items(found)        # SSH, Telnet and Remote Desktop can be monitored devices too
+        answer, chosen = None, None
+        if as_devices:
+            from ui import vendorassign
+            rows = [{**item, "org": picks[i], "folder": orgassign.strip_top(list(item["folder"]), picks[i])} for i, item in as_devices]
+            answer, chosen = vendorassign.choose(rows, {n: sessionimport.device_password(row, passwords) for n, row in enumerate(rows)}, self)
+            if answer is None:
+                return
         r = {"added": 0, "existing": 0, "folders": 0, "passwords": 0, "bad": []}
         for org, items in by_org.items():                     # each organization gets only its own sessions
             with db.within(org):
@@ -1832,6 +1842,23 @@ class InventoryTab(QWidget):
         if passwords:
             text += f" Passwords added for {r['passwords']:,} SSH sessions."
         lines = [text]
+        if answer == "devices":
+            d = {"added": 0, "existing": 0, "no_vendor": 0}
+            by_org_dev = {}
+            for (i, item), (vendor, platform) in zip(as_devices, chosen):
+                by_org_dev.setdefault(picks[i], []).append({**item, "folder": orgassign.strip_top(list(item["folder"]), picks[i]),
+                                                           "vendor": vendor, "platform": platform})
+            for org, items in by_org_dev.items():
+                with db.within(org):
+                    part = sessionimport.add_devices(items, passwords)
+                for k in d:
+                    d[k] += part[k]
+                r["bad"] += part["bad"]
+            audit.log("devices imported", f"{found.source}: {d['added']} added, {d['no_vendor']} without a vendor")
+            lines.append(f"Added {d['added']:,} devices to the device list ({d['existing']:,} were already there, "
+                         f"{d['no_vendor']:,} without a vendor).")
+            self.refresh()
+            self.changed.emit()
         if r["bad"]:
             lines.append(f"\nSkipped, with reasons ({len(r['bad'])}):")
             lines += [f"  \u2022 {b}" for b in r["bad"][:12]] + ([f"  ...and {len(r['bad']) - 12} more"] if len(r["bad"]) > 12 else [])

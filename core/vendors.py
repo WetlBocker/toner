@@ -94,8 +94,13 @@ def from_file(vendor, platform):
 DEFAULT_PAGING = "terminal length 0"      # the Settings > Terminal default
 
 
+# A device imported before anyone said what it is (a MobaXterm session whose vendor wasn't detected): it is kept and
+# edited like any other, with a user name and password, and only the checks that need no sign-in run until a vendor is chosen.
+NO_VENDOR = dict(name="", kind="", secret="Password", username=True, site="", ha=False, platforms=[], paging="")
+
+
 def get(vendor):
-    return VENDORS.get(vendor, {})
+    return VENDORS.get(vendor) or (NO_VENDOR if not vendor else {})
 
 
 def paging_command(vendor, configured):

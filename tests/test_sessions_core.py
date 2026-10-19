@@ -33,12 +33,13 @@ check("five kinds, with their usual ports", [k for k, *_ in sessions.KINDS] == [
 chi, den = sessions.create_folder("Chicago"), sessions.create_folder("Denver")
 ssh = {"name": "Core switch", "kind": "ssh", "host": "10.0.0.2", "port": 22, "username": "admin", "folder_id": chi}
 for s, word, why in (({**ssh, "name": ""}, "name", "no name"), ({**ssh, "kind": "ftp"}, "type", "unknown type"), ({**ssh, "host": "http://x"}, "host", "bad host"),
-                     ({**ssh, "port": 70000}, "port", "bad port"), ({**ssh, "username": ""}, "user name", "no user"),
+                     ({**ssh, "port": 70000}, "port", "bad port"),
                      ({"name": "r", "kind": "rdp", "host": "pc1", "options": {"fullscreen": False, "width": 10, "height": 10}}, "window size", "tiny RDP window"),
                      ({"name": "s", "kind": "serial", "host": ""}, "serial port", "no serial port"), ({"name": "s", "kind": "serial", "host": "printer"}, "not a COM port", "nonsense port"),
                      ({"name": "s", "kind": "serial", "host": "COM3", "options": {"baud": 5}}, "baud", "silly baud rate"), ({"name": "s", "kind": "serial", "host": "COM3", "options": {"parity": "Q"}}, "not valid", "bad parity")):
     check(f"refused: {why}", refused(s, word), s)
 check("an inventory-linked SSH session needs no user name of its own", sessions.validate({**ssh, "username": "", "device": "core-sw1"}) == "Core switch")
+check("nor does any SSH session (imported without one): connecting asks for it", sessions.validate({**ssh, "username": ""}) == "Core switch")
 a = sessions.save(ssh)
 check("saved, listed with defaults filled in", sessions.get(a)["name"] == "Core switch" and sessions.get(a)["options"] == {"paging": True, "remember": False} and sessions.get(a)["folder_id"] == chi and sessions.get(a)["port"] == 22)
 t = sessions.save({"name": "Old router", "kind": "telnet", "host": "10.0.0.9", "port": 0})
