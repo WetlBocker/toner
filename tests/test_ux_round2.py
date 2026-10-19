@@ -247,8 +247,8 @@ check("the Inventory in Global has a branch per organization", top == ["Global  
 ORGS.set_archived(a_org, True); w.refresh_orgs(); app.processEvents()
 check("an archived organization leaves the switcher", [w.tabs.org.itemText(i) for i in range(w.tabs.org.count())] == ["Global", "Globex Law"])
 ORGS.set_archived(a_org, False); w.refresh_orgs()
-w.tabs.setCollapsed(True); check("folded, the sidebar hides the switcher", not w.tabs.org.isVisibleTo(w.tabs.side))
-w.tabs.setCollapsed(False); check("unfolded, it is back", w.tabs.org.isVisibleTo(w.tabs.side))
+w.tabs.setCollapsed(True); check("with icons only, the switcher stays", w.tabs.org.isVisibleTo(w.tabs.side))
+w.tabs.setCollapsed(False); check("with the names, it is still there", w.tabs.org.isVisibleTo(w.tabs.side))
 
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

@@ -22,7 +22,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QMessageBox, QTableWidget, QTableWidgetItem
 app = QApplication([])
 import app as A
-from ui import theme, widgets
+from ui import nav, theme, widgets
 QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes)
 
 print("== the colours")
@@ -45,7 +45,7 @@ for i, (n, v) in enumerate((("sw1", "cisco"), ("fw1", "fortinet"), ("dc1", "wind
 db.save_run([Result("sw1", "cpu", "OK", "5%"), Result("fw1", "wan links", "FAIL", "1/2", "down: wan2"), Result("dc1", "disk C:", "WARN", "86% used", "high"), Result("dc1", "cpu", "OK", "5%")])
 A.apply_look(app)
 w = A.Main(); w.resize(1300, 820); w.show(); app.processEvents()
-check("the window starts in the standard look", not theme.is_ops() and w.tabs.side.width() == 208 and w.tabs.list.item(0).sizeHint().height() == 42)
+check("the window starts in the standard look", not theme.is_ops() and w.tabs.side.maximumHeight() == nav.BAR_HEIGHT and w.tabs.list.item(0).sizeHint().height() == nav.BAR_HEIGHT - 1)
 w.go("Inventory"); w.inventory.table.expandAll(); app.processEvents()
 dev_item = next(it for it in w.inventory._all_items() if w.inventory.kind_of(it)[0] == "device")
 h_std = w.inventory.table.visualItemRect(dev_item).height()
@@ -60,7 +60,7 @@ names = [n for t, rows in w.settings.pending_changes() if t == "Appearance" for 
 check("the change shows in the list of what will be saved", any(n == "Style" for n in names), names)
 w.settings.save(); app.processEvents()
 check("saving applies it at once, with no restart", db.get_setting("ui_style") == "Ops console" and theme.is_ops() and "Cascadia Mono" in app.styleSheet())
-check("the sidebar is narrower and its rows tighter", w.tabs.side.width() == 176 and w.tabs.list.item(0).sizeHint().height() == 32, (w.tabs.side.width(), w.tabs.list.item(0).sizeHint().height()))
+check("the top bar is lower in the console style", w.tabs.side.maximumHeight() == nav.BAR_HEIGHT_OPS and w.tabs.list.item(0).sizeHint().height() == nav.BAR_HEIGHT_OPS - 1, (w.tabs.side.maximumHeight(), w.tabs.list.item(0).sizeHint().height()))
 check("the text is a point smaller", app.font().pointSize() == font_std - 1, (font_std, app.font().pointSize()))
 w.go("Inventory"); w.inventory.table.expandAll(); app.processEvents()
 dev_item = next(it for it in w.inventory._all_items() if w.inventory.kind_of(it)[0] == "device")
@@ -91,7 +91,7 @@ img_ops = t.grab().toImage()
 db.set_setting("ui_style", "Standard"); w.settings_applied(); app.processEvents()
 img_std = t.grab().toImage()
 check("it is drawn differently in the two looks (a flat tag, not a round pill)", img_ops != img_std and not theme.is_ops())
-check("and switching back restores the standard sidebar and rows", w.tabs.side.width() == 208 and w.tabs.list.item(0).sizeHint().height() == 42 and app.font().pointSize() == font_std)
+check("and switching back restores the standard top bar", w.tabs.side.maximumHeight() == nav.BAR_HEIGHT and w.tabs.list.item(0).sizeHint().height() == nav.BAR_HEIGHT - 1 and app.font().pointSize() == font_std)
 
 print("== from the search (Ctrl+K)")
 w.open_palette(); ents = {e[0]: e[2] for e in w.palette.entries}; w.palette.close()
@@ -101,7 +101,7 @@ check("choosing it switches at once and the Settings page follows", theme.is_ops
 w.open_palette(); ents = {e[0]: e[2] for e in w.palette.entries}; w.palette.close()
 check("and then offers the way back", "Style: Standard" in ents and "Style: Ops console" not in ents)
 ents["Style: Standard"](); app.processEvents()
-check("which restores the standard look", not theme.is_ops() and w.tabs.side.width() == 208)
+check("which restores the standard look", not theme.is_ops() and w.tabs.side.maximumHeight() == nav.BAR_HEIGHT)
 
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

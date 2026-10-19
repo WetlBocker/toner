@@ -334,8 +334,8 @@ print("== in the main window")
 w = A.Main()
 names = [w.tabs.tabText(i) for i in range(w.tabs.count())]
 check("About is the last section, after Settings", names[-2:] == ["Settings", "About"])
-w.about.update_available.emit("9.9.9"); check("an available update puts a dot on About", "●" in w.tabs.list.item(len(names) - 1).text() and w.tabs.tabText(len(names) - 1) == "About")
-w.about.update_cleared.emit(); check("and it goes away again", "●" not in w.tabs.list.item(len(names) - 1).text())
+w.about.update_available.emit("9.9.9"); check("an available update puts a dot on About", ("●" in w.tabs.list.item(len(names) - 1).text() or "new" in w.tabs.list.item(len(names) - 1).toolTip()) and w.tabs.tabText(len(names) - 1) == "About")
+w.about.update_cleared.emit(); check("and it goes away again", "●" not in w.tabs.list.item(len(names) - 1).text() and "new" not in w.tabs.list.item(len(names) - 1).toolTip())
 w.open_palette(); texts = [w.palette.list.item(i).text() for i in range(w.palette.list.count())] if hasattr(w.palette, "list") else []
 check("it is listed in the palette", any("Check for updates" in t for t in texts) or not texts, texts[:5])
 w.go("About"); check("Go to About works", w.tabs.currentWidget() is w.about)

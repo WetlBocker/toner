@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QBoxLayout, QChe
 import html
 
 from core import acks, audit, backup, db, display, fleet, maintenance, notify, reports, scope, vendors
-from ui import theme
+from ui import icons, theme
 from ui.widgets import EmptyHint, StatusDelegate
 from ui import status as st
 
@@ -23,30 +23,47 @@ class Card(QFrame):
         self.color_key = color_key
         self.value = QLabel("0")
         f = self.value.font()
-        f.setPointSizeF(f.pointSizeF() * 2.4)
+        f.setPointSizeF(f.pointSizeF() * 2.8)
         f.setBold(True)
         self.value.setFont(f)
         self.title = QLabel(title)
         self.title.setProperty("muted", True)
+        tf = self.title.font()                          # a semibold heading in capitals, as on Demarc's tiles
+        tf.setWeight(QFont.Weight.DemiBold)
+        tf.setCapitalization(QFont.Capitalization.AllUppercase)
+        self.title.setFont(tf)
+        self.mark = QLabel()                            # the status icon before the heading (OK, WARN, FAIL cards)
+        self.mark.setFixedSize(16, 16)
+        self.mark.setVisible(False)
         self.sub = QLabel("")
         self.sub.setProperty("muted", True)
         self.sub.setWordWrap(True)                      # a long caption wraps instead of making the card wider
         self.title.setWordWrap(True)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(18, 14, 18, 14)
+        lay.setContentsMargins(18, 12, 18, 12)
         lay.setSpacing(2)
-        lay.addWidget(self.title)
+        top = QHBoxLayout()
+        top.setSpacing(6)
+        top.addWidget(self.mark)
+        top.addWidget(self.title, 1)
+        lay.addLayout(top)
         lay.addWidget(self.value)
         lay.addWidget(self.sub)
 
     def set(self, value, sub="", active=True):
         self.value.setText(str(value))
         f = self.value.font()                              # big numbers in the standard look, a step smaller in the console look
-        f.setPointSizeF(QApplication.font().pointSizeF() * (1.9 if theme.is_ops() else 2.4))
+        f.setPointSizeF(QApplication.font().pointSizeF() * (2.2 if theme.is_ops() else 2.8))
         self.value.setFont(f)
         self.sub.setText(sub)
-        show = self.color_key and active and int(value or 0)
-        self.value.setStyleSheet(f"color: {st.ink(self.color_key)};" if show else "")
+        self.sub.setVisible(False)                          # Demarc's tiles have no caption line: it is kept in the tooltip
+        self._tip = self._tip if hasattr(self, "_tip") else self.toolTip()
+        self.setToolTip(self._tip + (f"\n{sub}" if sub else ""))
+        self.value.setStyleSheet("")                       # the number in the text colour, as on Demarc: the icon carries the status colour
+        icon = {"OK": "check", "WARN": "warn-fill", "FAIL": "fail-fill"}.get(self.color_key)
+        self.mark.setVisible(bool(icon))
+        if icon:
+            self.mark.setPixmap(icons.icon(icon, st.ink(self.color_key)).pixmap(16, 16))
 
     def mousePressEvent(self, e):
         self.clicked.emit()

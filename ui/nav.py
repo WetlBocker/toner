@@ -1,19 +1,28 @@
-"""Main window layout: a sidebar of sections on the left, the current section on the right.
+"""Main window layout: a top bar of sections (as in Demarc), with the current section centred below it.
 
 Offers the small part of QTabWidget's API that the rest of the app uses (addTab, setCurrentWidget,
 currentWidget, indexOf, count, tabText), so sections can be switched from code.
 """
-from PySide6.QtCore import QEvent, QSize, Qt, Signal
-from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import (QBoxLayout, QComboBox, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QScrollArea,
+from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtGui import QFont, QFontMetrics, QIcon
+from PySide6.QtWidgets import (QApplication, QComboBox, QStyleOptionViewItem, QHBoxLayout, QLabel, QListView, QListWidget, QListWidgetItem, QPushButton, QScrollArea,
                                QStackedWidget, QVBoxLayout, QWidget)
 from ui import icons, theme
 
 
 ITEM_HEIGHT = 36            # a row in a page list; Qt does not take the style sheet's padding into account by itself
-EXPANDED_WIDTH = 208        # the sidebar in full
-COLLAPSED_WIDTH = 68        # and as a strip of icons
 HEADING_HEIGHT = 44        # a group heading: the room is above it, so the heading sits close to its own items
+BAR_HEIGHT = 60             # the top bar
+BAR_HEIGHT_OPS = 50         # and in the console style
+CONTENT_WIDTH = 1200        # the widest a section gets, centred in the window (as Demarc's pages are)
+WIDE_SECTIONS = ("Sessions",)   # sections that use the whole window width (a terminal or a remote desktop needs the room)
+TAB_PAD = 10                # space each side of a section's icon and name (the style sheet's item padding)
+QT_MARGINS = 12             # what Qt adds round an item's icon and text by itself
+NAV_ICON = 18               # the icon before each section's name
+NAV_GAP = 8                 # between the icon and the name
+NAV_SCALE = 1.12            # the section names, a little larger than the page text
+LOGO = 34                   # the mark in the top bar
+ICON_TAB = 44               # a section shown as just its icon
 
 
 class NavStack(QWidget):
@@ -27,91 +36,83 @@ class NavStack(QWidget):
         super().__init__()
         self._names, self._icon_names = [], []
         self.leave_guard = None                    # (from index, to index) -> False to stay on the section being left
-        self.side = QWidget()
-        self.side.setObjectName("sidebar")
+        self._filling = False
+        self._level = 0                            # 0: brand, icons and names; 1: icons and names; 2: names only; 3: icons only. The window width decides (not stored)
+        self._badges = set()
+        self.side = QWidget()                      # the top bar
+        self.side.setObjectName("topbar")
         from ui import logo
         mark = QLabel()
-        mark.setPixmap(logo.pixmap(32, 2.0))
-        mark.setFixedSize(32, 32)
+        mark.setPixmap(logo.pixmap(LOGO, 2.0))
+        mark.setFixedSize(LOGO, LOGO)
         brand = QLabel(title)
         brand.setObjectName("brand")
-        head = QHBoxLayout()
-        head.setContentsMargins(6, 4, 0, 8)
-        head.setSpacing(10)
-        head.addWidget(mark)
-        head.addWidget(brand, 1)
-        self.list = QListWidget()
+        self.list = QListWidget()                  # the sections, side by side
         self.list.setObjectName("nav")
-        self.list.setIconSize(QSize(20, 20))
+        self.list.setFlow(QListView.Flow.LeftToRight)
+        self.list.setWrapping(False)
+        self.list.setSpacing(0)
+        self.list.setMovement(QListView.Movement.Static)
+        self.list.setIconSize(QSize(NAV_ICON, NAV_ICON))
+        self.list.setTextElideMode(Qt.TextElideMode.ElideNone)   # a name is never cut short: the bar drops icons, then names, first
         self.list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        side = QVBoxLayout(self.side)
-        side.setContentsMargins(12, 16, 12, 12)
-        side.addLayout(head)
+        self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.org = QComboBox()                    # the organization being looked at: every section follows it
         self.org.setObjectName("orgPicker")
         self.org.setToolTip("The organization every section shows. Global lists every organization.")
+        self.org.setMinimumWidth(150)
+        self.org.setMaximumWidth(240)
         self.org.currentIndexChanged.connect(lambda _i: None if self._filling else self.org_changed.emit(int(self.org.currentData() or 0)))
-        self._filling = False
-        side.addWidget(self.org)
-        side.addSpacing(6)
-        side.addWidget(self.list, 1)
-        self.quick = QPushButton("Search      Ctrl+K")                   # the command palette is easy to miss otherwise
+        self.quick = QPushButton()                                          # the command palette (Ctrl+K) is easy to miss otherwise
         self.quick.setProperty("ghost", True)
-        self.quick.setToolTip("Jump to a section, tool, device or action")
+        self.quick.setFixedWidth(36)
+        self.quick.setToolTip("Search   (Ctrl+K)\nJump to a section, tool, device or action")
         self.quick.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.quick.clicked.connect(self.search_requested)
-        self.fold = QPushButton()                                          # shrinks the sidebar to a strip of icons, and back
+        self.fold = QPushButton()                                          # shows the sections as icons only, and back
         self.fold.setProperty("ghost", True)
         self.fold.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.fold.setFixedWidth(36)
         self.fold.clicked.connect(lambda: self.setCollapsed(not self._collapsed))
-        self.bottom = QBoxLayout(QBoxLayout.Direction.LeftToRight)
-        self.bottom.setSpacing(6)
-        self.bottom.addWidget(self.quick, 1)
-        self.bottom.addWidget(self.fold)
-        side.addLayout(self.bottom)
+        bar = QHBoxLayout(self.side)
+        bar.setContentsMargins(16, 0, 16, 0)
+        bar.setSpacing(12)
+        bar.addWidget(mark)
+        bar.addWidget(brand)
+        bar.addSpacing(8)
+        bar.addWidget(self.list, 1)
+        bar.addWidget(self.org)
+        bar.addWidget(self.quick)
+        bar.addWidget(self.fold)
         self.stack = QStackedWidget()
-        lay = QHBoxLayout(self)
+        self.stack.setMaximumWidth(CONTENT_WIDTH)
+        body = QHBoxLayout()                       # the section in the middle, as wide as it may be; the rest of the width is margin
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
+        body.addStretch(1)
+        body.addWidget(self.stack, 100)
+        body.addStretch(1)
+        lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
         lay.addWidget(self.side)
-        lay.addWidget(self.stack, 1)
+        lay.addLayout(body, 1)
         self.list.currentRowChanged.connect(self._row_changed)
-        self.list.installEventFilter(self)             # a short window squeezes the rows rather than hiding the last sections
         self._brand = brand
-        self._badges = set()
         self.setCollapsed(False)
 
-    ROW_MIN = 28
-
     @staticmethod
-    def expanded_width():
-        return 176 if theme.is_ops() else EXPANDED_WIDTH
+    def bar_height():
+        return BAR_HEIGHT_OPS if theme.is_ops() else BAR_HEIGHT
 
-    @staticmethod
-    def row_height():
-        return 32 if theme.is_ops() else 42
-
-    def eventFilter(self, obj, event):
-        if obj is self.list and event.type() == QEvent.Type.Resize:
-            self._fit_rows(event.size().height())
-        return super().eventFilter(obj, event)
-
-    def _fit_rows(self, height=None):
-        """The sections share the height there is: 42 px each when it all fits, less (down to 30) in a short window."""
-        n = self.list.count()
-        if not n:
-            return
-        if height is None and not self.list.isVisible():
-            return                                     # not laid out yet: the first resize does it
-        avail = (self.list.height() if height is None else height) - 6
-        h = max(self.ROW_MIN, min(self.row_height(), avail // n))
-        for i in range(n):
-            if self.list.item(i).sizeHint().height() != h:
-                self.list.item(i).setSizeHint(QSize(0, h))
-
+    # ---------- what the top bar shows
     def collapsed(self):
         return self._collapsed
+
+    def _icons_only(self):
+        """Only icons show, either because that was chosen (Ctrl+B) or because the names do not fit the window."""
+        return self._collapsed or self._level >= 3
 
     def set_orgs(self, orgs, current=0):
         """[(id, name, colour)]: the organizations besides Global (archived ones are not offered). Hidden while there are none."""
@@ -127,57 +128,81 @@ class NavStack(QWidget):
             self.org.addItem(dot(colour), name, oid)
         self.org.setCurrentIndex(max(0, self.org.findData(current)))
         self._filling = False
-        self.org.setVisible(bool(orgs) and not self._collapsed)
+        self.org.setVisible(bool(orgs))
+        self._fit_tabs()
 
     def setCollapsed(self, on):
-        """The sidebar as a strip of icons (names show as tooltips) or in full."""
+        """The sections as icons only (names show as tooltips) or with their names."""
         on = bool(on)
         changed = on != getattr(self, "_collapsed", None)
         self._collapsed = on
-        self.side.setFixedWidth(COLLAPSED_WIDTH if on else self.expanded_width())
-        self._brand.setVisible(not on)
-        if hasattr(self, "org"):
-            self.org.setVisible(not on and self.org.count() > 1)
-        self.bottom.setDirection(QBoxLayout.Direction.TopToBottom if on else QBoxLayout.Direction.LeftToRight)
-        if on:
-            self.fold.setMinimumWidth(0)
-            self.fold.setMaximumWidth(16777215)                           # the strip: as wide as the strip
-        else:
-            self.fold.setFixedWidth(36)                                   # beside Search: just the icon
-        self._fit_quick()
-        self.fold.setToolTip("Show the sidebar in full   (Ctrl+B)" if on else "Collapse the sidebar   (Ctrl+B)")
-        self.quick.setToolTip("Search   (Ctrl+K)\nJump to a section, tool, device or action" if on else "Jump to a section, tool, device or action")
-        for i, name in enumerate(self._names):
-            self._label(i)
-        self.restyle()
+        self._apply_mode()
         if changed:
             self.collapsed_changed.emit(on)
 
-    QUICK_TEXTS = ("Search      Ctrl+K", "Search   Ctrl+K", "Search  Ctrl+K", "Search")
+    def _apply_mode(self):
+        """Show the names or just the icons, in the sections and the fold button."""
+        self.side.setFixedHeight(self.bar_height())
+        self.list.setFixedHeight(self.bar_height() - 1)
+        self.fold.setToolTip("Show the sidebar in full   (Ctrl+B)" if self._collapsed else "Collapse the sidebar   (Ctrl+B)")
+        self._brand.setVisible(self._level < 1)
+        for i in range(len(self._names)):
+            self._label(i)
+        self.restyle()
 
-    def _fit_quick(self):
-        """The Search button's words, as roomy as fit beside the collapse button (system fonts differ in width), so they are
-        never cut off."""
-        if self._collapsed:
-            self.quick.setText("")
-            return
-        texts = self.QUICK_TEXTS[1:] if theme.is_ops() else self.QUICK_TEXTS
-        m = self.side.layout().contentsMargins()
-        room = self.expanded_width() - m.left() - m.right() - self.bottom.spacing() - self.fold.maximumWidth()
-        fm = self.quick.fontMetrics()
-        self.quick.setText(texts[0])
-        pad = self.quick.sizeHint().width() - fm.horizontalAdvance(texts[0])      # the button's own padding and frame
-        self.quick.setText(next((t for t in texts if fm.horizontalAdvance(t) + pad <= room), texts[-1]))
-        self.quick.setToolTip("Jump to a section, tool, device or action" if "Ctrl+K" in self.quick.text()
-                              else "Search   (Ctrl+K)\nJump to a section, tool, device or action")
+    def _tab_width(self, i):
+        if self._icons_only():
+            return ICON_TAB
+        f = QFont(self.list.font())
+        f.setBold(True)                            # measured in bold, so the selected section does not change the layout
+        text = self._names[i] + ("   ●" if i in self._badges else "")
+        bold_extra = QFontMetrics(f).horizontalAdvance(text) - QFontMetrics(self.list.font()).horizontalAdvance(text)
+        mine = QFontMetrics(f).horizontalAdvance(text) + (NAV_ICON + NAV_GAP if self._level < 2 else 0) + 2 * TAB_PAD + QT_MARGINS
+        try:                                       # what Qt itself needs for the item, style sheet padding and all
+            item = self.list.item(i)
+            keep = item.sizeHint()
+            item.setSizeHint(QSize())
+            opt = QStyleOptionViewItem()
+            self.list.initViewItemOption(opt)
+            qt = self.list.itemDelegate().sizeHint(opt, self.list.indexFromItem(item)).width() + bold_extra
+            item.setSizeHint(keep)
+        except Exception:
+            qt = 0
+        return max(mine, qt)
 
     def _label(self, i):
-        """What row i shows: its name, and a dot after it when something is new (the dot is on the icon when only icons show)."""
+        """What section i shows: its name, and a dot after it when something is new (the dot is on the icon when only icons show)."""
         item = self.list.item(i)
         dot = i in self._badges
-        item.setText("" if self._collapsed else self._names[i] + ("   ●" if dot else ""))
-        tip = self._names[i] + ("   (new)" if dot and self._collapsed else "")
+        icons_only = self._icons_only()
+        item.setText("" if icons_only else self._names[i] + ("   ●" if dot else ""))
+        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        item.setSizeHint(QSize(self._tab_width(i), self.bar_height() - 1))
+        tip = self._names[i] + ("   (new)" if dot and icons_only else "")
         item.setToolTip(tip + (f"   (Ctrl+{i + 1})" if i < 9 else ""))
+
+    def _fit_tabs(self):
+        """The brand and the names while they fit the window width, then the names, then icons only. The same answer for the same
+        width, whatever is shown now."""
+        if not self._names:
+            return
+        f = QFont(self.list.font())
+        f.setBold(True)
+        fm = QFontMetrics(f)
+        names = sum(fm.horizontalAdvance(n + ("   ●" if i in self._badges else "")) + 2 * TAB_PAD + QT_MARGINS for i, n in enumerate(self._names))
+        with_icons = names + (NAV_ICON + NAV_GAP) * len(self._names)
+        brand = QFontMetrics(self._brand.font()).horizontalAdvance(self._brand.text()) + 12
+        org = 150 if not self.org.isHidden() else 0                    # the switcher is at least this wide
+        fixed = 32 + LOGO + 36 + 36 + org + 92                           # margins, logo, Search, fold, switcher and the gaps between
+        w = self.width()
+        level = 0 if fixed + brand + with_icons <= w else 1 if fixed + with_icons <= w else 2 if fixed + names <= w else 3
+        if level != self._level:
+            self._level = level
+            self._apply_mode()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._fit_tabs()
 
     def _row_changed(self, row):
         if row < 0:
@@ -188,6 +213,7 @@ class NavStack(QWidget):
             self.list.setCurrentRow(was)
             self.list.blockSignals(False)
             return
+        self.stack.setMaximumWidth(16777215 if self._names[row] in WIDE_SECTIONS else CONTENT_WIDTH)
         self.stack.setCurrentIndex(row)
         self.currentChanged.emit(row)
 
@@ -197,12 +223,11 @@ class NavStack(QWidget):
             widget.layout().setSpacing(12)
         self.stack.addWidget(widget)
         item = QListWidgetItem(label)
-        item.setSizeHint(QSize(0, 42))
         self.list.addItem(item)
         self._names.append(label)
         self._icon_names.append(icon_name)
-        self._fit_rows()
         self._label(self.list.count() - 1)
+        self._fit_tabs()
         self.restyle()
         if self.list.currentRow() < 0:
             self.list.setCurrentRow(0)
@@ -213,23 +238,32 @@ class NavStack(QWidget):
         if i >= 0:
             (self._badges.add if on else self._badges.discard)(i)
             self._label(i)
+            self._fit_tabs()
             self.restyle()
 
     def restyle(self):
-        """Re-tint the icons after the theme or accent changed."""
+        """Re-tint the icons and re-measure the names after the theme, accent or text size changed."""
         t = theme.current()
         if not t:
             return
-        if not self._collapsed:
-            self.side.setFixedWidth(self.expanded_width())              # the console style has a narrower sidebar
-            self._fit_quick()
-        self._fit_rows()
+        self.side.setFixedHeight(self.bar_height())
+        self.list.setFixedHeight(self.bar_height() - 1)
+        icons_only = self._icons_only()
+        f = QFont(QApplication.font())                         # the section names a little larger than the page text
+        f.setPointSizeF(f.pointSizeF() * NAV_SCALE)
+        self.list.setFont(f)
         for i, name in enumerate(self._icon_names):
-            if name:
-                self.list.item(i).setIcon(icons.icon_with_dot(name, t.get("icon", t["muted"]), t["accent"]) if self._collapsed and i in self._badges
-                                          else icons.icon(name, t.get("icon", t["muted"]), t["accent"]))
+            if not name or (self._level == 2 and not icons_only):   # short of room: the names without their icons
+                self.list.item(i).setIcon(QIcon())
+            elif icons_only and i in self._badges:             # the dot is on the icon when the name (and its dot) is hidden
+                self.list.item(i).setIcon(icons.icon_with_dot(name, t.get("icon", t["muted"]), t["accent"]))
+            else:                                              # the icon before the name; tinted in the accent on the current section
+                self.list.item(i).setIcon(icons.icon(name, t.get("icon", t["muted"]), t["accent"]))
+            self._label(i)                                     # measured after the icon is set, so its room is counted
+        if self._names:
+            self._fit_tabs()
         self.fold.setIcon(icons.icon("panel", t.get("icon", t["muted"]), t["text"]))
-        self.quick.setIcon(icons.icon("search", t.get("icon", t["muted"]), t["text"]) if self._collapsed else QIcon())
+        self.quick.setIcon(icons.icon("search", t.get("icon", t["muted"]), t["text"]))
 
     def count(self):
         return self.stack.count()

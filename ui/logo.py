@@ -1,44 +1,47 @@
-"""The Toner logo: a tone probe (the tool used to trace cables) sending out signal waves. Drawn in code, so it is
-sharp at every size and there is no image file to ship; `python -m ui.logo` writes assets/toner.png and toner.ico."""
-import math
+"""The Toner logo, 4C Midnight: a white RJ45 plug on deep navy, one cyan pin, and two cyan signal arcs above the latch.
+
+Drop-in replacement for ui/logo.py with the same functions (paint, pixmap, icon, write_ico), so nothing that imports it
+changes. Drawn in code, so it is sharp at every size. `python -m ui.logo` writes assets/toner.png and toner.ico.
+At 24 px and below the five thin pins become three thick ones and the strokes are heavier, so the icon stays readable.
+"""
 import os
 import struct
 
 from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QPointF, QRectF, Qt
-from PySide6.QtGui import QBrush, QColor, QIcon, QLinearGradient, QPainter, QPen, QPixmap
+from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 
-TOP, BOTTOM, SPARK = "#3b82f6", "#1e3a8a", "#fbbf24"      # blue to deep blue, with an amber tone at the probe tip
+NAVY, TONE, PLUG = "#0b1b2b", "#22d3ee", "#ffffff"
 SIZES = (16, 20, 24, 32, 40, 48, 64, 128, 256)
 
 
 def paint(p, size):
-    """Draw the logo into a size x size square."""
-    u = size / 100.0
-    p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    g = QLinearGradient(0, 0, size, size)
-    g.setColorAt(0, QColor(TOP))
-    g.setColorAt(1, QColor(BOTTOM))
-    p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(QBrush(g))
-    p.drawRoundedRect(QRectF(0, 0, size, size), 24 * u, 24 * u)
-
+    """Draw the logo into a size x size square (a 120 x 120 grid scaled to fit)."""
+    u = size / 120.0
     small = size <= 24
-    tip = QPointF(43 * u, 57 * u)
-    # the probe: a thick rounded handle running down and to the left from the tip
-    p.setPen(QPen(QColor("#ffffff"), (17 if small else 13) * u, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-    p.drawLine(QPointF(17 * u, 83 * u), tip)
-    # the signal: arcs spreading up and to the right, fading as they travel
-    radii, alphas = ((19, 34), (255, 255)) if small else ((19, 31, 43), (255, 200, 140))
-    width = (9 if small else 6.5) * u
-    for r, a in zip(radii, alphas):
-        c = QColor("#ffffff")
-        c.setAlpha(a)
-        p.setPen(QPen(c, width, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-        p.drawArc(QRectF(tip.x() - r * u, tip.y() - r * u, 2 * r * u, 2 * r * u), 8 * 16, 74 * 16)
-    # the tone itself
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
     p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(QColor(SPARK))
-    p.drawEllipse(tip, (9 if small else 8) * u, (9 if small else 8) * u)
+    p.setBrush(QColor(NAVY))
+    p.drawRoundedRect(QRectF(0, 0, size, size), 27 * u, 27 * u)
+
+    # signal arcs: the upper half of two circles centred on the latch
+    pen = QPen(QColor(TONE), (9 if small else 6) * u, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
+    p.setPen(pen)
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    for r in ((19,) if small else (9, 19)):
+        p.drawArc(QRectF(60 * u - r * u, 34 * u - r * u, 2 * r * u, 2 * r * u), 0, 180 * 16)
+
+    # the plug: latch, then body
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor(PLUG))
+    p.drawRoundedRect(QRectF(44 * u, 42 * u, 32 * u, 16 * u), 5 * u, 5 * u)
+    p.drawRoundedRect(QRectF(28 * u, 54 * u, 64 * u, 52 * u), 10 * u, 10 * u)
+
+    # the pins: the middle one is the tone
+    pins = (44, 58, 72) if small else (42, 50, 58, 66, 74)
+    w = (7 if small else 4) * u
+    for x in pins:
+        p.setBrush(QColor(TONE if x == 58 else NAVY))
+        p.drawRoundedRect(QRectF((x - (1.5 if small else 0)) * u, 66 * u, w, 28 * u), w / 2, w / 2)
 
 
 def pixmap(size, ratio=1.0):
@@ -59,7 +62,7 @@ def icon():
 
 
 def _png(size):
-    data, buf = QByteArray(), None
+    data = QByteArray()
     buf = QBuffer(data)
     buf.open(QIODevice.OpenModeFlag.WriteOnly)
     pixmap(size).save(buf, "PNG")

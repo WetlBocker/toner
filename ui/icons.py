@@ -18,6 +18,8 @@ PATHS = {
     "sessions": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/>',
     "automation": '<path d="M13 3L5 14h6l-1 7 8-11h-6z"/>',
     "about": '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
+    "warn": '<path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17h.01"/>',
+    "fail": '<circle cx="12" cy="12" r="9"/><path d="M9 9l6 6M15 9l-6 6"/>',
     "check": '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
     "panel": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/>',
     "search": '<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>',
@@ -29,7 +31,31 @@ PATHS = {
 }
 
 
+# Solid versions (a filled shape with the mark cut out of it), for the status tiles: name -> (shape, mark)
+FILLED = {
+    "ok-fill": ('<circle cx="12" cy="12" r="10"/>', '<path d="M7.5 12.5l3 3 6-6.5"/>'),
+    "warn-fill": ('<path d="M12 2.5l10.5 18.5h-21z"/>', '<path d="M12 9.5v5M12 17.5h.01"/>'),
+    "fail-fill": ('<circle cx="12" cy="12" r="10"/>', '<path d="M8.5 8.5l7 7M15.5 8.5l-7 7"/>'),
+}
+
+
+def _render_filled(name, color, size):
+    shape, mark = FILLED[name]
+    img = QImage(size, size, QImage.Format.Format_ARGB32_Premultiplied)
+    img.fill(Qt.GlobalColor.transparent)
+    p = QPainter(img)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    head = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" '
+    QSvgRenderer(QByteArray((head + f'fill="{color}" stroke="{color}" stroke-width="1.5" stroke-linejoin="round">{shape}</svg>').encode())).render(p, QRectF(0, 0, size, size))
+    p.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationOut)       # the mark is cut out of the shape
+    QSvgRenderer(QByteArray((head + f'fill="none" stroke="#000000" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">{mark}</svg>').encode())).render(p, QRectF(0, 0, size, size))
+    p.end()
+    return QPixmap.fromImage(img)
+
+
 def _render(name, color, size):
+    if name in FILLED:
+        return _render_filled(name, color, size)
     svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="{color}" '
            f'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">{PATHS[name]}</svg>')
     img = QImage(size, size, QImage.Format.Format_ARGB32_Premultiplied)
