@@ -4,6 +4,8 @@ import os as _os, sys as _sys, tempfile as _tmp
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+if _sys.platform == "win32":          # the offscreen platform finds no fonts on Windows by itself, and the top bar fits its names by their width
+    _os.environ.setdefault("QT_QPA_FONTDIR", _os.path.join(_os.environ.get("WINDIR", r"C:\Windows"), "Fonts"))
 import os, sys, time
 SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\sidebar%d.db").replace("\\", os.sep) % int(time.time()); os.environ["APPDATA"] = SP
 from core import db
@@ -30,7 +32,9 @@ print("== the top bar shows icons only")
 w = A.Main(); w.resize(1900, 760); w.show(); app.processEvents()
 n = w.tabs
 check("it starts with the icons and names", not n.list.item(0).icon().isNull() and not n.collapsed() and n.side.maximumHeight() == nav.BAR_HEIGHT and n.list.item(0).text() == "Overview")
-check("the sections sit in a bar across the top, the page below it", n.side.y() < w.dashboard.y() and n.side.width() >= w.width() - 2)
+from PySide6.QtCore import QPoint
+check("the sections sit in a bar across the top, the page below it", n.side.mapTo(w, QPoint(0, 0)).y() < w.dashboard.mapTo(w, QPoint(0, 0)).y()
+      and n.side.width() >= w.width() - 2)
 check("the page is centred, no wider than the content width", w.dashboard.width() <= nav.CONTENT_WIDTH)
 n.fold.click(); app.processEvents()
 check("the button shows icons only", n.collapsed() and n._icons_only())
@@ -47,7 +51,7 @@ check("the tooltip says something is new", "new" in n.list.item(i).toolTip() and
 n.setCollapsed(False)
 check("with the names, the dot is after the name again", n.list.item(i).text().endswith("●") and n.list.item(i).text().startswith("About") and "new" not in n.list.item(i).toolTip())
 n.setBadge(w.about, False); check("and it clears", n.list.item(i).text() == "About")
-check("the names are back", n.list.item(0).text() == "Overview" and n.quick.toolTip().startswith("Jump"))
+check("the names are back", n.list.item(0).text() == "Overview" and "Jump to a section" in n.quick.toolTip())
 check("and the stored choice", db.get_setting("sidebar_collapsed") is False)
 
 print("== a narrow window shows icons only by itself")

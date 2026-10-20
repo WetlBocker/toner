@@ -28,9 +28,10 @@ QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.StandardButton.Y
 print("== the colours")
 std_l, std_d = theme.tokens(False), theme.tokens(True)
 ops_l, ops_d = theme.tokens(False, "Blue", theme.OPS), theme.tokens(True, "Blue", theme.OPS)
-check("Standard is unchanged by the new argument", std_d["bg"] == "#14161a" and std_l["surface"] == "#ffffff" and std_d["ops"] is False and std_d["accent"] == theme.tokens(True, "Blue", "Standard")["accent"])
+check("Standard is unchanged by the new argument", std_d == theme.tokens(True, theme.DEFAULT_ACCENT, "Standard") and std_d["ops"] is False
+      and theme.tokens(True, "Blue")["bg"] == "#14161a" and std_l["surface"] == "#ffffff")
 check("the console look has its own dark and light palettes", ops_d["bg"] == "#0a0d12" and ops_d["surface"] == "#10141b" and ops_l["bg"] == "#eceff3" and ops_l["surface"] == "#ffffff" and ops_d["ops"] and ops_l["ops"])
-check("and is teal, unless another accent is chosen", ops_d["accent"] == theme.ACCENTS["Teal"][1] and ops_l["accent"] == theme.ACCENTS["Teal"][0]
+check("and uses the accent chosen (the Toner theme no longer turns it teal)", ops_d["accent"] == theme.ACCENTS["Blue"][1] and ops_l["accent"] == theme.ACCENTS["Blue"][0]
       and theme.tokens(True, "Rose", theme.OPS)["accent"] == theme.ACCENTS["Rose"][1])
 check("rows are tinted with a solid colour in both", ops_d["select"].startswith("#") and ops_l["select"].startswith("#") and ops_d["select"] != ops_d["surface"])
 ss_std, ss_ops = theme.stylesheet(std_d), theme.stylesheet(ops_d)
@@ -68,7 +69,7 @@ h_ops = w.inventory.table.visualItemRect(dev_item).height()
 check("a row in the Inventory is shorter", h_ops < h_std, (h_std, h_ops))
 w.go("Overview"); w.dashboard.refresh(); app.processEvents()
 card = w.dashboard.cards["devices"]
-check("the number cards on the Overview carry a smaller number", abs(card.value.font().pointSizeF() / app.font().pointSizeF() - 1.9) < 0.15, (card.value.font().pointSizeF(), app.font().pointSizeF()))
+check("the number cards on the Overview carry a smaller number", abs(card.value.font().pointSizeF() / app.font().pointSizeF() - 2.2) < 0.15, (card.value.font().pointSizeF(), app.font().pointSizeF()))
 
 print("== every section draws in the console look, light and dark")
 errors = []

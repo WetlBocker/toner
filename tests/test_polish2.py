@@ -5,6 +5,8 @@ import os as _os, sys as _sys, tempfile as _tmp
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+if _sys.platform == "win32":          # the offscreen platform finds no fonts on Windows by itself, and the top bar fits its names by their width
+    _os.environ.setdefault("QT_QPA_FONTDIR", _os.path.join(_os.environ.get("WINDIR", r"C:\Windows"), "Fonts"))
 import os, sys, time
 SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\pol%d.db").replace("\\", os.sep) % int(time.time()); os.environ["APPDATA"] = os.path.join(SP, "roamingpol%d" % int(time.time()))
 from core import db, display
@@ -68,16 +70,17 @@ from ui import status as st
 fr2 = folder_rows()
 check("it is coloured like the status", fr2["Zeta"].foreground(inv.STATUS).color().name() == st.ink("ERROR") and fr2["Acme"].foreground(inv.STATUS).color().name() == st.ink("FAIL"), fr2["Zeta"].foreground(inv.STATUS).color().name())
 
-print("== the sidebar fits the window")
-nav = w.tabs; h42 = {nav.list.item(i).sizeHint().height() for i in range(nav.list.count())}
-check("in a tall window every row is the full 42 px", h42 == {42}, h42)
+print("== the top bar fits the window")
+from ui import nav as navmod
+nav = w.tabs; tall = {nav.list.item(i).sizeHint().height() for i in range(nav.list.count())}
+check("every section is the height of the bar", tall == {navmod.BAR_HEIGHT - 1}, tall)
 w.resize(900, 560); app.processEvents(); app.processEvents()
-rows = [nav.list.item(i).sizeHint().height() for i in range(nav.list.count())]
-check("in a short one the rows are squeezed (not below 30) so the last sections stay in view", max(rows) < 42 and min(rows) >= 30 and sum(rows) <= nav.list.height(), (rows, nav.list.height()))
+rows = {nav.list.item(i).sizeHint().height() for i in range(nav.list.count())}
+check("a short window doesn't change that (the bar runs across the top)", rows == {navmod.BAR_HEIGHT - 1}, rows)
 last = nav.list.visualItemRect(nav.list.item(nav.list.count() - 1))
-check("About is inside the list", last.bottom() <= nav.list.viewport().height() + 2, (last, nav.list.viewport().height()))
+check("in a narrow window About is still inside the bar", last.right() <= nav.list.viewport().width() + 2, (last, nav.list.viewport().width()))
 w.resize(1300, 820); app.processEvents(); app.processEvents()
-check("and they spread out again", {nav.list.item(i).sizeHint().height() for i in range(nav.list.count())} == {42})
+check("and widening it again changes nothing", {nav.list.item(i).sizeHint().height() for i in range(nav.list.count())} == {navmod.BAR_HEIGHT - 1})
 
 print("== History and Configs")
 w.go("History"); app.processEvents(); app.processEvents()
