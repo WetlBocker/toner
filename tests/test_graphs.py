@@ -80,7 +80,12 @@ lock = open(os.path.join(root, "requirements.lock"), encoding="utf-8").read().sp
 check("the lock pins them, and colorama, which pyqtgraph needs", {"pyqtgraph==0.14.0", "numpy==2.5.3", "colorama==0.4.6"} <= set(lock))
 check("requirements.txt asks for pyqtgraph", "pyqtgraph>=0.14" in open(os.path.join(root, "requirements.txt"), encoding="utf-8").read())
 for script in ("build.ps1", "build_linux.sh"):
-    check(f"{script} bundles all of pyqtgraph", "--collect-all pyqtgraph" in open(os.path.join(root, "packaging", script), encoding="utf-8").read())
+    # pyqtgraph's own PyInstaller hook (in pyinstaller-hooks-contrib) brings its data and templates and leaves out its examples;
+    # --collect-all imported the examples too, which open a Qt window and crashed the Linux build (no display there)
+    check(f"{script} leaves pyqtgraph to its own hook", "pyqtgraph" not in open(os.path.join(root, "packaging", script), encoding="utf-8").read())
+import importlib.util
+hook = os.path.join(os.path.dirname(importlib.util.find_spec("_pyinstaller_hooks_contrib").origin), "stdhooks", "hook-pyqtgraph.py")
+check("that hook is there, and leaves out the examples", os.path.exists(hook) and "examples" in open(hook, encoding="utf-8").read())
 
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)
