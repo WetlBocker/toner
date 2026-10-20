@@ -125,7 +125,7 @@ def signature(page):
 class SettingsTab(QWidget):
     changed = Signal()                    # emitted after a successful save (or an import)
     orgs_changed = Signal()               # Settings > Organizations created, renamed, archived or removed one
-    look_preview = Signal(str, str)       # Appearance: (theme, accent) shown at once, before Save
+    look_preview = Signal(str)            # Appearance: the theme shown at once, before Save
     look_reset = Signal()                 # edits dropped (Cancel, Discard, reload): back to the saved look
 
     def __init__(self):

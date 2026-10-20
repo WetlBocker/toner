@@ -27,12 +27,11 @@ QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.StandardButton.Y
 
 print("== the colours")
 std_l, std_d = theme.tokens(False), theme.tokens(True)
-ops_l, ops_d = theme.tokens(False, "Blue", theme.OPS), theme.tokens(True, "Blue", theme.OPS)
-check("Standard is unchanged by the new argument", std_d == theme.tokens(True, theme.DEFAULT_ACCENT, "Standard") and std_d["ops"] is False
-      and theme.tokens(True, "Blue")["bg"] == "#14161a" and std_l["surface"] == "#ffffff")
-check("the console look has its own dark and light palettes", ops_d["bg"] == "#0a0d12" and ops_d["surface"] == "#10141b" and ops_l["bg"] == "#eceff3" and ops_l["surface"] == "#ffffff" and ops_d["ops"] and ops_l["ops"])
-check("and uses the accent chosen (the Toner theme no longer turns it teal)", ops_d["accent"] == theme.ACCENTS["Blue"][1] and ops_l["accent"] == theme.ACCENTS["Blue"][0]
-      and theme.tokens(True, "Rose", theme.OPS)["accent"] == theme.ACCENTS["Rose"][1])
+ops_l, ops_d = theme.tokens(False, theme.OPS), theme.tokens(True, theme.OPS)
+check("Standard is the default style", std_d == theme.tokens(True, "Standard") and std_d["ops"] is False and std_l["surface"] == "#ffffff")
+check("the console look has its own dark and light palettes", ops_d["bg"] == "#050e17" and ops_d["surface"] == "#08141f" and ops_l["bg"] == "#e8eef3"
+      and ops_l["surface"] == "#ffffff" and ops_d["bg"] != std_d["bg"] and ops_d["ops"] and ops_l["ops"])
+check("and the Toner theme's accent, the same as Standard", ops_d["accent"] == std_d["accent"] == theme.ACCENT[1] and ops_l["accent"] == theme.ACCENT[0])
 check("rows are tinted with a solid colour in both", ops_d["select"].startswith("#") and ops_l["select"].startswith("#") and ops_d["select"] != ops_d["surface"])
 ss_std, ss_ops = theme.stylesheet(std_d), theme.stylesheet(ops_d)
 check("only the console look has the compact rules", "Cascadia Mono" not in ss_std and "Cascadia Mono" in ss_ops and "padding: 1px 6px" in ss_ops)

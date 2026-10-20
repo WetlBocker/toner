@@ -83,7 +83,7 @@ DEFAULT_SETTINGS = {
     # automation (runs only while the app is open)
     "schedule_enabled": False, "schedule_minutes": 60, "schedule_groups": [], "schedule_on_start": False,
     # appearance
-    "theme": "System", "ui_style": "Standard", "font_size": 0, "accent": "Blue", "color_preset": "Default", "status_colors": {},
+    "theme": "System", "ui_style": "Standard", "font_size": 0, "color_preset": "Default", "status_colors": {},
     # terminal
     "term_font": "Consolas", "rdp_embedded": True, "term_font_size": 10, "term_scrollback": 5000, "term_scheme": "Dark",
     "paging_cmd": "terminal length 0",
@@ -903,7 +903,7 @@ def ensure_folder_path(path):
 # Settings: Global's apply everywhere; an organization's file holds only the ones it changes (Settings > ... while it is picked).
 # These are about this computer or the whole program, so they are always read from and written to the Global file:
 GLOBAL_ONLY = {"window_geometry", "sidebar_collapsed", "onboarding_done", "org_current",
-               "theme", "ui_style", "font_size", "accent", "color_preset", "status_colors",
+               "theme", "ui_style", "font_size", "color_preset", "status_colors",
                "term_font", "rdp_embedded", "term_font_size", "term_scrollback", "term_scheme", "paging_cmd",
                "hostkey_mode", "ssh_legacy_algorithms", "run_in_background", "metrics_port", "proxy", "ssh_tunnel",
                "update_check", "update_auto_install", "update_last_check", "update_skip", "update_pending",

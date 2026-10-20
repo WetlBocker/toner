@@ -5,11 +5,7 @@ from PySide6.QtWidgets import QApplication
 from ui import icons
 
 THEMES = ["System", "Light", "Dark"]
-ACCENTS = {                      # name -> (light-mode accent, dark-mode accent)
-    "Toner": ("#0e7490", "#22d3ee"), "Blue": ("#2563eb", "#5b9dff"), "Teal": ("#0d9488", "#2dd4bf"), "Violet": ("#7c3aed", "#a78bfa"),
-    "Green": ("#16a34a", "#4ade80"), "Orange": ("#ea580c", "#fb923c"), "Rose": ("#e11d48", "#fb7185"),
-}
-DEFAULT_ACCENT = "Toner"
+ACCENT = ("#0e7490", "#22d3ee")  # the Toner theme's accent (light mode, dark mode); there is no accent setting
 STYLES = ["Standard", "Ops console"]       # Ops console: denser, flatter, monospace data; made for watching many devices at once
 OPS = "Ops console"
 BASE_POINT_SIZE = 10             # the text size when Settings says "default"
@@ -27,10 +23,9 @@ def is_dark(app, theme):
         return False
 
 
-def tokens(dark, accent=DEFAULT_ACCENT, style="Standard"):
+def tokens(dark, style="Standard"):
     ops = style == OPS
-    light_acc, dark_acc = accent_pair(accent)
-    a = QColor(dark_acc if dark else light_acc)
+    a = QColor(ACCENT[1] if dark else ACCENT[0])
     soft = QColor(a)
     soft.setAlpha(46 if dark else 30)
     t = dict(
@@ -49,9 +44,8 @@ def tokens(dark, accent=DEFAULT_ACCENT, style="Standard"):
                       scroll="#2b3442", icon="#b3bcc8") if dark else
                  dict(bg="#eceff3", surface="#ffffff", surface2="#f3f5f8", border="#d6dbe3", text="#161b22", muted="#5b6675", hover="#e8ecf1", input="#ffffff",
                       scroll="#c3cad4"))
-    if accent == "Toner":                                 # the Toner look (Midnight and Daylight): its own surfaces, text and accent shades
-        from ui import toner_theme_tokens
-        t.update(toner_theme_tokens.overrides(dark, ops))
+    from ui import toner_theme_tokens                      # the Toner look (Midnight and Daylight): its own surfaces, text and accent shades
+    t.update(toner_theme_tokens.overrides(dark, ops))
     t["ops"] = ops
     # the selected row of a list or table: the accent mixed into the surface as one opaque colour (a see-through one is painted twice on a
     # table row and comes out too strong)
@@ -63,27 +57,6 @@ def tokens(dark, accent=DEFAULT_ACCENT, style="Standard"):
     t["check"] = icons.png_path("check", t["accent_text"])
     t["chev_up"] = icons.png_path("chev-up", t["muted"])
     return t
-
-
-def accent_pair(accent):
-    """(light-mode colour, dark-mode colour) for an accent: one of the named ACCENTS, or any colour '#rrggbb' chosen in Settings >
-    Appearance. A chosen colour that is too dark to read on the dark theme is lightened there."""
-    if accent in ACCENTS:
-        return ACCENTS[accent]
-    c = QColor(str(accent or ""))
-    if not c.isValid() or not str(accent).startswith("#"):
-        return ACCENTS[DEFAULT_ACCENT]
-    on_dark = QColor(c)
-    while on_dark.lightness() < 140 and on_dark.lightness() > 0:
-        on_dark = on_dark.lighter(125)
-    if on_dark.lightness() == 0:
-        on_dark = QColor("#9aa2ae")
-    return c.name(), on_dark.name()
-
-
-def accent_colour(accent):
-    """The colour an accent shows as in the light theme (Settings' swatch)."""
-    return accent_pair(accent)[0]
 
 
 def palette(t):
@@ -274,7 +247,7 @@ def is_ops():
     return bool(_current.get("ops"))
 
 
-def apply(app: QApplication, theme="System", font_size=0, accent=DEFAULT_ACCENT, style="Standard"):
+def apply(app: QApplication, theme="System", font_size=0, style="Standard"):
     # Tell Qt which scheme we want so window frames and native pop-ups follow it (Qt 6.8+).
     try:
         app.styleHints().setColorScheme({"Dark": Qt.ColorScheme.Dark, "Light": Qt.ColorScheme.Light}
@@ -282,7 +255,7 @@ def apply(app: QApplication, theme="System", font_size=0, accent=DEFAULT_ACCENT,
     except Exception:
         pass
     dark = is_dark(app, theme)
-    t = tokens(dark, accent, style)
+    t = tokens(dark, style)
     _current.clear()
     _current.update(t, dark=dark)
     app.setStyle("Fusion")                               # one style everywhere, so the stylesheet looks the same

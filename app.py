@@ -66,8 +66,7 @@ def app_icon(accent=None):
 
 def apply_look(app):
     """Theme, text size and status colours from Settings > Appearance."""
-    theme.apply(app, db.get_setting("theme"), int(db.get_setting("font_size")), db.get_setting("accent"),
-                db.get_setting("ui_style"))
+    theme.apply(app, db.get_setting("theme"), int(db.get_setting("font_size")), db.get_setting("ui_style"))
     reports.apply_colors(db.get_setting("color_preset"), db.get_setting("status_colors"))
     app.setWindowIcon(app_icon(theme.current().get("accent", "#2563eb")))
 
@@ -557,10 +556,10 @@ class Main(QMainWindow):
         self.settings.reload()
         self.settings_applied()
 
-    def preview_look(self, theme_name, accent):
-        """Settings > Appearance: show a theme or accent at once, before it is saved."""
+    def preview_look(self, theme_name):
+        """Settings > Appearance: show a theme at once, before it is saved."""
         app = QApplication.instance()
-        theme.apply(app, theme_name, int(db.get_setting("font_size")), accent, db.get_setting("ui_style"))
+        theme.apply(app, theme_name, int(db.get_setting("font_size")), db.get_setting("ui_style"))
         self._restyle()
 
     def reset_look(self):

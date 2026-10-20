@@ -1,7 +1,7 @@
 # Run directly (python tests/test_x.py) or all together (python tests/run_all.py). Each test builds its own
 # throw-away database and uses a fake credential store, so nothing on this computer is touched.
-# Settings > Appearance shows a theme or accent at once and puts the saved one back when the edit is dropped; any colour can be the
-# accent; drop-down menus open upward when there is no room below; the import step shows the whole of each name.
+# Settings > Appearance shows a theme at once and puts the saved one back when the edit is dropped (the Toner theme has one accent,
+# with no setting for it); drop-down menus open upward when there is no room below; the import step shows the whole of each name.
 import os as _os, sys as _sys, tempfile as _tmp
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
@@ -26,50 +26,42 @@ import app as A
 A.apply_look(app)
 from ui import theme
 
-print("== any colour as the accent")
-check("a named accent is unchanged", theme.accent_pair("Rose") == theme.ACCENTS["Rose"])
-light, dark = theme.accent_pair("#2a9d8f")
-check("a chosen colour is used as it is in the light theme", light == "#2a9d8f")
-check("and kept readable in the dark one", QColor(dark).lightness() >= 140, dark)
-check("a very dark colour is lightened for the dark theme", QColor(theme.accent_pair("#101830")[1]).lightness() >= 140)
-check("black still gets a usable colour in the dark theme", QColor(theme.accent_pair("#000000")[1]).lightness() > 0)
-check("nonsense falls back to the default accent", theme.accent_pair("not a colour") == theme.ACCENTS[theme.DEFAULT_ACCENT]
-      and theme.accent_pair(None) == theme.ACCENTS[theme.DEFAULT_ACCENT])
-check("the tokens use the chosen colour", theme.tokens(False, "#2a9d8f")["accent"] == "#2a9d8f")
+print("== the Toner theme's accent")
+check("there is one accent, the Toner theme's, in light and dark", theme.tokens(False)["accent"] == theme.ACCENT[0]
+      and theme.tokens(True)["accent"] == theme.ACCENT[1] and theme.ACCENT == ("#0e7490", "#22d3ee"))
+check("the Ops console uses it too", theme.tokens(True, theme.OPS)["accent"] == theme.ACCENT[1])
 check("icons are brighter than muted text in the dark theme", QColor(theme.tokens(True)["icon"]).lightness() > QColor(theme.tokens(True)["muted"]).lightness())
+check("no accent is stored any more", "accent" not in db.DEFAULT_SETTINGS and "accent" not in db.GLOBAL_ONLY)
+check("an older settings export with one still imports, the accent left out", db.import_settings({"accent": "#8e44ad", "theme": "Dark"}) == (["theme"], ["accent"]))
+db.set_setting("theme", "System")
 
 print("== Settings > Appearance")
 import ui.settings as ST
 S = ST.SettingsTab(); S.resize(1200, 800); S.show(); app.processEvents()
 page = next(p for p in S.pages if p.title == "Appearance")
 shown, reset = [], []
-S.look_preview.connect(lambda th, ac: shown.append((th, ac)))
+S.look_preview.connect(lambda th: shown.append(th))
 S.look_reset.connect(lambda: reset.append(1))
-check("the accent is chosen with a colour picker, showing its colour", isinstance(page.accent, QPushButton) and not page.accent.icon().isNull())
-QColorDialog.getColor = staticmethod(lambda *a, **k: QColor("#2a9d8f"))
-page.accent.click()
-check("choosing a colour shows it at once", shown and shown[-1][1] == "#2a9d8f", shown)
-check("it counts as an unsaved change", S.unsaved_count() >= 1, S.unsaved_count())
-QColorDialog.getColor = staticmethod(lambda *a, **k: QColor())                  # the picker closed with Cancel
-n = len(shown); page.accent.click()
-check("cancelling the picker changes nothing", len(shown) == n and page.accent_value == "#2a9d8f")
+labels = [page.form.itemAt(i, page.form.ItemRole.LabelRole).widget().text() for i in range(page.form.rowCount())
+          if page.form.itemAt(i, page.form.ItemRole.LabelRole) and page.form.itemAt(i, page.form.ItemRole.LabelRole).widget()]
+check("there is no accent colour to choose", "Accent colour" not in labels and not hasattr(page, "accent") and "Theme" in labels, labels)
+check("and the note no longer mentions one", not any("accent" in w.text().lower() for w in page.findChildren(ST.QLabel) if hasattr(w, "text")))
 other = next(t for t in theme.THEMES if t != page.theme.currentText())
 page.theme.setCurrentText(other)
-check("choosing a theme shows it at once, with the chosen accent", shown[-1] == (other, "#2a9d8f"), shown[-1])
+check("choosing a theme shows it at once", shown and shown[-1] == other, shown[-1:])
+check("it counts as an unsaved change", S.unsaved_count() >= 1, S.unsaved_count())
 S.cancel()
-check("Cancel puts the saved look back", reset and page.accent_value == (db.get_setting("accent") or theme.DEFAULT_ACCENT)
-      and page.theme.currentText() == db.get_setting("theme"))
+check("Cancel puts the saved look back", reset and page.theme.currentText() == db.get_setting("theme"))
 n = len(shown); S.reload()
 check("loading the saved values does not count as a preview", len(shown) == n)
-QColorDialog.getColor = staticmethod(lambda *a, **k: QColor("#8e44ad"))
-page.accent.click()
+page.theme.setCurrentText("Dark")
 QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes)
 page.save()
-check("Save stores the colour", db.get_setting("accent") == "#8e44ad")
+check("Save stores the theme", db.get_setting("theme") == "Dark")
 S.reload(); page = next(p for p in S.pages if p.title == "Appearance")
-check("and it comes back after a reload", page.accent_value == "#8e44ad")
+check("and it comes back after a reload", page.theme.currentText() == "Dark")
 A.apply_look(app)
-check("the saved colour is the accent in use", theme.current()["accent"] == theme.tokens(theme.current()["dark"], "#8e44ad")["accent"])
+check("the dark Toner theme is in use", theme.current()["dark"] and theme.current()["accent"] == theme.ACCENT[1])
 
 print("== drop-down menus near the bottom")
 from ui.widgets import MenuPlacer, place_menu
