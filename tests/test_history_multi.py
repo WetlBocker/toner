@@ -4,7 +4,7 @@ import os as _os, sys as _sys, tempfile as _tmp
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-import os, sys, time
+import os, sys, time, types
 pass
 SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\hm%d.db").replace("\\", os.sep) % int(time.time())
 from core import db
@@ -74,20 +74,41 @@ check("nothing ticked -> one empty chart with the prompt", len(w.chart.charts) =
 
 w.chk.set_selected(["CPU", "Memory"]); w.chk._toggled(); QApplication.processEvents()
 ch = w.chart.charts[0]; ch.grab()
-r = ch._geom["rect"]; n = len(ch._geom["stamps"])
-dev = QPointingDevice.primaryPointingDevice()
-def move(x, y):
-    ev = QMouseEvent(QEvent.Type.MouseMove, QPointF(x, y), QPointF(x, y), Qt.MouseButton.NoButton, Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier, dev)
-    ch.mouseMoveEvent(ev)
-move(ch._geom["x"](ch._geom["stamps"][2]), r.center().y())
+n = len(ch.stamps)
+at = lambda i, y=50: ch.vb.mapViewToScene(QPointF(i, y))                  # a point over run i, as the mouse would be
+ch._moved(at(2))
 check("hovering picks the nearest run", ch.hover == 2, ch.hover)
 rows = ch.hover_rows()
-check("tooltip lists each measured value", [(a, b) for a, b, _ in rows] == [("CPU", "30%"), ("Memory", "52%")], rows)
-move(r.left() + 1, r.center().y()); check("left edge = first run", ch.hover == 0 and ch.hover_rows()[0][1] == "20%")
-move(r.right() + 5, r.center().y()); check("right edge = last run", ch.hover == n - 1 and ch.hover_rows()[0][1] == "55%")
-move(r.center().x(), r.bottom() + 200); check("pointer far outside the plot clears it", ch.hover is None and ch.hover_rows() == [])
-move(r.center().x(), r.center().y()); ch.grab().save(SP + (r"\history_hover.png").replace("\\", os.sep))
+check("the readout lists each measured value", [(a, b) for a, b, _ in rows] == [("CPU", "30%"), ("Memory", "52%")], rows)
+check("with a guide line and the readout showing", ch.guide.isVisible() and ch.readout.isVisible() and "CPU  30%" in ch.readout.toPlainText())
+ch._moved(at(-0.4)); check("left edge = first run", ch.hover == 0 and ch.hover_rows()[0][1] == "20%")
+ch._moved(at(n - 1 + 0.2)); check("right edge = last run", ch.hover == n - 1 and ch.hover_rows()[0][1] == "55%")
+ch._moved(QPointF(-5000, -5000)); check("pointer far outside the plot clears it", ch.hover is None and ch.hover_rows() == [] and not ch.readout.isVisible())
+ch._moved(at(3)); ch.grab().save(SP + (r"\history_hover.png").replace("\\", os.sep))
 ch.leaveEvent(None); check("leaving the chart clears it", ch.hover is None)
+
+print("== zooming, the legend and the hint")
+check("pyqtgraph's own menu and button are switched off (their words are not Toner's)", not ch.vb.menuEnabled() and not ch.plot.plotItem.buttonsHidden is False)
+check("only time zooms; the scale stays put", ch.vb.state["mouseEnabled"] == [True, False] and ch.vb.state["mouseMode"] == ch.vb.RectMode)
+ch.vb.setXRange(1, 3, padding=0)                                          # what dragging across runs 1 to 3 does
+check("dragging zooms in on a stretch of time", abs(ch.vb.viewRange()[0][0] - 1) < 0.01 and abs(ch.vb.viewRange()[0][1] - 3) < 0.01, ch.vb.viewRange()[0])
+ch._clicked(types.SimpleNamespace(double=lambda: True))
+check("double-clicking shows the whole stretch again", ch.vb.viewRange()[0][0] < 0 and ch.vb.viewRange()[0][1] > n - 1.5, ch.vb.viewRange()[0])
+names = [ch.legend_lay.itemAt(i).widget() for i in range(ch.legend_lay.count())]
+check("each check has a name above the chart", [b.text() for b in names] == ["CPU", "Memory"], [b.text() for b in names])
+names[1].click()
+check("clicking a name hides that check, and the readout leaves it out", not ch.curves["memory"].isVisible()
+      and (ch._moved(at(2)) or True) and [a for a, _b, _c in ch.hover_rows()] == ["CPU"])
+names[1].click()
+check("clicking it again shows it", ch.curves["memory"].isVisible())
+check("the hint says how, in the agreed words", w.chart.hint is not None and w.chart.hint.text()
+      == "Drag across a graph to zoom in. Double-click to zoom back out. Click a name in the legend to hide it.")
+w.chk.set_selected(["CPU"]); w.chk._toggled(); QApplication.processEvents()
+one = w.chart.charts[0]
+lines = sorted(round(i.value()) for i in one.plot.items() if isinstance(i, H.pg.InfiniteLine) and i.angle == 0)
+check("one percentage check shows its WARN and FAIL lines", lines == sorted([one.th["warn"], one.th["fail"]]), (lines, one.th))
+w.chk.set_selected([]); w.chk._toggled()
+check("nothing ticked: no hint", w.chart.hint is None)
 check("value formats", H.fmt_value("cpu", 85.0) == "85%" and H.fmt_value("memory", 85.46) == "85.5%" and H.fmt_value("temperature", 72.0) == "72 °C"
       and H.fmt_value("uptime", 100.0) == "4:04:00:00" and H.fmt_value("bgp", 2.0) == "2" and H.fmt_value("port errors", 10234.0) == "10,234" and H.fmt_value("channel util (ng)", 41.5) == "41.5%",
       [H.fmt_value("cpu", 85.0), H.fmt_value("temperature", 72.0), H.fmt_value("uptime", 100.0), H.fmt_value("bgp", 2.0), H.fmt_value("port errors", 10234.0)])

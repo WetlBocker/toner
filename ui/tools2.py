@@ -6,16 +6,17 @@ import time
 from collections import deque
 from datetime import datetime
 
-from PySide6.QtCore import QPointF, QRectF, QThread, QTimer, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QFont, QFontDatabase, QPainter, QPainterPath, QPen
+import pyqtgraph as pg
+from PySide6.QtCore import QThread, QTimer, Qt, Signal
+from PySide6.QtGui import QBrush, QColor, QFont, QFontDatabase, QPainter, QPen
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout,
                                QGraphicsItem, QGraphicsLineItem, QGraphicsRectItem, QGraphicsScene,
                                QGraphicsSimpleTextItem, QGraphicsView, QHBoxLayout, QLabel, QLineEdit, QListWidget,
                                QListWidgetItem, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QSpinBox,
-                               QSplitter, QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+                               QSplitter, QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget, QFrame)
 from core import audit, cmdrun, custom, db, discovery, listeners, nettools, oui, pinger, profiles, reach, reports, snmp
 from core import proxy, topology, vendors
-from ui import theme
+from ui import plots, theme
 from ui.tools import DevicePicker, OutputBox, _row
 from ui.widgets import EmptyHint, GroupPicker
 from ui.finder import FilterButton, SearchBox, device_sections, shown_devices
@@ -483,72 +484,59 @@ class PingWorker(QThread):
             self.stop_event.wait(max(0.0, self.interval - (time.time() - t0)))
 
 
-class LatencyGraph(QWidget):
+class LatencyGraph(QFrame):
+    """The live ping graph, drawn with pyqtgraph: one point per reply, the newest at the right; a lost reply is a red tick on the
+    floor and breaks the line."""
+
     def __init__(self):
         super().__init__()
         self.samples = deque(maxlen=300)
         self.setMinimumHeight(220)
+        self.empty = QLabel("Press Start")
+        self.empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty.setProperty("muted", True)
+        self.plot = plots.plot_widget()
+        self.plot.setMouseEnabled(x=False, y=False)              # it moves by itself: nothing to zoom while it runs
+        self.plot.hideAxis("bottom")                             # the newest reply is at the right; no time scale to read
+        self.plot.getAxis("left").setWidth(56)                   # room for '120 ms'
+        self.line = self.plot.plot(connect="finite")
+        self.lost = pg.ScatterPlotItem(symbol="s", size=4)
+        self.plot.addItem(self.lost)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(10, 8, 10, 8)
+        lay.addWidget(self.empty)
+        lay.addWidget(self.plot, 1)
+        self.redraw()
 
     def add(self, ms):
         self.samples.append(ms)
-        self.update()
+        self.redraw()
 
     def clear(self):
         self.samples.clear()
-        self.update()
+        self.redraw()
 
-    def paintEvent(self, _):
-        tk = theme.current() or {}
-        col = lambda k, d: QColor(tk.get(k, d))
-        surface, border, muted, accent = col("surface", "#fff"), col("border", "#ddd"), col("muted", "#777"), col("accent", "#2563eb")
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.setPen(QPen(border, 1))
-        p.setBrush(surface)
-        p.drawRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), 10, 10)
-        r = QRectF(self.rect().adjusted(50, 16, -16, -26))
-        vals = [s for s in self.samples if s is not None]
-        if not self.samples:
-            p.setPen(muted)
-            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Press Start")
+    def redraw(self):
+        plots.card_style(self, "latencyGraph")
+        _surface, _border, _muted = plots.restyle(self.plot)
+        accent = plots.colours()[4]
+        has = bool(self.samples)
+        self.empty.setVisible(not has)
+        self.plot.setVisible(has)
+        if not has:
             return
-        hi = max(10.0, (max(vals) if vals else 10.0) * 1.2)
-        y = lambda v: r.bottom() - v / hi * r.height()
         n = self.samples.maxlen
-        x = lambda i: r.right() - (len(self.samples) - 1 - i) * r.width() / (n - 1)
-        for frac in (0, 0.5, 1):
-            p.setPen(QPen(border, 1))
-            p.drawLine(QPointF(r.left(), y(hi * frac)), QPointF(r.right(), y(hi * frac)))
-            p.setPen(muted)
-            p.drawText(QRectF(0, y(hi * frac) - 9, 44, 18), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, f"{hi * frac:.0f} ms")
-        path = None
-        for i, s in enumerate(self.samples):
-            if s is None:                                       # a lost reply: a red tick on the floor
-                p.setPen(QPen(QColor("#d32f2f"), 2))
-                p.drawLine(QPointF(x(i), r.bottom()), QPointF(x(i), r.bottom() - 14))
-                path = None
-                continue
-            pt = QPointF(x(i), y(s))
-            if path is None:
-                path = QPainterPath(pt)
-            else:
-                path.lineTo(pt)
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.setPen(QPen(accent, 2))
-        # draw the connected runs of replies as lines
-        run = []
-        for i, s in enumerate(list(self.samples) + [None]):
-            if s is not None:
-                run.append(QPointF(x(i), y(s)))
-            else:
-                if len(run) > 1:
-                    pp = QPainterPath(run[0])
-                    for q in run[1:]:
-                        pp.lineTo(q)
-                    p.drawPath(pp)
-                elif len(run) == 1:
-                    p.drawEllipse(run[0], 2, 2)
-                run = []
+        first = n - len(self.samples)                            # the newest sample sits at the right edge
+        xs = list(range(first, n))
+        ys = [float("nan") if s is None else s for s in self.samples]
+        self.line.setData(xs, ys, pen=pg.mkPen(accent, width=2))
+        gone = [x for x, s in zip(xs, self.samples) if s is None]
+        self.lost.setData(gone, [0] * len(gone), pen=None, brush=pg.mkBrush("#d32f2f"), symbol="s", size=6)
+        vals = [s for s in self.samples if s is not None]
+        hi = max(10.0, (max(vals) if vals else 10.0) * 1.2)
+        self.plot.setXRange(0, n - 1, padding=0.01)
+        self.plot.setYRange(0, hi, padding=0.04)
+        self.plot.getAxis("left").setTicks([[(hi * f, f"{hi * f:.0f} ms") for f in (0, 0.5, 1)]])
 
 
 class LivePingTab(QWidget):

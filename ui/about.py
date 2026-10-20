@@ -19,7 +19,8 @@ _STARTED = "The new AppImage" if platforms.LINUX else "The installer"
 
 LIBRARIES = [("PySide6", "Qt user interface"), ("netmiko", "SSH to network devices"), ("paramiko", "SSH and SFTP"),
              ("pysnmp", "SNMP"), ("requests", "web APIs and updates"), ("cryptography", "certificates"),
-             ("keyring", "the password vault"), ("PyYAML", "inventory import"), ("PySocks", "SOCKS proxies")]
+             ("keyring", "the password vault"), ("PyYAML", "inventory import"), ("PySocks", "SOCKS proxies"),
+             ("pyqtgraph", "graphs"), ("numpy", "the numbers behind the graphs")]
 
 
 def _version_of(name):

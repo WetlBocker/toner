@@ -5,13 +5,14 @@ import subprocess
 import threading
 from datetime import datetime
 
-from PySide6.QtCore import QPointF, QRectF, QThread, QTimer, Qt, QUrl, Signal
-from PySide6.QtGui import QColor, QDesktopServices, QPainter, QPainterPath, QPen
+import pyqtgraph as pg
+from PySide6.QtCore import QThread, QTimer, Qt, QUrl, Signal
+from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
-                               QProgressBar, QPushButton, QSpinBox, QStackedWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+                               QProgressBar, QPushButton, QSpinBox, QStackedWidget, QTableWidgetItem, QVBoxLayout, QWidget, QFrame)
 import paramiko
 from core import audit, db, fileserver, iperf, nettools, oui, profiles, proxy, scp, vendors, wifi, xcopy
-from ui import theme
+from ui import plots, theme
 from ui.tools import DevicePicker, OutputBox, Runner, _row
 from ui.tools2 import _muted, _primary, _table
 from ui import status as st
@@ -284,63 +285,64 @@ class FileServerTab(QWidget):
 
 
 # =============================================================================== iperf3
-class ThroughputGraph(QWidget):
-    """Speed over the course of a test: one point per interval, drawn as it arrives."""
+class SecondsAxis(pg.AxisItem):
+    """The time axis of a test: '2 s', '4 s' ..."""
+
+    def __init__(self):
+        super().__init__("bottom")
+
+    def tickStrings(self, values, scale, spacing):
+        return [f"{v:g} s" for v in values]
+
+
+class ThroughputGraph(QFrame):
+    """Speed over the course of a test, drawn with pyqtgraph: one point per interval, as it arrives."""
 
     def __init__(self):
         super().__init__()
         self.points = []                                    # [(seconds, Mbit/s)]
         self.setMinimumHeight(150)
+        self.empty = QLabel("The speed appears here during a test")
+        self.empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty.setProperty("muted", True)
+        self.summary = QLabel()
+        self.summary.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.plot = plots.plot_widget(axisItems={"bottom": SecondsAxis()})
+        self.plot.setMouseEnabled(x=True, y=False)
+        self.plot.getViewBox().setMouseMode(pg.ViewBox.RectMode)
+        self.plot.scene().sigMouseClicked.connect(lambda ev: ev.double() and self.plot.autoRange())
+        self.plot.getAxis("left").setLabel("Mbit/s")
+        self.curve = self.plot.plot()
+        self.last = pg.ScatterPlotItem(size=8)
+        self.plot.addItem(self.last)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(10, 6, 10, 6)
+        lay.setSpacing(2)
+        for w in (self.summary, self.empty, self.plot):
+            lay.addWidget(w)
+        lay.setStretch(2, 1)
+        self.set_points([])
 
     def set_points(self, points):
         self.points = list(points)
-        self.update()
-
-    def paintEvent(self, _):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        fg = self.palette().windowText().color()
-        faint = QColor(fg)
-        faint.setAlpha(60)
-        left, top, right, bottom = 56, 8, 12, 22
-        r = QRectF(left, top, self.width() - left - right, self.height() - top - bottom)
-        if not self.points:
-            p.setPen(faint)
-            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "The speed appears here during a test")
+        plots.card_style(self, "throughputGraph")
+        surface, _border, _muted = plots.restyle(self.plot)
+        accent = plots.colours()[4]
+        has = bool(self.points)
+        self.empty.setVisible(not has)
+        self.plot.setVisible(has)
+        self.summary.setVisible(has)
+        if not has:
             return
-        peak = max(v for _, v in self.points) or 1.0
-        top_v = peak * 1.15
-        t_max = max(t for t, _ in self.points) or 1.0
-        for i in range(5):                                  # grid and the speed scale
-            y = r.bottom() - r.height() * i / 4
-            p.setPen(QPen(faint, 1))
-            p.drawLine(QPointF(r.left(), y), QPointF(r.right(), y))
-            p.setPen(fg)
-            p.drawText(QRectF(0, y - 9, left - 6, 18), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                       f"{top_v * i / 4:.0f}")
-        p.setPen(fg)
-        p.drawText(QRectF(r.left(), r.bottom() + 3, r.width(), 18), Qt.AlignmentFlag.AlignRight, f"{t_max:.0f} s")
-        p.drawText(QRectF(r.left(), r.bottom() + 3, r.width(), 18), Qt.AlignmentFlag.AlignLeft, "Mbit/s")
-        pts = [QPointF(r.left() + r.width() * t / t_max, r.bottom() - r.height() * v / top_v) for t, v in self.points]
-        accent = QColor(theme.current().get("accent", "#2563eb"))
-        line = QPainterPath(pts[0])
-        for pt in pts[1:]:
-            line.lineTo(pt)
-        fill = QPainterPath(line)
-        fill.lineTo(QPointF(pts[-1].x(), r.bottom()))
-        fill.lineTo(QPointF(pts[0].x(), r.bottom()))
-        fill.closeSubpath()
+        xs, ys = [t for t, _ in self.points], [v for _, v in self.points]
         shade = QColor(accent)
         shade.setAlpha(45)
-        p.fillPath(fill, shade)
-        p.setPen(QPen(accent, 2))
-        p.drawPath(line)
-        p.setBrush(accent)
-        p.drawEllipse(pts[-1], 3.5, 3.5)
-        p.setPen(fg)
-        last = self.points[-1][1]
-        p.drawText(QRectF(r.left(), r.top(), r.width() - 4, 18), Qt.AlignmentFlag.AlignRight,
-                   f"now {last:.1f}   peak {peak:.1f}   average {sum(v for _, v in self.points) / len(self.points):.1f} Mbit/s")
+        self.curve.setData(xs, ys, pen=pg.mkPen(accent, width=2), fillLevel=0, brush=pg.mkBrush(shade))
+        self.last.setData([xs[-1]], [ys[-1]], brush=pg.mkBrush(accent), pen=pg.mkPen(surface, width=1.2))
+        peak = max(ys) or 1.0
+        self.plot.setYRange(0, peak * 1.15, padding=0)
+        self.plot.setXRange(0, max(xs) or 1.0, padding=0.01)
+        self.summary.setText(f"now {ys[-1]:.1f}   peak {peak:.1f}   average {sum(ys) / len(ys):.1f} Mbit/s")
 
 
 class IperfTab(QWidget):

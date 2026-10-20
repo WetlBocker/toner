@@ -1,14 +1,15 @@
 import math
 from datetime import datetime, timedelta
 
-from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen
-from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QHBoxLayout, QLabel, QScrollArea, QSizePolicy, QSplitter,
-                               QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+import pyqtgraph as pg
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
+from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFrame, QHBoxLayout, QLabel, QScrollArea, QSizePolicy, QSplitter,
+                               QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout, QWidget)
 from core import db, display, scope
 from core.reports import COLORS, fg_for
 from ui import theme
-from ui.widgets import EmptyHint, GroupPicker, StatusDelegate, flow
+from ui.widgets import EmptyHint, FlowLayout, GroupPicker, StatusDelegate, flow
 from ui.finder import FilterButton, SearchBox, device_sections, listed_devices, shown_devices, wants_archived
 from ui import status as st
 
@@ -103,17 +104,71 @@ def scale_title(key):
     return "Values up to 10" if key[1] == 0 else f"Values {lo:,} to {lo * 10:,}"
 
 
-class TrendChart(QWidget):
-    """One chart: one or more checks that share a vertical axis. Hover to read the measured values."""
+class RunAxis(pg.AxisItem):
+    """The time axis: runs are evenly spaced (one step each), labelled with when they ran."""
+
+    def __init__(self, chart):
+        super().__init__("bottom")
+        self.chart = chart
+
+    def tickValues(self, minVal, maxVal, size):
+        n = len(self.chart.stamps)
+        if not n:
+            return []
+        lo, hi = max(0, math.ceil(minVal)), min(n - 1, math.floor(maxVal))
+        if hi < lo:
+            return []
+        room = max(1, int(size // 110))                      # about one label per 110 pixels
+        step = max(1, math.ceil((hi - lo + 1) / room))
+        return [(step, list(range(lo, hi + 1, step)))]
+
+    def tickStrings(self, values, scale, spacing):
+        out = []
+        for v in values:
+            i = int(round(v))
+            stamp = self.chart.stamps[i] if 0 <= i < len(self.chart.stamps) else ""
+            out.append(stamp[5:16] if len(stamp) >= 16 and stamp[4] == "-" else stamp)      # 'MM-DD HH:MM'
+        return out
+
+
+class TrendChart(QFrame):
+    """One chart: one or more checks that share a vertical axis, drawn with pyqtgraph. Hover to read the measured values; drag
+    across it to zoom in on a stretch of time and double-click to zoom back out; click a name above it to hide that check."""
 
     def __init__(self, title=""):
         super().__init__()
         self.title = title
         self.series, self.th = [], None            # series: [(check name, [(time, value)], colour)]
         self.hover = None                          # index of the run under the mouse
-        self._geom = None                          # plot area and time axis from the last paint
-        self.setMouseTracking(True)
+        self.stamps, self.curves = [], {}
         self.setMinimumSize(320, 230)
+        self.setObjectName("trendChart")
+        self.caption = QLabel()
+        self.caption.setProperty("muted", True)
+        self.legend = QWidget()
+        self.legend_lay = FlowLayout(12, 2)
+        self.legend.setLayout(self.legend_lay)
+        self.empty = QLabel("Select one or more checks")
+        self.empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty.setProperty("muted", True)
+        self.axis = RunAxis(self)
+        self.plot = pg.PlotWidget(axisItems={"bottom": self.axis})
+        self.plot.setMenuEnabled(False)                         # pyqtgraph's own menu and "A" button are not part of Toner
+        self.plot.hideButtons()
+        self.plot.setMouseEnabled(x=True, y=False)              # zoom in time only; the scale stays put
+        self.vb = self.plot.getViewBox()
+        self.vb.setMouseMode(pg.ViewBox.RectMode)               # drag across a stretch of time to zoom in on it
+        self.plot.scene().sigMouseMoved.connect(self._moved)
+        self.plot.scene().sigMouseClicked.connect(self._clicked)
+        self.guide = pg.InfiniteLine(angle=90, movable=False)
+        self.readout = pg.TextItem(anchor=(0, 0))
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(12, 10, 12, 8)
+        lay.setSpacing(4)
+        for w in (self.caption, self.legend, self.empty, self.plot):
+            lay.addWidget(w)
+        lay.setStretch(3, 1)
+        self.set_series([])
 
     def set_series(self, series, th=None, title=None):
         if title is not None:
@@ -121,192 +176,160 @@ class TrendChart(QWidget):
         self.series = [s for s in series if s[1]]
         self.th = th if len(self.series) == 1 else None      # thresholds only make sense for one check
         self.hover = None
-        self.update()
+        self.draw()
 
-    # ---------- hover ----------
-    def mouseMoveEvent(self, e):
-        g = self._geom
-        if not g:
-            return
-        r, stamps = g["rect"], g["stamps"]
-        pos = e.position()
-        if r.adjusted(-14, -10, 14, 10).contains(pos):
-            n = len(stamps)
-            i = round((pos.x() - r.left()) / r.width() * (n - 1)) if n > 1 else 0
-            i = max(0, min(n - 1, i))
-        else:
-            i = None
-        if i != self.hover or i is not None:
-            self.hover, self._mouse = i, pos
-            self.update()
-
-    def leaveEvent(self, _):
-        self.hover = None
-        self.update()
-
-    # ---------- painting ----------
-    def paintEvent(self, _):
+    # ---------- drawing ----------
+    def draw(self):
         tk = theme.current() or {}
         col = lambda k, d: QColor(tk.get(k, d))
-        surface, border, muted, text = (col("surface", "#ffffff"), col("border", "#dddddd"),
-                                        col("muted", "#777777"), col("text", "#222222"))
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        card = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
-        p.setPen(QPen(border, 1))
-        p.setBrush(surface)
-        p.drawRoundedRect(card, 10, 10)
-        self._geom = None
-        if not self.series:
-            p.setPen(muted)
-            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Select one or more checks")
-            return
+        surface, border, muted, text = col("surface", "#ffffff"), col("border", "#dddddd"), col("muted", "#777777"), col("text", "#222222")
+        self.setStyleSheet(f"QFrame#trendChart {{ background: {surface.name()}; border: 1px solid {border.name()}; border-radius: 10px; }}")
+        self.plot.setBackground(surface)
+        for name in ("left", "bottom"):
+            ax = self.plot.getAxis(name)
+            ax.setPen(pg.mkPen(border))
+            ax.setTextPen(pg.mkPen(muted))
+        self.plot.clear()
+        self.curves = {}
+        self.plot.addItem(self.guide, ignoreBounds=True)
+        self.plot.addItem(self.readout, ignoreBounds=True)
+        self.guide.setPen(pg.mkPen(muted, width=1, style=Qt.PenStyle.DashLine))
+        self.guide.hide()
+        self.readout.hide()
+        while self.legend_lay.count():
+            w = self.legend_lay.takeAt(0).widget()
+            if w:
+                w.deleteLater()
+        self.caption.setText(self.title)
+        self.caption.setVisible(bool(self.title))
+        has = bool(self.series)
+        self.empty.setVisible(not has)
+        self.plot.setVisible(has)
         many = len(self.series) > 1
-        fm = p.fontMetrics()
-        top = 16
-        if self.title:                                           # which scale this chart is
-            p.setPen(muted)
-            p.drawText(QRectF(22, 10, self.width() - 44, 18), Qt.AlignmentFlag.AlignVCenter, self.title)
-            top = 38
-        if many or self.title:                                   # legend: coloured dots, wrapping
-            x, y = 22.0, float(top - 4)
-            for name, _, color in self.series:
-                label = display.check_name(name)
-                w = fm.horizontalAdvance(label) + 30
-                if x + w > self.width() - 20:
-                    x, y = 22.0, y + 20
-                p.setPen(Qt.PenStyle.NoPen)
-                p.setBrush(color)
-                p.drawEllipse(QPointF(x + 5, y + 9), 4.5, 4.5)
-                p.setPen(text)
-                p.drawText(QRectF(x + 15, y, w, 18), Qt.AlignmentFlag.AlignVCenter, label)
-                x += w + 8
-            top = int(y + 32)
-        r = QRectF(self.rect().adjusted(52, top, -22, -36))
-
+        named = has and (many or bool(self.title))           # names above the chart: several checks, or a captioned one
+        self.legend.setVisible(named)
+        if not has:
+            self.stamps = []
+            return
+        self.stamps = sorted({s for _, pts, _ in self.series for s, _ in pts})     # runs, evenly spaced in time order
+        pos = {s: i for i, s in enumerate(self.stamps)}
         allpct = all(is_percent(c) for c, _, _ in self.series)
         peak = max(v for _, pts, _ in self.series for _, v in pts)
         only_uptime = all(is_uptime(c) for c, _, _ in self.series)
         if only_uptime:
             hi, grid = uptime_axis(peak)                         # round days, so the lines read as 7 d, 14 d, 21 d
+        elif allpct:
+            hi, grid = 100.0, [(v, f"{v:.0f}") for v in (0, 25, 50, 75, 100)]
         else:
-            if allpct:
-                hi, grid = 100.0, [(v, f"{v:.0f}") for v in (0, 25, 50, 75, 100)]
-            else:
-                hi, grid = nice_axis(peak)
-        y = lambda v: r.bottom() - (min(max(v, 0), hi) / hi) * r.height()
-        stamps = sorted({s for _, pts, _ in self.series for s, _ in pts})     # runs, evenly spaced in time order
-        pos = {s: i for i, s in enumerate(stamps)}
-        n = len(stamps)
-        x = lambda s: r.left() + (pos[s] / (n - 1) if n > 1 else 0.5) * r.width()
-        self._geom = {"rect": r, "stamps": stamps, "x": x}
-
-        for value, label in grid:                                 # light horizontal grid with labels
-            p.setPen(QPen(border, 1))
-            p.drawLine(QPointF(r.left(), y(value)), QPointF(r.right(), y(value)))
-            p.setPen(muted)
-            p.drawText(QRectF(0, y(value) - 9, 46, 18), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, label)
+            hi, grid = nice_axis(peak)
+        left = self.plot.getAxis("left")
+        left.setTicks([grid])
+        self.plot.showGrid(x=False, y=True, alpha=0.35)
+        self.vb.setLimits(xMin=-0.5, xMax=max(0.5, len(self.stamps) - 0.5), minXRange=1)
+        self.plot.setYRange(0, hi, padding=0.02)
+        self._full()
         if only_uptime:                                           # a drop in uptime is a restart: mark where, behind the lines
             red = st.qink("FAIL")
-            for _c, points, color in self.series:
+            red.setAlpha(150)
+            for _c, points, _color in self.series:
                 for stamp, _before, _after in restarts(points):
-                    red.setAlpha(150)
-                    p.setPen(QPen(red, 1.4, Qt.PenStyle.DashLine))
-                    p.drawLine(QPointF(x(stamp), r.top()), QPointF(x(stamp), r.bottom()))
+                    self.plot.addItem(pg.InfiniteLine(pos=pos[stamp], angle=90, pen=pg.mkPen(red, width=1.4, style=Qt.PenStyle.DashLine)))
                     if not many:
-                        p.setPen(red)
-                        p.drawText(QPointF(min(x(stamp) + 5, r.right() - fm.horizontalAdvance("restart") - 2), r.top() + 13), "restart")
+                        label = pg.TextItem("restart", color=st.qink("FAIL"), anchor=(0, 0))
+                        label.setPos(pos[stamp], hi)
+                        self.plot.addItem(label)
         if self.th and allpct:
             for key, c in (("warn", st.ink("WARN")), ("fail", st.ink("FAIL"))):
-                p.setPen(QPen(QColor(c), 1.2, Qt.PenStyle.DashLine))
-                p.drawLine(QPointF(r.left(), y(self.th[key])), QPointF(r.right(), y(self.th[key])))
-
-        if self.hover is not None:                               # guide line under the mouse
-            hx = x(stamps[self.hover])
-            p.setPen(QPen(muted, 1, Qt.PenStyle.DashLine))
-            p.drawLine(QPointF(hx, r.top()), QPointF(hx, r.bottom()))
-
+                self.plot.addItem(pg.InfiniteLine(pos=self.th[key], angle=0, pen=pg.mkPen(QColor(c), width=1.2, style=Qt.PenStyle.DashLine)))
         for c, points, color in self.series:
-            pts = [QPointF(x(s), y(v)) for s, v in points]
-            if len(pts) > 1:
-                if not many:                                      # a soft fill under a single line
-                    area = QPainterPath(QPointF(pts[0].x(), r.bottom()))
-                    for pt in pts:
-                        area.lineTo(pt)
-                    area.lineTo(QPointF(pts[-1].x(), r.bottom()))
-                    area.closeSubpath()
-                    g = QLinearGradient(0, r.top(), 0, r.bottom())
-                    top_c, bot_c = QColor(color), QColor(color)
-                    top_c.setAlpha(70)
-                    bot_c.setAlpha(0)
-                    g.setColorAt(0, top_c)
-                    g.setColorAt(1, bot_c)
-                    p.setPen(Qt.PenStyle.NoPen)
-                    p.setBrush(g)
-                    p.drawPath(area)
-                p.setPen(QPen(color, 2.2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-                p.setBrush(Qt.BrushStyle.NoBrush)
-                line = QPainterPath(pts[0])
-                for pt in pts[1:]:
-                    line.lineTo(pt)
-                p.drawPath(line)
-            for (s, v), pt in zip(points, pts):
-                big = self.hover is not None and s == stamps[self.hover]
-                p.setPen(QPen(surface, 1.5))
-                p.setBrush(color)
-                p.drawEllipse(pt, 5.0 if big else 3.2, 5.0 if big else 3.2)
-        p.setPen(muted)
-        p.drawText(QRectF(r.left(), r.bottom() + 8, r.width(), 20), Qt.AlignmentFlag.AlignLeft, stamps[0])
-        p.drawText(QRectF(r.left(), r.bottom() + 8, r.width(), 20), Qt.AlignmentFlag.AlignRight, stamps[-1])
-        if self.hover is not None:
-            self._tooltip(p, stamps[self.hover], self.hover_rows(), fm)
+            xs, ys = [pos[s] for s, _ in points], [v for _, v in points]
+            fill = None
+            if not many:                                          # a soft fill under a single line
+                soft = QColor(color)
+                soft.setAlpha(45)
+                fill = pg.mkBrush(soft)
+            curve = self.plot.plot(xs, ys, pen=pg.mkPen(color, width=2.2), symbol="o", symbolSize=6, symbolBrush=color,
+                                   symbolPen=pg.mkPen(surface, width=1.2), fillLevel=0 if fill else None, brush=fill)
+            self.curves[c] = curve
+            if named:
+                self.legend_lay.addWidget(self._legend_button(c, color, text))
+
+    def _legend_button(self, check, color, text):
+        b = QToolButton()
+        b.setText(display.check_name(check))
+        b.setCheckable(True)
+        b.setChecked(True)
+        b.setAutoRaise(True)
+        b.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        dot = QPixmap(10, 10)
+        dot.fill(Qt.GlobalColor.transparent)
+        p = QPainter(dot)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(color))
+        p.drawEllipse(0, 0, 10, 10)
+        p.end()
+        b.setIcon(QIcon(dot))
+        b.toggled.connect(lambda on, c=check: self._show(c, on))
+        return b
+
+    def _show(self, check, on):
+        """Hide or show one check (its name above the chart was clicked)."""
+        if check in self.curves:
+            self.curves[check].setVisible(on)
+
+    def _full(self):
+        self.plot.setXRange(-0.25, max(0.25, len(self.stamps) - 0.75), padding=0)
+
+    # ---------- the mouse ----------
+    def _clicked(self, ev):
+        if ev.double():
+            self._full()                                          # double-click: the whole stretch of time again
+
+    def _moved(self, scene_pos):
+        if not self.stamps or not self.plot.sceneBoundingRect().contains(scene_pos):
+            self._leave()
+            return
+        x = self.vb.mapSceneToView(scene_pos).x()
+        i = max(0, min(len(self.stamps) - 1, int(round(x))))
+        self.hover = i
+        rows = self.hover_rows()
+        if not rows:
+            self._leave()
+            return
+        tk = theme.current() or {}
+        self.guide.setPos(i)
+        self.guide.show()
+        lines = [self.stamps[i]] + [f"{name}  {val}" for name, val, _c in rows]
+        self.readout.setText("\n".join(lines), color=QColor(tk.get("text", "#222222")))
+        self.readout.fill = pg.mkBrush(QColor(tk.get("surface2", "#f1f3f6")))
+        self.readout.border = pg.mkPen(QColor(tk.get("border", "#dddddd")))
+        (x0, x1), (y0, y1) = self.vb.viewRange()
+        right = i > x0 + (x1 - x0) * 0.6                          # keep the readout inside: left of the line near the right edge
+        self.readout.setAnchor((1, 0) if right else (0, 0))
+        self.readout.setPos(i, y1)
+        self.readout.show()
+
+    def _leave(self):
+        self.hover = None
+        self.guide.hide()
+        self.readout.hide()
+
+    def leaveEvent(self, e):
+        self._leave()
+        super().leaveEvent(e)
 
     def hover_rows(self):
         """[(check name, measured value as text, colour)] for the run under the mouse."""
-        if self.hover is None or not self._geom:
+        if self.hover is None or not self.stamps:
             return []
-        stamp = self._geom["stamps"][self.hover]
+        stamp = self.stamps[self.hover]
         rows = [(display.check_name(c), fmt_value(c, dict(pts)[stamp]), color)
-                for c, pts, color in self.series if stamp in dict(pts)]
+                for c, pts, color in self.series if stamp in dict(pts) and (c not in self.curves or self.curves[c].isVisible())]
         for c, pts, _color in self.series:                         # say so when the device restarted since the previous run
             if is_uptime(c) and any(s == stamp for s, _b, _a in restarts(pts)):
                 rows.append(("Restarted", "since the run before", st.qink("FAIL")))
         return rows
-
-    def _tooltip(self, p, stamp, rows, fm):
-        """A small card next to the mouse: the time of the run and each measured value."""
-        tk = theme.current() or {}
-        bg, bd, tx, mu = (QColor(tk.get("surface2", "#f1f3f6")), QColor(tk.get("border", "#dddddd")),
-                          QColor(tk.get("text", "#222222")), QColor(tk.get("muted", "#777777")))
-        if not rows:
-            return
-        w = max([fm.horizontalAdvance(stamp)] + [fm.horizontalAdvance(a) + 24 + fm.horizontalAdvance(b) + 16
-                                                 for a, b, _ in rows]) + 24
-        h = 16 + 20 * (len(rows) + 1)
-        pos = self._mouse
-        x = pos.x() + 16
-        if x + w > self.width() - 6:
-            x = pos.x() - 16 - w
-        y = min(max(6.0, pos.y() - h / 2), self.height() - h - 6)
-        box = QRectF(x, y, w, h)
-        p.setPen(QPen(bd, 1))
-        p.setBrush(bg)
-        p.drawRoundedRect(box, 8, 8)
-        p.setPen(mu)
-        p.drawText(QRectF(x + 12, y + 6, w - 24, 20), Qt.AlignmentFlag.AlignVCenter, stamp)
-        for i, (name, val, color) in enumerate(rows):
-            ry = y + 6 + 20 * (i + 1)
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(color)
-            p.drawEllipse(QPointF(x + 17, ry + 10), 4, 4)
-            p.setPen(tx)
-            p.drawText(QRectF(x + 28, ry, w - 40, 20), Qt.AlignmentFlag.AlignVCenter, name)
-            f = QFont(p.font())
-            f.setBold(True)
-            p.setFont(f)
-            p.drawText(QRectF(x + 12, ry, w - 24, 20), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, val)
-            f.setBold(False)
-            p.setFont(f)
 
 
 class ChartStack(QScrollArea):
@@ -342,6 +365,12 @@ class ChartStack(QScrollArea):
                 w.setParent(None)
                 w.deleteLater()
         self.charts = []
+        self.hint = None
+        if have:
+            self.hint = QLabel("Drag across a graph to zoom in. Double-click to zoom back out. Click a name in the legend to hide it.")
+            self.hint.setProperty("muted", True)
+            self.hint.setWordWrap(True)
+            self.lay.addWidget(self.hint)
         for key in sorted(groups) or [None]:
             ch = TrendChart()
             members = groups.get(key, [])
