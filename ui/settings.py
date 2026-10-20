@@ -419,8 +419,9 @@ class SettingsTab(QWidget):
         self.changed.emit()
         toast(self, f"{KEY_LABELS.get(key, key)} follows Global again.")
 
-    def reload(self):
-        """Show what is stored, discarding unsaved edits (and a look being previewed)."""
+    def reload(self, announce=True):
+        """Show what is stored, discarding unsaved edits (and a look being previewed). announce=False: no `changed` signal, for a
+        caller that makes the settings take effect itself."""
         self.look_reset.emit()
         self.apply_org()
         for i in range(len(self.pages)):
@@ -429,7 +430,8 @@ class SettingsTab(QWidget):
         self.status.setText("")
         self._dirty = {}
         self.rebase()
-        self.changed.emit()
+        if announce:
+            self.changed.emit()
 
     def refresh_dynamic(self):
         clean = [i for i in range(len(self.pages)) if i in self.baseline and signature(self.pages[i]) == self.baseline[i]]

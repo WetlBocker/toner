@@ -206,12 +206,17 @@ class within:
         return False
 
 
-_orgs_cache = {"key": None, "at": 0.0, "rows": []}
+_orgs_cache = {"key": None, "at": 0.0, "rows": [], "names": {}}
 show_archived = False                 # Global's Organization filter can ask for archived organizations too
 
 
 def org_rows():
     """Every organization in the Global file: [{'id', 'name', 'code', 'colour', 'archived', 'created', 'uid'}] by name. Cached briefly."""
+    return [dict(r) for r in _org_rows_kept()]
+
+
+def _org_rows_kept():
+    """The cached rows themselves, for reading only (org_rows hands out copies)."""
     key, now = str(base_path()), time.monotonic()
     if _orgs_cache["key"] != key or now - _orgs_cache["at"] > SETTINGS_TTL:
         try:
@@ -223,8 +228,8 @@ def org_rows():
                 c.close()
         except sqlite3.Error:
             rows = []
-        _orgs_cache.update(key=key, at=now, rows=rows)
-    return [dict(r) for r in _orgs_cache["rows"]]
+        _orgs_cache.update(key=key, at=now, rows=rows, names={r["id"]: r["name"] for r in rows})
+    return _orgs_cache["rows"]
 
 
 def forget_orgs():
@@ -234,7 +239,8 @@ def forget_orgs():
 def org_name(org):
     if not org:
         return "Global"
-    return next((r["name"] for r in org_rows() if r["id"] == int(org)), f"Organization {org}")
+    _org_rows_kept()                                        # (fresh names; asked for once per row of most lists, so no copies)
+    return _orgs_cache["names"].get(int(org), f"Organization {org}")
 
 
 class including_archived:
@@ -1450,9 +1456,13 @@ def availability(days=7, start=None, end=None):
 def _availability_here(days=7, start=None, end=None):
     """{device: {'runs', 'reachable', 'healthy'}} over the last `days` days (or between two times). A run counts as 'reachable'
     when the device produced results without a 'connection' error, and 'healthy' when none of its checks was worse than WARN.
-    Counted by SQLite: a week of runs is a lot of results to go through one by one."""
-    cutoff = start or (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
-    until = end or "9999-12-31 00:00:00"
+    The last `days` days start on the minute, so the answer can be kept until a run is stored or the next minute begins."""
+    cutoff = start or (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:00")
+    return _availability_between(cutoff, end or "9999-12-31 00:00:00")
+
+
+def _availability_between(cutoff, until):
+    """Counted by SQLite: a week of runs is a lot of results to go through one by one."""
     with connect() as c:
         rows = c.execute(
             "SELECT dev, COUNT(*) AS runs, SUM(1 - conn) AS reachable, SUM(1 - bad) AS healthy FROM ("
@@ -1462,6 +1472,10 @@ def _availability_here(days=7, start=None, end=None):
             "  FROM results r WHERE r.run_id IN (SELECT id FROM runs WHERE started_at >= ? AND started_at < ?)"
             "  AND r.check_name != 'config backup' GROUP BY r.run_id, dev) GROUP BY dev", (cutoff, until)).fetchall()
     return {r["dev"]: {"runs": r["runs"], "reachable": r["reachable"], "healthy": r["healthy"]} for r in rows}
+
+
+_availability_between = _remembered(_availability_between, lambda a: {k: dict(v) for k, v in a.items()})
+
 
 def last_run():
     def here():

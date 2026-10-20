@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import sys
@@ -64,11 +65,21 @@ def app_icon(accent=None):
     return logo.icon()
 
 
+_look = None                 # the look last applied; applying the same one again restyles every widget and changes nothing
+
+
 def apply_look(app):
-    """Theme, text size and status colours from Settings > Appearance."""
-    theme.apply(app, db.get_setting("theme"), int(db.get_setting("font_size")), db.get_setting("ui_style"))
+    """Theme, text size and status colours from Settings > Appearance. Returns False when they are what is shown already."""
+    global _look
+    look = (db.get_setting("theme"), int(db.get_setting("font_size")), db.get_setting("ui_style"), db.get_setting("color_preset"),
+            json.dumps(db.get_setting("status_colors"), sort_keys=True))
+    if look == _look:
+        return False
+    theme.apply(app, look[0], look[1], look[2])
     reports.apply_colors(db.get_setting("color_preset"), db.get_setting("status_colors"))
     app.setWindowIcon(app_icon(theme.current().get("accent", "#2563eb")))
+    _look = look
+    return True
 
 
 class Main(QMainWindow):
@@ -339,14 +350,12 @@ class Main(QMainWindow):
 
     def _show_org(self):
         self.set_titles()
-        self.scheduler.apply()                         # the organization being looked at runs through the sections
-        self.backup_scheduler.apply()
-        self.settings.reload()
+        self.settings.reload(announce=False)           # its settings take effect here, once (the schedules too: the organization
+        self.settings_applied(lists=False)             # being looked at runs through the sections)
         self.results.reset_view()
         self.sessions.refresh()
         self.inventory.org_switched()
-        self.inventory.changed.emit()                  # everything that follows the inventory refills itself
-        self.update_headers()
+        self.inventory.changed.emit()                  # everything that follows the inventory refills itself, the headers too
 
     def _strip_go(self, section, page):
         self.go(section)
@@ -559,15 +568,17 @@ class Main(QMainWindow):
     def preview_look(self, theme_name):
         """Settings > Appearance: show a theme at once, before it is saved."""
         app = QApplication.instance()
+        global _look
         theme.apply(app, theme_name, int(db.get_setting("font_size")), db.get_setting("ui_style"))
+        _look = None                                   # what is shown is not the saved look any more
         self._restyle()
 
     def reset_look(self):
-        """Edits dropped: the saved look again."""
+        """Edits dropped: the saved look again (nothing to do when it is what is shown)."""
         if theme.current().get("accent") is None:
             return
-        apply_look(QApplication.instance())
-        self._restyle()
+        if apply_look(QApplication.instance()):
+            self._restyle()
 
     def _restyle(self):
         app = QApplication.instance()
@@ -576,12 +587,14 @@ class Main(QMainWindow):
         self.strip.restyle()
         self.inventory.refresh()
 
-    def settings_applied(self):
-        """Make a saved (or imported) settings change take effect everywhere, without a restart."""
+    def settings_applied(self, lists=True):
+        """Make a saved (or imported) settings change take effect everywhere, without a restart. lists=False leaves out the lists
+        that follow the inventory: switching organization refills those once itself."""
         apply_look(QApplication.instance())
         self.tabs.restyle()
         self.update_tray()
-        self.inventory.refresh()
+        if lists:
+            self.inventory.refresh()
         self.results.repopulate()
         self.reports.show_preview()
         self.history.show_run()
@@ -590,8 +603,9 @@ class Main(QMainWindow):
         self.backup_scheduler.apply()
         agents.apply()
         self.strip.restyle()
-        self.results.refresh_groups()
-        self.dashboard.refresh()
+        if lists:
+            self.results.refresh_groups()
+            self.dashboard.refresh()
 
     def closeEvent(self, event):
         self.remember_layout()

@@ -140,7 +140,7 @@ with db.connect() as c:
                       [(rid, d, ch, s, "", "") for d, ch, s in rows])
     now = datetime.now()
     for h in range(30):
-        at = (now - timedelta(hours=h * 7)).strftime("%Y-%m-%d %H:%M:%S")        # some inside the last week, some before it
+        at = (now - timedelta(hours=h * 7, minutes=30)).strftime("%Y-%m-%d %H:%M:%S")     # some inside the last week, some before
         run(at, [("fw1", "cpu", "OK"), ("fw1", "memory", ["OK", "WARN", "FAIL"][h % 3]),
                  ("ctrl", "health", "OK"), ("ctrl / ap1", "clients", ["OK", "ERROR"][h % 2]), ("ctrl / ap2", "clients", "OK"),
                  ("lab", "connection", ["ERROR", "OK"][h % 2]), ("lab", "config backup", "FAIL"),
@@ -148,6 +148,17 @@ with db.connect() as c:
 for args in ((7,), (2,), (30,), (7, (now - timedelta(days=3)).strftime("%Y-%m-%d %H:%M:%S"), now.strftime("%Y-%m-%d %H:%M:%S"))):
     new, was = db._availability_here(*args), old_availability(*args)
     check(f"the same counts for {args[0]} days" + (" between two times" if len(args) > 1 else ""), new == was and new, (new, was))
+check("the last week starts on the minute", db._availability_here(7) == db._availability_between(
+      (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:00"), "9999-12-31 00:00:00"))
+WEEK = ((datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:00"), "9999-12-31 00:00:00")
+first = db._availability_between(*WEEK)
+kept = [k for k in db._remember if k[1] == "_availability_between" and k[2] == WEEK]
+check("availability is kept for the file until runs change", len(kept) == 1)
+db._remember[kept[0]] = (db._remember[kept[0]][0], {"made-up": {"runs": 1, "reachable": 1, "healthy": 1}})
+check("...and that kept answer is used", "made-up" in db._availability_between(*WEEK))
+db.save_run([Result("fw1", "cpu", "OK", "1%", "", 1.0)])
+now_ = db._availability_between(*WEEK)
+check("a new run is counted at once", "made-up" not in now_ and now_["fw1"]["runs"] == first["fw1"]["runs"] + 1, (now_.get("fw1"), first.get("fw1")))
 check("a UniFi sub-device counts for its controller", "ctrl / ap1" not in db._availability_here(30) and "ctrl" in db._availability_here(30))
 nas = db._availability_here(30)["nas"]
 check("a failed config backup doesn't make a run unhealthy", nas["healthy"] == nas["runs"] > 0, nas)
@@ -217,6 +228,50 @@ check("the list has the failing devices", rows >= 60, rows)
 check("refilling it measures its status column a few times per row, not every row per cell", calls[0] < rows * 6, (calls[0], rows))
 check("its columns still fit their contents", dash.attention.horizontalHeader().sectionResizeMode(0) == FIT
       and dash.attention.horizontalHeader().sectionResizeMode(2) == STRETCH)
+
+print("== organization names, without copying the list each time")
+check("Global and an organization by number", db.org_name(0) == "Global" and db.org_name(acme) == "Acme")
+orgs.update(acme, "Acme Schools", "ACME", "")
+check("a rename shows at once", db.org_name(acme) == "Acme Schools")
+check("a number that isn't an organization says so", db.org_name(9999) == "Organization 9999")
+rows = db.org_rows(); rows[0]["name"] = "changed by a caller"
+check("the list handed out is a copy", db.org_name(acme) == "Acme Schools")
+orgs.update(acme, "Acme", "ACME", "")
+
+print("== switching organization")
+from ui import theme
+applied = []
+real_apply = theme.apply
+theme.apply = lambda *a, **k: (applied.append(a[1:]), real_apply(*a, **k))[1]
+A.apply_look(app); applied.clear()                                  # what Toner does once as it starts
+check("the look that is shown already isn't applied again", A.apply_look(app) is False and not applied)
+with db.within(db.GLOBAL):
+    was = db.get_setting("font_size")
+    db.set_setting("font_size", 11)
+check("a changed look is applied", A.apply_look(app) is True and len(applied) == 1)
+with db.within(db.GLOBAL):
+    db.set_setting("font_size", was)
+A.apply_look(app); applied.clear()
+w.preview_look("Dark")
+w.reset_look()
+check("after a preview, the saved look comes back", len(applied) == 2 and applied[-1][0] == db.get_setting("theme"), applied)
+with db.within(acme):
+    db.set_setting("schedule_enabled", True); db.set_setting("schedule_minutes", 30)
+counted = {"availability": 0}
+real_av = db.availability
+db.availability = lambda *a, **k: (counted.__setitem__("availability", counted["availability"] + 1), real_av(*a, **k))[1]
+applied.clear()
+w.set_org(acme); app.processEvents()
+check("switching re-applies no look", not applied, applied)
+check("the Overview refreshes once", counted["availability"] == 1, counted)
+check("the organization's own settings take effect (its check schedule)", w.results.schedule_note.text().startswith("Next scheduled run"),
+      w.results.schedule_note.text())
+check("the sections show the organization", w.headers["inventory"].title.text().startswith("Acme"))
+counted["availability"] = 0
+w.set_org(db.GLOBAL); app.processEvents()
+check("switching back refreshes the Overview once too", counted["availability"] == 1, counted)
+check("and Global's settings are back (no schedule)", w.results.schedule_note.text() == "", w.results.schedule_note.text())
+db.availability, theme.apply = real_av, real_apply
 
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)
