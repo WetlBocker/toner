@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComb
 from core import ansible as AN, audit, db, scope
 from ui import status as st
 from ui.nav import PageStack
-from ui.widgets import EmptyHint, flow
+from ui.widgets import EmptyHint, filling, flow
 from ui.finder import FilterButton, SearchBox, device_sections, shown_devices
 
 MODES = {"check": "Check", "run": "Run", "syntax": "Syntax"}
@@ -309,15 +309,16 @@ class PlaybooksPage(QWidget):
         self.finished.emit()
 
     def _fill_recap(self, rows):
-        self.recap.setRowCount(len(rows))
-        for i, r in enumerate(rows):
-            for j, v in enumerate((r["host"], r["ok"], r["changed"], r["unreachable"], r["failed"], r.get("skipped", 0))):
-                it = QTableWidgetItem(str(v))
-                if j in (3, 4) and v:
-                    it.setForeground(st.qink("FAIL"))
-                elif j == 2 and v:
-                    it.setForeground(st.qink("WARN"))
-                self.recap.setItem(i, j, it)
+        with filling(self.recap):
+            self.recap.setRowCount(len(rows))
+            for i, r in enumerate(rows):
+                for j, v in enumerate((r["host"], r["ok"], r["changed"], r["unreachable"], r["failed"], r.get("skipped", 0))):
+                    it = QTableWidgetItem(str(v))
+                    if j in (3, 4) and v:
+                        it.setForeground(st.qink("FAIL"))
+                    elif j == 2 and v:
+                        it.setForeground(st.qink("WARN"))
+                    self.recap.setItem(i, j, it)
 
     def save_output(self):
         if not self.output.toPlainText():

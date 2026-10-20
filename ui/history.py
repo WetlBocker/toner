@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFrame, QHBoxLayout
 from core import db, display, scope
 from core.reports import COLORS, fg_for
 from ui import theme
-from ui.widgets import EmptyHint, FlowLayout, GroupPicker, StatusDelegate, flow
+from ui.widgets import EmptyHint, FlowLayout, GroupPicker, StatusDelegate, filling, flow
 from ui.finder import FilterButton, SearchBox, device_sections, listed_devices, shown_devices, wants_archived
 from ui import status as st
 
@@ -469,11 +469,12 @@ class HistoryTab(QWidget):
         if orgs:                                                            # Global: only the runs of the organizations picked
             runs = [r for r in runs if r["org"] in orgs]
         self.run_ids = [(r["id"], r["org"]) for r in runs]
-        self.runs.setRowCount(len(runs))
-        self.runs.setColumnHidden(5, not db.several())
-        for i, r in enumerate(runs):
-            for j, v in enumerate([r["started_at"], r["ok"], r["warn"], r["fail"], r["error"], db.org_name(r["org"])]):
-                self.runs.setItem(i, j, QTableWidgetItem(str(v)))
+        with filling(self.runs):
+            self.runs.setRowCount(len(runs))
+            self.runs.setColumnHidden(5, not db.several())
+            for i, r in enumerate(runs):
+                for j, v in enumerate([r["started_at"], r["ok"], r["warn"], r["fail"], r["error"], db.org_name(r["org"])]):
+                    self.runs.setItem(i, j, QTableWidgetItem(str(v)))
         self.runs_hint.setVisible(not runs)
         if runs and self.runs.currentRow() < 0:
             self.runs.selectRow(0)                                          # the latest run, so the lower table is never blank

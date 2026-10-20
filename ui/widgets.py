@@ -1,6 +1,6 @@
 from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QIcon, QIconEngine, QPainter, QPalette, QPen, QPixmap, QPolygonF
-from PySide6.QtWidgets import (QAbstractButton, QAbstractSpinBox, QApplication, QCheckBox, QComboBox, QHBoxLayout, QLabel, QLayout, QLineEdit,
+from PySide6.QtWidgets import (QAbstractButton, QAbstractSpinBox, QApplication, QCheckBox, QComboBox, QHBoxLayout, QHeaderView, QLabel, QLayout, QLineEdit,
                                QMenu, QPushButton, QSizePolicy, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QToolButton,
                                QVBoxLayout, QWidget, QWidgetAction)
 from core import reports
@@ -343,6 +343,28 @@ class SectionHeader(QWidget):
         for w in widgets:
             self.lay.addWidget(w)
         return self
+
+
+class filling:
+    """`with filling(table):` refill a table without it measuring itself again after every cell. Columns that fit their contents
+    are held at their width while the cells go in, then fitted once at the end. Without this, replacing the cells of a table
+    that already has a few hundred rows takes seconds: Qt measures every row again after each cell."""
+
+    def __init__(self, table):
+        self.table = table
+
+    def __enter__(self):
+        hh = self.table.horizontalHeader()
+        self.fit = [i for i in range(hh.count()) if hh.sectionResizeMode(i) == QHeaderView.ResizeMode.ResizeToContents]
+        for i in self.fit:
+            hh.setSectionResizeMode(i, QHeaderView.ResizeMode.Fixed)
+        return self.table
+
+    def __exit__(self, *exc):
+        hh = self.table.horizontalHeader()
+        for i in self.fit:
+            hh.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
+        return False
 
 
 class EmptyHint(QWidget):

@@ -278,7 +278,7 @@ check("the IDs stay the same when the database is opened again", {r["id"]: r["ui
 orgs.update(acme, "Acme Charter Schools", "ACME", "#2f6fed")
 db.forget_orgs()
 check("renaming an organization keeps its ID", orgs.get(acme)["uid"] == uids[acme])
-check("the database is at the newest schema version", db.schema_version() == db.SCHEMA_VERSION == 7)
+check("the database is at the newest schema version", db.schema_version() == db.SCHEMA_VERSION >= 7)
 
 old = os.path.join(SP, "before-uids%d.db" % int(time.time() * 1000))         # a database from 1.6.1: organizations without IDs
 c = sqlite3.connect(old)

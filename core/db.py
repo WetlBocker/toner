@@ -441,7 +441,6 @@ def init():
             colour TEXT DEFAULT '', archived INTEGER DEFAULT 0, created TEXT DEFAULT '');
         CREATE INDEX IF NOT EXISTS idx_backups_dev ON config_backups(device, id);
         CREATE INDEX IF NOT EXISTS idx_results_run ON results(run_id);
-        CREATE INDEX IF NOT EXISTS idx_results_series ON results(device, check_name);
         """)
         _migrate(c)
     _invalidate_folders()
@@ -538,8 +537,24 @@ def new_uid():
     return str(uuid.uuid4())
 
 
+def _m8_faster_history(c):
+    """Reading the newest results no longer goes through every result ever stored. An index by device, check and run replaces the
+    one by device and check (it covers what that one did). The checks that have numbers, which History offers to chart, are listed
+    in numeric_checks; a trigger adds to it as results are stored, however they are stored."""
+    c.executescript("""
+    CREATE INDEX IF NOT EXISTS idx_results_latest ON results(device, check_name, run_id);
+    DROP INDEX IF EXISTS idx_results_series;
+    CREATE TABLE IF NOT EXISTS numeric_checks (
+        device TEXT NOT NULL, check_name TEXT NOT NULL, PRIMARY KEY (device, check_name)) WITHOUT ROWID;
+    CREATE TRIGGER IF NOT EXISTS numeric_checks_add AFTER INSERT ON results WHEN NEW.numeric IS NOT NULL BEGIN
+        INSERT OR IGNORE INTO numeric_checks(device, check_name) VALUES (NEW.device, NEW.check_name);
+    END;
+    INSERT OR IGNORE INTO numeric_checks(device, check_name) SELECT DISTINCT device, check_name FROM results WHERE numeric IS NOT NULL;
+    """)
+
+
 MIGRATIONS = [(1, _m1_legacy_columns), (2, _m2_agent_history), (3, _m3_agent_tokens), (4, _m4_device_checks), (5, _m5_ansible_runs),
-              (6, _m6_shared), (7, _m7_org_uids)]
+              (6, _m6_shared), (7, _m7_org_uids), (8, _m8_faster_history)]
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 
 
@@ -1234,8 +1249,7 @@ def device_checks():
     def here():
         out = {}
         with connect() as c:
-            for r in c.execute("SELECT DISTINCT device, check_name FROM results "
-                               "WHERE numeric IS NOT NULL ORDER BY device, check_name"):
+            for r in c.execute("SELECT device, check_name FROM numeric_checks ORDER BY device, check_name"):
                 out.setdefault(r["device"], []).append(r["check_name"])
         return out
     return _per_device(here)
@@ -1259,7 +1273,7 @@ def _series_here(device, check, limit):
             "SELECT runs.started_at AS t, results.numeric AS v FROM results "
             "JOIN runs ON runs.id = results.run_id "
             "WHERE results.device=? AND results.check_name=? AND results.numeric IS NOT NULL "
-            "ORDER BY runs.id DESC LIMIT ?", (device, check, limit)).fetchall()
+            "ORDER BY results.run_id DESC LIMIT ?", (device, check, limit)).fetchall()
         pts = [(r["t"], r["v"]) for r in reversed(rows)]
         col = AGENT_COLUMNS.get(check)
         if col:
@@ -1276,6 +1290,42 @@ _SEV = {"OK": 0, "WARN": 1, "FAIL": 2, "ERROR": 3}
 
 def _base(label):
     return (label or "").split(" / ")[0]
+
+
+# ---------- remembering the newest results ----------
+# Every device's newest results are asked for often (each section shown, each refresh), and reading them takes a while on a long
+# history. What a file holds only changes when runs are stored or removed, so each file's answer is kept until then.
+_remember = {}
+_remember_lock = threading.Lock()
+
+
+def _history_mark(c):
+    """Changes whenever runs or results are added or removed: the newest run, how many there are, and the newest result."""
+    return tuple(c.execute("SELECT (SELECT IFNULL(MAX(id), 0) FROM runs), (SELECT COUNT(*) FROM runs), "
+                           "(SELECT IFNULL(MAX(rowid), 0) FROM results)").fetchone())
+
+
+def forget_history():
+    """Read the newest results afresh (moving devices between organizations takes results out of a file without a new run)."""
+    with _remember_lock:
+        _remember.clear()
+
+
+def _remembered(fn, copy):
+    """fn, answered from what was kept for this file while its runs have not changed. `copy` hands each caller its own copy."""
+    def kept(*args, **kw):
+        key = (str(db_path()), fn.__name__, args, tuple(sorted(kw.items())))
+        with connect() as c:
+            mark = _history_mark(c)
+        with _remember_lock:
+            hit = _remember.get(key)
+        if hit is None or hit[0] != mark:
+            hit = (mark, fn(*args, **kw))                     # stored under the mark read first: a run saved meanwhile is read next time
+            with _remember_lock:
+                _remember[key] = hit
+        return copy(hit[1])
+    kept.__name__, kept.__doc__ = fn.__name__, fn.__doc__
+    return kept
 
 
 def latest_results(exclude=("config backup",)):
@@ -1316,6 +1366,9 @@ def _latest_results_here(exclude=("config backup",)):
     return rows, newest_at
 
 
+_latest_results_here = _remembered(_latest_results_here, lambda r: ([dict(x) for x in r[0]], r[1]))
+
+
 def device_health(exclude=("config backup",)):
     """_device_health_here for every file of the view, keyed with dkey."""
     return _per_device(lambda: _device_health_here(exclude))
@@ -1352,6 +1405,9 @@ def _device_health_here(exclude=("config backup",)):
     for d in out.values():
         d["problems"].sort(key=lambda p: -_SEV.get(p[1], 0))
     return out
+
+
+_device_health_here = _remembered(_device_health_here, lambda h: {k: {**v, "problems": list(v["problems"])} for k, v in h.items()})
 
 
 def changes_since_previous():
@@ -1393,28 +1449,19 @@ def availability(days=7, start=None, end=None):
 
 def _availability_here(days=7, start=None, end=None):
     """{device: {'runs', 'reachable', 'healthy'}} over the last `days` days (or between two times). A run counts as 'reachable'
-    when the device produced results without a 'connection' error, and 'healthy' when none of its checks was worse than WARN."""
+    when the device produced results without a 'connection' error, and 'healthy' when none of its checks was worse than WARN.
+    Counted by SQLite: a week of runs is a lot of results to go through one by one."""
     cutoff = start or (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
     until = end or "9999-12-31 00:00:00"
-    stats = {}
     with connect() as c:
-        seen = {}
-        for r in c.execute("SELECT results.run_id AS rid, device, check_name, status FROM results JOIN runs ON "
-                           "runs.id = results.run_id WHERE runs.started_at >= ? AND runs.started_at < ? AND check_name != 'config backup'",
-                           (cutoff, until)):
-            key = (r["rid"], _base(r["device"]))
-            s = seen.setdefault(key, {"conn": False, "bad": False})
-            if r["check_name"] == "connection" and r["status"] == "ERROR":
-                s["conn"] = True
-            if _SEV.get(r["status"], 0) >= 2:
-                s["bad"] = True
-    for (rid, dev), s in seen.items():
-        d = stats.setdefault(dev, {"runs": 0, "reachable": 0, "healthy": 0})
-        d["runs"] += 1
-        d["reachable"] += 0 if s["conn"] else 1
-        d["healthy"] += 0 if s["bad"] else 1
-    return stats
-
+        rows = c.execute(
+            "SELECT dev, COUNT(*) AS runs, SUM(1 - conn) AS reachable, SUM(1 - bad) AS healthy FROM ("
+            "  SELECT r.run_id, CASE WHEN instr(r.device, ' / ') > 0 THEN substr(r.device, 1, instr(r.device, ' / ') - 1)"
+            "         ELSE r.device END AS dev,"                         # a UniFi sub-device counts for its controller (_base)
+            "         MAX(r.check_name = 'connection' AND r.status = 'ERROR') AS conn, MAX(r.status IN ('FAIL', 'ERROR')) AS bad"
+            "  FROM results r WHERE r.run_id IN (SELECT id FROM runs WHERE started_at >= ? AND started_at < ?)"
+            "  AND r.check_name != 'config backup' GROUP BY r.run_id, dev) GROUP BY dev", (cutoff, until)).fetchall()
+    return {r["dev"]: {"runs": r["runs"], "reachable": r["reachable"], "healthy": r["healthy"]} for r in rows}
 
 def last_run():
     def here():

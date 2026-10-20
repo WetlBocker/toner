@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QComboBox, QDial
 from core import audit, profiles, winmon, winservices
 from ui import status as st
 from ui import theme
+from ui.widgets import filling
 
 NAME = Qt.ItemDataRole.UserRole
 FILTERS = ["All services", "Running", "Stopped", "Automatic but not running"]
@@ -201,17 +202,18 @@ class ServicesDialog(QDialog):
     def _fill(self):
         keep = set(self._chosen())
         self.table.setSortingEnabled(False)
-        self.table.setRowCount(len(self.rows))
-        for i, r in enumerate(self.rows):
-            for j, text in enumerate((r["display"] or r["name"], r["name"], r["state"], winservices.startup_label(r))):
-                it = QTableWidgetItem(text)
-                it.setToolTip(text)
-                if j == 1:
-                    it.setData(NAME, r["name"])
-                self.table.setItem(i, j, it)
-            self._paint(i, r)
-            if r["name"] in keep:
-                self.table.selectRow(i)
+        with filling(self.table):
+            self.table.setRowCount(len(self.rows))
+            for i, r in enumerate(self.rows):
+                for j, text in enumerate((r["display"] or r["name"], r["name"], r["state"], winservices.startup_label(r))):
+                    it = QTableWidgetItem(text)
+                    it.setToolTip(text)
+                    if j == 1:
+                        it.setData(NAME, r["name"])
+                    self.table.setItem(i, j, it)
+                self._paint(i, r)
+                if r["name"] in keep:
+                    self.table.selectRow(i)
         self.table.setSortingEnabled(True)
         self._apply_filter()
 

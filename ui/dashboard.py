@@ -9,7 +9,7 @@ import html
 
 from core import acks, audit, backup, db, display, fleet, maintenance, notify, reports, scope, vendors
 from ui import icons, theme
-from ui.widgets import EmptyHint, StatusDelegate
+from ui.widgets import EmptyHint, StatusDelegate, filling
 from ui import status as st
 
 
@@ -489,26 +489,27 @@ class DashboardTab(QWidget):
         keep = self._current()[0] if self._current() else None
         self.names = [n for n, _ in problems]
         self.rows = [(n, v, aside.get(n, (None,))[0]) for n, v in problems]
-        self.attention.setRowCount(len(problems))
-        muted = QColor((theme.current() or {}).get("muted", "#888888"))
-        for i, (name, v) in enumerate(problems):
-            what = "; ".join(display.said(display.check_name(c), m) for c, _, m in v["problems"][:2])
-            if len(v["problems"]) > 2:
-                what += f"  (+{len(v['problems']) - 2} more)"
-            if name in held:
-                what = "(maintenance) " + what
-            if name in aside:
-                state, entry = aside[name]
-                what = (f"(acknowledged {display.ago(entry['at'])}) " if state == "acknowledged"
-                        else f"(snoozed until {entry['until'][11:16]}) ") + what
-            for j, text in enumerate([db.label_org(name), v["status"], what, self._ago(v["at"])]):
-                item = QTableWidgetItem(text)
-                item.setToolTip(v["at"] if j == 3 else text)
-                if name in aside and j != 1:
-                    item.setForeground(muted)
-                self.attention.setItem(i, j, item)
-            if name == keep:
-                self.attention.selectRow(i)
+        with filling(self.attention):
+            self.attention.setRowCount(len(problems))
+            muted = QColor((theme.current() or {}).get("muted", "#888888"))
+            for i, (name, v) in enumerate(problems):
+                what = "; ".join(display.said(display.check_name(c), m) for c, _, m in v["problems"][:2])
+                if len(v["problems"]) > 2:
+                    what += f"  (+{len(v['problems']) - 2} more)"
+                if name in held:
+                    what = "(maintenance) " + what
+                if name in aside:
+                    state, entry = aside[name]
+                    what = (f"(acknowledged {display.ago(entry['at'])}) " if state == "acknowledged"
+                            else f"(snoozed until {entry['until'][11:16]}) ") + what
+                for j, text in enumerate([db.label_org(name), v["status"], what, self._ago(v["at"])]):
+                    item = QTableWidgetItem(text)
+                    item.setToolTip(v["at"] if j == 3 else text)
+                    if name in aside and j != 1:
+                        item.setForeground(muted)
+                    self.attention.setItem(i, j, item)
+                if name == keep:
+                    self.attention.selectRow(i)
         hidden = sum(1 for n in aside if n in health and health[n]["status"] != "OK")
         self.show_aside.setText(f"Show put aside ({hidden})" if hidden else "Show put aside")
         self.show_aside.setVisible(bool(hidden) or self.show_aside.isChecked())

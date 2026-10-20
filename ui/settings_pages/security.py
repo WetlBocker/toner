@@ -307,6 +307,7 @@ class DataPage(Page):
             return
         with db.connect() as c:
             c.execute("DELETE FROM runs")                # results go with them (cascade)
+            c.execute("DELETE FROM numeric_checks")      # and so do the checks History offers to chart
         self.refresh()
         self.on_imported()
 

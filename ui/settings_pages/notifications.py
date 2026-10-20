@@ -11,7 +11,7 @@ from core import alerts, db, notify
 from ui.brandicons import channel_icon
 from ui.settings_base import Page, note, spin
 from ui.toast import toast
-from ui.widgets import EmptyHint
+from ui.widgets import EmptyHint, filling
 
 
 # ------------------------------------------------------------------ Notifications
@@ -217,16 +217,17 @@ class NotificationsPage(Page):
 
     def reload_channels(self):
         chs = notify.channels()
-        self.table.setRowCount(len(chs))
-        for i, c in enumerate(chs):
-            sends = c.get("min", "WARN and worse") + (", recoveries" if c.get("recoveries", True) else "")
-            for j, v in enumerate(("yes" if c.get("enabled", True) else "no", c["name"],
-                                   notify.CHANNEL_TYPES[c["type"]]["label"], sends)):
-                item = QTableWidgetItem(v)
-                item.setToolTip(v)
-                if j == 1:                                        # the service's mark beside the channel's name (the type is plain text)
-                    item.setIcon(channel_icon(c["type"]))
-                self.table.setItem(i, j, item)
+        with filling(self.table):
+            self.table.setRowCount(len(chs))
+            for i, c in enumerate(chs):
+                sends = c.get("min", "WARN and worse") + (", recoveries" if c.get("recoveries", True) else "")
+                for j, v in enumerate(("yes" if c.get("enabled", True) else "no", c["name"],
+                                       notify.CHANNEL_TYPES[c["type"]]["label"], sends)):
+                    item = QTableWidgetItem(v)
+                    item.setToolTip(v)
+                    if j == 1:                                        # the service's mark beside the channel's name (the type is plain text)
+                        item.setIcon(channel_icon(c["type"]))
+                    self.table.setItem(i, j, item)
 
     def add_channel(self, ctype):
         dlg = ChannelDialog(notify.new_channel(ctype), self.desktop_cb, self)

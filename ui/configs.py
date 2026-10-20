@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QComboBox, QDial
 from core import audit, backup, db, display, scope
 from drivers.base import SEVERITY
 from ui import theme
-from ui.widgets import EmptyHint
+from ui.widgets import EmptyHint, filling
 from ui.finder import FilterButton, SearchBox, device_sections, listed_devices, shown_devices, wants_archived
 from ui.toast import toast
 from ui import status as st
@@ -227,17 +227,18 @@ class ConfigsTab(QWidget):
         self.names = [d["key"] for d in devs]
         self.devs.setColumnHidden(5, not db.several())        # the Organization column: Global lists every organization
         self.devs.blockSignals(True)
-        self.devs.setRowCount(len(devs))
-        for i, d in enumerate(devs):
-            s = info.get(d["key"], {})
-            state = ("not supported" if not backup.supported(d) else
-                     {"error": "last backup FAILED", "changed": "changed", "new": "ok", "unchanged": "ok"}.get(s.get("status"), "never backed up"))
-            for j, v in enumerate([d["name"], display.vendor_name(d["vendor"]), str(s.get("versions", 0)),
-                                   (s.get("last", "") or "")[:16], state, db.org_name(d["org"])]):
-                it = QTableWidgetItem(v)
-                if j == 4 and state == "last backup FAILED":
-                    it.setForeground(st.qink("FAIL"))
-                self.devs.setItem(i, j, it)
+        with filling(self.devs):
+            self.devs.setRowCount(len(devs))
+            for i, d in enumerate(devs):
+                s = info.get(d["key"], {})
+                state = ("not supported" if not backup.supported(d) else
+                         {"error": "last backup FAILED", "changed": "changed", "new": "ok", "unchanged": "ok"}.get(s.get("status"), "never backed up"))
+                for j, v in enumerate([d["name"], display.vendor_name(d["vendor"]), str(s.get("versions", 0)),
+                                       (s.get("last", "") or "")[:16], state, db.org_name(d["org"])]):
+                    it = QTableWidgetItem(v)
+                    if j == 4 and state == "last backup FAILED":
+                        it.setForeground(st.qink("FAIL"))
+                    self.devs.setItem(i, j, it)
         self.devs.resizeColumnsToContents()
         self.devs.blockSignals(False)
         self.hint.setVisible(not every)

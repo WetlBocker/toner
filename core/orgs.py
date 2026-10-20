@@ -312,6 +312,7 @@ def _move_data(src, dst, dev_name):
             c.execute("DELETE FROM backup_log WHERE device=?", (dev_name,))
             c.execute("DELETE FROM config_backups WHERE device=?", (dev_name,))
             c.execute(f"DELETE FROM results WHERE {where}", args)
+            c.execute(f"DELETE FROM numeric_checks WHERE {where}", args)      # (the new file's list fills itself as the results go in)
             for rid in runs:                                   # what is left of each run is counted again; an empty one goes
                 left = [r["status"] for r in c.execute("SELECT status FROM results WHERE run_id=?", (rid,))]
                 if left:
@@ -321,6 +322,7 @@ def _move_data(src, dst, dev_name):
                     c.execute("DELETE FROM runs WHERE id=?", (rid,))
             for old_id, _new in moved_sessions:
                 c.execute("DELETE FROM sessions WHERE id=?", (old_id,))
+    db.forget_history()                                    # results left this file without a new run
 
 
 def _session_paths(c):

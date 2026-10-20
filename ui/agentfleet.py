@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QLabel, QMessageB
                                QVBoxLayout, QWidget)
 from core import agents, audit, db
 from ui import status as st
+from ui.widgets import filling
 
 DEVICE = Qt.ItemDataRole.UserRole           # on a row's first cell: which computer the row is, whatever the sort order
 SORT_KEY = Qt.ItemDataRole.UserRole + 1     # on the Age cell: minutes, so "9 min" sorts before "2.0 h"
@@ -102,34 +103,35 @@ class AgentFleet(QWidget):
         sort_col, sort_order = hh.sortIndicatorSection(), hh.sortIndicatorOrder()
         self.rows = agents.overview()
         self.table.setSortingEnabled(False)                                # fill in order, then sort once
-        self.table.setRowCount(len(self.rows))
-        silent = 0
-        for i, r in enumerate(self.rows):
-            age = r["age"]
-            notes = []
-            if not r["has_token"]:
-                notes.append("revoked or no token")
-            elif age is None:
-                notes.append("no report yet")
-            elif age > fail:
-                notes.append("silent")
-                silent += 1
-            if r["pending_reboot"]:
-                notes.append("reboot pending")
-            if r["version"] and agents.agent_outdated(r["version"]):
-                notes.append("agent will update")
-            vals = (db.label_org(r["device"]), r["computer"], r["os"].replace("Microsoft ", "") + (f"  ({r['domain']})" if r["domain"] else ""),
-                    self._when(r["received_at"]), self._age(age), r["source"], f"v{r['version']}" if r["version"] else "", ", ".join(notes))
-            for j, v in enumerate(vals):
-                item = _Item(v)
-                item.setToolTip(v)
-                if j == 0:
-                    item.setData(DEVICE, r["device"])
-                if j == self.AGE:
-                    item.setData(SORT_KEY, age if age is not None else 1e12)
-                if j == self.NOTES and ("silent" in v or "revoked" in v):
-                    item.setForeground(st.qink("FAIL"))
-                self.table.setItem(i, j, item)
+        with filling(self.table):
+            self.table.setRowCount(len(self.rows))
+            silent = 0
+            for i, r in enumerate(self.rows):
+                age = r["age"]
+                notes = []
+                if not r["has_token"]:
+                    notes.append("revoked or no token")
+                elif age is None:
+                    notes.append("no report yet")
+                elif age > fail:
+                    notes.append("silent")
+                    silent += 1
+                if r["pending_reboot"]:
+                    notes.append("reboot pending")
+                if r["version"] and agents.agent_outdated(r["version"]):
+                    notes.append("agent will update")
+                vals = (db.label_org(r["device"]), r["computer"], r["os"].replace("Microsoft ", "") + (f"  ({r['domain']})" if r["domain"] else ""),
+                        self._when(r["received_at"]), self._age(age), r["source"], f"v{r['version']}" if r["version"] else "", ", ".join(notes))
+                for j, v in enumerate(vals):
+                    item = _Item(v)
+                    item.setToolTip(v)
+                    if j == 0:
+                        item.setData(DEVICE, r["device"])
+                    if j == self.AGE:
+                        item.setData(SORT_KEY, age if age is not None else 1e12)
+                    if j == self.NOTES and ("silent" in v or "revoked" in v):
+                        item.setForeground(st.qink("FAIL"))
+                    self.table.setItem(i, j, item)
         same = all((r["computer"] or "").lower() in ("", db.label(r["device"]).lower()) for r in self.rows)
         self.table.setColumnHidden(self.COMPUTER, bool(self.rows) and same)    # the same name twice is only clutter
         self.table.setSortingEnabled(True)
