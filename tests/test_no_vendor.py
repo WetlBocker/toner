@@ -70,7 +70,8 @@ w2 = VA.VendorAssignDialog([{"kind": "ssh", "name": "a", "host": "10.0.0.2", "po
 buttons = [b.text() for b in w2.findChildren(VA.QPushButton)]
 check("from the inventory the buttons are Apply and Cancel", "Apply" in buttons and "Cancel" in buttons and "Add devices" not in buttons and "Sessions only" not in buttons, buttons)
 note = next(l.text() for l in w2.findChildren(VA.QLabel) if l.text().startswith("Pick rows"))
-check("the note leaves out the import's sentences", "still added" not in note and "Remote Desktop" not in note and "Detect Vendors checks" in note, note)
+check("the note's last two sentences are left out, as agreed", note.endswith("edit them later to choose one.") and "Remote Desktop" not in note
+      and "Detect Vendors" not in note, note)
 check("each row starts from the device's own vendor", w2.vendors() == [("", ""), ("cisco", "cisco_xe")])
 w2.start_detect()
 deadline = time.time() + 5

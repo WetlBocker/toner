@@ -34,7 +34,7 @@ class VendorAssignDialog(QDialog):
         """rows: [{'name', 'host', 'port', 'kind', 'username', 'org', 'folder': [parts]}], each optionally with the 'vendor' and
         'platform' it starts from. passwords: {row index: password}, for Detect Vendors to sign in with. vendors() then gives
         (vendor, platform) for each row, in the same order. inventory: opened for devices already in the inventory (More > Detect
-        vendors): the buttons are Apply and Cancel, and the import's sentences are left out of the note."""
+        vendors): the buttons are Apply and Cancel, and the note's last two sentences are left out."""
         super().__init__(parent)
         from core import vendordetect
         self.detect_all = detect or vendordetect.detect_all
@@ -106,10 +106,10 @@ class VendorAssignDialog(QDialog):
             bottom.addWidget(only)
         bottom.addWidget(cancel)
         note = QLabel("Pick rows (an organization's or folder's row picks everything in it), choose a vendor, and press Apply to selected. "
-                      + ("" if inventory else "Devices left without a vendor are still added: edit them later to choose one. Remote Desktop "
-                         "sessions start as Windows. ")
-                      + "Detect Vendors checks the selected rows (or every row without a vendor): first what each device shows "
-                      "without signing in, then, using its user name and password, what it says after signing in over SSH.")
+                      "Devices left without a vendor are still added: edit them later to choose one."
+                      + ("" if inventory else " Remote Desktop sessions start as Windows. Detect Vendors checks the selected rows (or every "
+                         "row without a vendor): first what each device shows without signing in, then, using its user name and "
+                         "password, what it says after signing in over SSH."))
         note.setWordWrap(True)
         lay = QVBoxLayout(self)
         lay.addWidget(note)
