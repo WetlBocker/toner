@@ -150,7 +150,7 @@ def listed_devices(fb=None, enabled_only=False):
 
 def device_sections(devs, folders=True):
     """Organization (in Global), Vendor, Location, Folder (each folder that holds devices, and the folders above it) and Tag."""
-    out = org_section() + [Section("vendor", "Vendor", sorted(((display.vendor_name(v), v) for v in {vendors.family(d["vendor"]) for d in devs}),
+    out = org_section() + [Section("vendor", "Vendor", sorted(((display.vendor_name(v) if v else "(no vendor)", v) for v in {vendors.family(d["vendor"]) for d in devs}),
                                               key=lambda x: x[0].lower()))]
     locs = sorted({d.get("location") for d in devs if d.get("location")}, key=str.lower)
     out.append(Section("location", "Location", [(x, x) for x in locs] + ([("(none)", "")] if any(not d.get("location") for d in devs) else [])))

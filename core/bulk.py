@@ -5,8 +5,9 @@ from core import audit, db
 
 
 def apply(devices, ops):
-    """ops may hold any of: folder_id (None = top level), location, add_tags, remove_tags, profile_id (None = detach),
-    jump (device name, '' = direct), enabled (bool). A key that is absent is left alone. Returns the number of devices
+    """ops may hold any of: vendor (its default platform comes with it; None = leave as is), folder_id (None = top level),
+    location, add_tags, remove_tags, profile_id (None = detach), jump (device name, '' = direct), enabled (bool). A key that
+    is absent is left alone. Returns the number of devices
     changed. Raises ValueError for a jump host that would loop."""
     changed = 0
     names = {d["name"] for d in db.list_devices()}
@@ -20,6 +21,10 @@ def apply(devices, ops):
         if d is None:
             continue
         new = dict(d)
+        if ops.get("vendor") and ops["vendor"] != d.get("vendor"):
+            from core import vendors
+            new["vendor"] = ops["vendor"]
+            new["platform"] = "winrm" if ops["vendor"] == "windows" else vendors.default_platform(ops["vendor"])
         if "folder_id" in ops:
             new["folder_id"] = ops["folder_id"]
         if "location" in ops:
