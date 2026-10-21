@@ -363,13 +363,25 @@ def db_path() -> Path:
 _wal_set = set()
 
 
+class _Connection(sqlite3.Connection):
+    """`with connect() as c:` commits (or rolls back) at the end of the block, then closes the connection. Left open, each one
+    waited for Python's garbage collector, and Toner held a hundred or more at a time, each with its file handles."""
+
+    def __exit__(self, *exc):
+        try:
+            return super().__exit__(*exc)
+        finally:
+            self.close()
+
+
 def connect():
-    """A connection to the database. WAL mode lets the window, the scheduler and the agent receiver read while one of them
-    writes; a long busy timeout makes a competing write wait its turn instead of failing with 'database is locked'."""
+    """A connection to the database, for one `with` block (it is closed at the end). WAL mode lets the window, the scheduler and
+    the agent receiver read while one of them writes; a long busy timeout makes a competing write wait its turn instead of
+    failing with 'database is locked'."""
     p = db_path()
     if target() and not p.exists():
         p.parent.mkdir(parents=True, exist_ok=True)
-    c = sqlite3.connect(p, timeout=15)
+    c = sqlite3.connect(p, timeout=15, factory=_Connection)
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA foreign_keys = ON")
     c.execute("PRAGMA busy_timeout = 15000")
@@ -1182,7 +1194,9 @@ def _save_run_here(results):
     n = lambda s: sum(r.status == s for r in results)
     results = [r if "@@" not in (r.device or "") else type(r)(**{**r.__dict__, "device": split_key(r.device)[0]}) for r in results]
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    path, stored = str(db_path()), None
     with connect() as c:
+        before = _history_mark(c)
         cur = c.execute("INSERT INTO runs(started_at, ok, warn, fail, error) VALUES(?,?,?,?,?)",
                         (now, n("OK"), n("WARN"), n("FAIL"), n("ERROR")))
         rid = cur.lastrowid
@@ -1193,6 +1207,13 @@ def _save_run_here(results):
         cutoff = (datetime.now() - timedelta(days=int(get_setting("retention_days")))
                   ).strftime("%Y-%m-%d %H:%M:%S")
         c.execute("DELETE FROM runs WHERE started_at < ?", (cutoff,))
+        after = _history_mark(c)
+        if _kept_for(path, before):                          # read back as stored, so what is kept matches a fresh read exactly
+            stored = [dict(r) for r in c.execute("SELECT device, check_name, status, value, message, numeric FROM results "
+                                                 "WHERE run_id=? ORDER BY rowid", (rid,))]
+    # only this run changed the file (no other process stored one meanwhile, no old run was removed): bring it up to date
+    if stored is not None and after[0] == rid and after[1] == before[1] + 1 and after[2] - before[2] == len(results):
+        _advance_kept(path, before, after, now, stored)
     return rid
 
 def list_runs(limit=200):
@@ -1311,6 +1332,33 @@ def _history_mark(c):
                            "(SELECT IFNULL(MAX(rowid), 0) FROM results)").fetchone())
 
 
+def _kept_for(path, mark):
+    with _remember_lock:
+        return any(k[0] == path and v[0] == mark for k, v in _remember.items())
+
+
+def _advance_kept(path, before, after, at, stored):
+    """A run this process just stored: what is kept for this file (each device's newest state and results) is brought up to date
+    from that run alone, instead of reading every device's newest results again. Only what was up to date just before the run;
+    anything else (availability, or what another process changed) is read afresh as usual."""
+    with _remember_lock:
+        for key, (mark, value) in list(_remember.items()):
+            if key[0] != path or mark != before or key[1] not in ("_device_health_here", "_latest_results_here"):
+                continue
+            exclude = key[2][0] if key[2] else dict(key[3]).get("exclude", ("config backup",))
+            fresh = [r for r in stored if r["check_name"] not in exclude]      # a backup-only run leaves a device as it was
+            if key[1] == "_device_health_here":
+                new = {}
+                for r in fresh:
+                    _health_add(new, r, at)
+                _remember[key] = (after, {**value, **_health_sorted(new)})
+            else:
+                rows, newest = value
+                bases = {_base(r["device"]) for r in fresh}
+                _remember[key] = (after, ([r for r in rows if _base(r["device"]) not in bases] + [{**r, "at": at} for r in fresh],
+                                          max(newest, at) if fresh else newest))
+
+
 def forget_history():
     """Read the newest results afresh (moving devices between organizations takes results out of a file without a new run)."""
     with _remember_lock:
@@ -1399,15 +1447,22 @@ def _device_health_here(exclude=("config backup",)):
             by_run.setdefault(rid, []).append(b)
         for rid, bases in by_run.items():
             for r in c.execute("SELECT device, check_name, status, value, message FROM results WHERE run_id=?", (rid,)):
-                b = _base(r["device"])
-                if b not in bases or r["check_name"] in exclude:
-                    continue
-                d = out.setdefault(b, {"status": "OK", "at": times.get(rid, ""), "checks": 0, "problems": []})
-                d["checks"] += 1
-                if _SEV.get(r["status"], 0) > 0:
-                    d["problems"].append((r["check_name"], r["status"], r["message"] or r["value"] or ""))
-                if _SEV.get(r["status"], 0) > _SEV[d["status"]]:
-                    d["status"] = r["status"]
+                if _base(r["device"]) in bases and r["check_name"] not in exclude:
+                    _health_add(out, r, times.get(rid, ""))
+    return _health_sorted(out)
+
+
+def _health_add(out, r, at):
+    """One stored result into its device's latest state (see _device_health_here)."""
+    d = out.setdefault(_base(r["device"]), {"status": "OK", "at": at, "checks": 0, "problems": []})
+    d["checks"] += 1
+    if _SEV.get(r["status"], 0) > 0:
+        d["problems"].append((r["check_name"], r["status"], r["message"] or r["value"] or ""))
+    if _SEV.get(r["status"], 0) > _SEV[d["status"]]:
+        d["status"] = r["status"]
+
+
+def _health_sorted(out):
     for d in out.values():
         d["problems"].sort(key=lambda p: -_SEV.get(p[1], 0))
     return out

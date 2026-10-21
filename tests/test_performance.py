@@ -91,8 +91,43 @@ calls = []
 inner = db._remember[kept[0]]
 db._remember[kept[0]] = (inner[0], {"sw1": {"status": "ERROR", "at": "", "checks": 0, "problems": []}})
 check("while the runs haven't changed, the kept answer is used", db.device_health()["sw1"]["status"] == "ERROR")
+db.forget_history()                                                 # (drop the made-up answer)
 db.save_run([Result("sw1", "cpu", "FAIL", "99%", "busy", 99.0)])
 check("a new run is read at once", db.device_health()["sw1"]["status"] == "FAIL" and "fw1" in db.device_health())
+
+print("== after a run, what is kept is brought up to date from the run alone")
+def mark_now():
+    with db.connect() as c:
+        return db._history_mark(c)
+def fresh(fn):
+    db.forget_history()
+    return fn()
+def rows_of(latest):
+    return sorted((r["device"], r["check_name"], r["status"], r["value"], r["message"], r["numeric"], r["at"]) for r in latest[0]), latest[1]
+dev("ctrl"); dev("lab")
+db.save_run([Result("ctrl", "health", "OK", "fine", ""), Result("ctrl / ap1", "clients", "WARN", "41", "many", 41),
+             Result("lab", "cpu", "OK", 5, "", 5)])
+db.device_health(); db.latest_results()                             # kept for the file
+runs = [[Result("sw1", "cpu", "OK", "7%", "", 7.0), Result("ctrl / ap1", "clients", "FAIL", "90", "too many", 90)],
+        [Result("fw1", "config backup", "FAIL", "", "timed out")],                  # a backup-only run
+        [Result("lab", "cpu", "ERROR", "", "connection refused"), Result("lab", "memory", "N/A", "", "")]]
+for rs in runs:
+    db.save_run(rs)
+    kept = [v[0] for k, v in db._remember.items() if k[1] in ("_device_health_here", "_latest_results_here") and k[0] == str(db.db_path())]
+    check(f"kept up to date without reading again ({', '.join(r.device for r in rs)})", kept and all(m == mark_now() for m in kept), (kept, mark_now()))
+    got_h, got_l = db.device_health(), rows_of(db.latest_results())
+    check("...and just what a fresh read gives", got_h == fresh(db.device_health) and got_l == rows_of(fresh(db.latest_results)),
+          (got_h, fresh(db.device_health)))
+    db.device_health(); db.latest_results()
+check("a backup-only run leaves the device as it was", db.device_health()["fw1"]["status"] == "WARN")
+check("a UniFi sub-device's result counts for its controller", db.device_health()["ctrl"]["status"] == "FAIL")
+with db.within(db.GLOBAL):
+    keep_days = db.get_setting("retention_days")
+with db.connect() as c:
+    c.execute("UPDATE runs SET started_at = '2020-01-01 00:00:00' WHERE id = (SELECT MIN(id) FROM runs)")
+db.forget_history(); db.device_health()
+db.save_run([Result("sw1", "cpu", "OK", "8%", "", 8.0)])           # this one also removes the old run (retention)
+check("when a run also removes old runs, it is read afresh instead", db.device_health() == fresh(db.device_health))
 rows, _at = db.latest_results()
 rows[0]["device"] = "changed"
 check("the newest results are copies too", all(r["device"] != "changed" for r in db.latest_results()[0]))
@@ -162,6 +197,59 @@ check("a new run is counted at once", "made-up" not in now_ and now_["fw1"]["run
 check("a UniFi sub-device counts for its controller", "ctrl / ap1" not in db._availability_here(30) and "ctrl" in db._availability_here(30))
 nas = db._availability_here(30)["nas"]
 check("a failed config backup doesn't make a run unhealthy", nas["healthy"] == nas["runs"] > 0, nas)
+
+# ================================================================ resources
+print("== numpy's maths library uses one thread")
+import subprocess
+probe = ("import os, sys; sys.path.insert(0, sys.argv[1]); import ui, numpy; print(os.environ.get('OPENBLAS_NUM_THREADS'))")
+env = {k: v for k, v in os.environ.items() if k != "OPENBLAS_NUM_THREADS"}
+out = subprocess.run([sys.executable, "-c", probe, os.path.dirname(os.path.dirname(os.path.abspath(__file__)))], capture_output=True, text=True, env=env)
+check("importing Toner's ui sets it before numpy loads", out.stdout.strip() == "1", (out.stdout, out.stderr[-300:]))
+if sys.platform == "win32":
+    probe = ("import ctypes, ctypes.wintypes as wt, os, sys; sys.path.insert(0, sys.argv[1]); os.environ['QT_QPA_PLATFORM'] = 'offscreen'\n"
+             "import app\n"
+             "class P(ctypes.Structure): _fields_ = [('cb', wt.DWORD), ('f', wt.DWORD)] + [(n, ctypes.c_size_t) for n in "
+             "('pw', 'w', 'qp', 'q', 'qnp', 'qn', 'pf', 'ppf', 'private')]\n"
+             "k, ps = ctypes.WinDLL('kernel32'), ctypes.WinDLL('psapi'); k.GetCurrentProcess.restype = wt.HANDLE\n"
+             "ps.GetProcessMemoryInfo.argtypes = [wt.HANDLE, ctypes.POINTER(P), wt.DWORD]; p = P(); p.cb = ctypes.sizeof(p)\n"
+             "ps.GetProcessMemoryInfo(k.GetCurrentProcess(), ctypes.byref(p), p.cb); print(p.private // 2 ** 20)")
+    out = subprocess.run([sys.executable, "-c", probe, os.path.dirname(os.path.dirname(os.path.abspath(__file__)))],
+                         capture_output=True, text=True, env=env)
+    mb = int(out.stdout.strip() or 0)
+    check(f"so starting Toner sets aside little memory ({mb} MB here, on {os.cpu_count()} cores)", 0 < mb < 400, out.stderr[-300:])
+
+print("== database connections are closed after use")
+import gc
+with db.connect() as c:
+    c.execute("SELECT 1")
+try:
+    c.execute("SELECT 1"); check("a connection is closed at the end of its block", False)
+except sqlite3.ProgrammingError:
+    check("a connection is closed at the end of its block", True)
+def still_open():
+    n = 0
+    for o in gc.get_objects():
+        if isinstance(o, sqlite3.Connection):
+            try:
+                o.execute("SELECT 1"); n += 1
+            except sqlite3.ProgrammingError:
+                pass
+    return n
+gc.collect(); gc.disable()
+was_open = still_open()
+for _ in range(50):
+    db.list_devices(); db.get_setting("workers"); db.device_checks(); db.last_run()
+now_open = still_open()
+gc.enable()
+check("reading again and again leaves no connections open, even without the garbage collector", now_open - was_open <= 1, (was_open, now_open))
+try:
+    with db.connect() as c:
+        c.execute("INSERT INTO audit(at, actor, action, detail) VALUES('x', 'test', 'kept?', '')")
+        raise RuntimeError("stop")
+except RuntimeError:
+    pass
+with db.connect() as c:
+    check("a block that fails is still rolled back", c.execute("SELECT COUNT(*) FROM audit WHERE action='kept?'").fetchone()[0] == 0)
 
 # ================================================================ tables
 print("== tables refill without measuring every row after each cell")
