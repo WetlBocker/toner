@@ -637,7 +637,9 @@ def delete_device_secrets(name):
 
 # ---------- inventory ----------
 def _devices_here(enabled_only=False):
-    q = "SELECT * FROM devices" + (" WHERE enabled=1" if enabled_only else "") + " ORDER BY name"
+    """enabled_only: the devices that can be checked. A device with no vendor yet (imported from a session file) is not: nothing
+    knows how to sign in to it, so the checks, backups and commands leave it out until a vendor is chosen."""
+    q = "SELECT * FROM devices" + (" WHERE enabled=1 AND vendor != ''" if enabled_only else "") + " ORDER BY name"
     with connect() as c:
         return [dict(r) for r in c.execute(q)]
 

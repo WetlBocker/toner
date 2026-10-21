@@ -706,6 +706,11 @@ class BulkEditDialog(QDialog):
         self.enabled = QComboBox()
         self.enabled.addItem("Enabled", True)
         self.enabled.addItem("Disabled", False)
+        self.vendor_box = QComboBox()
+        self.vendor_box.addItem("(leave as is)", None)
+        for v in vendors.listed():
+            self.vendor_box.addItem(display.vendor_name(v), v)
+        row("vendor", "Vendor", self.vendor_box)
         row("folder_id", "Move to folder", self.folder)
         row("location", "Set location", self.location)
         row("add_tags", "Add tags", self.add_tags)
@@ -890,9 +895,14 @@ class InventoryTab(QWidget):
         self.bar_w = QWidget()
         self.bar_w.setLayout(bar)
         bar.setContentsMargins(0, 0, 0, 0)
+        self.no_vendor = QLabel()                        # how many devices the checks skip because they have no vendor yet
+        self.no_vendor.setProperty("muted", True)
+        self.no_vendor.setWordWrap(True)
+        self.no_vendor.hide()
         lay = QVBoxLayout(self)
         lay.addWidget(self.views_w)
         lay.addWidget(self.bar_w)
+        lay.addWidget(self.no_vendor)
         lay.addWidget(self.stack)
         self.refresh()
 
@@ -1188,6 +1198,10 @@ class InventoryTab(QWidget):
         self.table.blockSignals(False)
         self.update_buttons()
         self._empty_hint().setVisible(self.table.topLevelItemCount() == 0)
+        n = sum(1 for d in self._listed() if not d.get("vendor"))
+        self.no_vendor.setText(f"{n} devices have no vendor yet, so the checks skip them. Choose a vendor to start checking them: "
+                               "Bulk edit, or More > Detect vendors." if n else "")
+        self.no_vendor.setVisible(bool(n))
         if hasattr(self, "fleet"):
             self._update_views()
             if self.stack.currentWidget() is self.fleet:
@@ -1599,6 +1613,7 @@ class InventoryTab(QWidget):
                 menu.addAction("Run Checks", lambda: self.run_checks.emit([d.get("key") or d["name"] for d in self.selected_devices()]))
             if devs and can:
                 menu.addAction("Edit selected..." if len(devs) > 1 else "Edit tags, folder, profile...", self.bulk_edit)
+                menu.addAction("Detect vendors for selected...", self.detect_vendors)
             if len(folders) == 1 and not devs and can:
                 menu.addAction("New subfolder...", lambda: self.new_folder(folders[0], use_selection=False))
                 menu.addAction("Rename...", self.rename_folder)
@@ -1691,6 +1706,41 @@ class InventoryTab(QWidget):
             self.refresh()
             self.changed.emit()
             toast(self, f"Changed {n} of {len(devs)} device(s).")
+
+    def detect_vendors(self):
+        """More > Detect vendors for selected: the vendor window from a session-file import, for devices already in the inventory.
+        Detect Vendors signs in with each device's own user name and stored password."""
+        devs = self.selected_devices()
+        if not devs:
+            return
+        from ui import vendorassign
+        rows, passwords = [], {}
+        for i, d in enumerate(devs):
+            with db.within(d.get("org")):
+                paths = db.folder_paths()
+                passwords[i] = profiles.secret(d) or ""
+                user = profiles.username(d) or d.get("username") or ""
+            rows.append({"kind": "rdp" if d.get("vendor") == "windows" else "ssh", "name": d["name"], "host": d.get("host") or "",
+                         "port": int(d.get("port") or 22), "username": user, "org": d.get("org"),
+                         "folder": [p for p in (paths.get(d.get("folder_id")) or "").split("/") if p],
+                         "vendor": d.get("vendor") or "", "platform": d.get("platform") or ""})
+        answer, chosen = vendorassign.choose(rows, passwords, self, inventory=True)
+        if answer != "devices":
+            return
+        changed = 0
+        for d, (vendor, platform) in zip(devs, chosen):
+            if not vendor or (vendor, platform) == (d.get("vendor") or "", d.get("platform") or ""):
+                continue
+            with db.within(d.get("org")):
+                now = db.get_device(d["id"])
+                if now is not None:
+                    db.save_device({**now, "vendor": vendor, "platform": platform})
+                    changed += 1
+        if changed:
+            audit.log("vendors detected", f"{changed} of {len(devs)} device(s)")
+        self.refresh()
+        self.changed.emit()
+        toast(self, f"Changed {changed} of {len(devs)} device(s).")
 
     # ---------- import ----------
     def import_file(self):

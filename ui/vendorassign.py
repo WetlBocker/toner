@@ -30,9 +30,11 @@ class _Relay(QObject):
 
 
 class VendorAssignDialog(QDialog):
-    def __init__(self, rows, passwords=None, parent=None, detect=None):
-        """rows: [{'name', 'host', 'port', 'kind', 'username', 'org', 'folder': [parts]}]. passwords: {row index: password}, for
-        Detect Vendors to sign in with. vendors() then gives (vendor, platform) for each row, in the same order."""
+    def __init__(self, rows, passwords=None, parent=None, detect=None, inventory=False):
+        """rows: [{'name', 'host', 'port', 'kind', 'username', 'org', 'folder': [parts]}], each optionally with the 'vendor' and
+        'platform' it starts from. passwords: {row index: password}, for Detect Vendors to sign in with. vendors() then gives
+        (vendor, platform) for each row, in the same order. inventory: opened for devices already in the inventory (More > Detect
+        vendors): the buttons are Apply and Cancel, and the import's sentences are left out of the note."""
         super().__init__(parent)
         from core import vendordetect
         self.detect_all = detect or vendordetect.detect_all
@@ -40,7 +42,8 @@ class VendorAssignDialog(QDialog):
         self.resize(760, 560)
         self.rows, self.passwords = rows, passwords or {}
         from core import sessionimport
-        self.chosen = [(sessionimport.first_vendor(r), "winrm" if sessionimport.first_vendor(r) == "windows" else "") for r in rows]
+        self.chosen = [(r["vendor"], r.get("platform") or "") if r.get("vendor") else
+                       (sessionimport.first_vendor(r), "winrm" if sessionimport.first_vendor(r) == "windows" else "") for r in rows]
         self.cancel = None
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["Name", "Host", "Vendor"])
@@ -89,20 +92,23 @@ class VendorAssignDialog(QDialog):
         bar.addStretch(1)
         bar.addWidget(self.detect_btn)
         bar.addWidget(self.stop_btn)
-        self.add_btn = QPushButton("Add devices")
+        self.add_btn = QPushButton("Apply" if inventory else "Add devices")
         self.add_btn.setDefault(True)
         self.add_btn.clicked.connect(self.accept)
-        only = QPushButton("Sessions only")
-        only.clicked.connect(lambda: self.done(SESSIONS_ONLY))
         cancel = QPushButton("Cancel")
         cancel.clicked.connect(self.reject)
         bottom = QHBoxLayout()
         bottom.addStretch(1)
-        for b in (self.add_btn, only, cancel):
-            bottom.addWidget(b)
+        bottom.addWidget(self.add_btn)
+        if not inventory:
+            only = QPushButton("Sessions only")
+            only.clicked.connect(lambda: self.done(SESSIONS_ONLY))
+            bottom.addWidget(only)
+        bottom.addWidget(cancel)
         note = QLabel("Pick rows (an organization's or folder's row picks everything in it), choose a vendor, and press Apply to selected. "
-                      "Devices left without a vendor are still added: edit them later to choose one. Remote Desktop sessions start as "
-                      "Windows. Detect Vendors checks the selected rows (or every row without a vendor): first what each device shows "
+                      + ("" if inventory else "Devices left without a vendor are still added: edit them later to choose one. Remote Desktop "
+                         "sessions start as Windows. ")
+                      + "Detect Vendors checks the selected rows (or every row without a vendor): first what each device shows "
                       "without signing in, then, using its user name and password, what it says after signing in over SSH.")
         note.setWordWrap(True)
         lay = QVBoxLayout(self)
@@ -228,9 +234,9 @@ class VendorAssignDialog(QDialog):
         super().done(result)
 
 
-def choose(rows, passwords=None, parent=None):
+def choose(rows, passwords=None, parent=None, inventory=False):
     """(answer, [(vendor, platform)] per row): answer is 'devices', 'sessions' (Sessions only) or None (Cancel)."""
-    dlg = VendorAssignDialog(rows, passwords, parent)
+    dlg = VendorAssignDialog(rows, passwords, parent, inventory=inventory)
     result = dlg.exec()
     if result == 1:                                         # Add devices
         return "devices", dlg.vendors()
