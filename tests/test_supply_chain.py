@@ -15,7 +15,7 @@ def read(*parts):
 
 print("== requirements.lock")
 lock = read("requirements.lock")
-entries = re.findall(r"^([A-Za-z0-9_.\-]+==[^ \\\n]+)((?:\s*\\\n\s*--hash=sha256:[0-9a-f]{64})+)\s*$", lock, flags=re.M)
+entries = re.findall(r"^([A-Za-z0-9_.\-]+==[^ \\\n]+(?: ; [^\\\n]+?)?)\s*((?:\\\n\s*--hash=sha256:[0-9a-f]{64}\s*)+)$", lock, flags=re.M)   # "; marker": the Linux-only packages
 pins = re.findall(r"^[A-Za-z0-9_.\-]+==", lock, flags=re.M)
 check("every pinned package carries at least one SHA-256", len(entries) == len(pins) >= 50, (len(entries), len(pins)))
 check("the ones Toner's graphs need are among them", any(e[0].startswith("pyqtgraph==") for e in entries) and any(e[0].startswith("numpy==") for e in entries))
