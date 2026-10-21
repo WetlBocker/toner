@@ -354,6 +354,10 @@ fingerprint and public-key line of any private key, .ppk or public key, and chan
 a device* adds the public key to a Linux or other Unix-like device's ~/.ssh/authorized_keys over SSH, like ssh-copy-id, using the
 device's saved login, jump host and proxy. Toner stores none of the keys.
 
+Toner saves each device's SSH host key the first time it connects and refuses a device whose key has changed, so a device that
+answers on another device's address can't collect Toner's passwords. Settings > Security lists the saved keys. Choose **Reject
+unknown hosts** to only accept devices whose key was saved from the console first.
+
 ### File servers (TFTP and SFTP)
 
 Each serves one folder you choose, nothing outside it, and is off until you start it. Read-only until you tick "Allow uploads";
@@ -418,6 +422,8 @@ watches the agent certificate. It uses the data folder of the account it runs as
 for that account, so run it as the account you set Toner up with.
 
 ## Updates and About
+
+Each release includes `SHA256SUMS.txt` with the SHA-256 of every file.
 
 **Check for updates** looks at the newest GitHub release (daily if "Check for updates automatically" is ticked, or when you press the
 button). A newer version puts a dot next to About with its release notes and **Download and install**, **View release** and **Skip

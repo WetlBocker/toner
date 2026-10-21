@@ -35,7 +35,8 @@ def signing_in(host, port, username, password, timeout=20):
     guesser = None
     try:
         guesser = SSHDetect(device_type="autodetect", host=host, port=int(port or 22), username=username, password=password,
-                            timeout=timeout, conn_timeout=timeout, banner_timeout=timeout, auth_timeout=timeout)
+                            timeout=timeout, conn_timeout=timeout, banner_timeout=timeout, auth_timeout=timeout,
+                            **nettools.netmiko_hostkey_args())
         best = guesser.autodetect()
     except Exception:
         return "", ""

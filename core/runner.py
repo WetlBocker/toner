@@ -4,10 +4,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 
-from core import checks, custom, db, profiles, reach, support, vendors, winmon
+from core import checks, custom, db, nettools, profiles, reach, support, vendors, winmon
 from core.nettools import resolve_host
 from drivers import DRIVERS
-from drivers.base import AuthRejected, Driver, Result, ERROR, NA, WARN
+from drivers.base import AuthRejected, Driver, Result, ERROR, FAIL, NA, WARN
 from core import quiet
 
 
@@ -87,12 +87,18 @@ def run_one(dev, thresholds, opts=None):
             drv.flush_baselines()            # only after a complete run
             return pre + res
         except Exception as e:
-            if attempt < attempts and _transient(e):
+            key_problem = nettools.host_key_problem(e)           # the device's SSH host key: changed, or unknown while rejected
+            if attempt < attempts and _transient(e) and not key_problem:
                 time.sleep(max(0, int(opts.get("retry_delay", 0))))
                 continue
             tail = f" (after {attempt} attempts)" if attempt > 1 else ""
             said = str(e) if isinstance(e, AuthRejected) else Driver.explain(e)          # a rejected key already says so in words; an HTTP error names its code, not the long address
-            rows = pre + [Result(dev["name"], "connection", ERROR, "", f"{said}{tail}")]
+            if key_problem == "changed":
+                rows = pre + [Result(dev["name"], "host key", FAIL, "", nettools.HOSTKEY_CHANGED)]
+            elif key_problem == "unknown":
+                rows = pre + [Result(dev["name"], "host key", ERROR, "", nettools.HOSTKEY_UNKNOWN)]
+            else:
+                rows = pre + [Result(dev["name"], "connection", ERROR, "", f"{said}{tail}")]
             try:                                   # web, port, certificate and ping checks do not need the login
                 rows += custom.run_network(dev, [c for c in custom.for_device(dev, opts.get("custom"))
                                                  if c["kind"] in ("http", "tcp", "tls", "ping", "iperf")])

@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import socket
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import paramiko
@@ -239,6 +240,69 @@ def forget_host_key(host=None):
     if host in hk:
         del hk[host]
         hk.save(str(path))
+
+
+HOSTKEY_CHANGED = ("The device's SSH host key has changed. If it was replaced or reinstalled, forget its old key under Settings > Security, "
+                   "then run the checks again.")
+HOSTKEY_UNKNOWN = ("Unknown SSH host key, and Settings > Security rejects unknown hosts. Connect once from the console to save it, or "
+                   "change the setting.")
+
+
+def hostkey_mode():
+    try:
+        from core import db
+        return db.get_setting("hostkey_mode") or HOSTKEY_MODES[0]
+    except Exception:
+        return HOSTKEY_MODES[0]
+
+
+def netmiko_hostkey_args(mode=None):
+    """What a netmiko connection (the checks, config backups, the Command Runner, Detect Vendors) needs to check the device's SSH
+    host key the way Settings > Security says, with the same known_hosts file as the console and jump hosts. Trust on first use
+    saves a new key and refuses a changed one; Reject unknown hosts refuses a new one too; Always trust checks nothing."""
+    mode = mode or hostkey_mode()
+    if mode == "Always trust":
+        return {}
+    path = known_hosts_path()
+    path.touch(exist_ok=True)              # netmiko reads the file only when it exists, and paramiko saves new keys only to a file it read
+    out = {"alt_host_keys": True, "alt_key_file": str(path)}
+    if mode == "Reject unknown hosts":
+        out["ssh_strict"] = True
+    return out
+
+
+def host_key_problem(e):
+    """'changed' when an SSH connection failed because the device's host key differs from the saved one, 'unknown' when the key
+    isn't saved and Settings > Security rejects unknown hosts, else None. (netmiko wraps paramiko's words in its own.)"""
+    text = str(e)
+    if "does not match" in text and "host key" in text.lower():
+        return "changed"
+    if "not found in known_hosts" in text:
+        return "unknown"
+    return None
+
+
+_hostkeys_lock = threading.Lock()
+
+
+def _save_host_keys_merged(self, filename):
+    """paramiko writes the whole known_hosts file from one client's view. With ten checks running at once, two could each drop
+    the other's new key (the next run would save it again, but a change in between would go unnoticed). Under a lock, merge
+    the client's keys into what the file holds now, then write."""
+    with _hostkeys_lock:
+        merged = paramiko.HostKeys()
+        if os.path.exists(filename):
+            try:
+                merged.load(filename)
+            except Exception:
+                quiet.ignored()
+        for host, keys in self._host_keys.items():
+            for ktype, key in keys.items():
+                merged.add(host, ktype, key)
+        merged.save(filename)
+
+
+paramiko.SSHClient.save_host_keys = _save_host_keys_merged
 
 
 # ---------- SSH session ----------
