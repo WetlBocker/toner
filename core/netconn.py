@@ -83,6 +83,9 @@ SPECIAL = {"cisco_asa": AsaSSH}
 
 
 def connect(**args):
-    """ConnectHandler(**args), with Toner's class for the device types listed in SPECIAL."""
+    """ConnectHandler(**args), with Toner's class for the device types listed in SPECIAL, and the device's SSH host key checked the
+    way Settings > Security says (core.nettools.netmiko_hostkey_args; what the caller passes wins)."""
+    from core import nettools
+    args = {**nettools.netmiko_hostkey_args(), **args}
     cls = SPECIAL.get(args.get("device_type"))
     return cls(**args) if cls else ConnectHandler(**args)

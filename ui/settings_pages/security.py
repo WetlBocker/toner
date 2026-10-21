@@ -27,7 +27,9 @@ class SecurityPage(Page):
         self.form.addRow(note(
             "Trust on first use: remember each device's key the first time, and refuse the connection if it "
             "ever changes (protects against a swapped or spoofed device). Always trust: accept anything, "
-            "remember nothing. Reject unknown hosts: only connect to devices already remembered."))
+            "remember nothing. Reject unknown hosts: only connect to devices already remembered. "
+            "This applies to the console and jump hosts, and to monitoring, config backups, the Command Runner and Detect Vendors. "
+            "Keys are saved on first contact and listed below."))
         self.legacy = QCheckBox("Allow older SSH algorithms for older devices (ssh-rsa, SHA-1 key exchange)")
         self.form.addRow("", self.legacy)
         self.form.addRow(note(
