@@ -32,7 +32,7 @@ class AppearancePage(Page):
             self.swatch[s] = b
         self.ui_style = QComboBox()
         for name, tip in (("Standard", "Roomy rows, rounded pills and large numbers"),
-                          ("Ops console", "Dense and flat for watching many devices: 22 px rows, monospace data, small tags, a narrower sidebar")):
+                          ("Ops console", "Dense and flat for watching many devices: 22 px rows, monospace data, small tags, a lower top bar")):
             self.ui_style.addItem(name)
             self.ui_style.setItemData(self.ui_style.count() - 1, tip, Qt.ItemDataRole.ToolTipRole)
         self.ui_style.setToolTip("How much fits on screen, and how it looks. Works with the light and the dark theme.")

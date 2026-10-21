@@ -257,6 +257,8 @@ def _before_sign_in(t, cfg, err, timeout):
     server hung up during it, or it took too long. Say which, and why if the transport knows."""
     why = t.get_exception() if t is not None else None
     why = f" ({why})" if why is not None and str(why) and str(why) != str(err) else ""
+    if isinstance(err, EOFError) or not str(err):              # paramiko's EOFError has no words: the server hung up before the sign-in
+        return f"{cfg.label()} closed the connection before Toner could sign in{why}"
     if "No existing session" not in str(err):
         return f"{cfg.label()}: {err}{why}"
     if t is not None and t.is_active():
