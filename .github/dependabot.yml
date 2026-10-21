@@ -1,0 +1,12 @@
+# Dependabot opens a pull request when a pinned package or a GitHub Action has a newer version. Each one runs the tests.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
