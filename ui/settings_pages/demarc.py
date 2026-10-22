@@ -1,8 +1,9 @@
 """Settings > Connections > Demarc: connect Toner to a Demarc server, see how sending is going, and turn it off (core/demarc.py).
 
-Connect... and Disconnect... act at once; Send data to Demarc waits for Save changes, like the other settings."""
+Connect... and Disconnect... act at once; Send data to Demarc and Config history wait for Save changes, like the other settings
+(Connect... saves Config history too, since the first full copy uses it straight away)."""
 from PySide6.QtCore import QTimer, Qt, Signal
-from PySide6.QtWidgets import QApplication, QCheckBox, QDialog, QDialogButtonBox, QLabel, QLineEdit, QMessageBox, QPushButton, QVBoxLayout
+from PySide6.QtWidgets import QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QLabel, QLineEdit, QMessageBox, QPushButton, QVBoxLayout
 
 from core import demarc
 from ui.settings_base import Page, compact_row, note
@@ -16,6 +17,8 @@ CHECK_TITLE = "Check Demarc's certificate"
 CHECK_TEXT = ("Toner reached {address}. Its certificate fingerprint (SHA-256) is:\n{fingerprint}\nCheck that Demarc shows the same "
               "fingerprint next to the enrollment code. Connect only if they match.")
 CHECK_YES = "They match, connect"
+HISTORY = [(demarc.HISTORY_ALL, "Every version Toner holds"), (demarc.HISTORY_LATEST, "Only each device's newest version")]
+HISTORY_NOTE = "What Toner's first full copy sends to Demarc 0.0.8 or newer."
 DISCONNECT_TITLE = "Disconnect from Demarc?"
 DISCONNECT_TEXT = "Toner stops sending and forgets its token. Changes not sent yet are dropped. Demarc keeps what it already has."
 
@@ -36,6 +39,9 @@ class DemarcPage(Page):
         self.connect_btn.setProperty("primary", True)
         self.connect_btn.setAutoDefault(False)
         self.enabled = QCheckBox("Send data to Demarc")
+        self.history = QComboBox()
+        for key, label in HISTORY:
+            self.history.addItem(label, key)
         self.status = QLabel("")
         self.status.setWordWrap(True)
         self.status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -47,6 +53,8 @@ class DemarcPage(Page):
         self.form.addRow("Enrollment code", self.code)
         self.form.addRow("", compact_row(self.connect_btn))
         self.form.addRow("", self.enabled)
+        self.form.addRow("Config history", self.history)
+        self.form.addRow("", note(HISTORY_NOTE))
         self.form.addRow("Status", self.status)
         self.form.addRow("Certificate", self.cert)
         self.form.addRow("", compact_row(self.disconnect_btn))
@@ -63,9 +71,12 @@ class DemarcPage(Page):
         cfg = demarc.config()
         self.address.setText(cfg["address"])
         self.enabled.setChecked(bool(cfg["enabled"]))
+        self.history.setCurrentIndex(max(0, self.history.findData(cfg.get("history", demarc.HISTORY_ALL))))
         self.show_status()
 
     def save(self):
+        if demarc.config().get("history") != self.history.currentData():
+            demarc.save_config(history=self.history.currentData())
         if demarc.connected() and bool(demarc.config()["enabled"]) != self.enabled.isChecked():
             demarc.save_config(enabled=self.enabled.isChecked())
             demarc.kick()
@@ -99,6 +110,7 @@ class DemarcPage(Page):
             if not found.trusted and not self.ask(CHECK_TITLE, CHECK_TEXT.format(address=found.url, fingerprint=found.fingerprint),
                                                   CHECK_YES):
                 return
+            demarc.save_config(history=self.history.currentData())       # the first full copy follows at once
             self._busy(lambda: demarc.enroll(found, code))
         except demarc.DemarcError as e:
             self.tell(str(e))
