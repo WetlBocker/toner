@@ -10,7 +10,10 @@ What is sent (an allowlist: only the fields in BODIES, which are exactly the one
   * device          name, address, platform (the vendor), folder, groups (its location), tags, notes (the Details text)
   * device_removed  a device that was removed or renamed
   * result          every check result, with the time of its run, and its value to graph (to Demarc 0.0.3 or newer)
-Passwords, user names, SNMP and proxy settings, custom fields and everything else in the vault are never sent.
+  * backup          each config backup version, always masked on the way out (to Demarc 0.0.8 or newer)
+  * backup_log      how each config backup went (to Demarc 0.0.8 or newer)
+Passwords, user names, SNMP and proxy settings, custom fields and everything else in the vault are never sent. A config backup
+goes through backup.clean(mask=True) before it is queued, even when Toner keeps unmasked copies itself (Backup mask off).
 
 How it is sent:
   * every few seconds the sender compares the organizations and devices with what it last queued, and picks up new results;
@@ -18,7 +21,10 @@ How it is sent:
     when they are sent, so an organization that is Live goes at once while another waits for its interval;
   * the first time (and whenever the queue had to be dropped) Toner sends a full copy instead: a snapshot, in parts;
   * Demarc's reply says what it stored (acked_seq) and how each organization wants its data (Live, or every N minutes);
-  * a queue older than 7 days or bigger than 500 MB is dropped, and a full copy is sent when Demarc is back.
+  * a queue older than 7 days or bigger than 500 MB is dropped, and a full copy is sent when Demarc is back;
+  * config backups are history, not state, so they are not in a full copy: they follow it, from a cursor per organization.
+    Where there is no cursor yet (a first contact, a dropped queue, a Demarc just upgraded to 0.0.8) the Config history
+    setting decides: every version Toner holds, or only each device's newest.
 Times are sent in UTC (Toner stores local times).
 
 Toner's window and its service may both run: only the one holding the lock file beside the queue sends.
@@ -35,6 +41,7 @@ import ssl
 import threading
 import time
 import warnings
+import zlib
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
@@ -55,6 +62,10 @@ COLLECT_SECONDS = 5                      # how often changes are looked for (Liv
 RETRY_FIRST, RETRY_MOST = 15, 300        # after a failed send: 15 s, then twice as long each time, up to 5 minutes
 STATUSES = {"OK", "WARN", "FAIL", "ERROR", "N/A"}
 NUMERIC_FROM = (0, 0, 3)                 # the first Demarc that takes a result's value; older ones refuse the field
+BACKUPS_FROM = (0, 0, 8)                 # the first Demarc that takes config backups and the backup log
+BACKUPS_PER_ROUND = 100                  # versions (and log entries) queued per organization each round, so a long history goes
+                                         # out in steps instead of filling the queue at once
+HISTORY_ALL, HISTORY_LATEST = "all", "latest"   # the Config history setting
 
 # The allowlist: each kind of item, its fields, and the longest text Demarc keeps for each (core of Demarc's ingest.py).
 BODIES = {
@@ -62,7 +73,11 @@ BODIES = {
     "device": {"name": 255, "address": 255, "platform": 100, "folder": 1000, "groups": 100, "tags": 100, "notes": 10000},
     "device_removed": {"name": 255},
     "result": {"device": 255, "check": 255, "status": None, "value": 1000, "message": 4000, "ran_at": None, "numeric": None},
+    "backup": {"device": 255, "taken_at": None, "sha": None, "size": None, "lines": None, "added": None, "removed": None,
+               "masked": 5_000_000},
+    "backup_log": {"device": 255, "at": None, "status": None, "message": 4000},
 }
+BACKUP_STATUSES = {"new", "changed", "unchanged", "error"}
 
 # ---------------------------------------------------------------- wording (approved)
 T_NOT_CONNECTED = "Not connected."
@@ -186,12 +201,36 @@ def result_body(row):
     return allowed("result", body)
 
 
-def takes_numeric(version):
-    """True when Demarc `version` ('0.0.3') takes a result's value. Unknown or unreadable: False, so nothing is refused."""
+def backup_body(row, text):
+    """A stored config version as Demarc takes it: masked here whatever Toner stored, with the sha, size and line count of
+    what is sent."""
+    from core import backup
+    masked = backup.clean(text, mask=True)
+    return allowed("backup", {"device": row["device"], "taken_at": utc_of(row["taken_at"]), "sha": backup.sha(masked),
+                              "size": len(masked), "lines": masked.count("\n"), "added": int(row["added"] or 0),
+                              "removed": int(row["removed"] or 0), "masked": masked})
+
+
+def backup_log_body(row):
+    status = row["status"] if row["status"] in BACKUP_STATUSES else "error"
+    return allowed("backup_log", {"device": row["device"], "at": utc_of(row["at"]), "status": status, "message": row["message"] or ""})
+
+
+def _from(version, first):
     try:
-        return tuple(int(x) for x in str(version or "").split(".")[:3]) >= NUMERIC_FROM
+        return tuple(int(x) for x in str(version or "").split(".")[:3]) >= first
     except ValueError:
         return False
+
+
+def takes_numeric(version):
+    """True when Demarc `version` ('0.0.3') takes a result's value. Unknown or unreadable: False, so nothing is refused."""
+    return _from(version, NUMERIC_FROM)
+
+
+def takes_backups(version):
+    """True when Demarc `version` takes config backups and the backup log (0.0.8 or newer). Unknown: False."""
+    return _from(version, BACKUPS_FROM)
 
 
 def fit(items, numeric):
@@ -256,6 +295,42 @@ def latest_results(org):
     return [result_body(r) for r in rows if r["device"] and r["check_name"]], top
 
 
+BACKUP_SQL = "SELECT id, device, taken_at, added, removed, body FROM config_backups "
+LOG_SQL = "SELECT id, device, at, status, message FROM backup_log "
+
+
+def _unpack(blob):
+    return zlib.decompress(blob).decode("utf-8", "replace") if blob else ""
+
+
+def backups_after(org, after, log_after, limit=None):
+    """([backup body], [backup log body], the highest backup id, the highest log id) of one organization: what was stored after
+    the two row ids, oldest first, up to `limit` (default BACKUPS_PER_ROUND) of each."""
+    limit = limit or BACKUPS_PER_ROUND
+    with db.within(org):
+        with db.connect() as c:
+            rows = c.execute(BACKUP_SQL + "WHERE id > ? ORDER BY id LIMIT ?", (after, limit)).fetchall()
+            logs = c.execute(LOG_SQL + "WHERE id > ? ORDER BY id LIMIT ?", (log_after, limit)).fetchall()
+    return ([backup_body(r, _unpack(r["body"])) for r in rows if r["device"]], [backup_log_body(r) for r in logs if r["device"]],
+            rows[-1]["id"] if rows else after, logs[-1]["id"] if logs else log_after)
+
+
+def backup_start(org, history):
+    """Where sending config backups starts for an organization that has no cursor yet, as backups_after answers. Every
+    version: the first ones from row 0, the rest in the rounds after. Only the newest: each device's newest version and log
+    entry, and the cursors at the top, so only what comes after follows."""
+    if history != HISTORY_LATEST:
+        return backups_after(org, 0, 0)
+    with db.within(org):
+        with db.connect() as c:
+            top = c.execute("SELECT IFNULL(MAX(id), 0) FROM config_backups").fetchone()[0]
+            log_top = c.execute("SELECT IFNULL(MAX(id), 0) FROM backup_log").fetchone()[0]
+            rows = c.execute(BACKUP_SQL + "WHERE id IN (SELECT MAX(id) FROM config_backups GROUP BY device) ORDER BY id").fetchall()
+            logs = c.execute(LOG_SQL + "WHERE id IN (SELECT MAX(id) FROM backup_log GROUP BY device) ORDER BY id").fetchall()
+    return ([backup_body(r, _unpack(r["body"])) for r in rows if r["device"]], [backup_log_body(r) for r in logs if r["device"]],
+            top, log_top)
+
+
 def _hash(body):
     return hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
 
@@ -270,8 +345,9 @@ GONE = "gone"                            # in `known`: an organization removed f
 
 class Queue:
     """demarc-queue.db: pending (changes not numbered yet), outbox (numbered, sent, not yet stored by Demarc), known (what was
-    last queued for each organization and device, to notice changes), cursors (the last result row queued per organization)
-    and state (sequence numbers, Demarc's settings, the last contact and any error)."""
+    last queued for each organization and device, to notice changes), cursors (the last result row queued per organization),
+    backup_cursors (the last config backup and backup log rows queued per organization) and state (sequence numbers, Demarc's
+    settings, the last contact and any error)."""
 
     def __init__(self, path=None):
         self.path = path or queue_path()
@@ -293,6 +369,7 @@ class Queue:
             CREATE TABLE IF NOT EXISTS known (org_uid TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL, hash TEXT NOT NULL,
                 body TEXT DEFAULT '', PRIMARY KEY (org_uid, kind, name));
             CREATE TABLE IF NOT EXISTS cursors (org_uid TEXT PRIMARY KEY, result_id INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS backup_cursors (org_uid TEXT PRIMARY KEY, backup_id INTEGER NOT NULL, log_id INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT);
             """)
             self._made = True
@@ -340,7 +417,7 @@ class Queue:
     def drop(self, **state):
         """Forget every change and what was queued: the next send is a full copy."""
         with self.tx() as c:
-            for t in ("pending", "outbox", "known", "cursors"):
+            for t in ("pending", "outbox", "known", "cursors", "backup_cursors"):
                 c.execute(f"DELETE FROM {t}")
             self.set(c, need_snapshot=True, **state)
         try:
@@ -624,6 +701,7 @@ class Sender:
             values["settings"] = data["settings"]
         version = data.get("demarc_version")
         values["numeric"] = takes_numeric(version)
+        values["backups"] = takes_backups(version)
         if version:
             values["demarc_version"] = str(version)[:40]
         self.q.set(c, **values)
@@ -643,11 +721,13 @@ class Sender:
         with self.q.tx() as c:
             known = {(u, k, n): (h, b) for u, k, n, h, b in c.execute("SELECT org_uid, kind, name, hash, body FROM known")}
             cursors = dict(c.execute("SELECT org_uid, result_id FROM cursors").fetchall())
+            bcursors = {u: (b, lg) for u, b, lg in c.execute("SELECT org_uid, backup_id, log_id FROM backup_cursors")}
+        backups, history = self.q.get("backups", False), config().get("history", HISTORY_ALL)
         by_org = {}
         for (u, k, n) in known:
             if k == "device":
                 by_org.setdefault(u, set()).add(n)
-        items, upserts, deletes, moved = [], [], [], {}
+        items, upserts, deletes, moved, bmoved = [], [], [], {}, {}
         here = set()
         for org, uid, body in org_list():
             here.add(uid)
@@ -668,6 +748,15 @@ class Sender:
             items += [(uid, "result", b["ran_at"], b) for _rid, b in rows]
             if top != cursors.get(uid, 0):
                 moved[uid] = top
+            if backups:
+                if uid in bcursors:
+                    vers, logs, b_top, l_top = backups_after(org, *bcursors[uid])
+                else:
+                    vers, logs, b_top, l_top = backup_start(org, history)
+                items += [(uid, "backup", b["taken_at"], b) for b in vers]
+                items += [(uid, "backup_log", b["at"], b) for b in logs]
+                if (b_top, l_top) != bcursors.get(uid):
+                    bmoved[uid] = (b_top, l_top)
         for (u, k, n), (h, b) in known.items():                  # removed from Toner: archived in Demarc, its devices removed
             if k == "org" and u not in here and h != GONE:
                 body = {**json.loads(b or "{}"), "archived": True}
@@ -676,7 +765,7 @@ class Sender:
                 for name in sorted(by_org.get(u, set())):
                     items.append((u, "device_removed", when, {"name": name}))
                     deletes.append((u, "device", name))
-        if not (items or upserts or deletes or moved):
+        if not (items or upserts or deletes or moved or bmoved):
             return 0
         with self.q.tx() as c:
             c.executemany("INSERT INTO pending(org_uid, kind, changed_at, body, queued_at) VALUES(?, ?, ?, ?, ?)",
@@ -686,6 +775,8 @@ class Sender:
             c.executemany("DELETE FROM known WHERE org_uid=? AND kind=? AND name=?", deletes)
             c.executemany("INSERT INTO cursors(org_uid, result_id) VALUES(?, ?) ON CONFLICT(org_uid) DO UPDATE SET "
                           "result_id=excluded.result_id", list(moved.items()))
+            c.executemany("INSERT INTO backup_cursors(org_uid, backup_id, log_id) VALUES(?, ?, ?) ON CONFLICT(org_uid) DO UPDATE SET "
+                          "backup_id=excluded.backup_id, log_id=excluded.log_id", [(u, b, lg) for u, (b, lg) in bmoved.items()])
         return len(items)
 
     # ---------- batches
@@ -875,6 +966,7 @@ class Sender:
         with self.q.tx() as c:
             c.execute("DELETE FROM known")
             c.execute("DELETE FROM cursors")
+            c.execute("DELETE FROM backup_cursors")              # backups follow the full copy, from the Config history setting
             c.executemany("INSERT OR REPLACE INTO known(org_uid, kind, name, hash, body) VALUES(?, ?, ?, ?, ?)", known)
             c.executemany("INSERT OR REPLACE INTO cursors(org_uid, result_id) VALUES(?, ?)", list(cursors.items()))
             self._contact(c, data, need_snapshot=None, dropped=None, snapshot=None, last_seq=seq, org_sent=None)

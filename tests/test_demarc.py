@@ -39,8 +39,10 @@ def dev(name, **kw):
 DEMARC_BODIES = {"org": {"name", "code", "colour", "archived"},
                  "device": {"name", "address", "platform", "folder", "groups", "tags", "notes"},
                  "device_removed": {"name"},
-                 "result": {"device", "check", "status", "value", "message", "ran_at", "numeric"}}     # numeric: from Demarc 0.0.3
-LATER = {"folder", "problem_state", "schedule", "backup", "backup_log"}
+                 "result": {"device", "check", "status", "value", "message", "ran_at", "numeric"},    # numeric: from Demarc 0.0.3
+                 "backup": {"device", "taken_at", "sha", "size", "lines", "added", "removed", "masked"},   # these two: from 0.0.8
+                 "backup_log": {"device", "at", "status", "message"}}
+LATER = {"folder", "problem_state", "schedule"}
 SECRET_LIKE = re.compile(r"(?i)pass|secret|token|key|credential|community|psk|private")    # the same test Demarc runs on its side
 TZ = re.compile(r"(Z|[+-]\d\d:\d\d)$")
 
@@ -73,6 +75,7 @@ class FakeDemarc:
         self.codes = {"GOOD-CODE-1234": "ok", "OLD-CODE": "expired"}
         self.token, self.last_seq, self.revoked = None, 0, False
         self.orgs, self.devices, self.latest, self.results = {}, {}, {}, []
+        self.backups_held, self.backup_log = {}, []     # from 0.0.8: (org_uid, device) -> {(taken_at, sha): body}; log entries
         self.settings = {}                  # org_uid -> {'live', 'interval_minutes', 'unmasked_configs'}
         self.parts, self.not_demarc, self.stored_batches = {}, False, 0
         self.version = "0.0.1"              # from 0.0.3 Demarc names its version in every reply and takes a result's value
@@ -154,6 +157,15 @@ class FakeDemarc:
                 return self.refuse(f"items.{i}.body.numeric")
             if it["kind"] == "result" and (it["body"]["status"] not in ("OK", "WARN", "FAIL", "ERROR", "N/A") or not TZ.search(it["body"]["ran_at"])):
                 return self.refuse(f"items.{i}.body.status/ran_at")
+            if it["kind"] in ("backup", "backup_log") and not self.backups():
+                return self.refuse(f"items.{i}.kind {it['kind']} sent to Demarc {self.version}")
+            b = it["body"]
+            if it["kind"] == "backup" and (not re.fullmatch(r"[0-9a-f]{64}", b["sha"]) or not TZ.search(b["taken_at"])
+                                           or not isinstance(b["masked"], str) or len(b["masked"]) > 5_000_000
+                                           or not all(isinstance(b[k], int) and b[k] >= 0 for k in ("size", "lines", "added", "removed"))):
+                return self.refuse(f"items.{i}.body (backup)")
+            if it["kind"] == "backup_log" and (b["status"] not in ("new", "changed", "unchanged", "error") or not TZ.search(b["at"])):
+                return self.refuse(f"items.{i}.body (backup_log)")
         return None
 
     def _apply(self, items):
@@ -171,7 +183,14 @@ class FakeDemarc:
             elif it["kind"] == "result":
                 self.results.append((uid, b))
                 self.latest[(uid, b["device"], b["check"])] = b
+            elif it["kind"] == "backup":
+                self.backups_held.setdefault((uid, b["device"]), {})[(b["taken_at"], b["sha"])] = b      # stored once, as Demarc does
+            elif it["kind"] == "backup_log":
+                self.backup_log.append((uid, b))
         return None
+
+    def backups(self):
+        return tuple(map(int, self.version.split("."))) >= (0, 0, 8)
 
     def numeric(self):
         return tuple(map(int, self.version.split("."))) >= (0, 0, 3)
@@ -255,7 +274,8 @@ class FakeDemarc:
         return [p for _path, _h, p, _gz in self.requests]
 
 
-STATE = ("token", "last_seq", "revoked", "orgs", "devices", "latest", "results", "settings", "codes", "version")
+STATE = ("token", "last_seq", "revoked", "orgs", "devices", "latest", "results", "settings", "codes", "version", "backups_held",
+         "backup_log")
 
 
 def restart(old):
@@ -710,6 +730,111 @@ check("so the older Demarc takes the next results", results_sent() and all("nume
 check("which version takes them", (demarc.takes_numeric("0.0.3"), demarc.takes_numeric("0.1.0"), demarc.takes_numeric("0.0.2"),
                                     demarc.takes_numeric(""), demarc.takes_numeric("x.y")) == (True, True, False, False, False))
 
+# ================================================================ config backups
+print("== config backups, for Demarc 0.0.8 and newer")
+from core import backup as bk
+CFG = ["hostname edge-fw\nset deviceconfig system ip-address 203.0.113.5\nsnmp-server community c0mmunity-S3cret RO\n"
+       "username admin password Hunter2-p@ss!\n",
+       "hostname edge-fw\nset deviceconfig system ip-address 203.0.113.6\nsnmp-server community c0mmunity-S3cret RO\n"
+       "username admin password Hunter2-p@ss!\n"]
+with db.within(acme):
+    for i, t in enumerate(CFG):
+        state, row, added, removed = bk.store("edge-fw", t, mask=False)     # Backup mask off: stored unmasked
+        bk.log("edge-fw", state, f"+{added} / -{removed}" if state == "changed" else "", row["id"])
+    bk.store("ap-1", "hostname ap-1\nwpa-psk c0mmunity-S3cret\n", mask=False)
+    bk.log("ap-1", "error", "timed out")
+with db.within(acme):
+    held = bk.list_backups("edge-fw")
+check("Toner holds the versions unmasked here (the case that must never reach Demarc as is)",
+      "Hunter2-p@ss!" in bk.get_text(held[0]["id"], acme) and len(held) == 2)
+
+
+def backups_sent():
+    return [it for p in server.payloads() for it in p.get("items", []) if it["kind"] in ("backup", "backup_log")]
+
+
+server.requests.clear()
+snd.step(); snd.step()
+check("Demarc 0.0.2 doesn't take them, so none is sent", not backups_sent() and not server.bad, server.bad)
+server.version = "0.0.8"                                     # upgraded where it is: Toner learns it from the next reply
+db.save_device(dev("before-backups"))
+snd.step()
+check("the reply naming 0.0.8 tells Toner", q.get("backups") is True and not backups_sent())
+snd.step()
+sent = backups_sent()
+vers = [it["body"] for it in sent if it["kind"] == "backup"]
+check("the next round sends every version Toner holds (the default Config history), oldest first, with the backup log",
+      [v["device"] for v in vers] == ["edge-fw", "edge-fw", "ap-1"] and [it["body"]["status"] for it in sent if it["kind"] == "backup_log"]
+      == ["new", "changed", "error"] and not server.bad, (sent, server.bad))
+text = json.dumps(sent)
+check("each version is masked on the way out, though Toner stored it unmasked", "<masked>" in vers[0]["masked"]
+      and not [s for s in SECRETS if s in text])
+check("its sha, size and line count are of the masked text that was sent", all(
+    v["sha"] == hashlib.sha256(v["masked"].encode()).hexdigest() and v["size"] == len(v["masked"]) and v["lines"] == v["masked"].count("\n")
+    for v in vers))
+check("its time is in UTC, as the time it was taken", all(v["taken_at"].endswith("Z") for v in vers) and vers[0]["taken_at"] == demarc.utc_of(held[-1]["taken_at"]))
+check("and the changes counted by Toner go with it", vers[1]["added"] == 1 and vers[1]["removed"] == 1, vers[1])
+check("Demarc took them", len(server.backups_held[(uids[acme], "edge-fw")]) == 2 and not server.bad)
+server.requests.clear()
+snd.step()
+check("nothing is sent twice", not backups_sent())
+with db.within(acme):
+    state, row, *_ = bk.store("edge-fw", CFG[1] + "ntp server 10.0.0.9\n", mask=False)
+    bk.log("edge-fw", state, "+1 / -0", row["id"])
+snd.step()
+check("a new version goes in the next batch, alone", [it["kind"] for it in backups_sent()] == ["backup", "backup_log"]
+      and "ntp server" in backups_sent()[0]["body"]["masked"])
+
+print("== Config history: only each device's newest")
+demarc.save_config(history=demarc.HISTORY_LATEST)
+q.drop()
+server.requests.clear()
+server.backups_held.clear(); server.backup_log.clear()
+snd.step()
+check("a full copy carries no backups: they follow it", any(p == "/ingest/v1/snapshot" for p, *_ in server.requests) and not backups_sent())
+snd.step()
+vers = [it["body"] for it in backups_sent() if it["kind"] == "backup"]
+check("then only each device's newest version is sent", sorted((v["device"], "ntp server" in v["masked"]) for v in vers)
+      == [("ap-1", False), ("edge-fw", True)], vers)
+check("and each device's newest backup log entry", sorted(it["body"]["device"] for it in backups_sent() if it["kind"] == "backup_log") == ["ap-1", "edge-fw"])
+server.requests.clear()
+with db.within(acme):
+    bk.store("ap-1", "hostname ap-1\nwpa-psk c0mmunity-S3cret\nwlan staff\n", mask=False)
+snd.step()
+check("what comes after follows as usual", [it["body"]["device"] for it in backups_sent()] == ["ap-1"])
+
+print("== Config history: every version, a few at a time")
+demarc.save_config(history=demarc.HISTORY_ALL)
+demarc.BACKUPS_PER_ROUND = 2
+q.drop()
+server.backups_held.clear()
+snd.step()
+rounds = 0
+while sum(len(v) for v in server.backups_held.values()) < 5 and rounds < 10:
+    snd.step(); rounds += 1
+check("a long history goes out a few versions each round, until all are in", sum(len(v) for v in server.backups_held.values()) == 5
+      and rounds == 3 and not server.bad, (rounds, server.bad))
+demarc.BACKUPS_PER_ROUND = 100
+
+print("== a Demarc put back to an older version")
+server.version = "0.0.7"
+db.save_device(dev("after-0.0.7"))
+snd.step()
+check("the reply naming 0.0.7 stops the backups", q.get("backups") is False)
+with db.within(acme):
+    bk.store("edge-fw", "hostname edge-fw\nset version 2\n", mask=False)
+server.requests.clear()
+snd.step()
+check("so none is sent to it", not backups_sent() and not server.bad, server.bad)
+server.version = "0.0.8"
+db.save_device(dev("after-0.0.8"))
+snd.step(); snd.step()
+check("upgraded again, the one it missed follows", [it["body"]["device"] for it in backups_sent() if it["kind"] == "backup"] == ["edge-fw"]
+      and "set version 2" in backups_sent()[0]["body"]["masked"])
+check("which version takes them", (demarc.takes_backups("0.0.8"), demarc.takes_backups("0.1.0"), demarc.takes_backups("0.0.7"),
+                                    demarc.takes_backups("")) == (True, True, False, False))
+check("Demarc refused nothing Toner sent", not server.bad, server.bad)
+
 # ================================================================ one sender at a time
 print("== one Toner process sends at a time")
 lock_path = os.path.join(SP, "lock%d" % int(time.time() * 1000))
@@ -764,6 +889,17 @@ page.save()
 check("Send data to Demarc is saved with Save changes", demarc.config()["enabled"] is False and page.status.text() == demarc.T_OFF)
 page.enabled.setChecked(True)
 page.save()
+from ui.settings_pages.demarc import HISTORY, HISTORY_NOTE
+check("Config history offers every version (the default) or each device's newest, in the proposed words",
+      [page.history.itemText(i) for i in range(page.history.count())] == [label for _k, label in HISTORY]
+      and page.history.currentData() == demarc.HISTORY_ALL and "0.0.8" in HISTORY_NOTE)
+page.history.setCurrentIndex(page.history.findData(demarc.HISTORY_LATEST))
+page.save()
+check("it is saved with Save changes", demarc.config()["history"] == demarc.HISTORY_LATEST)
+page.load()
+check("and shown again when the page loads", page.history.currentData() == demarc.HISTORY_LATEST)
+page.history.setCurrentIndex(page.history.findData(demarc.HISTORY_ALL))
+page.save()
 asked.clear()
 page.ask = lambda title, text, yes: (asked.append((title, text, yes)), True)[1]
 page._disconnect()
@@ -786,6 +922,9 @@ dp.code.setText("UI-CODE-0003")
 dp._connect()
 check("connecting from the tab is not counted as an unsaved edit", demarc.connected() and dp.enabled.isChecked()
       and signature(dp) == tab.baseline[i])
+dp.history.setCurrentIndex(dp.history.findData(demarc.HISTORY_LATEST))
+check("changing Config history is an unsaved edit", signature(dp) != tab.baseline[i])
+dp.history.setCurrentIndex(dp.history.findData(demarc.HISTORY_ALL))
 dp.enabled.setChecked(False)
 check("turning sending off is", signature(dp) != tab.baseline[i])
 tab.save()
