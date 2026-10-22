@@ -77,6 +77,7 @@ class FakeDemarc:
         self.orgs, self.devices, self.latest, self.results = {}, {}, {}, []
         self.backups_held, self.backup_log = {}, []     # from 0.0.8: (org_uid, device) -> {(taken_at, sha): body}; log entries
         self.settings = {}                  # org_uid -> {'live', 'interval_minutes', 'unmasked_configs'}
+        self.unmasked = {}                  # from 0.0.8: (org_uid, device, taken_at, sha) -> the unmasked text
         self.parts, self.not_demarc, self.stored_batches = {}, False, 0
         self.version = "0.0.1"              # from 0.0.3 Demarc names its version in every reply and takes a result's value
         self.bad = []                       # what the server refused, and why (a test fails if Toner sent anything wrong)
@@ -99,7 +100,8 @@ class FakeDemarc:
                 except Exception:
                     return self._json(400, {"error": "bad_gzip"})
                 fake.requests.append((self.path, dict(self.headers), payload, gz))
-                fake.seen.append(payload)
+                if self.path != "/ingest/v1/unmasked":            # the one request meant to carry secrets: checked on its own
+                    fake.seen.append(payload)
                 fake.gzipped = getattr(fake, "gzipped", True) and gz
                 for i, (p, status, reply) in enumerate(fake.inject):
                     if p == self.path:
@@ -217,6 +219,14 @@ class FakeDemarc:
             return 401, {"error": "bad_token"}
         if self.revoked:
             return 403, {"error": "revoked"}
+        if path == "/ingest/v1/unmasked":
+            if set(p) != {"org_uid", "device", "taken_at", "sha", "text"} or not re.fullmatch(r"[0-9a-f]{64}", p["sha"]) \
+                    or not TZ.search(p["taken_at"]) or not self.backups():
+                return self.refuse("unmasked fields")
+            if not (self.settings.get(p["org_uid"]) or {}).get("unmasked_configs"):
+                return 403, {"error": "unmasked_off"}
+            self.unmasked[(p["org_uid"], p["device"], p["taken_at"], p["sha"])] = p["text"]
+            return 200, {"stored": True, "server_time": "2026-10-18T12:00:00Z", "demarc_version": self.version, "settings": dict(self.settings)}
         if not TZ.search(p.get("sent_at", "")):
             return self.refuse("sent_at")
         if path == "/ingest/v1/batch":
@@ -275,7 +285,7 @@ class FakeDemarc:
 
 
 STATE = ("token", "last_seq", "revoked", "orgs", "devices", "latest", "results", "settings", "codes", "version", "backups_held",
-         "backup_log")
+         "backup_log", "unmasked")
 
 
 def restart(old):
@@ -834,6 +844,84 @@ check("upgraded again, the one it missed follows", [it["body"]["device"] for it 
 check("which version takes them", (demarc.takes_backups("0.0.8"), demarc.takes_backups("0.1.0"), demarc.takes_backups("0.0.7"),
                                     demarc.takes_backups("")) == (True, True, False, False))
 check("Demarc refused nothing Toner sent", not server.bad, server.bad)
+
+print("== unmasked configs, only when Demarc asks")
+RAW = ("Building configuration...\nhostname core-sw\nsnmp-server community c0mmunity-S3cret RO\n"
+       "username admin password Hunter2-p@ss!\ninterface vlan 10\n")
+real_fetch = bk.fetch
+bk.fetch = lambda d, opts=None: RAW
+UNMASKED = "/ingest/v1/unmasked"
+
+
+def unmasked_posts():
+    return [p for path, _h, p, _g in server.requests if path == UNMASKED]
+
+
+def back_up():
+    with db.within(acme):
+        return bk.backup_device({"name": "core-sw"}, mask=True)          # Toner keeps it masked; the unmasked copy is in memory
+
+
+server.settings[uids[acme]] = {"live": True, "interval_minutes": 5, "unmasked_configs": False}
+db.save_device(dev("unmasked-1"))
+snd.step()
+server.requests.clear()
+r = back_up()
+check("with Receive unmasked configs off in Demarc, nothing unmasked is sent", r.status == "OK" and not unmasked_posts()
+      and not demarc.wants_unmasked(acme))
+server.settings[uids[acme]]["unmasked_configs"] = True
+db.save_device(dev("unmasked-2"))
+snd.step(); snd.step()
+check("Demarc's reply turns it on for that organization only", demarc.wants_unmasked(acme) and not demarc.wants_unmasked(globex)
+      and not demarc.wants_unmasked(db.GLOBAL))
+server.requests.clear()
+r = back_up()
+posts = unmasked_posts()
+check("the next backup posts its config unmasked, on its own", r.status == "OK" and len(posts) == 1
+      and set(posts[0]) == {"org_uid", "device", "taken_at", "sha", "text"} and posts[0]["org_uid"] == uids[acme], posts)
+check("straight from the device, with only the volatile lines taken out", posts and "Hunter2-p@ss!" in posts[0]["text"]
+      and "c0mmunity-S3cret" in posts[0]["text"] and posts[0]["text"] == bk.clean(RAW, mask=False))
+snd.step()
+held = server.backups_held[(uids[acme], "core-sw")]
+newest = max(held.values(), key=lambda b: b["taken_at"])
+check("it carries the time and the sha of the masked version Demarc gets in the batch", posts
+      and (posts[0]["taken_at"], posts[0]["sha"]) == (newest["taken_at"], newest["sha"]) and "<masked>" in newest["masked"], (posts, held))
+with db.within(acme):
+    stored = bk.get_text(bk.latest("core-sw")["id"])
+qfile = demarc.queue_path()
+on_disk = b"".join(p.read_bytes() for p in qfile.parent.glob(qfile.name + "*") if p.is_file())
+check("the unmasked text is in neither Toner's database (masked there) nor its queue", "Hunter2-p@ss!" not in stored
+      and b"Hunter2-p@ss!" not in on_disk and not [s for s in SECRETS if s in json.dumps(backups_sent())])
+server.requests.clear()
+r = back_up()
+check("an unchanged backup sends it again, for the same version (Demarc keeps the newer copy)", r.value == "unchanged"
+      and [(p["taken_at"], p["sha"]) for p in unmasked_posts()] == [(posts[0]["taken_at"], posts[0]["sha"])])
+server.inject.append((UNMASKED, 403, {"error": "unmasked_off"}))
+server.requests.clear()
+r = back_up()
+check("one Demarc refuses (turned off just now) is dropped, and the backup still succeeds", r.status == "OK" and len(unmasked_posts()) == 1
+      and not server.inject)
+server.inject.append((UNMASKED, None, None))
+check("a dropped connection is only logged", demarc.offer_unmasked(acme, "core-sw", "2026-10-18 12:00:00",
+                                                                   "0" * 64, "hostname x\n") is False)
+server.inject.clear()
+demarc.save_config(enabled=False)
+server.requests.clear()
+back_up()
+check("with Send data to Demarc off, nothing is sent", not unmasked_posts() and not demarc.wants_unmasked(acme))
+demarc.save_config(enabled=True)
+snd.step()                                                   # what is waiting goes to 0.0.8 first
+server.version = "0.0.7"
+db.save_device(dev("unmasked-3"))
+snd.step()
+server.requests.clear()
+back_up()
+check("nor to a Demarc older than 0.0.8", not unmasked_posts())
+server.version = "0.0.8"
+db.save_device(dev("unmasked-4"))
+snd.step(); snd.step()
+check("the posts were all as Demarc takes them", not server.bad, server.bad)
+bk.fetch = real_fetch
 
 # ================================================================ one sender at a time
 print("== one Toner process sends at a time")

@@ -15,6 +15,11 @@ What is sent (an allowlist: only the fields in BODIES, which are exactly the one
 Passwords, user names, SNMP and proxy settings, custom fields and everything else in the vault are never sent. A config backup
 goes through backup.clean(mask=True) before it is queued, even when Toner keeps unmasked copies itself (Backup mask off).
 
+The one exception, and only when Demarc asks for it: while an organization's Receive unmasked configs toggle is on in Demarc
+(its replies say unmasked_configs), each config backup Toner takes is also posted unmasked to /ingest/v1/unmasked, straight
+from what the device returned (offer_unmasked). It goes from memory, by whichever Toner process took the backup, and is never
+written to Toner's database or the queue; one that fails is not tried again. Demarc stores it encrypted.
+
 How it is sent:
   * every few seconds the sender compares the organizations and devices with what it last queued, and picks up new results;
   * changes wait in a queue on disk (demarc-queue.db next to Toner's database), unnumbered. They are given sequence numbers
@@ -63,6 +68,7 @@ RETRY_FIRST, RETRY_MOST = 15, 300        # after a failed send: 15 s, then twice
 STATUSES = {"OK", "WARN", "FAIL", "ERROR", "N/A"}
 NUMERIC_FROM = (0, 0, 3)                 # the first Demarc that takes a result's value; older ones refuse the field
 BACKUPS_FROM = (0, 0, 8)                 # the first Demarc that takes config backups and the backup log
+UNMASKED_PATH = "/ingest/v1/unmasked"   # an unmasked config, posted on its own (offer_unmasked)
 BACKUPS_PER_ROUND = 100                  # versions (and log entries) queued per organization each round, so a long history goes
                                          # out in steps instead of filling the queue at once
 HISTORY_ALL, HISTORY_LATEST = "all", "latest"   # the Config history setting
@@ -214,6 +220,53 @@ def backup_body(row, text):
 def backup_log_body(row):
     status = row["status"] if row["status"] in BACKUP_STATUSES else "error"
     return allowed("backup_log", {"device": row["device"], "at": utc_of(row["at"]), "status": status, "message": row["message"] or ""})
+
+
+def org_uid(org):
+    """The org_uid Demarc knows organization `org` by (Global's too), or '' for one without a uid yet."""
+    if not org:
+        return global_uid()
+    return next((r["uid"] for r in db.org_rows() if r["id"] == int(org) and r.get("uid")), "") or ""
+
+
+def wants_unmasked(org, queue=None):
+    """True when Demarc's last reply asked for organization `org`'s configs unmasked, and Toner is connected and sending to a
+    Demarc that takes config backups."""
+    cfg = config()
+    if not (cfg["address"] and cfg["enabled"]):
+        return False
+    st = (queue or Queue()).state()
+    if st.get("stopped") or st.get("off") or not st.get("backups"):
+        return False
+    settings = st.get("settings") or {}
+    uid = org_uid(org)
+    return bool(uid) and isinstance(settings.get(uid), dict) and bool(settings[uid].get("unmasked_configs"))
+
+
+def offer_unmasked(org, device, taken_at, masked_sha, text, queue=None):
+    """Post one unmasked config to Demarc, if it asked for this organization's: `taken_at` is the version's local time and
+    `masked_sha` the sha of its masked text (what Demarc knows the version by). The text stays in memory: nothing is written,
+    and a post that fails is only logged. Returns whether Demarc stored it."""
+    try:
+        if not wants_unmasked(org, queue):
+            return False
+        tok = token()
+        if not tok:
+            return False
+        cfg = config()
+        body = {"org_uid": org_uid(org), "device": _cut(device, 255), "taken_at": utc_of(taken_at), "sha": masked_sha,
+                "text": text}
+        if len(text) > BODIES["backup"]["masked"]:
+            return False
+        status, data = Client(cfg["address"], cfg["pin"], cfg["trusted"], tok).post(UNMASKED_PATH, body, timeout=(10, 60))
+        if status != 200:
+            log.info("Demarc: the unmasked config of %s was not taken (%s %s)", device, status, (data or {}).get("error", ""))
+        return status == 200 and bool((data or {}).get("stored"))
+    except (Unreachable, CertChanged) as e:
+        log.info("Demarc: couldn't send the unmasked config of %s: %s", device, e or type(e).__name__)
+    except Exception:
+        log.exception("Demarc: sending the unmasked config of %s failed", device)
+    return False
 
 
 def _from(version, first):

@@ -306,9 +306,22 @@ def backup_device(dev, opts=None, mask=None):
         log(name, "error", f"{type(e).__name__}: {e}")
         return Result(name, CHECK_NAME, ERROR, "", f"{type(e).__name__}: {str(e)[:200]}")
     log(name, state, f"+{added} / -{removed}" if state == "changed" else "", row["id"] if row else None)
+    if row:
+        _offer_unmasked(name, text, row)
     if state == "changed":
         return Result(name, CHECK_NAME, WARN, "changed", f"+{added} / -{removed} lines since the previous backup")
     return Result(name, CHECK_NAME, OK, "first copy" if state == "new" else "unchanged")
+
+
+def _offer_unmasked(name, text, row):
+    """Hand Demarc the config as fetched (only the volatile lines taken out), when it asked for this organization's unmasked.
+    Sent for the version just stored, or the newest one when nothing changed, by the sha Demarc knows it by. Never stored."""
+    from core import demarc
+    org = db.target()
+    if not demarc.wants_unmasked(org):
+        return
+    masked_sha = sha(clean(get_text(row["id"]), mask=True))      # as core/demarc.py's backup_body computes it
+    demarc.offer_unmasked(org, name, row["taken_at"], masked_sha, clean(text, mask=False))
 
 
 def backup_many(devices, workers=5, on_result=None, opts=None):

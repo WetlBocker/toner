@@ -326,7 +326,10 @@ browser view. In Demarc, create an enrollment code under Toners. In Toner, open 
 address and the code, and check the certificate fingerprint before you confirm. Toner always connects out to Demarc over HTTPS and
 never sends passwords or other secrets from its vault. If Demarc can't be reached, changes wait for up to 7 days or 500 MB. With Demarc 0.0.3 or newer, each check result's value goes too, for Demarc's graphs. With Demarc 0.0.8 or newer, config backups and the backup log go too, always masked: passwords, keys and SNMP
 communities are replaced with `<masked>` before they leave Toner, even when Toner keeps unmasked copies itself. **Config history**
-chooses what the first full copy sends: every version Toner holds, or only each device's newest.
+chooses what the first full copy sends: every version Toner holds, or only each device's newest. The one exception is Demarc's **Receive
+unmasked configs**, off unless an administrator turns it on for an organization in Demarc: then each backup Toner takes of that
+organization's devices is also sent unmasked, straight from the device, and Demarc stores it encrypted. Toner never writes that
+copy to its own database or its queue, so if Demarc can't be reached at that moment, it isn't sent.
 
 ### Wi-Fi and cloud status pages
 
