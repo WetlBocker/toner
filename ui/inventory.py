@@ -1168,11 +1168,16 @@ class InventoryTab(QWidget):
         return self.hint
 
     def org_switched(self):
-        """Another organization was picked: its own open folders (refresh follows from the inventory's changed signal)."""
+        """Another organization was picked: its own open folders, a clean search box, and its devices. The list is drawn here:
+        the `changed` signal that follows tells the other sections, not the inventory itself (1.6.10: a switch used to leave
+        the old organization's devices on screen until a filter was touched)."""
         self.expanded = set(db.get_setting("inventory_expanded"))
         self.org_sel = set()
         self._update_filter_btn()
+        self.search.blockSignals(True)                 # clearing would draw the list once for the search, once more below
         self.search.clear()
+        self.search.blockSignals(False)
+        self.refresh()
 
     def refresh(self):
         devs = scope.keep(self._visible(self._listed()))

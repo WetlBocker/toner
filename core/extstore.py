@@ -406,10 +406,15 @@ def status_text(s=None):
 
 
 # ---------------------------------------------------------------- in the background
+_stop = threading.Event()
+
+
 def _loop():
-    while True:
+    while not _stop.is_set():
         _kick.wait(INTERVAL)
         _kick.clear()
+        if _stop.is_set():
+            return
         try:
             sync_once()
         except Exception:
@@ -428,6 +433,17 @@ def start():
 
 def kick():
     _kick.set()
+
+
+def stop():
+    """End the background rounds (a factory reset: nothing may be written after it). start() runs them again."""
+    global _thread
+    _stop.set()
+    _kick.set()
+    if _thread is not None:
+        _thread.join(5)
+    _thread = None
+    _stop.clear()
 
 
 # ---------------------------------------------------------------- choosing another store

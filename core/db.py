@@ -113,7 +113,7 @@ DEFAULT_SETTINGS = {
     "fileserver": {}, "iperf_path": "", "openssl_path": "",
     # proxy for every connection that can use one (see core/proxy.py; the proxy password is in the vault)
     # updates (see core/updates.py)
-    "sessions_expanded": [],
+    "sessions_expanded": [], "sessions_list_hidden": False,
     "update_check": True, "update_auto_install": False, "update_last_check": "", "update_skip": "", "update_pending": {},
     "proxy": {"mode": "system", "kind": "http", "host": "", "port": 8080, "username": "",
               "bypass": "localhost, 127.0.0.1"},
@@ -130,7 +130,7 @@ DEFAULT_SETTINGS = {
 }
 # Per-machine state that must not travel in an exported settings file (channel secrets stay in
 # the vault, so an imported channel would be broken).
-NOT_PORTABLE = {"vault_provider", "vault_config", "org_current", "window_geometry", "ansible_distro", "ansible_playbooks", "ansible_server", "ansible_server_device", "sidebar_collapsed", "acks", "client_scope", "onboarding_done", "inventory_columns", "results_columns", "notify_channels", "notify_snooze_until", "inventory_expanded", "snippets", "fileserver", "iperf_path", "openssl_path",
+NOT_PORTABLE = {"vault_provider", "vault_config", "org_current", "window_geometry", "ansible_distro", "ansible_playbooks", "ansible_server", "ansible_server_device", "sidebar_collapsed", "sessions_list_hidden", "acks", "client_scope", "onboarding_done", "inventory_columns", "results_columns", "notify_channels", "notify_snooze_until", "inventory_expanded", "snippets", "fileserver", "iperf_path", "openssl_path",
                 "update_last_check", "update_skip", "update_pending", "sessions_expanded", "agent_enabled", "agent_enroll", "agent_bind",
                 "agent_address", "install_uid", "demarc"}
 
@@ -959,7 +959,7 @@ def ensure_folder_path(path):
 # ---------- settings ----------
 # Settings: Global's apply everywhere; an organization's file holds only the ones it changes (Settings > ... while it is picked).
 # These are about this computer or the whole program, so they are always read from and written to the Global file:
-GLOBAL_ONLY = {"window_geometry", "sidebar_collapsed", "onboarding_done", "org_current",
+GLOBAL_ONLY = {"window_geometry", "sidebar_collapsed", "sessions_list_hidden", "onboarding_done", "org_current",
                "theme", "ui_style", "font_size", "color_preset", "status_colors",
                "term_font", "rdp_embedded", "term_font_size", "term_scrollback", "term_scheme", "paging_cmd",
                "hostkey_mode", "ssh_legacy_algorithms", "run_in_background", "metrics_port", "proxy", "ssh_tunnel",
