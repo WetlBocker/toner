@@ -38,6 +38,11 @@ def history_split(w):
     return next(s for s in w.history.findChildren(QSplitter) if s.orientation() == Qt.Orientation.Horizontal)
 
 
+def share(sizes):
+    """The first pane's share of the splitter: what is kept across a window of another size (Qt scales the sizes to fit)."""
+    return sizes[0] / max(1, sum(sizes))
+
+
 print("== a 1920-wide window")
 w = A.Main(); w.resize(1920, 1000); w.show(); wait(100)
 w.go("History"); wait(50)
@@ -56,14 +61,15 @@ w.go("Tools"); w.tools.show_tool(w.tools.apitest); wait(50)          # a splitte
 api = w.tools.apitest.split
 api.setSizes([600, 1100]); api.splitterMoved.emit(600, 1); wait(500)
 check("each page's splitter has its own entry", set(db.get_setting("splitters")) == {"history", "api_tester"}, db.get_setting("splitters"))
+saved_api = db.get_setting("splitters")["api_tester"]
 w.close()
 
 print("== the next start")
 w2 = A.Main(); w2.resize(1920, 1000); w2.show(); wait(100)
 w2.go("History"); wait(50)
-check("History opens with the dragged sizes", abs(history_split(w2).sizes()[0] - saved[0]) <= 2, (history_split(w2).sizes(), saved))
+check("History opens with the dragged sizes", abs(share(history_split(w2).sizes()) - share(saved)) < 0.02, (history_split(w2).sizes(), saved))
 w2.go("Tools"); w2.tools.show_tool(w2.tools.apitest); wait(50)
-check("and so does the API Tester", abs(w2.tools.apitest.split.sizes()[0] - 600) <= 2, w2.tools.apitest.split.sizes())
+check("and so does the API Tester", abs(share(w2.tools.apitest.split.sizes()) - share(saved_api)) < 0.03, (w2.tools.apitest.split.sizes(), saved_api))
 w2.close()
 
 print("== a saved entry that no longer fits the page")
