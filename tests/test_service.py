@@ -84,6 +84,38 @@ db.set_setting("schedule_groups", ["Tag: gone"]); d2 = service.Daemon(log=log.ap
 check("a schedule whose groups were all deleted is skipped, not run on everything", d2.tick(datetime.now() + timedelta(hours=1)) in ([], [("backup", 1)]) and len(chk) == n)
 db.set_setting("schedule_enabled", False); db.set_setting("backup_enabled", False)
 d3 = service.Daemon(log=log.append); d3._arm(); check("everything off -> nothing scheduled", d3.next_checks is None and d3.next_backup is None and d3.tick(datetime.now() + timedelta(days=9)) == [])
+
+print("== the running service follows Settings")
+db.set_setting("schedule_groups", []); db.set_setting("schedule_enabled", True); db.set_setting("schedule_minutes", 30)
+d5 = service.Daemon(log=log.append); d5._arm(); t = datetime.now(); n = len(chk)
+db.set_setting("schedule_enabled", False)
+check("scheduled checks turned off in Settings stop without a restart", d5.tick(t + timedelta(hours=2)) == [] and len(chk) == n and d5.next_checks is None)
+db.set_setting("schedule_enabled", True)
+d5.tick(t + timedelta(hours=2))
+check("turned on again, they run one interval later", d5.next_checks == t + timedelta(hours=2, minutes=30)
+      and d5.tick(t + timedelta(hours=2, minutes=29)) == [] and d5.tick(t + timedelta(hours=2, minutes=31)) == [("checks", 1)])
+db.set_setting("schedule_minutes", 5)
+d5.tick(t + timedelta(hours=2, minutes=32))
+check("a shorter interval counts at once, not after the old one", d5.next_checks <= t + timedelta(hours=2, minutes=37), d5.next_checks)
+from core import orgs
+acme = orgs.create("Acme", "ACME")
+d5.tick(t + timedelta(hours=2, minutes=33))
+check("an organization added while it runs gets its own schedule", d5.due.get(acme, {}).get("checks") is not None, d5.due)
+orgs.set_archived(acme, True)
+d5.tick(t + timedelta(hours=2, minutes=34))
+check("an archived one is dropped", acme not in d5.due, d5.due)
+
+print("== one Toner process runs the schedule")
+from core import platforms
+if service._schedule_lock:
+    service._schedule_lock.close(); service._schedule_lock = None       # as if this service had only just started
+base = db.base_path()
+window = platforms.try_lock(base.with_name(base.name + ".schedule.lock"))   # Toner's window started first and runs it
+n = len(chk)
+check("while the window runs the schedule, the service runs nothing", window is not None and not service.owns_schedule()
+      and d5.tick(t + timedelta(days=1)) == [] and len(chk) == n)
+window.close()                                                            # the window is closed
+check("once the window closes, the service takes over and runs what is due", service.owns_schedule() and d5.tick(t + timedelta(days=1)) == [("checks", 1)] and len(chk) == n + 1)
 def boom(*a, **k): raise RuntimeError("disk full")
 service.run_checks = boom; db.set_setting("schedule_enabled", True); db.set_setting("schedule_groups", [])
 db.set_setting("schedule_on_start", True)

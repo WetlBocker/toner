@@ -72,3 +72,21 @@ class FileLock:
         except OSError:
             pass
         self.f.close()
+
+
+def try_lock(path):
+    """Hold a lock file for as long as this process keeps the returned file open (closing it lets the lock go), or None when
+    another Toner process (the window, the service) holds it. For work only one of them should do: sending to Demarc, the schedule."""
+    f = open(path, "a+b")
+    try:
+        if WINDOWS:
+            import msvcrt
+            f.seek(0)
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return f
+    except OSError:
+        f.close()
+        return None
