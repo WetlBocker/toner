@@ -687,9 +687,11 @@ class ToolsTab(QWidget):
         from ui import sshkeysui
         self.sshkeys = sshkeysui.SshKeysTab()
         self.playbooks = playbookeditor.PlaybookEditorTab()
+        from ui import apitool
+        self.apitest = apitool.ApiTesterTab()
         self.discovery.inventory_changed = self.inventory_changed.emit
         self.tabs = PageStack(width=228)          # wide enough for 'Ping / Traceroute / DNS' without cutting it short
-        for title, pages in (("Connect", ((self.runner, "Command Runner"),)),
+        for title, pages in (("Connect", ((self.runner, "Command Runner"), (self.apitest, "API Tester"))),
                              ("Diagnose", ((self.diag, "Ping / Traceroute / DNS"), (self.liveping, "Live Ping"),
                                            (self.mtr, "Path Monitor (MTR)"), (self.scan, "Port Scanner"),
                                            (self.iperf, "Throughput (iperf3)"), (self.wifi, "Wi-Fi Scanner"),
@@ -708,7 +710,7 @@ class ToolsTab(QWidget):
         lay = QVBoxLayout(self)
         lay.addWidget(self.tabs)
         self._pickers = (self.diag, self.scan, self.snmp, self.liveping, self.mtr, self.tls, self.iperf, self.scp, self.sshkeys)
-        self._others = (self.runner, self.discovery, self.topology)
+        self._others = (self.runner, self.discovery, self.topology, self.apitest)
 
     def refresh(self):
         for t in self._pickers:
@@ -735,5 +737,5 @@ class ToolsTab(QWidget):
 
     def shutdown(self):
         for t in (self.diag, self.scan, self.snmp, self.liveping, self.mtr, self.tls, self.runner,
-                  self.discovery, self.topology, self.listeners, self.utilities, self.tftp, self.sftp, self.iperf, self.wifi, self.scp, self.xcopy, self.openssl, self.sshkeys, self.playbooks):
+                  self.discovery, self.topology, self.listeners, self.utilities, self.tftp, self.sftp, self.iperf, self.wifi, self.scp, self.xcopy, self.openssl, self.sshkeys, self.playbooks, self.apitest):
             t.shutdown()

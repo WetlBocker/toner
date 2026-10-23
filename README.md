@@ -20,6 +20,7 @@ A Windows desktop tool for checking, documenting and troubleshooting a multi-ven
   - [Demarc](#demarc)
   - [Wi-Fi and cloud status pages](#wi-fi-and-cloud-status-pages)
 - [Tools in detail](#tools-in-detail)
+  - [API Tester](#api-tester)
   - [OpenSSL](#openssl)
   - [SSH keys](#ssh-keys)
   - [File servers (TFTP and SFTP)](#file-servers-tftp-and-sftp)
@@ -126,7 +127,7 @@ and **Run checks** act on the devices shown (all of them when nothing is typed o
 | **Configs** | Backs up configurations (see below), keeps only versions that differ, shows diffs and searches every stored configuration. Passwords and keys are masked in stored copies by default. |
 | **History** | Charts any checks over time; hover for values. Checks on very different scales get their own chart. Uptime shows restarts. |
 | **Reports** | CSV, HTML and PDF. The **Trend report** (7, 30 or 90 days) compares with the period before: availability, worst offenders, repeat failures, what is still wrong, configuration changes, busiest CPUs and growing disks. Settings > Reports can make one every week or month. |
-| **Tools** | Command runner (the same commands on many devices, read-only by default: Cisco, Juniper, Arista, HPE and MikroTik by SSH, Windows computers by PowerShell, Fortinet and Palo Alto firewalls by SSH with a login set on the device), ping, traceroute, DNS, live ping graph, path monitor (MTR), port scanner, TLS certificate checker, subnet calculator, device discovery, LLDP / CDP topology map, SNMP (v1, v2c, v3), syslog and trap receivers, MAC lookup, Wake-on-LAN, Wi-Fi scanner, file servers, SCP and xcopy, OpenSSL, SSH keys, iperf3, and the Ansible **Playbook Editor**. |
+| **Tools** | Command runner (the same commands on many devices, read-only by default: Cisco, Juniper, Arista, HPE and MikroTik by SSH, Windows computers by PowerShell, Fortinet and Palo Alto firewalls by SSH with a login set on the device), ping, traceroute, DNS, live ping graph, path monitor (MTR), port scanner, TLS certificate checker, subnet calculator, device discovery, LLDP / CDP topology map, SNMP (v1, v2c, v3), syslog and trap receivers, MAC lookup, Wake-on-LAN, Wi-Fi scanner, file servers, SCP and xcopy, OpenSSL, SSH keys, iperf3, an **API Tester** (a small Postman), and the Ansible **Playbook Editor**. |
 | **Sessions** | Saved connections in a folder tree (drag, rename, search, duplicate): SSH, Telnet and Serial open in tabs inside Toner, follow Settings > Terminal, and are logged. An SSH session can keep its password in the vault or use an inventory device's login, jump host and proxy. Serial has a Send break button for ROMMON. Open sessions can be shown side by side in an equal grid (Split view), popped out into their own window, or typed into all at once (Type in all sessions, with a Leave out tick on any session that should not get it); the session list can be hidden to give the terminals the whole width. An SSH session has a Files panel: this computer on one side, the device on the other (SFTP over the same login), with drag and drop, Upload and Download buttons, progress and Cancel. **Remote Desktop** runs inside a Toner tab, using the Remote Desktop control Windows ships (the one `mstsc.exe` is built on): Windows asks for the password and Toner never stores it. Fill the window or use a fixed size; clipboard, drives, printers, the console session and a gateway are options. Settings > Terminal can send it to Windows' own window instead. **Sessions from other programs:** Inventory > More > Import... also reads a MobaXterm export (`.mobaconf`), a PuTTY export (`.reg`) and SecureCRT (its `.xml` export, or any `.ini` in its Sessions folder); More > Import PuTTY sessions on this computer reads PuTTY's own list. They become sessions (not devices), in the same folders (for MobaXterm the root every bookmark shares, such as `My Sessions`, is left out); one already there is skipped. A MobaXterm "Stored Passwords" export adds the SSH passwords to the vault (importing it again fills in sessions that have none). Browser, VNC, FTP and other kinds Toner does not open are counted and skipped. |
 | **Automation** | Runs **Ansible** playbooks on Inventory devices: pick a playbook and devices, check first (nothing changes), then run for real after a confirmation naming the playbook and devices. Output streams live, with a recap per device and a history. See [Automation (Ansible)](#automation-ansible). More will be added here. |
 | **Settings** | Thresholds (overrides per vendor, folder, tag or device), which checks run and when (Checks has tabs for the list, the schedule and your own checks), timeouts, config backups, notifications (email, Teams, Slack, Discord, ntfy, webhook, desktop), credential profiles, proxy, agents, maintenance, appearance, terminal, reports, security (host keys, and older SSH algorithms: ssh-rsa and SHA-1 key exchange for devices such as older Cisco ASAs that offer nothing newer, tried last and on unless turned off), audit log, data and logs. Pages with unsaved edits are marked, and Save and Revert list exactly what changes. |
@@ -344,6 +345,21 @@ copy to its own database or its queue, so if Demarc can't be reached at that mom
   available through an authenticated Microsoft Graph app.
 
 ## Tools in detail
+
+### API Tester
+
+Tools > Connect > API Tester sends one HTTP request at a time and shows the reply: pick the method, type the URL, fill in query
+parameters, headers and a body (JSON, XML, form or plain text), and choose how to sign in: a bearer token, basic user name and
+password, an API key in a header or query parameter, or one of Toner's credential profiles, whose password or token is read from
+the vault when you send and never shown. Requests go through the proxy in Settings > Proxy, with a timeout and a "Verify
+certificate" switch for devices with self-signed certificates. The reply shows the status, time taken, size and headers, with JSON
+and XML pretty-printed.
+
+Save requests in folders per organization; Global's can be marked Shared so every organization has them. Write `{{name}}` in any
+field and set the value on the Variables tab, per organization, so one Shared request works against each organization's own host;
+tick Secret for keys and passwords, which then live in the vault. History keeps the last 100 requests sent (you can change the
+number) and loads one back with a click. Tokens, passwords and keys are kept in the vault, never in the database, and are masked
+in the audit log. Not included: scripts and tests, environments, importing or exporting collections, mocks and flows.
 
 ### OpenSSL
 
