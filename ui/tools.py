@@ -678,7 +678,8 @@ class ToolsTab(QWidget):
         self.tls = tools2.TlsTab()
         self.discovery, self.topology = tools2.DiscoveryTab(), tools2.TopologyTab()
         self.listeners = tools2.ListenersTab()
-        self.tftp, self.sftp, self.iperf = tools3.FileServerTab("tftp"), tools3.FileServerTab("sftp"), tools3.IperfTab()
+        self.tftp, self.sftp, self.ftp = tools3.FileServerTab("tftp"), tools3.FileServerTab("sftp"), tools3.FileServerTab("ftp")
+        self.iperf = tools3.IperfTab()
         self.wifi = tools3.WifiTab()
         self.scp, self.xcopy = tools3.ScpTab(), tools3.XcopyTab()
         self.utilities = tools2.UtilitiesTab()
@@ -698,8 +699,8 @@ class ToolsTab(QWidget):
                                            (self.subnet, "Subnet Calculator"))),
                              ("Discover", ((self.discovery, "Find Devices"), (self.topology, "Topology"))),
                              ("SNMP and logs", ((self.snmp, "SNMP"), (self.listeners, "Syslog and Traps"))),
-                             ("File transfer", ((self.tftp, "TFTP Server"), (self.sftp, "SFTP Server"), (self.scp, "SCP"),
-                                               (self.xcopy, f"Copy Files ({self.xcopy.name})"))),
+                             ("File transfer", ((self.tftp, "TFTP Server"), (self.sftp, "SFTP / SCP Server"), (self.ftp, "FTP Server"),
+                                               (self.scp, "SCP"), (self.xcopy, f"Copy Files ({self.xcopy.name})"))),
                              ("Crypto", ((self.tls, "TLS Certificates"), (self.openssl, "OpenSSL"), (self.sshkeys, "SSH Keys"))),
                              ("Automation", ((self.playbooks, "Playbook Editor"),)),
                              ("Utilities", ((self.utilities, "MAC and Wake-on-LAN"),))):
@@ -737,5 +738,5 @@ class ToolsTab(QWidget):
 
     def shutdown(self):
         for t in (self.diag, self.scan, self.snmp, self.liveping, self.mtr, self.tls, self.runner,
-                  self.discovery, self.topology, self.listeners, self.utilities, self.tftp, self.sftp, self.iperf, self.wifi, self.scp, self.xcopy, self.openssl, self.sshkeys, self.playbooks, self.apitest):
+                  self.discovery, self.topology, self.listeners, self.utilities, self.tftp, self.sftp, self.ftp, self.iperf, self.wifi, self.scp, self.xcopy, self.openssl, self.sshkeys, self.playbooks, self.apitest):
             t.shutdown()

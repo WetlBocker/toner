@@ -172,7 +172,7 @@ KIND_WORDS = {":snmp": "SNMP community", ":snmp-auth": "SNMPv3 authentication ke
               ":proxy": "Proxy password", ":agent": "Agent token", ":ssh": "SSH password", ":proxy-otp": "Proxy authenticator key"}
 SERVICE_WORDS = {"service:proxy": "Toner proxy password", "service:proxy-otp": "Toner proxy authenticator key",
                  "service:ssh-tunnel": "Toner SSH tunnel password", "service:ssh-tunnel-otp": "Toner SSH tunnel authenticator key",
-                 "service:sftp-server": "Toner file server password", "service:agent-enroll": "Toner agent sign-up key",
+                 "service:sftp-server": "Toner SFTP server password", "service:ftp-server": "Toner FTP server password", "service:agent-enroll": "Toner agent sign-up key",
                  "service:ansible-server": "Toner Ansible control node password"}
 
 

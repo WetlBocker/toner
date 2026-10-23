@@ -23,7 +23,7 @@ A Windows desktop tool for checking, documenting and troubleshooting a multi-ven
   - [API Tester](#api-tester)
   - [OpenSSL](#openssl)
   - [SSH keys](#ssh-keys)
-  - [File servers (TFTP and SFTP)](#file-servers-tftp-and-sftp)
+  - [File servers (TFTP, SFTP / SCP and FTP)](#file-servers-tftp-sftp--scp-and-ftp)
   - [SCP and xcopy](#scp-and-xcopy)
   - [iperf3](#iperf3)
 - [Automation (Ansible)](#automation-ansible)
@@ -382,21 +382,24 @@ Toner saves each device's SSH host key the first time it connects and refuses a 
 answers on another device's address can't collect Toner's passwords. Settings > Security lists the saved keys. Choose **Reject
 unknown hosts** to only accept devices whose key was saved from the console first.
 
-### File servers (TFTP and SFTP)
+### File servers (TFTP, SFTP / SCP and FTP)
 
 Each serves one folder you choose, nothing outside it, and is off until you start it. Read-only until you tick "Allow uploads";
 replacing or deleting needs a second tick; you can limit them to named devices; they stop after a time you set. Every transfer is
 listed, and starts, stops, uploads, deletions, refusals and logins go to the audit log. TFTP has no passwords by design, so name
 the devices in "Allowed clients" whenever uploads are on. SFTP needs a user name and password (in the vault), has no
-shell, shows its fingerprint and locks an address out for five minutes after five wrong passwords. Whole drives and system folders
-are refused.
+shell, shows its fingerprint and locks an address out for five minutes after five wrong passwords; the same server also answers
+SCP (`copy scp://user:password@host/image.bin flash:`), for devices such as Cisco IOS and ASA that have an SCP client but no SFTP
+client. FTP needs a user name and password too, sends them in clear text as FTP always does, serves both active and passive
+mode (Cisco IOS uses active mode unless `ip ftp passive` is set) with a passive port range you choose, and is the fastest way to
+get a large image onto a device. Whole drives and system folders are refused.
 
 ### SCP and xcopy
 
 Tools > File transfer. **SCP** copies files and folders to or from a device over SSH using its saved login, jump host and proxy
 (the device must allow it; Cisco IOS: `ip scp server enable` and a privilege-15 user). Names a device sends are checked so nothing
 is written outside your folder, and Stop leaves no half-written files. **xcopy** runs Windows xcopy between this computer and a
-network share, for example to move what the TFTP and SFTP servers received. Preview shows what would be copied, and overwriting
+network share, for example to move what the TFTP, SFTP and FTP servers received. Preview shows what would be copied, and overwriting
 asks first.
 
 ### iperf3

@@ -1,4 +1,4 @@
-"""File servers (TFTP, SFTP) and the iperf3 throughput test."""
+"""File servers (TFTP, SFTP with SCP, FTP) and the iperf3 throughput test."""
 import os
 import re
 import subprocess
@@ -17,7 +17,7 @@ from ui.tools import DevicePicker, OutputBox, Runner, _row
 from ui.tools2 import _muted, _primary, _table
 from ui import status as st
 
-SECRET = "service:sftp-server"
+SECRETS = {"sftp": "service:sftp-server", "ftp": "service:ftp-server"}       # the servers' passwords, in the vault
 AUDITED = {"write", "delete", "mkdir", "rename", "login"}              # plain reads stay out of the audit log
 
 
@@ -32,7 +32,7 @@ def _size(n):
 class FileServerTab(QWidget):
     event = Signal(dict)
     MAX_ROWS = 5000
-    PROTOS = {"tftp": ("TFTP", 69), "sftp": ("SFTP", 2222)}
+    PROTOS = {"tftp": ("TFTP", 69), "sftp": ("SFTP", 2222), "ftp": ("FTP", 21)}
 
     def __init__(self, proto):
         super().__init__()
@@ -57,6 +57,10 @@ class FileServerTab(QWidget):
         self.gen = QPushButton("Generate")
         self.fingerprint = _muted("")
         self.fingerprint.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.pasv_lo, self.pasv_hi = QSpinBox(), QSpinBox()                   # FTP: the ports for passive data connections
+        for box, value in ((self.pasv_lo, 50000), (self.pasv_hi, 50100)):
+            box.setRange(1, 65535)
+            box.setValue(value)
         self.write = QCheckBox("Allow uploads (devices can send files to this folder)")
         self.replace = QCheckBox("Also allow replacing and deleting existing files")
         self.replace.setEnabled(False)
@@ -75,9 +79,12 @@ class FileServerTab(QWidget):
         lay = QVBoxLayout(self)
         lay.addWidget(_muted(self._intro()))
         lay.addLayout(_row("Folder", self.folder, self.browse, self.open_btn, "Port", self.port))
-        if proto == "sftp":
+        if proto in ("sftp", "ftp"):
             lay.addLayout(_row("User name", self.user, "Password", self.password, self.show_pw, self.gen))
+        if proto == "sftp":
             lay.addWidget(self.fingerprint)
+        if proto == "ftp":
+            lay.addLayout(_row("Passive ports", self.pasv_lo, "to", self.pasv_hi))
         lay.addWidget(self.write)
         lay.addWidget(self.replace)
         lay.addLayout(_row("Allowed clients", self.allowed))
@@ -109,9 +116,15 @@ class FileServerTab(QWidget):
             return ("A TFTP server for sending firmware and configuration files to switches and routers, and receiving "
                     "backups from them. TFTP has no passwords, so this one serves only the folder below, is read-only until "
                     "you allow uploads, and can be limited to the devices you name. Stop it when you are finished.")
+        if self.proto == "ftp":
+            return ("An FTP server for the same jobs. Every Cisco platform has an FTP client, and FTP is much faster than TFTP "
+                    "for large images. It serves only the folder below, is read-only until you allow uploads, needs a user name "
+                    "and password, and sends them in clear text, so use it on a management network. Data connections use the "
+                    "passive ports below when the device asks for passive mode; if Windows asks about the firewall, allow "
+                    "private networks.")
         return ("An SFTP server (file transfer over SSH, with a user name and password) for the same jobs. It serves only "
                 "the folder below, is read-only until you allow uploads, gives no shell, and locks out an address after "
-                "five wrong passwords.")
+                "five wrong passwords. Devices with an SCP client but no SFTP client (IOS, ASA) can use it too.")
 
     # ---- saved choices (never the password: that goes to the vault)
     def load(self):
@@ -122,21 +135,27 @@ class FileServerTab(QWidget):
         self.replace.setChecked(bool(saved.get("replace")) and self.write.isChecked())
         self.allowed.setText(saved.get("allowed", ""))
         self.minutes.setValue(saved.get("minutes", 60))
-        if self.proto == "sftp":
+        if self.proto in ("sftp", "ftp"):
             self.user.setText(saved.get("user", "toner"))
             try:
                 import keyring
-                self.password.setText(keyring.get_password(db.SERVICE, SECRET) or "")
+                self.password.setText(keyring.get_password(db.SERVICE, SECRETS[self.proto]) or "")
             except Exception:
                 pass
+        if self.proto == "sftp":
             self._show_fingerprint()
+        if self.proto == "ftp":
+            self.pasv_lo.setValue(int(saved.get("pasv_lo", 50000)))
+            self.pasv_hi.setValue(int(saved.get("pasv_hi", 50100)))
 
     def save_choices(self):
         data = dict(db.get_setting("fileserver") or {})
         entry = {"folder": self.folder.text().strip(), "port": self.port.value(), "write": self.write.isChecked(),
                  "replace": self.replace.isChecked(), "allowed": self.allowed.text().strip(), "minutes": self.minutes.value()}
-        if self.proto == "sftp":
+        if self.proto in ("sftp", "ftp"):
             entry["user"] = self.user.text().strip()
+        if self.proto == "ftp":
+            entry["pasv_lo"], entry["pasv_hi"] = self.pasv_lo.value(), self.pasv_hi.value()
         data[self.proto] = entry
         db.set_setting("fileserver", data)
 
@@ -191,6 +210,12 @@ class FileServerTab(QWidget):
             if self.proto == "tftp":
                 srv = fileserver.TftpServer(folder, self.port.value(), allow_write=self.write.isChecked(),
                                             allow_overwrite=self.replace.isChecked(), allowed=allowed, on_event=emit)
+            elif self.proto == "ftp":
+                if not self.password.text():
+                    self.generate()
+                srv = fileserver.FtpServer(folder, self.user.text(), self.password.text(), self.port.value(),
+                                           passive_ports=(self.pasv_lo.value(), self.pasv_hi.value()), allow_write=self.write.isChecked(),
+                                           allow_overwrite=self.replace.isChecked(), allowed=allowed, on_event=emit)
             else:
                 if not self.password.text():
                     self.generate()
@@ -202,11 +227,12 @@ class FileServerTab(QWidget):
             self.status.setText(f"Could not start: {e}")
             return
         self.server = srv
-        if self.proto == "sftp":
+        if self.proto in ("sftp", "ftp"):
             try:
-                db.set_secret(SECRET, self.password.text())
+                db.set_secret(SECRETS[self.proto], self.password.text())
             except Exception:
                 pass
+        if self.proto == "sftp":
             self._show_fingerprint()
         self.save_choices()
         audit.log(f"{self.proto} server started", f"folder {folder}, port {srv.port}, uploads {'on' if srv.allow_write else 'off'}"
@@ -229,7 +255,7 @@ class FileServerTab(QWidget):
         on = self.server is not None
         self.go.setText(f"Stop {self.label} server" if on else f"Start {self.label} server")
         for w in (self.folder, self.browse, self.port, self.write, self.allowed, self.minutes, self.user, self.password,
-                  self.gen, self.show_pw):
+                  self.gen, self.show_pw, self.pasv_lo, self.pasv_hi):
             w.setEnabled(not on)
         self.replace.setEnabled(not on and self.write.isChecked())
         if not on:
@@ -240,8 +266,12 @@ class FileServerTab(QWidget):
         shown = ", ".join(ips[:4])
         if self.proto == "tftp":
             how = f"Devices can use  tftp://{ips[0]}/<file>   (for example: copy tftp://{ips[0]}/image.bin flash:)"
+        elif self.proto == "ftp":
+            how = (f"Devices can use  ftp://{s.username}:<password>@{ips[0]}/<file>   "
+                   f"(for example: copy ftp://{s.username}:<password>@{ips[0]}/image.bin flash:)")
         else:
-            how = f"Connect with any SFTP client to {shown} port {s.port} as {s.username}."
+            how = (f"Connect with any SFTP or SCP client to {shown} port {s.port} as {s.username}   "
+                   f"(for example on a Cisco device: copy scp://{s.username}:<password>@{ips[0]}/image.bin flash:)")
         mode = ("read and upload" + (", replace and delete" if s.allow_overwrite else "")) if s.allow_write else "read-only"
         self.status.setText(f"Running on {shown}, port {s.port}, {mode}.  {how}  "
                             "If Windows asks about the firewall, allow private networks.")

@@ -234,6 +234,51 @@ except Exception: check("a client outside the allowed list is turned away", any(
 s.stop()
 check("generated passwords are strong enough to use", len(F.new_password()) == 16 and F.new_password() != F.new_password())
 
+# ---------------------------------------------------------------- SCP over the SFTP server
+print("== SCP over the SFTP server")
+from core import scp as SCP
+check("only scp -f / -t is understood as a command", F.parse_scp_command("scp -f /firmware/img.bin") == {"mode": "f", "recursive": False, "preserve": False, "path": "/firmware/img.bin"}
+      and F.parse_scp_command(b"scp -r -p -t 'a b'") == {"mode": "t", "recursive": True, "preserve": True, "path": "a b"} and F.parse_scp_command("scp -v -q -d -f x")["mode"] == "f"
+      and F.parse_scp_command("cmd /c dir") is None and F.parse_scp_command("scp -f") is None and F.parse_scp_command("scp -f -t x") is None and F.parse_scp_command("scp -x -f y") is None)
+sev.clear(); s = sftp_server()
+def scp_client():
+    cl, _extra = SCP.connect("127.0.0.1", s.port, "netcheck", "S3cret-pass!", hostkey_mode="Always trust"); return cl
+cl = scp_client(); got = os.path.join(SP, "scp-got-%d.bin" % int(time.time()))
+n = SCP.Scp(cl).download("big.bin", got)
+check("a device can download with scp -f (Toner's own SCP client stands in for it)", n == (1, 300000) and open(got, "rb").read() == open(os.path.join(root, "big.bin"), "rb").read(), n)
+n = SCP.Scp(cl).download("/sub/inner.bin", got, overwrite=True); check("...by an absolute path too", n[0] == 1 and open(got, "rb").read() == bytes(range(256)) * 10)
+try: SCP.Scp(cl).download("missing.bin", got, overwrite=True); check("a missing file is an scp error", False)
+except SCP.ScpError as e: check("a missing file is an scp error", "No such file" in str(e), e)
+for n in ("../outside.txt", "..\\outside.txt", "C:/Windows/win.ini"):
+    try: SCP.Scp(cl).download(n, got, overwrite=True); leaked = b"SECRET" in open(got, "rb").read()
+    except SCP.ScpError: leaked = False
+    check(f"scp cannot leave the folder: {n}", not leaked)
+folder = os.path.join(SP, "scp-folder-%d" % int(time.time()))
+n = SCP.Scp(cl).download("sub", folder, recursive=True); check("a folder with -r", n[0] == 1 and os.path.exists(os.path.join(folder, "sub", "inner.bin")), n)
+try: SCP.Scp(cl).upload(got, "scp-up.bin"); check("scp -t is refused while uploads are off", False)
+except SCP.ScpError as e: check("scp -t is refused while uploads are off", "switched off" in str(e) and not os.path.exists(os.path.join(root, "scp-up.bin")), e)
+try: cl.exec_command("cmd /c dir"); check("other commands are still refused", False)
+except paramiko.SSHException: check("other commands are still refused", True)
+cl.close(); time.sleep(0.3)
+check("scp transfers are reported as reads, marked scp", any(e["op"] == "read" and e["path"] == "big.bin" and e["bytes"] == 300000 and e["status"] == "ok" and e["note"].startswith("scp") for e in sev)
+      and any(e["op"] == "write" and e["status"] == "denied" for e in sev) and any(e["op"] == "exec" and e["status"] == "denied" for e in sev), [e for e in sev if e["status"] != "ok"])
+s.stop()
+sev.clear(); s = sftp_server(allow_write=True, max_bytes=400000); cl = scp_client()
+n = SCP.Scp(cl).upload(got, "scp-up.bin"); check("scp -t uploads once allowed", n[0] == 1 and open(os.path.join(root, "scp-up.bin"), "rb").read() == open(got, "rb").read(), n)
+try: SCP.Scp(cl).upload(got, "scp-up.bin"); check("replacing is refused by default", False)
+except SCP.ScpError as e: check("replacing is refused by default", "replacing" in str(e), e)
+try: SCP.Scp(cl).upload(got, "sub/../../escape.bin"); escaped = os.path.exists(os.path.join(base, "escape.bin"))
+except SCP.ScpError: escaped = os.path.exists(os.path.join(base, "escape.bin"))
+check("an upload cannot leave the folder", not escaped)
+big_local = os.path.join(SP, "scp-big-%d.bin" % int(time.time())); open(big_local, "wb").write(os.urandom(500000))
+try: SCP.Scp(cl).upload(big_local, "scp-toobig.bin"); check("an upload past the size limit is refused", False)
+except SCP.ScpError as e: check("an upload past the size limit is refused", "size limit" in str(e) and not os.path.exists(os.path.join(root, "scp-toobig.bin")), e)
+n = SCP.Scp(cl).upload(folder, "tree", recursive=True); check("a folder with -r", os.path.exists(os.path.join(root, "tree", "sub", "inner.bin")), n)
+cl.close(); time.sleep(0.3)
+check("scp uploads are reported", any(e["op"] == "write" and e["path"] == "scp-up.bin" and e["status"] == "ok" and e["note"].startswith("scp") for e in sev))
+s.stop()
+import shutil; shutil.rmtree(os.path.join(root, "tree"), ignore_errors=True); os.remove(os.path.join(root, "scp-up.bin"))
+
 # ---------------------------------------------------------------- iperf3
 print("== iperf3")
 row = iperf.parse_line("[  5]   0.00-1.00   sec  11.2 MBytes  94.1 Mbits/sec    0   63.4 KBytes")
