@@ -1,7 +1,9 @@
 """Sessions: saved connections (SSH, Telnet, Remote Desktop, Serial) on the left, open terminals in tabs on the right."""
+import math
+
 from PySide6.QtCore import QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QFont, QIcon, QKeySequence, QShortcut
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout,
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QGridLayout, QHBoxLayout,
                                QInputDialog, QLabel, QLineEdit, QMenu, QMessageBox, QPushButton, QSpinBox, QSplitter,
                                QStackedWidget, QTabWidget, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 from core import audit, db, nettools, profiles, serialconn, sessionlog, sessions, vendors
@@ -370,6 +372,7 @@ class SessionPane(QWidget):
         self.up = False                                   # true from the moment we start connecting until the session reports it ended
         self._override = None
         self._used = False
+        self.owner = None                                 # the SessionsTab, which routes typing while Type in all sessions is on
         self.term = TerminalView()
         self.apply_settings()
         self.status = QLabel("Not connected.")
@@ -377,24 +380,44 @@ class SessionPane(QWidget):
         self.break_btn = QPushButton("Send break")
         self.break_btn.setToolTip("Sends a serial break, which routers read as 'interrupt the boot' (ROMMON)")
         self.break_btn.setVisible(spec["kind"] == "serial")
+        self.leave_out = QCheckBox("Leave out")                # shown only while Type in all sessions is on
+        self.leave_out.setToolTip("Keep this session out of Type in all sessions: what you type here stays here, "
+                                  "and nothing typed elsewhere is sent here.")
+        self.leave_out.setVisible(False)
+        self.pop_btn = QPushButton("Pop out")
+        self.pop_btn.setToolTip("Move this session into its own window, which can be moved, resized or made full screen.")
+        for b in (self.reconnect_btn, self.disconnect_btn, self.break_btn, self.pop_btn):
+            b.setAutoDefault(False)
         bar = QHBoxLayout()
         bar.addWidget(self.status, 1)
-        for b in (self.break_btn, self.reconnect_btn, self.disconnect_btn):
+        for b in (self.leave_out, self.break_btn, self.reconnect_btn, self.disconnect_btn, self.pop_btn):
             bar.addWidget(b)
+        self.bar = bar
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 6, 0, 0)
         lay.addLayout(bar)
         lay.addWidget(self.term, 1)
+        self.body = lay                                   # (the file browser of an SSH session goes under the terminal)
         self.term.data_out.connect(self._to_session)
         self.term.resized.connect(self._resize_session)
         self.reconnect_btn.clicked.connect(self.connect_now)
         self.disconnect_btn.clicked.connect(self.disconnect_now)
         self.break_btn.clicked.connect(lambda: self.session and hasattr(self.session, "send_break") and self.session.send_break())
+        self.pop_btn.clicked.connect(lambda: self.owner and self.owner.pop_out(self))
         self._set_connected(False)
 
     @property
     def kind(self):
         return self.spec["kind"]
+
+    def takes_part(self):
+        """Does typing in other sessions reach this one while Type in all sessions is on? Only a connected terminal that is not left out."""
+        return self.connected() and not self.leave_out.isChecked()
+
+    def send_raw(self, data):
+        """Bytes straight to the device (what Type in all sessions sends from another pane)."""
+        if self.connected():
+            self.session.send(data)
 
     def apply_settings(self):
         """Pick up font, colours and scrollback from Settings > Terminal."""
@@ -415,7 +438,9 @@ class SessionPane(QWidget):
         self.term.feed(text.replace("\n", "\r\n").encode())
 
     def _to_session(self, data):
-        if self.connected():
+        if self.owner is not None and self.owner.typing_everywhere() and self.takes_part():
+            self.owner.send_everywhere(data)              # to every session that takes part, this one included
+        elif self.connected():
             self.session.send(data)
 
     def _resize_session(self, cols, rows):
@@ -556,12 +581,118 @@ class SessionTree(QTreeWidget):
             self.moved.emit(moves, (where, tid))
 
 
+TERMINAL_KINDS = ("ssh", "telnet", "serial")       # panes with a terminal: Type in all sessions reaches these, never Remote Desktop
+
+
+def grid_shape(n):
+    """(rows, columns) that share the screen as equally as possible: 1 = full, 2 = side by side, 3-4 = 2x2, 5-6 = 2x3, 7-9 = 3x3..."""
+    if n <= 1:
+        return (1, 1)
+    cols = math.ceil(math.sqrt(n))
+    return (math.ceil(n / cols), cols)
+
+
+class GridCell(QWidget):
+    """One session in Split view: a header line with the connection dot, the session's name and a Close button, then the pane."""
+
+    def __init__(self, pane, owner):
+        super().__init__()
+        self.pane = pane
+        self.title = QLabel()
+        self.title.setStyleSheet("font-weight: 600;")
+        self.close_btn = QPushButton("Close")
+        self.close_btn.setAutoDefault(False)
+        self.close_btn.setToolTip("Close this session (asks first while it is connected)")
+        self.close_btn.clicked.connect(lambda: owner.close_pane(pane))
+        head = QHBoxLayout()
+        head.setContentsMargins(4, 0, 4, 0)
+        head.addWidget(self.title, 1)
+        head.addWidget(self.close_btn)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        lay.addLayout(head)
+        lay.addWidget(pane, 1)
+        pane.show()                                       # (a page taken out of the tabs is left hidden)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet("GridCell { border: 1px solid palette(mid); }")
+        self.retitle()
+
+    def retitle(self):
+        self.title.setText(("● " if self.pane.connected() else "") + self.pane.spec["name"])
+
+    def release(self):
+        """Take the pane out, so it can go back to a tab; the cell is then thrown away."""
+        self.layout().removeWidget(self.pane)
+        self.pane.setParent(None)
+        self.hide()
+        self.deleteLater()
+        return self.pane
+
+
+class PoppedWindow(QWidget):
+    """A session in its own top-level window: it can be moved, resized or made full screen, and put back in a tab."""
+
+    def __init__(self, pane, owner):
+        super().__init__(None, Qt.WindowType.Window)
+        self.pane, self.owner = pane, owner
+        self._closing_quietly = False
+        self.setWindowTitle(f"{pane.spec['name']} - Toner")
+        self.back_btn = QPushButton("Put back in a tab")
+        self.back_btn.setToolTip("Return this session to the Sessions tabs")
+        self.full_btn = QPushButton("Full screen")
+        self.full_btn.setCheckable(True)
+        self.full_btn.setToolTip("Fill the screen   (F11)")
+        for b in (self.back_btn, self.full_btn):
+            b.setAutoDefault(False)
+        bar = QHBoxLayout()
+        bar.addStretch(1)
+        bar.addWidget(self.full_btn)
+        bar.addWidget(self.back_btn)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(8, 4, 8, 8)
+        lay.addLayout(bar)
+        lay.addWidget(pane, 1)
+        pane.show()
+        if hasattr(pane, "pop_btn"):
+            pane.pop_btn.setVisible(False)                # (it is already out)
+        self.back_btn.clicked.connect(lambda: owner.put_back(pane))
+        self.full_btn.toggled.connect(self.set_full)
+        QShortcut(QKeySequence("F11"), self, activated=lambda: self.full_btn.setChecked(not self.full_btn.isChecked()))
+        self.resize(900, 560)
+
+    def set_full(self, on):
+        self.showFullScreen() if on else self.showNormal()
+        self.full_btn.setText("Leave full screen" if on else "Full screen")
+
+    def release(self):
+        """Take the pane out and close the window without a question (the pane is going back to a tab)."""
+        self.layout().removeWidget(self.pane)
+        self.pane.setParent(None)
+        if hasattr(self.pane, "pop_btn"):
+            self.pane.pop_btn.setVisible(True)
+        self._closing_quietly = True
+        self.close()
+        self.deleteLater()
+        return self.pane
+
+    def closeEvent(self, e):
+        if self._closing_quietly:
+            return super().closeEvent(e)
+        e.ignore()                                        # closing the window ends the session, with the same question as closing a tab
+        QTimer.singleShot(0, lambda: self.owner.close_pane(self.pane) if self.pane in self.owner.popped else None)
+
+
 class SessionsTab(QWidget):
     logs_changed = Signal()
 
     def __init__(self):
         super().__init__()
         self.logs_dialog = None
+        self.popped = {}                                           # pane -> its PoppedWindow
+        self.cells = {}                                            # pane -> its GridCell, while Split view is on
+        self.grid_order = []                                       # the panes in the grid, in tab order
+        self._wired = set()                                        # panes whose signals are connected here (once each)
         from ui.finder import FilterButton, SearchBox
         self.search = SearchBox("Search sessions", "Type part of a name, address, folder or type. Several words must all match.", page=self)
         self.search.setMaximumWidth(16777215)                     # the box fills the column above the list
@@ -627,11 +758,48 @@ class SessionsTab(QWidget):
             starts.addWidget(b)
             self.welcome_buttons[kind] = b
         wl.addLayout(starts)
+        self.grid = QWidget()                                             # Split view: every open session at once
+        self.grid_lay = QGridLayout(self.grid)
+        self.grid_lay.setContentsMargins(0, 0, 0, 0)
+        self.grid_lay.setSpacing(4)
         self.stack = QStackedWidget()
         self.stack.addWidget(self.welcome)
         self.stack.addWidget(self.tabs)
+        self.stack.addWidget(self.grid)
+        self.tabs.tabBar().setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.tabs.tabBar().customContextMenuRequested.connect(self._tab_menu)
+        # the bar above the sessions: hide the list, Split view, Type in all sessions
+        self.list_btn = QPushButton()
+        self.list_btn.setProperty("ghost", True)
+        self.list_btn.setFixedWidth(36)
+        self.list_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.split_btn = QPushButton("Split view")
+        self.split_btn.setCheckable(True)
+        self.split_btn.setToolTip("Show every open session at once, in an equal grid, instead of in tabs.")
+        self.multi_btn = QPushButton("Type in all sessions")
+        self.multi_btn.setCheckable(True)
+        self.multi_btn.setToolTip("What you type in one connected session is sent to every connected session. "
+                                  "Tick Leave out on a session to keep it out.")
+        for b in (self.list_btn, self.split_btn, self.multi_btn):
+            b.setAutoDefault(False)
+        self.multi_banner = QLabel("Type in all sessions is on: keys and pastes go to every connected session except those marked Leave out.")
+        self.multi_banner.setWordWrap(True)
+        self.multi_banner.setVisible(False)
+        self.multi_banner.setStyleSheet("QLabel { background: #b8860b; color: #ffffff; padding: 4px 8px; border-radius: 4px; }")
+        bar = QHBoxLayout()
+        bar.setContentsMargins(0, 0, 0, 0)
+        bar.addWidget(self.list_btn)
+        bar.addStretch(1)
+        bar.addWidget(self.split_btn)
+        bar.addWidget(self.multi_btn)
+        right = QWidget()
+        rl = QVBoxLayout(right)
+        rl.setContentsMargins(0, 0, 0, 0)
+        rl.addLayout(bar)
+        rl.addWidget(self.multi_banner)
+        rl.addWidget(self.stack, 1)
 
-        left = QWidget()
+        left = self.left = QWidget()
         ll = QVBoxLayout(left)
         ll.setContentsMargins(0, 0, 8, 0)
         finder = QHBoxLayout()
@@ -647,13 +815,18 @@ class SessionsTab(QWidget):
         ll.addWidget(self.note)
         split = QSplitter()
         split.addWidget(left)
-        split.addWidget(self.stack)
+        split.addWidget(right)
         split.setStretchFactor(1, 1)
         split.setSizes([360, 700])
         split.setChildrenCollapsible(False)
         left.setMinimumWidth(240)
         lay = QVBoxLayout(self)
         lay.addWidget(split, 1)
+        self.list_btn.clicked.connect(lambda: self.show_list(not self.left.isVisibleTo(self)))
+        self.split_btn.toggled.connect(self._split_toggled)
+        self.multi_btn.toggled.connect(self._multi_toggled)
+        self.show_list(not db.get_setting("sessions_list_hidden"), remember=False)
+        self._show_what_is_open()
 
         self.search.textChanged.connect(self.refresh)
         self.tree.itemDoubleClicked.connect(self._double_clicked)
@@ -1199,20 +1372,15 @@ class SessionsTab(QWidget):
         except RdpUnavailable as e:
             self.note.setText(f"Remote Desktop cannot run inside Toner here ({e}). Using Windows' own client.")
             return None
-        pane.state_changed.connect(self._retitle)
-        pane.logs_changed.connect(self._logs_changed)
-        i = self.tabs.addTab(pane, spec["name"])
-        self.tabs.setCurrentIndex(i)
-        self.stack.setCurrentWidget(self.tabs)
+        self._place(pane)
         QTimer.singleShot(0, lambda: pane.connect_now() if pane in self.panes() else None)      # once the tab has its real size
         return pane
 
     def open_rdp_device(self, dev):
         """Inventory > Open Remote Desktop, the device window and the command palette: a Remote Desktop tab for a Windows computer."""
-        for i in range(self.tabs.count()):
-            p = self.tabs.widget(i)
+        for p in self.panes():
             if p.kind == "rdp" and p.spec.get("dev") and p.spec["dev"]["name"] == dev["name"] and p.spec["dev"].get("org") == dev.get("org"):
-                self.tabs.setCurrentIndex(i)
+                self.show_pane(p)
                 if not p.connected():
                     p.connect_now()
                 return p
@@ -1220,7 +1388,7 @@ class SessionsTab(QWidget):
         spec = self._spec({"name": dev["name"], "kind": "rdp", "host": dev["host"], "port": 3389, "device": dev["name"], "org": dev.get("org"),
                            "username": base["username"], "options": {"fullscreen": True}})
         self.open_spec(spec)
-        return self.tabs.currentWidget() if self.tabs.count() else None
+        return self.current_pane()
 
     def open_spec(self, spec):
         if spec["kind"] == "vnc":
@@ -1242,11 +1410,8 @@ class SessionsTab(QWidget):
                               f"Started Remote Desktop to {spec['host']}.")
             return
         pane = SessionPane(spec)
-        pane.state_changed.connect(self._retitle)
-        pane.logs_changed.connect(self._logs_changed)
-        i = self.tabs.addTab(pane, spec["name"])
-        self.tabs.setCurrentIndex(i)
-        self.stack.setCurrentWidget(self.tabs)
+        pane.owner = self
+        self._place(pane)
         # connect once the tab has its real size, or the first lines are cropped when the terminal settles
         QTimer.singleShot(0, lambda: pane.connect_now() if pane in self.panes() else None)
 
@@ -1265,38 +1430,210 @@ class SessionsTab(QWidget):
 
     def open_device(self, dev):
         """An inventory device's SSH session (Inventory > Open SSH session, the device window, the command palette)."""
-        for i in range(self.tabs.count()):
-            p = self.tabs.widget(i)
+        for p in self.panes():
             if p.spec.get("dev") and p.spec["dev"]["name"] == dev["name"] and p.spec["dev"].get("org") == dev.get("org") and p.kind == "ssh":
-                self.tabs.setCurrentIndex(i)
+                self.show_pane(p)
                 if not p.connected():
                     p.connect_now()
                 return p
         spec = self._spec({"name": dev["name"], "kind": "ssh", "host": dev["host"], "port": dev.get("port") or int(db.get_setting("default_ssh_port")),
                            "device": dev["name"], "org": dev.get("org"), "options": {"paging": True}})
         self.open_spec(spec)
-        return self.tabs.currentWidget()
+        return self.current_pane()
 
-    # ---------------------------------------------------------------- the tabs
+    # ---------------------------------------------------------------- the open sessions: tabs, the grid and popped-out windows
+    def attached(self):
+        """The panes shown here, in order: the tabs, or the grid while Split view is on."""
+        return list(self.grid_order) if self.split_btn.isChecked() else [self.tabs.widget(i) for i in range(self.tabs.count())]
+
     def panes(self):
-        return [self.tabs.widget(i) for i in range(self.tabs.count())]
+        """Every open session: the ones shown here and the ones in their own window."""
+        return self.attached() + list(self.popped)
+
+    def current_pane(self):
+        if self.split_btn.isChecked():
+            return self.grid_order[-1] if self.grid_order else None
+        return self.tabs.currentWidget() if self.tabs.count() else None
+
+    def _place(self, pane):
+        """A new or returning pane: into a tab, or into the grid while Split view is on."""
+        if getattr(pane, "owner", None) is None and hasattr(pane, "owner"):
+            pane.owner = self
+        if pane not in self._wired:
+            self._wired.add(pane)
+            pane.state_changed.connect(self._retitle)
+            pane.logs_changed.connect(self._logs_changed)
+        if self.split_btn.isChecked():
+            self.grid_order.append(pane)
+            self._lay_grid()
+        else:
+            i = self.tabs.addTab(pane, pane.spec["name"])
+            self.tabs.setCurrentIndex(i)
+            self._retitle(pane)
+        if isinstance(pane, SessionPane):
+            pane.leave_out.setVisible(self.multi_btn.isChecked())
+        self._show_what_is_open()
+
+    def _take(self, pane):
+        """Remove a pane from wherever it is shown (a tab, the grid or its own window) without closing it."""
+        i = self.tabs.indexOf(pane)
+        if i >= 0:
+            self.tabs.removeTab(i)
+        if pane in self.cells:
+            self.cells.pop(pane).release()
+            self.grid_order.remove(pane)
+            self._lay_grid()
+        elif pane in self.grid_order:
+            self.grid_order.remove(pane)
+        if pane in self.popped:
+            self.popped.pop(pane).release()
+        pane.setParent(None)
+
+    def _show_what_is_open(self):
+        here = self.attached()
+        self.stack.setCurrentWidget(self.welcome if not here else self.grid if self.split_btn.isChecked() else self.tabs)
+        for b in (self.split_btn, self.multi_btn):
+            b.setEnabled(bool(self.panes()))
+
+    def show_pane(self, pane):
+        """Bring a pane to the front: its tab, or its window."""
+        i = self.tabs.indexOf(pane)
+        if i >= 0:
+            self.tabs.setCurrentIndex(i)
+        elif pane in self.popped:
+            self.popped[pane].raise_()
+            self.popped[pane].activateWindow()
 
     def _retitle(self, pane):
         i = self.tabs.indexOf(pane)
         if i >= 0:
             self.tabs.setTabText(i, ("● " if pane.connected() else "") + pane.spec["name"])
+        if pane in self.cells:
+            self.cells[pane].retitle()
+
+    def _tab_menu(self, pos):
+        i = self.tabs.tabBar().tabAt(pos)
+        if i < 0:
+            return
+        pane = self.tabs.widget(i)
+        m = QMenu(self)
+        m.addAction("Pop out", lambda: self.pop_out(pane))
+        m.addAction("Close", lambda: self.close_pane(pane))
+        m.exec(self.tabs.tabBar().mapToGlobal(pos))
 
     def close_tab(self, i):
-        pane = self.tabs.widget(i)
+        self.close_pane(self.tabs.widget(i))
+
+    def close_pane(self, pane):
+        """End a session and remove it, wherever it is shown. Asks first while it is connected."""
         if pane.connected() and QMessageBox.question(self, "End session", f"'{pane.spec['name']}' is still connected. End the session?") \
                 != QMessageBox.StandardButton.Yes:
-            return
+            return False
         pane.shutdown()
-        self.tabs.removeTab(i)
+        self._take(pane)
+        self._wired.discard(pane)
         pane.deleteLater()
         self._logs_changed()
-        if not self.tabs.count():
-            self.stack.setCurrentWidget(self.welcome)
+        self._show_what_is_open()
+        return True
+
+    # ---- Split view
+    def _split_toggled(self, on):
+        if on:
+            self.grid_order = [self.tabs.widget(i) for i in range(self.tabs.count())]
+            while self.tabs.count():
+                self.tabs.removeTab(0)
+            self._lay_grid()
+        else:
+            for pane in list(self.grid_order):
+                self.cells.pop(pane).release()
+            while self.grid_lay.count():
+                self.grid_lay.takeAt(0)
+            order, self.grid_order = self.grid_order, []
+            for pane in order:
+                self.tabs.addTab(pane, pane.spec["name"])
+                self._retitle(pane)
+            if order:
+                self.tabs.setCurrentIndex(0)
+        self._show_what_is_open()
+
+    def _lay_grid(self):
+        """Share the screen equally between the panes in the grid (see grid_shape). Called whenever the set of panes changes."""
+        while self.grid_lay.count():
+            self.grid_lay.takeAt(0)
+        for pane in list(self.cells):
+            if pane not in self.grid_order:
+                self.cells.pop(pane).release()
+        for pane in self.grid_order:
+            if pane not in self.cells:
+                self.cells[pane] = GridCell(pane, self)
+        for c in range(max(1, self.grid_lay.columnCount())):
+            self.grid_lay.setColumnStretch(c, 0)
+        for r in range(max(1, self.grid_lay.rowCount())):
+            self.grid_lay.setRowStretch(r, 0)
+        rows, cols = grid_shape(len(self.grid_order))
+        for n, pane in enumerate(self.grid_order):
+            self.grid_lay.addWidget(self.cells[pane], n // cols, n % cols)
+            self.cells[pane].show()
+        for c in range(cols):
+            self.grid_lay.setColumnStretch(c, 1)
+        for r in range(rows):
+            self.grid_lay.setRowStretch(r, 1)
+
+    def grid_positions(self):
+        """{pane: (row, column)} of the grid as laid out now (for the tests)."""
+        out = {}
+        for i in range(self.grid_lay.count()):
+            item = self.grid_lay.itemAt(i)
+            r, c, _, _ = self.grid_lay.getItemPosition(i)
+            out[item.widget().pane] = (r, c)
+        return out
+
+    # ---- a session in its own window
+    def pop_out(self, pane):
+        if pane in self.popped or pane not in self.panes():
+            return None
+        self._take(pane)
+        win = PoppedWindow(pane, self)
+        self.popped[pane] = win
+        win.show()
+        self._show_what_is_open()
+        return win
+
+    def put_back(self, pane):
+        if pane not in self.popped:
+            return
+        self._take(pane)
+        self._place(pane)
+
+    # ---- Type in all sessions
+    def typing_everywhere(self):
+        return self.multi_btn.isChecked()
+
+    def _multi_toggled(self, on):
+        self.multi_banner.setVisible(on)
+        for p in self.panes():
+            if isinstance(p, SessionPane):
+                p.leave_out.setVisible(on)
+
+    def send_everywhere(self, data):
+        """What was typed in one session, to every connected terminal session that is not left out (never a Remote Desktop pane)."""
+        for p in self.panes():
+            if isinstance(p, SessionPane) and p.kind in TERMINAL_KINDS and p.takes_part():
+                p.send_raw(data)
+
+    # ---- the session list
+    def show_list(self, on, remember=True):
+        self.left.setVisible(on)
+        self.list_btn.setToolTip("Hide the session list" if on else "Show the session list")
+        from ui import icons, theme
+        t = theme.current()
+        if t:
+            self.list_btn.setIcon(icons.icon("panel", t.get("icon", t["muted"]), t["text"]))
+        else:
+            self.list_btn.setText("List")
+        if remember:
+            db.set_setting("sessions_list_hidden", not on)
 
     def _logs_changed(self):
         self.logs_changed.emit()
@@ -1327,3 +1664,6 @@ class SessionsTab(QWidget):
     def shutdown(self):
         for p in self.panes():
             p.shutdown()
+        for win in list(self.popped.values()):                # the popped-out windows go with the application, without a question
+            win._closing_quietly = True
+            win.close()

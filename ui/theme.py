@@ -101,6 +101,7 @@ QPushButton[primary="true"] { font-weight: 600; }
 /* (only a button marked primary is bold: a dialog makes a button its default after sizing it, so bold text there would not fit) */
 QPushButton[primary="true"]:hover, QPushButton:default:hover { background: %(accent_hover)s; border-color: %(accent_hover)s; }
 QPushButton[primary="true"]:disabled, QPushButton:default:disabled { background: %(surface2)s; color: %(muted)s; border-color: %(border)s; }
+QPushButton:checked { background: %(accent_soft)s; border-color: %(accent)s; }
 QPushButton[flat="true"], QPushButton[ghost="true"] { background: transparent; border-color: transparent; color: %(muted)s; }
 QPushButton[ghost="true"]:hover { background: %(hover)s; color: %(text)s; }
 QToolButton[popupMode="2"] { padding-right: 26px; }
