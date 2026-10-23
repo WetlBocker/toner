@@ -101,6 +101,18 @@ w.set_org(sg); app.processEvents()
 check("the search box is cleared on a switch", w.inventory.search.text() == "")
 every_section("SG360 after a search in Stericycle", sg)
 
+print("== removing or archiving an organization from Global redraws the lists (1.6.10 left its rows on screen)")
+w.set_org(0); app.processEvents()
+orgs.set_archived(ster, True); w.settings.orgs_changed.emit(); app.processEvents()
+got = shown()
+check("an archived organization's devices and sessions leave the Global lists",
+      not any(n.startswith("ster-") for n in got["inventory"] | got["sessions"]), (sorted(got["inventory"]), sorted(got["sessions"])))
+orgs.set_archived(ster, False); w.settings.orgs_changed.emit(); app.processEvents()
+check("restoring it brings them back", shown()["inventory"] == expect(0)["inventory"])
+orgs.remove(sg); w.settings.orgs_changed.emit(); app.processEvents()
+NAMES.pop(sg)
+every_section("after removing SG360 from Global", 0)
+
 w.close()
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

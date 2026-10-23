@@ -329,6 +329,7 @@ class Main(QMainWindow):
             self._show_org()
         else:
             self.set_titles()
+            self._redraw_lists()                           # in Global, a removed or archived organization's rows must go
 
     def set_titles(self):
         """Each section's title starts with the organization: 'Global - Overview', 'Acme - Inventory'."""
@@ -354,6 +355,9 @@ class Main(QMainWindow):
         self.set_titles()
         self.settings.reload(announce=False)           # its settings take effect here, once (the schedules too: the organization
         self.settings_applied(lists=False)             # being looked at runs through the sections)
+        self._redraw_lists()
+
+    def _redraw_lists(self):
         self.results.reset_view()
         self.sessions.refresh()
         self.inventory.org_switched()
