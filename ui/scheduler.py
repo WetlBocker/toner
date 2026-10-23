@@ -15,6 +15,13 @@ def _files():
     return [db.GLOBAL] + [o["id"] for o in db.org_rows() if not o["archived"]]
 
 
+def _ours():
+    """False while Toner's service runs the schedule (it started first): the window then leaves it alone, and takes over once the
+    service stops."""
+    from core import service
+    return service.owns_schedule()
+
+
 def _alive(saved):
     """Saved groups that still exist. None = they were chosen but have all gone, so skip the run."""
     alive = [g for g in saved if g in db.group_labels()]
@@ -92,6 +99,8 @@ class _OrgTimers(QObject):
         """Where the next run of the organization being looked at is announced."""
 
     def _run(self):
+        if not _ours():
+            return
         with db.within(db.home()):
             groups = _alive(self._settings()[2])
         if groups is not None:
@@ -113,8 +122,8 @@ class _OrgTimers(QObject):
         self._shown()
 
     def _run_other(self, org):
-        if any(j.isRunning() and j.org == org for j in self.jobs):
-            return                                    # still running from last time
+        if any(j.isRunning() and j.org == org for j in self.jobs) or not _ours():
+            return                                    # still running from last time, or the service runs the schedule
         with db.within(org):
             groups = _alive(self._settings()[2])
         if groups is None:

@@ -5,9 +5,22 @@ import threading
 import time
 from datetime import datetime, timedelta
 
-from core import alerts, audit, backup, db, notify
+from core import alerts, audit, backup, db, notify, platforms
 from core.runner import run_all
 from drivers.base import SEVERITY
+
+_schedule_lock = None
+
+
+def owns_schedule():
+    """True while this process runs the scheduled checks and backups. Toner's window and its service share the data, so only one
+    of them does: the first to ask holds a lock file beside the database until it closes, and the other takes over after that
+    (two would check every device twice, and count each failure twice towards an alert)."""
+    global _schedule_lock
+    if _schedule_lock is None:
+        base = db.base_path()
+        _schedule_lock = platforms.try_lock(base.with_name(base.name + ".schedule.lock"))
+    return _schedule_lock is not None
 
 
 def _groups_alive(groups):
@@ -137,15 +150,25 @@ class Daemon:
 
     def _arm(self):
         """When each organization's next checks and backups are due (Global's, and every organization's that is not archived)."""
-        now = datetime.now()
         self.due = {}
-        for org in [db.GLOBAL] + [o["id"] for o in db.org_rows() if not o["archived"]]:
-            with db.within(org):
-                self.due[org] = {"checks": now + timedelta(minutes=max(1, int(db.get_setting("schedule_minutes"))))
-                                 if db.get_setting("schedule_enabled") else None,
-                                 "backup": now + timedelta(hours=max(1, int(db.get_setting("backup_hours"))))
-                                 if db.get_setting("backup_enabled") else None}
+        self._follow_settings(datetime.now())
         self.next_checks, self.next_backup = self.due[db.GLOBAL]["checks"], self.due[db.GLOBAL]["backup"]
+
+    def _follow_settings(self, now):
+        """Settings as they are now, read at every tick: an organization added or archived, a schedule turned on or off, a shorter
+        interval. A run already due stays due; one turned off is dropped."""
+        orgs = [db.GLOBAL] + [o["id"] for o in db.org_rows() if not o["archived"]]
+        for org in [o for o in self.due if o not in orgs]:
+            del self.due[org]
+        for org in orgs:
+            with db.within(org):
+                every = {"checks": timedelta(minutes=max(1, int(db.get_setting("schedule_minutes"))))
+                         if db.get_setting("schedule_enabled") else None,
+                         "backup": timedelta(hours=max(1, int(db.get_setting("backup_hours"))))
+                         if db.get_setting("backup_enabled") else None}
+            when = self.due.setdefault(org, {"checks": None, "backup": None})
+            for kind, step in every.items():
+                when[kind] = None if step is None else min(when[kind] or now + step, now + step)
 
     def tick(self, now=None):
         """Run whatever is due. Returns a list of what it did (for tests and the log)."""
@@ -163,6 +186,9 @@ class Daemon:
         if not hasattr(self, "due"):
             self.due = {db.GLOBAL: {"checks": self.next_checks, "backup": self.next_backup}}
         self.due[db.GLOBAL].update(checks=self.next_checks, backup=self.next_backup)      # (tests set these directly)
+        if not owns_schedule():                             # the window runs the schedule while it is open
+            return did
+        self._follow_settings(now)
         for org, when in list(self.due.items()):
             who = "" if org == db.GLOBAL else f"{db.org_name(org)}: "
             with db.within(org):

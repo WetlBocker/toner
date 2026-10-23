@@ -1065,21 +1065,7 @@ _stop = threading.Event()
 _kick = threading.Event()
 
 
-def _try_lock(path):
-    """Hold the lock file beside the queue, or None when another Toner process (the window, the service) holds it."""
-    f = open(path, "a+b")
-    try:
-        if platforms.WINDOWS:
-            import msvcrt
-            f.seek(0)
-            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
-        else:
-            import fcntl
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        return f
-    except OSError:
-        f.close()
-        return None
+_try_lock = platforms.try_lock                      # the lock file beside the queue: one Toner process sends
 
 
 def _run():
