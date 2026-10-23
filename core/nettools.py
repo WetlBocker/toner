@@ -333,7 +333,19 @@ class SshSession(QThread):
         self.hostkey_mode, self.timeout = hostkey_mode, timeout
         self.cols, self.rows = cols, rows
         self.chan = None
+        self.client = None                       # the paramiko client while connected: the Files panel opens SFTP on it
         self._stop = False
+
+    def ready(self):
+        """Logged in, with the shell open."""
+        return self.client is not None and self.chan is not None and not self.chan.closed
+
+    def open_sftp(self):
+        """An SFTP channel on this login (no second login; the jump host, if any, is already in place). Raises when the
+        session is not connected or the device has no SFTP subsystem."""
+        if not self.ready():
+            raise paramiko.SSHException("not connected")
+        return self.client.open_sftp()
 
     def send(self, data: bytes):
         try:
@@ -377,6 +389,7 @@ class SshSession(QThread):
             client.get_transport().set_keepalive(30)
             self.chan = client.invoke_shell(term="xterm-256color", width=self.cols, height=self.rows)
             self.chan.settimeout(0.3)
+            self.client = client
             if self.init_cmd:
                 self.chan.send(self.init_cmd + "\r")
             while not self._stop and not self.chan.closed:
@@ -405,6 +418,7 @@ class SshSession(QThread):
         finally:
             if self._stop:
                 reason = "Disconnected by user."
+            self.client = None
             client.close()
             for c in extra:
                 try:

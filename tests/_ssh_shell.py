@@ -8,8 +8,11 @@ import paramiko
 
 
 class ShellServer:
-    def __init__(self, user="u", password="pw", banner="Welcome to R1\r\n", prompt="router# "):
+    def __init__(self, user="u", password="pw", banner="Welcome to R1\r\n", prompt="router# ", sftp_root=None):
+        """sftp_root: a folder on this computer served as the device's file system over SFTP (None: no SFTP subsystem, as on
+        a switch). self.slow: seconds to sleep per SFTP write, so a transfer takes long enough to be cancelled."""
         self.user, self.password, self.banner, self.prompt = user, password, banner, prompt
+        self.sftp_root, self.slow = sftp_root, 0.0
         self.key = paramiko.RSAKey.generate(2048)
         self.lines, self.sizes, self.logins = [], [], []
         self.sock = socket.socket()
@@ -55,6 +58,9 @@ class ShellServer:
         try:
             t = paramiko.Transport(c)
             t.add_server_key(self.key)
+            if self.sftp_root:
+                from _sftp_stub import attach
+                attach(t, self.sftp_root, lambda: srv.slow)
             t.start_server(server=If())
             keep = t.accept(30)                           # hold the channel: a dropped one is closed
             while t.is_active():

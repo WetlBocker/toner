@@ -264,7 +264,7 @@ class Main(QMainWindow):
         try:
             saved = len(sessions.list_sessions())
             live = self.sessions.count_open()
-            opened = self.sessions.tabs.count()
+            opened = len(self.sessions.panes())
             self.headers["sessions"].set_context(f"{saved} saved" + (f"  ·  {opened} open" if opened else "") + (f"  ·  {live} connected" if live else ""))
         except Exception:
             pass
