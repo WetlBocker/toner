@@ -10,6 +10,7 @@ from core.runner import run_all
 from drivers.base import SEVERITY
 
 _schedule_lock = None
+_schedule_guard = threading.Lock()
 
 
 def owns_schedule():
@@ -17,10 +18,11 @@ def owns_schedule():
     of them does: the first to ask holds a lock file beside the database until it closes, and the other takes over after that
     (two would check every device twice, and count each failure twice towards an alert)."""
     global _schedule_lock
-    if _schedule_lock is None:
-        base = db.base_path()
-        _schedule_lock = platforms.try_lock(base.with_name(base.name + ".schedule.lock"))
-    return _schedule_lock is not None
+    with _schedule_guard:                                # a second thread asking at once must not drop the lock held
+        if _schedule_lock is None:
+            base = db.base_path()
+            _schedule_lock = platforms.try_lock(base.with_name(base.name + ".schedule.lock"))
+        return _schedule_lock is not None
 
 
 def _groups_alive(groups):
