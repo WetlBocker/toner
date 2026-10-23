@@ -386,25 +386,47 @@ class SessionPane(QWidget):
         self.leave_out.setVisible(False)
         self.pop_btn = QPushButton("Pop out")
         self.pop_btn.setToolTip("Move this session into its own window, which can be moved, resized or made full screen.")
-        for b in (self.reconnect_btn, self.disconnect_btn, self.break_btn, self.pop_btn):
+        self.files_btn = QPushButton("Files")                  # SSH only: the Files panel under the terminal
+        self.files_btn.setCheckable(True)
+        self.files_btn.setToolTip("Browse this computer and the device side by side, and move files between them (SFTP on this session).")
+        self.files_btn.setVisible(spec["kind"] == "ssh")
+        self.browser = None
+        for b in (self.reconnect_btn, self.disconnect_btn, self.break_btn, self.pop_btn, self.files_btn):
             b.setAutoDefault(False)
         bar = QHBoxLayout()
         bar.addWidget(self.status, 1)
-        for b in (self.leave_out, self.break_btn, self.reconnect_btn, self.disconnect_btn, self.pop_btn):
+        for b in (self.leave_out, self.break_btn, self.files_btn, self.reconnect_btn, self.disconnect_btn, self.pop_btn):
             bar.addWidget(b)
         self.bar = bar
+        self.vsplit = QSplitter(Qt.Orientation.Vertical)      # the terminal, and under it the Files panel when it is open
+        self.vsplit.addWidget(self.term)
+        self.vsplit.setChildrenCollapsible(False)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 6, 0, 0)
         lay.addLayout(bar)
-        lay.addWidget(self.term, 1)
-        self.body = lay                                   # (the file browser of an SSH session goes under the terminal)
+        lay.addWidget(self.vsplit, 1)
         self.term.data_out.connect(self._to_session)
         self.term.resized.connect(self._resize_session)
         self.reconnect_btn.clicked.connect(self.connect_now)
         self.disconnect_btn.clicked.connect(self.disconnect_now)
         self.break_btn.clicked.connect(lambda: self.session and hasattr(self.session, "send_break") and self.session.send_break())
         self.pop_btn.clicked.connect(lambda: self.owner and self.owner.pop_out(self))
+        self.files_btn.toggled.connect(self._files_toggled)
         self._set_connected(False)
+
+    def _files_toggled(self, on):
+        """Files: the two-sided file browser under the terminal, made on first use and kept (hidden) after."""
+        if on and self.browser is None:
+            from ui.filebrowser import FileBrowser
+            self.browser = FileBrowser(self)
+            self.vsplit.addWidget(self.browser)
+            self.vsplit.setStretchFactor(0, 3)
+            self.vsplit.setStretchFactor(1, 2)
+            total = max(self.vsplit.height(), 400)
+            self.vsplit.setSizes([int(total * 0.55), int(total * 0.45)])     # the lists need room: a bit under half to begin with
+            self.browser.session_changed()
+        if self.browser is not None:
+            self.browser.setVisible(on)
 
     @property
     def kind(self):
@@ -432,6 +454,8 @@ class SessionPane(QWidget):
         self.reconnect_btn.setEnabled(not on)
         self.disconnect_btn.setEnabled(on)
         self.break_btn.setEnabled(on)
+        if self.browser is not None:
+            self.browser.session_changed()
         self.state_changed.emit(self)
 
     def _say(self, text):
@@ -542,6 +566,8 @@ class SessionPane(QWidget):
         self.logs_changed.emit()
 
     def shutdown(self):
+        if self.browser is not None:
+            self.browser.shutdown()
         if self.session is not None and self.session.isRunning():
             self.session.stop()
             self.session.wait(3000)
