@@ -125,6 +125,8 @@ DEFAULT_SETTINGS = {
     "vault_provider": "toner", "vault_config": {}, "vault_direct": False, "update_direct": False, "vault_keep_copies": True,   # (the last two: ignore the proxy)             # where passwords are kept: Toner's vault, or a password manager (core/extstore.py)
     # Demarc (see core/demarc.py): this install's permanent ID, and the Demarc it sends to (its token is in the vault)
     "install_uid": "", "demarc": {"address": "", "pin": "", "trusted": False, "enabled": False, "history": "all"},
+    # Tools > API Tester (see core/apitool.py): how many sent requests History keeps
+    "api_history_keep": 100,
 }
 # Per-machine state that must not travel in an exported settings file (channel secrets stay in
 # the vault, so an imported channel would be broken).
@@ -571,8 +573,28 @@ def _m8_faster_history(c):
     """)
 
 
+def _m9_api_tester(c):
+    """Tools > API Tester: saved requests in folders (Global's can be Shared), per-organization variables, and the history of what
+    was sent. Tokens, passwords and keys are never in these tables: they are in the vault (see core/apitool.py)."""
+    c.executescript("""
+    CREATE TABLE IF NOT EXISTS api_folders (
+        id INTEGER PRIMARY KEY, name TEXT NOT NULL, parent_id INTEGER, shared INTEGER DEFAULT 0);
+    CREATE TABLE IF NOT EXISTS api_requests (
+        id INTEGER PRIMARY KEY, name TEXT NOT NULL, folder_id INTEGER, method TEXT DEFAULT 'GET', url TEXT DEFAULT '',
+        params TEXT DEFAULT '[]', headers TEXT DEFAULT '[]', body TEXT DEFAULT '', body_type TEXT DEFAULT 'none',
+        auth TEXT DEFAULT '{}', timeout INTEGER DEFAULT 30, verify INTEGER DEFAULT 1, created TEXT DEFAULT '',
+        updated TEXT DEFAULT '', shared INTEGER DEFAULT 0);
+    CREATE TABLE IF NOT EXISTS api_history (
+        id INTEGER PRIMARY KEY, at TEXT NOT NULL, method TEXT, url TEXT, params TEXT, headers TEXT, body TEXT, body_type TEXT,
+        auth TEXT, timeout INTEGER, verify INTEGER, request_id INTEGER, status INTEGER DEFAULT 0, reason TEXT DEFAULT '',
+        ms INTEGER DEFAULT 0, size INTEGER DEFAULT 0, error TEXT DEFAULT '');
+    CREATE TABLE IF NOT EXISTS api_variables (
+        name TEXT PRIMARY KEY COLLATE NOCASE, value TEXT DEFAULT '', secret INTEGER DEFAULT 0);
+    """)
+
+
 MIGRATIONS = [(1, _m1_legacy_columns), (2, _m2_agent_history), (3, _m3_agent_tokens), (4, _m4_device_checks), (5, _m5_ansible_runs),
-              (6, _m6_shared), (7, _m7_org_uids), (8, _m8_faster_history)]
+              (6, _m6_shared), (7, _m7_org_uids), (8, _m8_faster_history), (9, _m9_api_tester)]
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 
 
