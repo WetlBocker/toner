@@ -127,6 +127,7 @@ class SettingsTab(QWidget):
     orgs_changed = Signal()               # Settings > Organizations created, renamed, archived or removed one
     look_preview = Signal(str)            # Appearance: the theme shown at once, before Save
     look_reset = Signal()                 # edits dropped (Cancel, Discard, reload): back to the saved look
+    reset_requested = Signal()            # Data and logs > Reset Toner to factory settings: the window stops everything and wipes
 
     def __init__(self):
         super().__init__()
@@ -134,6 +135,7 @@ class SettingsTab(QWidget):
                       BackupsPage(), MaintenancePage(), NotificationsPage(), ProfilesPage(), AnsiblePage(), AppearancePage(), TerminalPage(), ReportsPage(), SecurityPage(),
                       AuditPage(), DataPage(self.reload), OrganizationsPage()]
         self.pages[-1].changed_orgs.connect(self.orgs_changed)
+        self.pages[-2].reset_requested.connect(self.reset_requested)
         for i, p in enumerate(self.pages):
             if p.title == "Appearance":
                 p.preview.connect(self.look_preview)
