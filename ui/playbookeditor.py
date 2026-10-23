@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (QComboBox, QDialog, QDialogButtonBox, QFormLayout
 from core import ansible as AN, audit
 from ui import theme
 from ui import status as st
-from ui.widgets import EmptyHint
+from ui.widgets import EmptyHint, remember_sizes
 
 
 class YamlHighlighter(QSyntaxHighlighter):
@@ -197,6 +197,7 @@ class PlaybookEditorTab(QWidget):
         split.addWidget(self.editor)
         split.addWidget(self.output)
         split.setSizes([420, 120])
+        remember_sizes(split, "playbook_editor")
         right = QVBoxLayout()
         right.addWidget(self.title)
         right.addLayout(bar)

@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComb
 from core import ansible as AN, audit, db, scope
 from ui import status as st
 from ui.nav import PageStack
-from ui.widgets import EmptyHint, filling, flow
+from ui.widgets import EmptyHint, filling, flow, remember_sizes
 from ui.finder import FilterButton, SearchBox, device_sections, shown_devices
 
 MODES = {"check": "Check", "run": "Run", "syntax": "Syntax"}
@@ -144,6 +144,7 @@ class PlaybooksPage(QWidget):
         split.addWidget(out_box)
         split.addWidget(self.recap)
         split.setSizes([380, 140])
+        remember_sizes(split, "automation_output")
         right = QVBoxLayout()
         right.addWidget(self.where)
         right.addLayout(opts)
@@ -358,6 +359,7 @@ class HistoryPage(QWidget):
         bl.addWidget(self.output, 1)
         split.addWidget(box)
         split.setSizes([260, 300])
+        remember_sizes(split, "automation_runs")
         lay = QVBoxLayout(self)
         lay.addWidget(split, 1)
         self.table.itemSelectionChanged.connect(self.show_output)

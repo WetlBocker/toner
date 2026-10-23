@@ -1,10 +1,23 @@
-from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QIcon, QIconEngine, QPainter, QPalette, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (QAbstractButton, QAbstractSpinBox, QApplication, QCheckBox, QComboBox, QHBoxLayout, QHeaderView, QLabel, QLayout, QLineEdit,
                                QMenu, QPushButton, QSizePolicy, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QToolButton,
                                QVBoxLayout, QWidget, QWidgetAction)
-from core import reports
+from core import db, reports
 from ui import status as st, theme
+
+
+def remember_sizes(splitter, key):
+    """Start a splitter at the sizes it had last time on this computer (the 'splitters' setting, one entry per pane), and keep
+    the new sizes once it has been dragged. A wider window keeps the proportions."""
+    saved = (db.get_setting("splitters") or {}).get(key)
+    if saved and len(saved) == splitter.count():
+        splitter.setSizes([int(s) for s in saved])
+    timer = QTimer(splitter)
+    timer.setSingleShot(True)
+    timer.setInterval(400)                                   # one write per drag, not one per pixel
+    timer.timeout.connect(lambda: db.set_setting("splitters", {**(db.get_setting("splitters") or {}), key: splitter.sizes()}))
+    splitter.splitterMoved.connect(lambda *_: timer.start())
 
 
 class FlowLayout(QLayout):

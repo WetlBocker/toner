@@ -15,6 +15,7 @@ from PySide6.QtCore import QMimeData, QThread, Qt, QUrl, Signal
 from PySide6.QtGui import QDrag
 from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMessageBox,
                                QProgressBar, QPushButton, QSplitter, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
+from ui.widgets import remember_sizes
 
 MIME = "application/x-toner-files"            # a drag from one of the two lists: {"side": "local"|"remote", "paths": [...]}
 NOT_CONNECTED = "Connect the session to browse the device's files."
@@ -496,6 +497,7 @@ class FileBrowser(QWidget):
         split.addWidget(self.local)
         split.addWidget(self.remote)
         split.setChildrenCollapsible(False)
+        remember_sizes(split, "files_panel")
         self.note = QLabel(NOT_CONNECTED)
         self.note.setWordWrap(True)
         self.bar = QProgressBar()

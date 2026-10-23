@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFrame, QHBoxLayout
 from core import db, display, scope
 from core.reports import COLORS, fg_for
 from ui import theme
-from ui.widgets import EmptyHint, FlowLayout, GroupPicker, StatusDelegate, filling, flow
+from ui.widgets import EmptyHint, FlowLayout, GroupPicker, StatusDelegate, filling, flow, remember_sizes
 from ui.finder import FilterButton, SearchBox, device_sections, listed_devices, shown_devices, wants_archived
 from ui import status as st
 
@@ -437,6 +437,7 @@ class HistoryTab(QWidget):
         split.addWidget(left)
         split.addWidget(right)
         split.setSizes([450, 450])
+        remember_sizes(split, "history")
         top = QHBoxLayout()
         top.addStretch(1)
         top.addWidget(self.find, 1)                 # on the right, as on Inventory

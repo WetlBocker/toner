@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog,
 from core import audit, db, nettools, profiles, serialconn, sessionlog, sessions, vendors
 from core.telnet import TelnetSession
 from ui.terminal import TerminalView
-from ui.widgets import flow
+from ui.widgets import flow, remember_sizes
 
 KIND_TEXT = {k: label for k, label, _, _ in sessions.KINDS}
 ROLE = Qt.ItemDataRole.UserRole
@@ -844,6 +844,7 @@ class SessionsTab(QWidget):
         split.addWidget(right)
         split.setStretchFactor(1, 1)
         split.setSizes([360, 700])
+        remember_sizes(split, "sessions")
         split.setChildrenCollapsible(False)
         left.setMinimumWidth(240)
         lay = QVBoxLayout(self)

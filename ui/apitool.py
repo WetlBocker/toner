@@ -13,7 +13,7 @@ from core import apitool as A, db, profiles
 from ui import status as st
 from ui.orgfield import SHARED_CHOICE, choice_file, org_choices, show_row
 from ui.tools2 import _muted, _primary, _table
-from ui.widgets import EmptyHint
+from ui.widgets import EmptyHint, remember_sizes
 
 ROLE = Qt.ItemDataRole.UserRole
 DOTS = "•" * 8
@@ -487,12 +487,14 @@ class ApiTesterTab(QWidget):
         self.vsplit.addWidget(editor)
         self.vsplit.addWidget(resp)
         self.vsplit.setSizes([360, 300])
+        remember_sizes(self.vsplit, "api_tester_reply")
         self.split = QSplitter(Qt.Orientation.Horizontal)
         self.split.addWidget(self.left)
         self.split.addWidget(self.vsplit)
         self.split.setSizes([340, 840])
         self.split.setStretchFactor(0, 1)
         self.split.setStretchFactor(1, 3)
+        remember_sizes(self.split, "api_tester")
         lay = QVBoxLayout(self)
         lay.addWidget(self.split, 1)
 

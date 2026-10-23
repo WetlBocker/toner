@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QComboBox, QDial
 from core import audit, backup, db, display, scope
 from drivers.base import SEVERITY
 from ui import theme
-from ui.widgets import EmptyHint, filling
+from ui.widgets import EmptyHint, filling, remember_sizes
 from ui.finder import FilterButton, SearchBox, device_sections, listed_devices, shown_devices, wants_archived
 from ui.toast import toast
 from ui import status as st
@@ -204,6 +204,7 @@ class ConfigsTab(QWidget):
         bl.addWidget(self.text, 1)
         rsplit.addWidget(box)
         rsplit.setSizes([170, 450])
+        remember_sizes(rsplit, "configs_versions")
         rl.addWidget(rsplit)
         split = QSplitter()
         split.addWidget(self.devs)
@@ -211,6 +212,7 @@ class ConfigsTab(QWidget):
         self.devs.setMinimumWidth(440)                 # the device name keeps room to be read; the other columns fit their contents
         split.setCollapsible(0, False)
         split.setSizes([560, 620])
+        remember_sizes(split, "configs")
         lay = QVBoxLayout(self)
         lay.addLayout(top)
         lay.addWidget(split, 1)
