@@ -25,6 +25,18 @@ def owns_schedule():
         return _schedule_lock is not None
 
 
+def release_schedule():
+    """Let the schedule lock go (closing the file frees it): Toner is quitting, or resetting itself and about to delete the file."""
+    global _schedule_lock
+    with _schedule_guard:
+        if _schedule_lock is not None:
+            try:
+                _schedule_lock.close()
+            except OSError:
+                pass
+            _schedule_lock = None
+
+
 def _groups_alive(groups):
     """Saved groups that still exist; None means they were chosen but all gone (so do nothing)."""
     alive = [g for g in groups if g in db.group_labels()]

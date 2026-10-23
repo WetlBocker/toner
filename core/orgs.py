@@ -369,6 +369,37 @@ def remove(org, move_to=None):
             quiet.ignored()
 
 
+def clashes_many(org_ids, move_to):
+    """Before several organizations are removed with a move: the device names that would clash at the destination, or between
+    the organizations themselves (two of them with a device of the same name). One line each, as remove() words them."""
+    lines, seen = [], {}
+    for org in org_ids:
+        with db.within(org):
+            devices = [d for d in db.list_devices() if d["org"] == org]
+        for n in clashes(devices, move_to):
+            lines.append(f"A device named {n} already exists in {db.org_name(move_to)}.")
+        for d in devices:
+            key = d["name"].lower()
+            if key in seen and seen[key] != org:
+                lines.append(f"A device named {d['name']} already exists in {db.org_name(seen[key])}.")
+            seen.setdefault(key, org)
+    return lines
+
+
+def remove_many(org_ids, move_to=None):
+    """Remove several organizations at once (see remove). With a move, every one is checked first, so a name clash in any of
+    them stops the whole thing before anything changes."""
+    org_ids = [int(o) for o in org_ids]
+    if move_to is not None and move_to in org_ids:
+        raise ValueError("Pick another organization to move them to.")
+    if move_to is not None:
+        lines = clashes_many(org_ids, move_to)
+        if lines:
+            raise ValueError("\n".join(lines) + "\n\nNothing was removed.")
+    for org in org_ids:
+        remove(org, move_to=move_to)
+
+
 def _move_rest(src, dst):
     """Sessions not tied to a device, profiles, custom checks, maintenance windows and the audit log, after the devices moved."""
     from core import sessions as S

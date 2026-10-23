@@ -99,6 +99,8 @@ class Main(QMainWindow):
         self.automation = AutomationTab()
         self.configs = ConfigsTab()
         self.settings = SettingsTab()
+        self.settings.reset_requested.connect(self.factory_reset)
+        self._wiped = False                              # a factory reset happened: nothing may be written while quitting
         self.about = AboutTab()
         self.scheduler = Scheduler(self.results)
         self.backup_scheduler = BackupScheduler(self.configs)
@@ -607,7 +609,15 @@ class Main(QMainWindow):
             self.results.refresh_groups()
             self.dashboard.refresh()
 
+    def factory_reset(self):
+        """Settings > Data and logs > Reset Toner to factory settings: ask, stop everything, delete Toner's data, quit (ui/factoryreset.py)."""
+        from ui import factoryreset
+        factoryreset.perform(self)
+
     def closeEvent(self, event):
+        if self._wiped:
+            event.accept()                         # Toner's data is gone: write nothing new, just go
+            return
         self.remember_layout()
         if not self._quitting and self.background_mode():
             event.ignore()                         # keep scheduled checks and backups running from the tray

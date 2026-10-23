@@ -5,7 +5,7 @@ import keyring
 import sqlite3
 from datetime import datetime
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QInputDialog, QLabel, QLineEdit, QMessageBox,
                                QPushButton, QTableWidget, QTableWidgetItem, QWidget)
@@ -176,6 +176,7 @@ class SecurityPage(Page):
 # ------------------------------------------------------------------ Data & logs
 class DataPage(Page):
     title = "Data and logs"
+    reset_requested = Signal()                     # Reset Toner to factory settings (the window does it: ui/factoryreset.py)
 
     def __init__(self, on_imported):
         super().__init__()
@@ -193,8 +194,14 @@ class DataPage(Page):
             b = QPushButton(text)
             b.clicked.connect(fn)
             self.lay.insertWidget(self.lay.count() - 1, b, 0, Qt.AlignmentFlag.AlignLeft)
+        self.reset_btn = QPushButton("Reset Toner to factory settings...")        # Global only: it takes every organization with it
+        self.reset_btn.setProperty("danger", True)
+        self.reset_btn.clicked.connect(self.reset_requested)
+        self.lay.insertWidget(self.lay.count() - 1, self.reset_btn, 0, Qt.AlignmentFlag.AlignLeft)
+        self.reset_btn.setVisible(db.home() == db.GLOBAL)
 
     def refresh(self):
+        self.reset_btn.setVisible(db.home() == db.GLOBAL)
         path = db.db_path()
         with db.connect() as c:
             runs = c.execute("SELECT COUNT(*) FROM runs").fetchone()[0]

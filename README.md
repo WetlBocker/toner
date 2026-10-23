@@ -104,6 +104,9 @@ The vault is locked with a master password you choose the first time Toner start
 Change the master password, turn remembering on or off, or lock it in **Settings > Security**. If the master password is forgotten
 and it is not remembered, **Forgot it?** starts a new, empty vault (devices, sessions and settings stay). **Settings > Data and logs
 > Export saved passwords** still writes them to a separate file with its own password, for another copy of Toner.
+**Settings > Data and logs > Reset Toner to factory settings** deletes everything Toner keeps on this computer (every organization's
+data, the vault, logs, settings and what the system keyring remembered for Toner) and quits. Windows agents and Demarc are not
+touched, but must be enrolled again. Type RESET to confirm.
 
 **Shortcuts:** **Ctrl+K** searches sections, tools, devices, Settings pages, limits, checks and actions. **Ctrl+1** to **Ctrl+9**
 switch sections. **Ctrl+B** folds the sidebar to icons and back (remembered). **Ctrl+F** goes to the search box of the page you are on.
