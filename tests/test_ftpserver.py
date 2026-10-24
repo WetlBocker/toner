@@ -84,6 +84,8 @@ for n in ("../outside.txt", "sub/../../outside.txt", "..\\outside.txt", "C:/Wind
     except ftplib.error_perm: leaked = False
     check(f"escape attempt gets nothing: {n}", not leaked)
 check("PORT to another address is refused (no bouncing)", refused(lambda: c.sendcmd("PORT 10,0,0,9,0,80")))
+check("...and to the client's own ports below 1024 (its own services)", refused(lambda: c.sendcmd("PORT 127,0,0,1,0,80")) and c.sendcmd("PORT 127,0,0,1,195,80").startswith("200"))
+c.sendcmd("PASV")
 try: c.sendcmd("ABOR"); c.voidcmd("NLST"); check("a listing without PORT or PASV first is 425", False)
 except ftplib.error_temp as e: check("a listing without PORT or PASV first is 425", str(e).startswith("425"), e)
 
@@ -142,6 +144,27 @@ c.storbinary("STOR up.txt", io.BytesIO(b"replaced")); check("replacing works onc
 c.rename("up.txt", "moved.txt"); check("rename", os.path.exists(os.path.join(root, "moved.txt")) and not os.path.exists(os.path.join(root, "up.txt")))
 check("a rename cannot overwrite another file", refused(lambda: c.rename("moved.txt", "hello.txt")) and open(os.path.join(root, "hello.txt"), "rb").read() == b"hello world")
 c.delete("moved.txt"); c.rmd("made"); check("delete a file and a folder", not os.path.exists(os.path.join(root, "moved.txt")) and not os.path.exists(os.path.join(root, "made")))
+c.quit(); s.stop()
+
+print("== putting a finished upload in place")
+pub = os.path.join(base, "pub"); os.makedirs(pub)
+a, b = os.path.join(pub, "a.bin"), os.path.join(pub, "a.bin.1" + F.PART)
+open(b, "wb").write(b"new")
+F._publish(b, a, overwrite=False)
+check("a new name: the file is in place and the unfinished one is gone", open(a, "rb").read() == b"new" and not os.path.exists(b))
+open(b, "wb").write(b"newer")
+try: F._publish(b, a, overwrite=False); clobbered = True
+except FileExistsError as e: clobbered = False; why = str(e)
+check("a name taken meanwhile is never replaced without 'replace' on", not clobbered and open(a, "rb").read() == b"new" and why == "the file appeared during the upload")
+F._publish(b, a, overwrite=True); check("with 'replace' on it is replaced", open(a, "rb").read() == b"newer" and not os.path.exists(b))
+p1, p2 = F._part_for(a), F._part_for(a)
+check("each upload writes its own unfinished file, which is never listed", p1 != p2 and p1.endswith(F.PART) and p2.endswith(F.PART))
+
+print("== passive ports used again at once")
+s = F.FtpServer(root, "toner", "S3cret-pass!", port=0, bind="127.0.0.1", passive_ports=(50230, 50232)); s.start()
+c = client(s)
+got = [get(c, "hello.txt") for _ in range(10)]              # ten transfers through three ports, back to back
+check("more transfers than passive ports, one after another (a closed port is free again at once, on Linux too)", got == [b"hello world"] * 10)
 c.quit(); s.stop()
 
 print("== a device that hangs up")

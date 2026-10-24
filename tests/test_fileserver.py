@@ -237,8 +237,9 @@ check("generated passwords are strong enough to use", len(F.new_password()) == 1
 # ---------------------------------------------------------------- SCP over the SFTP server
 print("== SCP over the SFTP server")
 from core import scp as SCP
-check("only scp -f / -t is understood as a command", F.parse_scp_command("scp -f /firmware/img.bin") == {"mode": "f", "recursive": False, "preserve": False, "path": "/firmware/img.bin"}
-      and F.parse_scp_command(b"scp -r -p -t 'a b'") == {"mode": "t", "recursive": True, "preserve": True, "path": "a b"} and F.parse_scp_command("scp -v -q -d -f x")["mode"] == "f"
+check("only scp -f / -t is understood as a command", F.parse_scp_command("scp -f /firmware/img.bin") == {"mode": "f", "recursive": False, "preserve": False, "dir": False, "path": "/firmware/img.bin"}
+      and F.parse_scp_command(b"scp -r -p -t 'a b'") == {"mode": "t", "recursive": True, "preserve": True, "dir": False, "path": "a b"}
+      and F.parse_scp_command("scp -v -q -d -f x")["mode"] == "f" and F.parse_scp_command("scp -d -t x")["dir"]
       and F.parse_scp_command("cmd /c dir") is None and F.parse_scp_command("scp -f") is None and F.parse_scp_command("scp -f -t x") is None and F.parse_scp_command("scp -x -f y") is None)
 sev.clear(); s = sftp_server()
 def scp_client():
@@ -278,6 +279,36 @@ cl.close(); time.sleep(0.3)
 check("scp uploads are reported", any(e["op"] == "write" and e["path"] == "scp-up.bin" and e["status"] == "ok" and e["note"].startswith("scp") for e in sev))
 s.stop()
 import shutil; shutil.rmtree(os.path.join(root, "tree"), ignore_errors=True); os.remove(os.path.join(root, "scp-up.bin"))
+
+def raw_scp(cl, command):
+    """Run an scp command on its own channel and return the server's first reply byte and line (for what Toner's client never sends)."""
+    ch = cl.get_transport().open_session(timeout=10); ch.settimeout(10); ch.exec_command(command)
+    first = ch.recv(1); line = b""
+    while first in (b"\x01", b"\x02") and not line.endswith(b"\n"):
+        more = ch.recv(1)
+        if not more: break
+        line += more
+    ch.close(); return first, line.decode(errors="replace")
+sev.clear(); s = sftp_server(allow_write=True); cl = scp_client()
+first, line = raw_scp(cl, "scp -d -t hello.txt")
+check("scp -d: the target must be a folder", first == b"\x01" and "Not a directory" in line, (first, line))
+first, _line = raw_scp(cl, "scp -d -t sub"); check("...a folder is fine", first == b"\x00")
+cl.close(); s.stop()
+sev.clear(); s = sftp_server(max_connections=2); cl = scp_client()
+held = []
+for _ in range(2):                                         # two downloads that wait for the client's first byte
+    ch = cl.get_transport().open_session(timeout=10); ch.exec_command("scp -f hello.txt"); held.append(ch)
+time.sleep(0.3)
+try:
+    ch = cl.get_transport().open_session(timeout=10); ch.exec_command("scp -f hello.txt"); third = True
+except paramiko.SSHException:
+    third = False
+check("SCP sessions are capped across the server, however many channels one connection opens", not third and any("too many SCP" in e["note"] for e in sev))
+for ch in held: ch.close()
+time.sleep(1.0)
+n = SCP.Scp(cl).download("hello.txt", os.path.join(SP, "scp-after-cap.txt"), overwrite=True)
+check("...and a place frees up when a session ends", n[0] == 1)
+cl.close(); s.stop()
 
 # ---------------------------------------------------------------- iperf3
 print("== iperf3")

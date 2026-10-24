@@ -420,6 +420,36 @@ def _limit(nbytes):
     return f"{nbytes} bytes"
 
 
+def _part_for(real):
+    """The unfinished file for one upload: its own name (two uploads of the same file never write into one), ending in PART
+    so it is never listed, served or accepted as a name."""
+    return f"{real}.{os.getpid()}-{threading.get_ident()}-{time.monotonic_ns()}{PART}"
+
+
+def _publish(part, real, overwrite):
+    """Put a finished upload in place. Without `overwrite` an existing file is never replaced, not even one that appeared while
+    the upload ran (a hard link fails when the name is taken); raises FileExistsError then, and the caller removes `part`."""
+    if overwrite:
+        os.replace(part, real)
+        return
+    try:
+        os.link(part, real)
+    except FileExistsError:
+        raise FileExistsError("the file appeared during the upload") from None
+    except OSError:                                         # no hard links here (some network shares)
+        if os.name == "nt":
+            try:
+                os.rename(part, real)                       # Windows' rename refuses an existing name
+            except FileExistsError:
+                raise FileExistsError("the file appeared during the upload") from None
+            return
+        if os.path.exists(real):
+            raise FileExistsError("the file appeared during the upload") from None
+        os.replace(part, real)
+        return
+    os.remove(part)
+
+
 def _rate(nbytes, seconds):
     return f"{nbytes * 8 / max(seconds, 0.001) / 1e6:.1f} Mbit/s"
 
@@ -622,6 +652,13 @@ def _sftp_classes():
             if job is None:
                 self.srv.emit(self.ip, "exec", "", 0, "denied", f"refused command {str(command)[:60]!r}")
                 return False
+            with self.srv.lock:                             # each connection can open many channels: count them all
+                busy = self.srv.scp_active >= self.srv.max_connections
+                if not busy:
+                    self.srv.scp_active += 1
+            if busy:
+                self.srv.emit(self.ip, "exec", job["path"], 0, "denied", "too many SCP sessions at once")
+                return False
             threading.Thread(target=serve_scp, args=(self.srv, self.ip, channel, job), daemon=True).start()
             return True
 
@@ -661,6 +698,7 @@ class SftpServer(_Base):
             raise ValueError("The password must be at least 8 characters.")
         self.username, self.password = username.strip(), password
         self.host_key_path, self.max_connections = host_key_path, max_connections
+        self.scp_active = 0                                 # SCP sessions running (they share max_connections)
         self.host_key = None
         self.fails = {}
         self.fail_lock = threading.Lock()
@@ -767,7 +805,7 @@ def parse_scp_command(command):
         return None
     if len(words) < 3 or words[0] not in ("scp", "/usr/bin/scp") or not words[-1]:
         return None
-    job = {"mode": "", "recursive": False, "preserve": False, "path": words[-1]}
+    job = {"mode": "", "recursive": False, "preserve": False, "dir": False, "path": words[-1]}
     for w in words[1:-1]:
         if not w.startswith("-") or len(w) < 2:
             return None
@@ -780,7 +818,9 @@ def parse_scp_command(command):
                 job["recursive"] = True
             elif ch == "p":
                 job["preserve"] = True
-            elif ch not in "dvq":
+            elif ch == "d":
+                job["dir"] = True                           # the target must be a folder (several files are coming)
+            elif ch not in "vq":
                 return None
     return job if job["mode"] else None
 
@@ -847,6 +887,8 @@ def serve_scp(srv, ip, chan, job):
             chan.close()
         except Exception:
             quiet.ignored()
+        with srv.lock:
+            srv.scp_active = max(0, srv.scp_active - 1)
 
 
 def _scp_send(srv, ip, chan, rel, real, job):
@@ -894,6 +936,8 @@ def _scp_receive(srv, ip, chan, rel, real, job):
     if not srv.allow_write:
         srv.emit(ip, "write", rel, 0, "denied", "uploads are switched off")
         raise _ScpFail("scp: uploads are switched off on this server")
+    if job.get("dir") and not os.path.isdir(real):
+        raise _ScpFail(f"scp: {rel}: Not a directory")
     chan.sendall(b"\x00")
     stack = [(rel, real)]
     while True:
@@ -950,7 +994,7 @@ def _scp_receive(srv, ip, chan, rel, real, job):
             srv.emit(ip, "write", target_rel, 0, "denied", f"larger than the {_limit(srv.max_bytes)} limit")
             raise _ScpFail(f"scp: {target_rel}: larger than the size limit")
         chan.sendall(b"\x00")
-        part, got, started = target + PART, 0, time.time()
+        part, got, started = _part_for(target), 0, time.time()
         try:
             with open(part, "wb") as out:
                 while got < size:
@@ -960,7 +1004,10 @@ def _scp_receive(srv, ip, chan, rel, real, job):
                     out.write(block)
                     got += len(block)
             _scp_ack(chan)                                  # the client's end-of-file byte
-            os.replace(part, target)
+            try:
+                _publish(part, target, srv.allow_overwrite)
+            except FileExistsError:
+                raise _ScpFail(f"scp: {target_rel}: File exists and replacing is switched off") from None
         except BaseException:
             try:
                 os.remove(part)
@@ -1104,6 +1151,9 @@ class FtpServer(_Base):
         lo, hi = self.passive_ports
         for port in range(lo, hi + 1):
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            # A port whose last transfer ended a moment ago is in TIME_WAIT for about a minute: Linux and macOS let a new
+            # listener have it only with SO_REUSEADDR (on Windows that option would let another program take the port).
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0 if os.name == "nt" else 1)
             try:
                 s.bind((local_ip if self.bind in ("", "0.0.0.0") else self.bind, port))
                 s.listen(1)
@@ -1443,7 +1493,7 @@ class _FtpSession:
         self._set_port(parts[2], int(parts[4]))
 
     def _set_port(self, ip, port):
-        if ip != self.ip or not (1 <= port <= 65535):        # no bouncing to third parties
+        if ip != self.ip or not (1024 <= port <= 65535):     # no bouncing to third parties, nor to the client's own services
             self.srv.emit(self.ip, "access", "", 0, "denied", f"PORT to another address refused ({ip}:{port})")
             self.reply("501 The data address must be your own.")
             return
@@ -1578,7 +1628,7 @@ class _FtpSession:
         if d is None:
             return
         self.reply("150 OK to send data.")
-        part, got_bytes, started, ok = real + PART, 0, time.time(), False
+        part, got_bytes, started, ok = _part_for(real), 0, time.time(), False
         try:
             with open(part, "wb") as out, d:
                 while True:
@@ -1591,9 +1641,7 @@ class _FtpSession:
                     if got_bytes > self.srv.max_bytes:
                         raise OSError(f"larger than the {_limit(self.srv.max_bytes)} limit")
                     out.write(block)
-            if os.path.exists(real) and not self.srv.allow_overwrite:
-                raise OSError("the file appeared during the upload")
-            os.replace(part, real)
+            _publish(part, real, self.srv.allow_overwrite)
             ok = True
         except OSError as e:
             self.srv.emit(self.ip, "write", shown, got_bytes, "failed", str(e)[:100])
