@@ -652,7 +652,7 @@ class _Ctx:
 class SftpServer(_Base):
     LOCK_AFTER, LOCK_SECONDS = 5, 300
 
-    def __init__(self, root, username, password, port=2222, bind="0.0.0.0", host_key_path="", allow_write=False,
+    def __init__(self, root, username, password, port=22, bind="0.0.0.0", host_key_path="", allow_write=False,
                  allow_overwrite=False, allowed=(), max_bytes=512 * 1024 * 1024, on_event=None, max_connections=8):
         super().__init__("sftp", root, port, bind, allow_write, allow_overwrite, allowed, max_bytes, on_event)
         if not str(username or "").strip():

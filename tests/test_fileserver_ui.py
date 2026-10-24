@@ -79,7 +79,10 @@ check("a port that is already used is reported", b.server is None and "Could not
 
 print("== SFTP page")
 sf = T3.FileServerTab("sftp"); sf.resize(1100, 700); sf.show()
-check("has a user name and a password box", sf.user.text() == "toner" and sf.port.value() == 2222 and sf.password.echoMode() == sf.password.EchoMode.Password)
+check("has a user name and a password box, on port 22 (so a device's copy URL needs no port)", sf.user.text() == "toner" and sf.port.value() == 22
+      and sf.password.echoMode() == sf.password.EchoMode.Password)
+import inspect
+check("...and the server itself defaults to 22", inspect.signature(T3.fileserver.SftpServer).parameters["port"].default == 22)
 sf.folder.setText(share); sf.port.setRange(0, 65535); sf.port.setValue(0); sf.password.setText("short"); sf.start()
 check("a short password is refused", sf.server is None and "8 characters" in sf.status.text(), sf.status.text())
 sf.password.setText(""); sf.start()

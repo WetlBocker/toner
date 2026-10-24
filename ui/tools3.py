@@ -32,7 +32,7 @@ def _size(n):
 class FileServerTab(QWidget):
     event = Signal(dict)
     MAX_ROWS = 5000
-    PROTOS = {"tftp": ("TFTP", 69), "sftp": ("SFTP", 2222), "ftp": ("FTP", 21)}
+    PROTOS = {"tftp": ("TFTP", 69), "sftp": ("SFTP", 22), "ftp": ("FTP", 21)}      # the usual ports: devices' copy URLs need none
 
     def __init__(self, proto):
         super().__init__()

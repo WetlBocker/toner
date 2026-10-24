@@ -794,7 +794,8 @@ TRANSFER_STEPS = ("For each device Toner copies the image, checks its MD5, puts 
 
 
 def source_shown(src):
-    """The server as the confirmation shows it, never with its password: 'sftp://toner@10.0.0.5:2222', 'tftp://10.0.0.5'."""
+    """The server as the confirmation shows it, never with its password: 'sftp://toner@10.0.0.5', 'ftp://toner@10.0.0.5:2121',
+    'tftp://10.0.0.5' (a port only when it is not the protocol's usual one)."""
     user = "" if src["proto"] == "tftp" or src.get("anonymous") else (src.get("user") or "")
     port = "" if int(src["port"]) == DEFAULT_PORTS[src["proto"]] else f":{src['port']}"
     return f"{src['proto']}://{user + '@' if user else ''}{src['host']}{port}"
