@@ -9,6 +9,7 @@ Sources are plain dicts:
 For Toner's own server, "host" is this computer's address as the devices see it and "folder" is the server's folder on disk.
 """
 import ftplib
+import io
 import os
 import re
 import socket
@@ -336,3 +337,273 @@ def mask(text, secrets):
     for s in sorted({s for s in secrets if s}, key=len, reverse=True):
         out = out.replace(s, "****")
     return re.sub(r"(\b(?:ftp|sftp|scp|tftp)://[^:/@\s]*:)[^@\s]*@", r"\1****@", out)
+
+
+# ================================================================ reading the devices (step 3: Check devices)
+CHECK_WORKERS, TRANSFER_WORKERS = 8, 4                 # all selected devices at once, up to these (transfers: bandwidth)
+MAIN_FS = {"cisco_ios": "flash:", "cisco_xe": "flash:", "cisco_nxos": "bootflash:", "cisco_asa": "disk0:"}
+NO_LOGIN = "No user name or password: set one on the device or its profile."
+NO_CLIENT = "{platform} has no SFTP client: use FTP, SCP or TFTP."
+
+
+def member_fs(platform, n):
+    """Stack member n's flash: flash-2: on IOS XE, flash2: on classic IOS (3750, 2960-X stacks)."""
+    return MAIN_FS[platform] if n == 1 else (f"flash-{n}:" if platform == "cisco_xe" else f"flash{n}:")
+
+
+def parse_version(platform, text):
+    """{'version', 'image' (the file it booted, without the file system), 'mode' ('INSTALL', 'BUNDLE' or '')} from `show version`."""
+    t = text or ""
+    if platform == "cisco_nxos":
+        v = re.search(r"NXOS:\s*version\s+(\S+)", t) or re.search(r"system:\s*version\s+(\S+)", t)
+        img = re.search(r"NXOS image file is:\s*(\S+)", t) or re.search(r"system image file is:\s*(\S+)", t)
+    elif platform == "cisco_asa":
+        v = re.search(r"Adaptive Security Appliance Software Version\s+(\S+)", t)
+        img = re.search(r'System image file is "([^"]+)"', t)
+    else:
+        v = re.search(r"Cisco IOS XE Software, Version\s+(\S+)", t) or re.search(r"\bVersion\s+([^\s,]+)", t)
+        img = re.search(r'System image file is "([^"]+)"', t)
+    mode = ""
+    if platform == "cisco_xe":
+        m = re.search(r"Installation mode is\s+(\w+)", t)
+        mode = m.group(1).upper() if m else ""
+    return {"version": v.group(1) if v else "", "image": file_name(img.group(1)) if img else "", "mode": mode}
+
+
+def file_name(path):
+    """'flash:/x.bin', 'bootflash:///x.bin', 'disk0:/x.bin', 'flash:x.bin' -> 'x.bin'."""
+    return re.sub(r"^[\w-]+:/*", "", str(path or "")).strip()
+
+
+_DIR_IOS = re.compile(r"^\s*\d+\s+[-drwx]{4,}\s+(\d+)\s+.*?\d{2}:\d{2}:\d{2}(?:\s+[+-]\d{2}:?\d{2})?\s+(\S.*)$")
+_DIR_ASA = re.compile(r"^\s*\d+\s+[-drwx]{4,}\s+(\d+)\s+\d{2}:\d{2}:\d{2}\s+\w{3}\s+\d{1,2}\s+\d{4}\s+(\S.*)$")
+_DIR_NX = re.compile(r"^\s*(\d+)\s+\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4}\s+(\S.*)$")
+
+
+def parse_dir(text):
+    """`dir flash:` (IOS, IOS XE), `dir disk0:` (ASA) or `dir bootflash:` (NX-OS): {'files': {name: size}, 'total', 'free'}; None when
+    the totals are not there. Folders (a 'd' flag, or a name ending in /) are left out."""
+    t = text or ""
+    m = re.search(r"(\d+)\s+bytes total\s*\((\d+)\s+bytes free\)", t)
+    if m:
+        total, free = int(m.group(1)), int(m.group(2))
+    else:
+        tot, fr = re.search(r"^\s*(\d+)\s+bytes total", t, re.M), re.search(r"^\s*(\d+)\s+bytes free", t, re.M)
+        if not (tot and fr):
+            return None
+        total, free = int(tot.group(1)), int(fr.group(1))
+    files = {}
+    for line in t.splitlines():
+        if re.search(r"\s+d[-rwx]{3,}\s", line):
+            continue
+        hit = _DIR_ASA.match(line) or _DIR_IOS.match(line) or _DIR_NX.match(line)
+        if hit and not hit.group(2).endswith("/"):
+            files[hit.group(2).strip()] = int(hit.group(1))
+    return {"files": files, "total": total, "free": free}
+
+
+def parse_boot(platform, text):
+    """The image files the boot statement or variable names: `show boot` (IOS, IOS XE, NX-OS) or `show running-config boot` (ASA).
+    Only the file names, without the file system ('packages.conf' on IOS XE in INSTALL mode)."""
+    t = text or ""
+    if platform == "cisco_asa":
+        paths = re.findall(r"^\s*boot system\s+(\S+)", t, re.M)
+    elif platform == "cisco_nxos":
+        paths = [p for line in re.findall(r"NXOS variable\s*=\s*(\S+)", t) for p in line.split(";")]
+    elif platform == "cisco_xe":
+        first = re.search(r"BOOT variable\s*=\s*([^\r\n]*)", t)           # the current boot variable (the first one printed)
+        paths = (first.group(1) if first else "").split(";")
+    else:
+        m = re.search(r"BOOT path-list\s*:\s*([^\r\n]*)", t) or re.search(r"BOOT variable\s*=\s*([^\r\n]*)", t)
+        paths = (m.group(1) if m else "").split(";")
+    out = []
+    for p in paths:
+        p = p.strip().strip(",")
+        if p:
+            out.append(file_name(p))
+    return out
+
+
+def ping_ok(text):
+    """IOS / ASA 'Success rate is 100 percent' or NX-OS '5 packets received': True when any answer came back."""
+    t = text or ""
+    m = re.search(r"Success rate is (\d+) percent", t)
+    if m:
+        return int(m.group(1)) > 0
+    m = re.search(r"(\d+) packets received", t)
+    return bool(m and int(m.group(1)) > 0)
+
+
+# ---------------------------------------------------------------- signing in, and the wizard's session log
+def has_login(dev):
+    from core import profiles
+    return bool(profiles.username(dev) and profiles.secret(dev, "main"))
+
+
+def connect(dev, log=None, opts=None):
+    """A netmiko connection to the device the way the checks and the Command Runner make one: its login and credential profile,
+    its jump host or proxy, its SSH host key checked per Settings > Security. Use as a context manager."""
+    from core import profiles
+    from drivers import DRIVERS
+    dev = profiles.resolve(dev)
+    drv = DRIVERS["cisco"](dev, {}, opts or db.runtime_options())
+    drv.plat = platform_of(dev)
+    drv.session_log = log
+    return drv.connect()
+
+
+def log_path(dev):
+    from core import sessionlog
+    safe = re.sub(r"[^\w.-]+", "_", dev["name"])[:60]
+    return sessionlog.log_dir() / f"firmware-{safe}.log"
+
+
+def save_log(dev, buf, secrets, append=True):
+    """Write what was sent and received to firmware-<device>.log in the SSH logs folder, every password masked. The first step
+    of a run replaces the file; the later steps add to it."""
+    data = buf.getvalue().decode("utf-8", "replace") if buf is not None else ""
+    if not data:
+        return None
+    try:
+        path = log_path(dev)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a" if append else "w", encoding="utf-8") as fh:
+            fh.write(mask(data, secrets))
+        return path
+    except OSError:
+        return None
+
+
+def plain_error(e, secrets=()):
+    """An exception as one line for the page, any password masked."""
+    text = " ".join(str(e).split()) or type(e).__name__
+    return mask(text[:240], secrets)
+
+
+def _prompt_re(c):
+    from core.netconn import any_mode
+    return any_mode(c) or r"[>#]\s*$"
+
+
+def _read_until(c, pattern, seconds):
+    """Read the channel until `pattern` matches what came back (or the time is up). Returns what was read."""
+    seen, end = "", time.time() + seconds
+    while time.time() < end:
+        seen += c.read_channel()
+        if re.search(pattern, seen):
+            return seen
+        time.sleep(0.1)
+    return seen
+
+
+def port_open(c, host, port, seconds=40):
+    """IOS and IOS XE: `telnet <host> <port>` from the device. True when it opens (Toner then leaves it with Ctrl-^ x and
+    `disconnect`), False when it is refused or times out."""
+    prompt = _prompt_re(c)
+    c.write_channel(f"telnet {host} {port}{c.RETURN}")
+    seen, end = "", time.time() + seconds
+    while time.time() < end:
+        seen += c.read_channel()
+        if re.search(r"\bOpen\b", seen):
+            c.write_channel("\x1e")
+            time.sleep(0.3)
+            c.write_channel("x")
+            _read_until(c, prompt, 10)
+            c.write_channel("disconnect" + c.RETURN)
+            if re.search(r"\[confirm\]", _read_until(c, r"\[confirm\]|" + prompt, 10)):
+                c.write_channel(c.RETURN)
+                _read_until(c, prompt, 10)
+            return True
+        tail = seen.split("\n", 1)[1] if "\n" in seen else ""   # what came after the command's own echo
+        if re.search(prompt, tail):                         # the prompt is back without 'Open': refused, timed out, unknown host
+            return False
+        time.sleep(0.1)
+    c.write_channel("\x1e")                                 # still trying: give up on it and get the prompt back
+    time.sleep(0.3)
+    c.write_channel("x")
+    _read_until(c, prompt, 10)
+    return False
+
+
+# ---------------------------------------------------------------- step 3: what each device has, and whether it can take part
+def collect(dev, src, vrf="management", opts=None, append_log=False):
+    """Sign in and read the device: version, mode, free space on every flash (every stack member), the boot statement, and
+    whether the source answers ping and its port from the device itself. Changes nothing. Returns
+    {'key', 'name', 'host', 'platform', 'version', 'mode', 'image', 'boot': [files], 'flashes': [{'member', 'role', 'state',
+    'fs', 'total', 'free', 'files': {name: size}}], 'ping', 'port' (True/False/None), 'note', 'held' (the reason, or ''), 'dev'}."""
+    plat = platform_of(dev)
+    out = {"key": dev.get("key") or dev["name"], "name": dev["name"], "host": dev.get("host", ""), "platform": plat, "version": "",
+           "mode": "", "image": "", "boot": [], "flashes": [], "ping": None, "port": None, "note": "", "held": "", "dev": dev}
+    secrets = [src.get("password") or ""]
+    if not can_fetch(plat, src["proto"]):
+        out["held"] = NO_CLIENT.format(platform=PLATFORM_NAMES[plat])
+        return out
+    if not has_login(dev):
+        out["held"] = NO_LOGIN
+        return out
+    from core import profiles
+    secrets.append(profiles.secret(dev, "main") or "")
+    log = io.BytesIO()
+    try:
+        with connect(dev, log, opts) as c:
+            try:
+                c.enable()
+            except Exception:                               # noqa: BLE001  (already privileged, or no enable password)
+                pass
+            prompt = _prompt_re(c)
+
+            def run(cmd, t=60):
+                return c.send_command(cmd, read_timeout=t, expect_string=prompt)
+            out.update(parse_version(plat, run("show version")))
+            members = []
+            if plat in ("cisco_ios", "cisco_xe"):
+                from drivers import clichecks
+                members = clichecks.stack_members(run("show switch"))
+            if len(members) < 2:
+                members = [("1", "", "Ready")]
+            for n, role, state in members:
+                fs = member_fs(plat, int(n))
+                listing = parse_dir(run(f"dir {fs}"))
+                if listing is None:
+                    out["held"] = out["held"] or f"Could not read the free space from 'dir {fs}'."
+                    listing = {"files": {}, "total": None, "free": None}
+                out["flashes"].append({"member": int(n), "role": role, "state": state, "fs": fs, **listing})
+            out["boot"] = parse_boot(plat, run("show running-config boot" if plat == "cisco_asa" else "show boot"))
+            host, port = src["host"], int(src["port"])
+            out["ping"] = ping_ok(run(f"ping {host} vrf {vrf}" if plat == "cisco_nxos" else f"ping {host}", 60))
+            if out["ping"]:
+                if src["proto"] == "tftp":
+                    out["note"] = f"Port {port} not checked (TFTP is UDP)"
+                elif plat in ("cisco_nxos", "cisco_asa"):
+                    out["note"] = f"Port {port} not checked (ping only)"
+                else:
+                    out["port"] = port_open(c, host, port)
+    except Exception as e:                                  # noqa: BLE001  (the reason is shown beside the device)
+        out["held"] = f"Could not sign in: {plain_error(e, secrets)}"
+    finally:
+        save_log(dev, log, secrets, append=append_log)
+    if not out["held"]:
+        bad = [f for f in out["flashes"] if f["state"].strip().lower() != "ready"]
+        if bad:
+            out["held"] = f"Stack member {bad[0]['member']} is not Ready ({bad[0]['state']})."
+        elif out["ping"] is False:
+            out["held"] = f"Cannot reach {src['host']} from the device (ping failed)."
+        elif out["port"] is False:
+            out["held"] = f"Reaches {src['host']}, but port {src['port']} is closed."
+    return out
+
+
+def collect_many(devices, src, vrf="management", on_result=None, cancel=None, opts=None):
+    """collect() for every device, up to CHECK_WORKERS at once, each in its own organization's file. Results in the order given."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    def one(d):
+        if cancel is not None and cancel.is_set():
+            return None
+        with db.within(d.get("org")):
+            r = collect(d, src, vrf, opts)
+        if on_result:
+            on_result(r)
+        return r
+    with ThreadPoolExecutor(max_workers=max(1, min(CHECK_WORKERS, len(devices)))) as pool:
+        return [r for r in pool.map(one, devices) if r is not None]

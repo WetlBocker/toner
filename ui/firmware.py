@@ -1,8 +1,12 @@
 """Tools > File transfer > Firmware Transfer: a page of six steps for putting a firmware image on Cisco devices.
 Devices, Image server, Check devices, Clean up, Images, Transfer. The work is in core/firmware.py; this is the page."""
+import threading
+
 from PySide6.QtCore import QThread, Qt, Signal
+from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-                               QPushButton, QRadioButton, QSpinBox, QStackedWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+                               QPushButton, QRadioButton, QSpinBox, QStackedWidget, QTableWidgetItem, QTreeWidget, QTreeWidgetItem,
+                               QVBoxLayout, QWidget)
 
 from core import db, firmware as fw
 from ui.finder import FilterButton, SearchBox, device_sections, shown_devices
@@ -370,6 +374,120 @@ class ServerStep(QWidget):
             self.job.wait(20000)
 
 
+# =============================================================================== step 3: Check devices
+class CollectJob(QThread):
+    """Reads every device (core.firmware.collect_many, up to 8 at once) and hands each result back as it finishes."""
+    result = Signal(object)
+
+    def __init__(self, devices, src, vrf):
+        super().__init__()
+        self.devices, self.src, self.vrf = devices, src, vrf
+        self.cancel = threading.Event()
+
+    def run(self):
+        fw.collect_many(self.devices, self.src, self.vrf, on_result=self.result.emit, cancel=self.cancel)
+
+
+class CheckStep(QWidget):
+    changed = Signal()
+    COLS = ["Device", "Platform", "Version", "Mode", "Free space", "Reaches server", "Status"]
+
+    def __init__(self):
+        super().__init__()
+        self.job, self.results, self.rows, self.args = None, {}, {}, None
+        self.intro = _muted("Toner signs in to each device and reads its software version, mode, free space and whether it can reach the "
+                            "server. Nothing is changed.")
+        self.tree = QTreeWidget()
+        self.tree.setColumnCount(len(self.COLS))
+        self.tree.setHeaderLabels(self.COLS)
+        self.tree.setRootIsDecorated(True)
+        self.tree.header().setStretchLastSection(True)
+        self.progress = _muted("")
+        self.again = QPushButton("Collect again")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(self.intro)
+        lay.addWidget(self.tree, 1)
+        bar = QHBoxLayout()
+        bar.addWidget(self.progress, 1)
+        bar.addWidget(self.again)
+        lay.addLayout(bar)
+        self.again.clicked.connect(self.restart)
+
+    def start(self, devices, src, vrf):
+        if self.running():
+            return
+        self.args = (list(devices), src, vrf)
+        self.results, self.rows = {}, {}
+        self.tree.clear()
+        for d in devices:
+            it = QTreeWidgetItem([db.label_org(d["key"]), fw.PLATFORM_NAMES[fw.platform_of(d)], "", "", "", "", ""])
+            self.tree.addTopLevelItem(it)
+            self.rows[d["key"]] = it
+        self.job = CollectJob(*self.args)
+        self.job.result.connect(self._one)
+        self.job.finished.connect(self._done)
+        self.job.start()
+        self._progress()
+        self.changed.emit()
+
+    def restart(self):
+        if self.args and not self.running():
+            self.start(*self.args)
+
+    def _one(self, r):
+        self.results[r["key"]] = r
+        it = self.rows.get(r["key"])
+        if it is not None:
+            self._fill(it, r)
+        self._progress()
+
+    def _fill(self, it, r):
+        main = r["flashes"][0] if r["flashes"] else {}
+        reach = "" if r["ping"] is None else "Yes" if r["ping"] and r["port"] is not False else "No"
+        values = [r["version"], r["mode"] or "–", fw.human_size(main.get("free")) if main else "", reach,
+                  r["held"] or r["note"] or "Ready"]
+        for col, text in enumerate(values, 2):
+            it.setText(col, text)
+        it.takeChildren()
+        for f in r["flashes"][1:]:
+            child = QTreeWidgetItem([f"Switch {f['member']} ({f['role']})", "", "", "", fw.human_size(f.get("free")), "", ""])
+            it.addChild(child)
+        it.setExpanded(True)
+        if r["held"]:
+            grey = self.palette().color(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text)
+            for col in range(len(self.COLS)):
+                it.setForeground(col, grey)
+                it.setToolTip(col, r["held"])
+
+    def _progress(self):
+        n, done = len(self.rows), len(self.results)
+        if self.running():
+            self.progress.setText(f"Collecting from {min(done + 1, n)} of {n} devices...")
+            return
+        ready = len(self.ready_results())
+        self.progress.setText(f"{n} device{'s' if n != 1 else ''}: {ready} ready, {n - ready} held back.")
+
+    def _done(self):
+        self._progress()
+        self.changed.emit()
+
+    def ready_results(self):
+        """The devices that can go on, in the order they were ticked."""
+        return [self.results[k] for k in self.rows if k in self.results and not self.results[k]["held"]]
+
+    def running(self):
+        return self.job is not None and self.job.isRunning()
+
+    def ready(self):
+        return not self.running() and bool(self.ready_results())
+
+    def shutdown(self):
+        if self.running():
+            self.job.cancel.set()
+            self.job.wait(60000)
+
+
 # =============================================================================== the page
 class FirmwareTab(QWidget):
     def __init__(self, servers=lambda: {}):
@@ -380,6 +498,7 @@ class FirmwareTab(QWidget):
         self.pick_org = _muted(PICK_ORG)
         self.devices = DevicesStep()
         self.server = ServerStep(servers)
+        self.check = CheckStep()
         self.stack = QStackedWidget()
         for step in self.steps():
             self.stack.addWidget(step)
@@ -403,7 +522,7 @@ class FirmwareTab(QWidget):
 
     def steps(self):
         """The steps built so far, in order."""
-        return [self.devices, self.server]
+        return [self.devices, self.server, self.check]
 
     @staticmethod
     def blocked():
@@ -428,10 +547,14 @@ class FirmwareTab(QWidget):
 
     def go(self, index):
         index = max(0, min(index, len(self.steps()) - 1))
+        forward = index > self.stack.currentIndex()
         if index == 1:
             self.server.reload_own()
             self.server.set_platforms({fw.platform_of(d) for d in self.devices.chosen()})
         self.stack.setCurrentIndex(index)
+        if index == 2 and forward:                        # coming from the Image server: read the devices again
+            src, _files, vrf = self.server.chosen()
+            self.check.start(self.devices.chosen(), src, vrf)
         self._sync()
 
     def _sync(self, *_):
@@ -444,11 +567,14 @@ class FirmwareTab(QWidget):
         step = self.steps()[i]
         for b in (self.restart, self.back, self.next):
             b.setVisible(not blocked)
-        self.back.setEnabled(i > 0 and not self.running())
-        self.next.setEnabled(i + 1 < len(self.steps()) and step.ready() and not self.running())
+        busy = self.running()
+        self.restart.setEnabled(not busy)
+        self.back.setEnabled(i > 0 and not busy)
+        self.next.setEnabled(i + 1 < len(self.steps()) and step.ready() and not busy)
 
     def running(self):
-        return self.server.busy()
+        return self.server.busy() or self.check.running()
 
     def shutdown(self):
         self.server.shutdown()
+        self.check.shutdown()

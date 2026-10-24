@@ -5,7 +5,7 @@ import os as _os, sys as _sys, tempfile as _tmp
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-import logging, os, socket, sys, time
+import logging, os, re, socket, sys, time
 SP = os.environ["SP"]
 os.environ["NETCHECK_DB"] = os.path.join(SP, "fw%d.db" % int(time.time())); os.environ["APPDATA"] = os.path.join(SP, "fwapp%d" % int(time.time()))
 import keyring
@@ -257,6 +257,165 @@ by_text("beta-sw").setCheckState(Qt.CheckState.Checked); page.next.click()
 check("...and none of the other organization's server or login stays on screen", page.server.own_btn.isChecked() and page.server.host.text() == ""
       and page.server.user.text() == "" and page.server.password.text() == "" and page.server.folder.text() == "" and page.server.table.rowCount() == 0)
 page.shutdown(); page2.shutdown()
+
+# ================================================================ step 3: Check devices, against fake Cisco devices
+from _cisco_fake import CiscoFake
+print("== reading what the devices print")
+check("show version: version, the image it booted, the mode", FW.parse_version("cisco_xe", 'Cisco IOS XE Software, Version 17.06.05\nSystem image file is "flash:packages.conf"\nInstallation mode is INSTALL\n')
+      == {"version": "17.06.05", "image": "packages.conf", "mode": "INSTALL"}
+      and FW.parse_version("cisco_nxos", " NXOS: version 10.2(5)\n  NXOS image file is: bootflash:///nxos64-cs.10.2.5.M.bin\n")["image"] == "nxos64-cs.10.2.5.M.bin"
+      and FW.parse_version("cisco_asa", 'Cisco Adaptive Security Appliance Software Version 9.16(4)\nSystem image file is "disk0:/asa9-16-4-smp-k8.bin"\n')
+      == {"version": "9.16(4)", "image": "asa9-16-4-smp-k8.bin", "mode": ""})
+real_ios = ("Directory of flash:/\n\n    2  -rwx        1048   Mar 1 1993 00:02:43 +00:00  config.text\n"
+            "    3  drwx         512   Mar 1 1993 00:02:43 +00:00  c2960x-universalk9-mz.152-7.E9\n"
+            "  442  -rwx    26789376  Jun 12 2023 10:04:15 +00:00  c2960x-universalk9-mz.152-7.E9.bin\n\n122185728 bytes total (88324608 bytes free)\n")
+check("dir on IOS: files with sizes, folders left out, total and free", FW.parse_dir(real_ios) ==
+      {"files": {"config.text": 1048, "c2960x-universalk9-mz.152-7.E9.bin": 26789376}, "total": 122185728, "free": 88324608})
+nx_dir = "  1979260416    Oct 22 10:00:00 2026  nxos64-cs.10.3.4a.M.bin\n        4096    Oct 22 10:00:00 2026  .rpmstore/\n\nUsage for bootflash://sup-local\n 2539487232 bytes used\n 50766032896 bytes free\n 53305520128 bytes total\n"
+check("dir bootflash: on NX-OS (its totals are on separate lines)", FW.parse_dir(nx_dir) == {"files": {"nxos64-cs.10.3.4a.M.bin": 1979260416}, "total": 53305520128, "free": 50766032896})
+check("no totals: unreadable", FW.parse_dir("% Invalid input detected at '^' marker.") is None)
+check("boot statements per platform", FW.parse_boot("cisco_xe", "BOOT variable = flash:packages.conf;\nBoot Variables on next reload:\nBOOT variable = flash:x.bin;") == ["packages.conf"]
+      and FW.parse_boot("cisco_ios", "BOOT path-list      : flash:/a.bin;flash:/b.bin\n") == ["a.bin", "b.bin"]
+      and FW.parse_boot("cisco_nxos", "NXOS variable = bootflash:/nxos.10.bin\n") == ["nxos.10.bin"]
+      and FW.parse_boot("cisco_asa", "boot system disk0:/asa9-16.bin\nboot system disk0:/asa9-12.bin\n") == ["asa9-16.bin", "asa9-12.bin"])
+check("ping, IOS and NX-OS forms", FW.ping_ok("Success rate is 100 percent (5/5)") and not FW.ping_ok("Success rate is 0 percent (0/5)")
+      and FW.ping_ok("5 packets transmitted, 4 packets received") and not FW.ping_ok("5 packets transmitted, 0 packets received, 100.00% packet loss"))
+check("stack members' flash: flash-2: on IOS XE, flash2: on classic IOS", FW.member_fs("cisco_xe", 2) == "flash-2:" and FW.member_fs("cisco_ios", 3) == "flash3:"
+      and FW.member_fs("cisco_xe", 1) == "flash:" and FW.member_fs("cisco_nxos", 1) == "bootflash:")
+check("all selected devices at once, up to 8 for checking and 4 for copying", FW.CHECK_WORKERS == 8 and FW.TRANSFER_WORKERS == 4)
+
+print("== collecting from the devices")
+lab = orgs.create("Lab", "LAB")
+src = FW.own_source("ftp", own_ftp, "127.0.0.1")
+OK_REACH = {"127.0.0.1": {"ping": True, "ports": {own_ftp.port}}}
+G = 1024 ** 3
+fakes = {
+    "ios1": CiscoFake("cisco_ios", "ios1", files={"c2960x-universalk9-mz.152-7.E9.bin": (26000000, "a" * 32), "c2960x-old.bin": (25000000, "b" * 32), "config.text": (4000, "")},
+                      image="c2960x-universalk9-mz.152-7.E9.bin", reach=OK_REACH, fs_total=122185728),
+    "stack1": CiscoFake("cisco_xe", "stack1", mode="INSTALL", members=3, files={"packages.conf": (8000, ""), "cat9k-rpbase.17.06.05.SPA.pkg": (500000000, "")},
+                        reach=OK_REACH, fs_total=11 * G),
+    "bundle1": CiscoFake("cisco_xe", "bundle1", mode="BUNDLE", files={"cat9k_iosxe.17.06.05.SPA.bin": (900000000, ""), "cat9k_iosxe.17.03.04.SPA.bin": (880000000, "")},
+                         image="cat9k_iosxe.17.06.05.SPA.bin", reach=OK_REACH),
+    "nx1": CiscoFake("cisco_nxos", "nx1", files={"nxos64-cs.10.2.5.M.bin": (1900000000, ""), "nxos.9.3.8.bin": (1600000000, "")}, image="nxos64-cs.10.2.5.M.bin",
+                     reach=OK_REACH, vrf="management"),
+    "asa1": CiscoFake("cisco_asa", "asa1", files={"asa9-16-4-smp-k8.bin": (118000000, ""), "asa9-12-4-smp-k8.bin": (110000000, ""), "asdm-7181.bin": (90000000, "")},
+                      image="asa9-16-4-smp-k8.bin", boot=["disk0:/asa9-16-4-smp-k8.bin"], reach=OK_REACH),
+    "noping": CiscoFake("cisco_ios", "noping", files={"a.bin": (1000, "")}, image="a.bin", reach={}),
+    "closed": CiscoFake("cisco_xe", "closed", mode="BUNDLE", files={"a.bin": (1000, "")}, image="a.bin", reach={"127.0.0.1": {"ping": True, "ports": set()}}),
+    "provisioned": CiscoFake("cisco_xe", "provisioned", mode="INSTALL", members=3, member_states={3: "Provisioned"}, files={"packages.conf": (8000, "")}, reach=OK_REACH),
+}
+PW = "Dev-pass-77"
+for name, f in fakes.items():
+    f.password = PW
+    add(name, "cisco", f.platform, lab, host="127.0.0.1")
+    with db.within(lab):
+        d = next(x for x in db.list_devices() if x["name"] == name); db.save_device({**d, "port": f.port, "username": "admin"})
+        db.set_secret(db.secret_name(name), PW)
+add("nologin", "cisco", "cisco_ios", lab, host="127.0.0.1")
+with db.within(lab):
+    d = next(x for x in db.list_devices() if x["name"] == "nologin"); db.save_device({**d, "username": ""})
+    labdevs = {d["name"]: d for d in db.list_devices()}
+seen = []
+t0 = time.time()
+with db.within(lab):
+    results = FW.collect_many([labdevs[n] for n in list(fakes) + ["nologin"]], src, on_result=seen.append)
+took = time.time() - t0
+R = {r["name"]: r for r in results}
+check("every device answered, in the order given, each reported as it finished", [r["name"] for r in results] == list(fakes) + ["nologin"] and len(seen) == len(results), [r["name"] for r in results])
+check("they were read in parallel (8 devices in about the time of a few)", took < 25, took)
+r = R["ios1"]
+check("IOS: version, the image it runs, no mode, free space, the boot file", r["version"] == "15.2(7)E9" and r["image"] == "c2960x-universalk9-mz.152-7.E9.bin" and r["mode"] == ""
+      and len(r["flashes"]) == 1 and r["flashes"][0]["fs"] == "flash:" and r["flashes"][0]["total"] == 122185728 and r["flashes"][0]["free"] == 122185728 - 51004000
+      and r["boot"] == ["c2960x-universalk9-mz.152-7.E9.bin"] and set(r["flashes"][0]["files"]) == {"c2960x-universalk9-mz.152-7.E9.bin", "c2960x-old.bin", "config.text"}, r)
+check("...it reaches the server: ping and the FTP port, through its own telnet", r["ping"] is True and r["port"] is True and not r["held"] and r["note"] == "", r)
+check("...and telnet was left cleanly (Ctrl-^ x, disconnect, confirmed)", any(l.startswith("telnet 127.0.0.1 ") for l in fakes["ios1"].commands) and "disconnect" in fakes["ios1"].commands, fakes["ios1"].commands)
+r = R["stack1"]
+check("IOS XE stack in INSTALL mode: every member under the primary, each with its own flash", r["mode"] == "INSTALL" and [(f["member"], f["role"], f["fs"]) for f in r["flashes"]]
+      == [(1, "Active", "flash:"), (2, "Standby", "flash-2:"), (3, "Member", "flash-3:")] and all(f["free"] == 11 * G - 500008000 for f in r["flashes"]) and not r["held"], r["flashes"])
+check("IOS XE BUNDLE: the mode and the bundle it boots", R["bundle1"]["mode"] == "BUNDLE" and R["bundle1"]["boot"] == ["cat9k_iosxe.17.06.05.SPA.bin"] and not R["bundle1"]["held"])
+r = R["nx1"]
+check("NX-OS: bootflash:, pinged through the management VRF (it reaches the server only there)", r["flashes"][0]["fs"] == "bootflash:" and r["ping"] is True and not r["held"]
+      and "ping 127.0.0.1 vrf management" in fakes["nx1"].commands, fakes["nx1"].commands)
+check("...no telnet client: the port is not checked, and it says so", r["port"] is None and r["note"] == f"Port {own_ftp.port} not checked (ping only)" and not any(l.startswith("telnet") for l in fakes["nx1"].commands))
+r = R["asa1"]
+check("ASA: disk0:, its boot system lines, ping only", r["flashes"][0]["fs"] == "disk0:" and r["boot"] == ["asa9-16-4-smp-k8.bin"] and r["note"].endswith("not checked (ping only)") and not r["held"])
+check("a device that cannot ping the server is held back, saying so", R["noping"]["held"] == "Cannot reach 127.0.0.1 from the device (ping failed).")
+check("one that pings it but finds the port closed", R["closed"]["held"] == f"Reaches 127.0.0.1, but port {own_ftp.port} is closed.", R["closed"]["held"])
+check("a stack with a member that is not Ready", R["provisioned"]["held"] == "Stack member 3 is not Ready (Provisioned).")
+check("a device with no login, without trying to sign in", R["nologin"]["held"] == "No user name or password: set one on the device or its profile.")
+CHANGES = re.compile(r"^(copy|delete|install|boot|no |write|reload)", re.I)
+def config_lines(cmds):
+    """What was typed in configuration mode."""
+    out, inside = [], False
+    for l in cmds:
+        if l.lower() in ("configure terminal", "conf t"): inside = True; continue
+        if inside and l.lower() == "end": inside = False; continue
+        if inside and l.strip(): out.append(l)            # (netmiko also presses Enter on its own)
+    return out
+check("nothing was changed on any device: only commands that read", not [l for f in fakes.values() for l in f.commands if CHANGES.match(l)],
+      [l for f in fakes.values() for l in f.commands if CHANGES.match(l)])
+check("...the only thing typed in configuration mode is netmiko's ASA sign-in setting the terminal width",
+      all(config_lines(f.commands) == (["terminal width 511"] * f.commands.count("configure terminal") if f.platform == "cisco_asa" else []) for f in fakes.values()),
+      {n: config_lines(f.commands) for n, f in fakes.items()})
+with db.within(lab):
+    sftp_src = FW.own_source("sftp", sftp_srv, "127.0.0.1")
+    r = FW.collect(labdevs["asa1"], sftp_src)
+    check("an ASA with an SFTP source is held back without signing in: it has no SFTP client", r["held"] == "ASA has no SFTP client: use FTP, SCP or TFTP.")
+    check("...and IOS too", FW.collect(labdevs["ios1"], sftp_src)["held"] == "IOS has no SFTP client: use FTP, SCP or TFTP.")
+    db.set_secret(db.secret_name("bundle1"), "wrong-password")
+    r = FW.collect(labdevs["bundle1"], src)
+    check("a wrong password: 'Could not sign in' with netmiko's reason", r["held"].startswith("Could not sign in: ") and "wrong-password" not in r["held"], r["held"])
+    db.set_secret(db.secret_name("bundle1"), PW)
+log = FW.log_path(labdevs["ios1"]).read_text(encoding="utf-8")
+check("the session is written to firmware-<device>.log in the SSH logs folder", FW.log_path(labdevs["ios1"]).name == "firmware-ios1.log" and "show version" in log and "telnet 127.0.0.1" in log)
+check("...without the device's password or the server's", PW not in log and "Own-ftp-pass1" not in log)
+
+print("== the Check devices step")
+db.set_home(lab)
+page = UF.FirmwareTab(servers=lambda: dict(live)); page.resize(1200, 800); page.show()
+def tick(*names):
+    for i in range(page.devices.list.count()):
+        it = page.devices.list.item(i)
+        if it.flags() & Qt.ItemFlag.ItemIsUserCheckable:
+            it.setCheckState(Qt.CheckState.Checked if it.data(Qt.ItemDataRole.UserRole) in names else Qt.CheckState.Unchecked)
+tick("ios1", "stack1", "nx1", "asa1", "noping", "provisioned")
+page.next.click()
+sv = page.server; sv.own_btn.click(); sv.own.setCurrentIndex(sv.own.findData("ftp")); sv.address.setEditText("127.0.0.1")
+sv.test.click(); pump(lambda: sv.ready())
+check("Next leads on from the Image server step once files are listed", page.next.isEnabled())
+page.next.click()
+ck = page.check
+check("Step 3 of 6: Check devices, with the agreed words", page.step_line.text() == "Step 3 of 6: Check devices"
+      and "Toner signs in to each device and reads its software version, mode, free space and whether it can reach the server. Nothing is changed." in ck.intro.text())
+check("it starts collecting at once; Back, Next and Start over wait", ck.running() and not page.next.isEnabled() and not page.back.isEnabled() and not page.restart.isEnabled()
+      and ck.progress.text().startswith("Collecting from ") and ck.progress.text().endswith(" of 6 devices..."), ck.progress.text())
+pump(lambda: not ck.running(), 1500)
+tree = ck.tree
+top = {tree.topLevelItem(i).text(0): tree.topLevelItem(i) for i in range(tree.topLevelItemCount())}
+check("one row per device, in the order of the Devices list", list(top) == ["asa1", "ios1", "noping", "nx1", "provisioned", "stack1"], list(top))
+check("the columns", [tree.headerItem().text(i) for i in range(tree.columnCount())] == ["Device", "Platform", "Version", "Mode", "Free space", "Reaches server", "Status"])
+check("the summary line", ck.progress.text() == "6 devices: 4 ready, 2 held back.", ck.progress.text())
+it = top["stack1"]
+check("a stack shows its members under the primary, each with its free space", it.childCount() == 2 and it.child(0).text(0) == "Switch 2 (Standby)"
+      and it.child(1).text(0) == "Switch 3 (Member)" and it.child(0).text(4) == FW.human_size(11 * G - 500008000) and it.isExpanded())
+check("mode INSTALL; a ready device says Ready", it.text(3) == "INSTALL" and it.text(6) == "Ready" and it.text(5) == "Yes")
+check("the mode is a dash where it does not apply", top["ios1"].text(3) == "–" and top["nx1"].text(1) == "NX-OS" and top["ios1"].text(2) == "15.2(7)E9")
+check("NX-OS and ASA: ready, with the port note as the status", top["nx1"].text(6) == f"Port {own_ftp.port} not checked (ping only)" and top["asa1"].text(5) == "Yes")
+check("held back: greyed, the reason as status and tooltip", top["noping"].text(6) == "Cannot reach 127.0.0.1 from the device (ping failed)." and top["noping"].text(5) == "No"
+      and top["noping"].toolTip(6) == top["noping"].text(6) and top["noping"].foreground(0).color() != top["ios1"].foreground(0).color())
+check("only ready devices go on", [r["name"] for r in ck.ready_results()] == ["asa1", "ios1", "nx1", "stack1"], [r["name"] for r in ck.ready_results()])
+check("the step is ready, and Back and Start over are on again", ck.ready() and page.back.isEnabled() and page.restart.isEnabled())
+fakes["noping"].reach = OK_REACH
+ck.again.click(); check("Collect again runs it again", ck.running()); pump(lambda: not ck.running(), 1500)
+check("...and a fixed device comes back ready", ck.progress.text() == "6 devices: 5 ready, 1 held back." and "noping" in [r["name"] for r in ck.ready_results()], ck.progress.text())
+tick(); page.back.click(); page.back.click()
+page.devices.untick_all.click(); tick("noping", "provisioned")
+fakes["noping"].reach = {}
+page.next.click(); pump(lambda: sv.ready()); page.next.click(); pump(lambda: not ck.running(), 1500)
+check("when every device is held back, the step is not ready and Next stays off", ck.progress.text() == "2 devices: 0 ready, 2 held back." and not ck.ready()
+      and not page.next.isEnabled(), ck.progress.text())
+page.shutdown()
+for f in fakes.values(): f.stop()
 for s in (ftp, sftp_srv, own_ftp, own_tftp): s.stop()
 for s in (sftp_dev, scp_only, missing): s.stop()
 
