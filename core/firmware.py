@@ -405,22 +405,22 @@ def parse_dir(text):
 
 def parse_boot(platform, text):
     """The image files the boot statement or variable names: `show boot` (IOS, IOS XE, NX-OS) or `show running-config boot` (ASA).
-    Only the file names, without the file system ('packages.conf' on IOS XE in INSTALL mode)."""
+    Only the file names, without the file system ('packages.conf' on IOS XE in INSTALL mode). IOS XE prints the current boot
+    variable and the one for the next reload; both count (a file set for the next reload must never be offered for deleting)."""
     t = text or ""
     if platform == "cisco_asa":
         paths = re.findall(r"^\s*boot system\s+(\S+)", t, re.M)
     elif platform == "cisco_nxos":
         paths = [p for line in re.findall(r"NXOS variable\s*=\s*(\S+)", t) for p in line.split(";")]
     elif platform == "cisco_xe":
-        first = re.search(r"BOOT variable\s*=\s*([^\r\n]*)", t)           # the current boot variable (the first one printed)
-        paths = (first.group(1) if first else "").split(";")
+        paths = [p for line in re.findall(r"BOOT variable\s*=\s*([^\r\n]*)", t) for p in line.split(";")]
     else:
         m = re.search(r"BOOT path-list\s*:\s*([^\r\n]*)", t) or re.search(r"BOOT variable\s*=\s*([^\r\n]*)", t)
         paths = (m.group(1) if m else "").split(";")
     out = []
     for p in paths:
         p = p.strip().strip(",")
-        if p:
+        if p and file_name(p) not in out:
             out.append(file_name(p))
     return out
 
@@ -969,3 +969,75 @@ def transfer(dev, r, choice, src, vrf="management", on_step=None, cancel=None, p
         return fail(f"The copy failed: {plain_error(e, secrets)}.")
     finally:
         save_log(dev, log, secrets)
+
+
+# ================================================================ after a verified copy: the boot statement, or install add
+INSTALL_TIMEOUT = 1800             # install add unpacks and checks the image on every member
+INSTALL_NOTE = ("IOS XE INSTALL mode: the image is added, not activated; run install activate and install commit in the maintenance "
+                "window (that reloads). Other devices boot the new image at their next reload.")
+
+
+def _words(out, pattern=r"FAILED|%|rror"):
+    """The device's line that says what went wrong."""
+    return next((l.strip() for l in reversed((out or "").splitlines()) if re.search(pattern, l)), (out or "").strip()[-160:])
+
+
+def boot_lines(r, name, current_paths=()):
+    """The configuration lines that point the device at the new image (never a reload). `current_paths`: an ASA's boot system
+    lines as the device prints them, to remove."""
+    plat, fs = r["platform"], r["flashes"][0]["fs"]
+    if plat == "cisco_nxos":
+        return [f"boot nxos {fs}{name}"]
+    if plat == "cisco_asa":
+        # An ASA boots the first boot system line and adds new lines at the end. So: take them all out, put the new image first,
+        # then the others back in their order, except the line for the image it runs now (the old one, which goes).
+        running = (r.get("image") or "").lower()
+        others = [p for p in current_paths if file_name(p).lower() not in (running, name.lower())]
+        return [f"no boot system {p}" for p in current_paths] + [f"boot system {fs}/{name}"] + [f"boot system {p}" for p in others]
+    stack = len(r["flashes"]) > 1
+    return ["no boot system", f"boot system switch all {fs}{name}" if stack else f"boot system {fs}{name}"]
+
+
+def after_copy(dev, r, name, secrets=()):
+    """The step after a verified copy, for transfer(then=...): install add on IOS XE in INSTALL mode, else set the boot statement
+    or variable and save the configuration, checked by reading it back. Returns True, or the line saying what went wrong.
+    Every change has its audit line. Nothing here reloads, activates or commits."""
+    from core import audit
+    plat, fs = r["platform"], r["flashes"][0]["fs"]
+
+    def then(c, prompt, report):
+        if plat == "cisco_xe" and r.get("mode") == "INSTALL":
+            report("Running install add (this can take several minutes)")
+            out = c.send_command(f"install add file {fs}{name}", expect_string=prompt, read_timeout=INSTALL_TIMEOUT)
+            if "SUCCESS" in out and "FAILED" not in out:
+                audit.log("firmware install add", f"{dev['name']}: {fs}{name}")
+                return True
+            return f"install add failed: {mask(_words(out), secrets)}"
+        current = []
+        if plat == "cisco_asa":
+            current = re.findall(r"^\s*boot system\s+(\S+)", c.send_command("show running-config boot", expect_string=prompt, read_timeout=60), re.M)
+        lines = boot_lines(r, name, current)
+        report("Setting boot statement")
+        out = c.send_config_set(lines, read_timeout=600)
+        if re.search(r"%\s*(Invalid|Error|Incomplete)|Invalid input", out):
+            return f"The boot statement did not take: {mask(_words(out), secrets)}"
+        report("Saving configuration")
+        save = "copy running-config startup-config" if plat == "cisco_nxos" else "write memory"
+        out = c.send_command(save, expect_string=prompt, read_timeout=600)
+        if not re.search(r"\[OK\]|Copy complete", out):
+            return f"The configuration was not saved: {mask(_words(out), secrets)}"
+        shown = c.send_command("show running-config boot" if plat == "cisco_asa" else "show boot", expect_string=prompt, read_timeout=60)
+        now = parse_boot(plat, shown)
+        took = now[:1] == [name] if plat == "cisco_asa" else name in now      # an ASA boots the first boot system line
+        if not took:
+            return f"The boot statement did not take: show boot says {', '.join(now) or 'nothing'}."
+        new_line = next(l for l in lines if not l.startswith("no ") and file_name(l.split()[-1]) == name)
+        audit.log("firmware boot", f"{dev['name']}: {new_line}, saved")
+        return True
+    return then
+
+
+def summary_text(rows, status, note):
+    """What Copy summary puts on the clipboard: one line per device, then the line under the table. `rows`: [(device, address, step, detail)]."""
+    lines = [f"{name} ({host}): {step}" + (f" - {detail}" if detail else "") for name, host, step, detail in rows]
+    return "\n".join(lines + ["", status] + ([note] if note else []))

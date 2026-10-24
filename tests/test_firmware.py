@@ -274,7 +274,8 @@ check("dir on IOS: files with sizes, folders left out, total and free", FW.parse
 nx_dir = "  1979260416    Oct 22 10:00:00 2026  nxos64-cs.10.3.4a.M.bin\n        4096    Oct 22 10:00:00 2026  .rpmstore/\n\nUsage for bootflash://sup-local\n 2539487232 bytes used\n 50766032896 bytes free\n 53305520128 bytes total\n"
 check("dir bootflash: on NX-OS (its totals are on separate lines)", FW.parse_dir(nx_dir) == {"files": {"nxos64-cs.10.3.4a.M.bin": 1979260416}, "total": 53305520128, "free": 50766032896})
 check("no totals: unreadable", FW.parse_dir("% Invalid input detected at '^' marker.") is None)
-check("boot statements per platform", FW.parse_boot("cisco_xe", "BOOT variable = flash:packages.conf;\nBoot Variables on next reload:\nBOOT variable = flash:x.bin;") == ["packages.conf"]
+check("boot statements per platform; on IOS XE the current and the next reload's both count", FW.parse_boot("cisco_xe", "BOOT variable = flash:packages.conf;\nBoot Variables on next reload:\nBOOT variable = flash:x.bin;") == ["packages.conf", "x.bin"]
+      and FW.parse_boot("cisco_xe", "BOOT variable = flash:a.bin;\nBOOT variable = flash:a.bin;") == ["a.bin"]
       and FW.parse_boot("cisco_ios", "BOOT path-list      : flash:/a.bin;flash:/b.bin\n") == ["a.bin", "b.bin"]
       and FW.parse_boot("cisco_nxos", "NXOS variable = bootflash:/nxos.10.bin\n") == ["nxos.10.bin"]
       and FW.parse_boot("cisco_asa", "boot system disk0:/asa9-16.bin\nboot system disk0:/asa9-12.bin\n") == ["asa9-16.bin", "asa9-12.bin"])
@@ -630,8 +631,28 @@ everything = " ".join(tr.table.item(i, j).text() for i in range(tr.table.rowCoun
 logs = "".join(FW.log_path(labdevs[n]).read_text(encoding="utf-8") for n in ("ios1", "nx1", "stack1", "bundle1"))
 check("the FTP password is nowhere: screen, audit log, session logs", "Own-ftp-pass1" not in everything and "Own-ftp-pass1" not in logs and "copy ftp://toner:****@" in logs)
 check("...nor the devices' password", PW not in everything and PW not in logs)
-check("nothing beyond the copy and its checks was sent: no boot, install add, write or reload", not [l for f in fakes.values() for l in f.commands
-      if re.match(r"^(boot|no boot|install add|write|reload|install activate|install commit)", l)])
+print("== after a verified copy (first run)")
+check("IOS: the boot statement replaced, saved, and read back", config_lines(fakes["ios1"].commands)[-2:] == ["no boot system", f"boot system flash:{IOS}"]
+      and "write memory" in fakes["ios1"].commands and fakes["ios1"].saved_boot == [f"flash:{IOS}"])
+check("NX-OS: boot nxos, then copy running-config startup-config", config_lines(fakes["nx1"].commands)[-1:] == [f"boot nxos bootflash:{NX}"]
+      and "copy running-config startup-config" in fakes["nx1"].commands and fakes["nx1"].saved_boot == [f"bootflash:{NX}"])
+check("IOS XE in INSTALL mode: install add only, no boot change and nothing saved", f"install add file flash:{XE}" in fakes["stack1"].commands
+      and fakes["stack1"].added == [XE] and not config_lines(fakes["stack1"].commands) and "write memory" not in fakes["stack1"].commands)
+check("the device whose MD5 differed got no boot change at all", not config_lines(fakes["bundle1"].commands) and "write memory" not in fakes["bundle1"].commands)
+rows = audit.recent()
+check("audit: the boot change and the install add", any(a["action"] == "firmware boot" and a["detail"] == f"ios1: boot system flash:{IOS}, saved" for a in rows)
+      and any(a["action"] == "firmware boot" and a["detail"] == f"nx1: boot nxos bootflash:{NX}, saved" for a in rows)
+      and any(a["action"] == "firmware install add" and a["detail"] == f"stack1: flash:{XE}" for a in rows))
+check("the reminder about activating and reloading", tr.note.isVisibleTo(tr) and tr.note.text() == FW.INSTALL_NOTE and FW.INSTALL_NOTE ==
+      "IOS XE INSTALL mode: the image is added, not activated; run install activate and install commit in the maintenance window (that reloads). "
+      "Other devices boot the new image at their next reload.")
+tr.copy.click()
+from PySide6.QtWidgets import QApplication as _QA
+clip = _QA.clipboard().text()
+check("Copy summary: a line per device, then the line under the table and the reminder", clip.splitlines()[:4] == [
+      f"bundle1 (127.0.0.1): Failed - {steps['bundle1'][1]}", "ios1 (127.0.0.1): Done", "nx1 (127.0.0.1): Done", "stack1 (127.0.0.1): Done"]
+      and clip.endswith("Done: 3 of 4 devices have the new image, 1 failed. Nothing was reloaded.\n" + FW.INSTALL_NOTE) and "Own-ftp-pass1" not in clip, clip)
+check("nothing was reloaded, activated or committed", not [l for f in fakes.values() for l in f.commands if re.match(r"^(reload|install activate|install commit)", l)])
 
 print("== Stop")
 for f in fakes.values(): f.copy_seconds = 3.0; f.corrupt = set()
@@ -662,6 +683,56 @@ check("the Stopping line was shown, and Stop is off", "Stopping: devices that ar
 since = {n: f.commands[typed_before[n]:] for n, f in fakes.items()}
 check("after Stop no stack member was copied to and nothing more was sent", not any(l.startswith(("copy flash:", "boot", "install add", "write")) for c in since.values() for l in c)
       and not any(l.startswith("copy ") for l in since["stack1"]), {n: [l for l in c if l.startswith("copy")] for n, c in since.items()})
+
+print("== after a verified copy: ASA, a BUNDLE stack, and what can go wrong")
+fakes["bstack"] = CiscoFake("cisco_xe", "bstack", mode="BUNDLE", members=2, files={"cat9k_iosxe.17.06.05.SPA.bin": (900, "")},
+                            image="cat9k_iosxe.17.06.05.SPA.bin", reach=OK_REACH, password=PW, copy_seconds=0.5)
+add("bstack", "cisco", "cisco_xe", lab, host="127.0.0.1")
+with db.within(lab):
+    d = next(x for x in db.list_devices() if x["name"] == "bstack"); db.save_device({**d, "port": fakes["bstack"].port, "username": "admin"})
+    db.set_secret(db.secret_name("bstack"), PW)
+for f in fakes.values():
+    f.copy_seconds = 0.5
+    for fs in f.fs.values():
+        for n in (XE, IOS, NX, ASA): fs.files.pop(n, None)
+fakes["stack1"].install_fail = "Super package already added. Add operation not allowed."
+fakes["ios1"].ignore_boot = True
+fakes["ios1"].boot = fakes["ios1"].saved_boot = ["flash:/c2960x-old.bin"]      # (so a change that does not take shows)
+fakes["asa1"].boot = ["disk0:/asa9-16-4-smp-k8.bin", "disk0:/asa9-12-4-smp-k8.bin"]
+page.restart.click(); page.refresh(); page.devices.untick_all.click(); tick("asa1", "bstack", "stack1", "ios1")
+page.next.click(); sv.own_btn.click(); sv.own.setCurrentIndex(sv.own.findData("ftp")); sv.address.setEditText("127.0.0.1"); sv.test.click(); pump(lambda: sv.ready())
+page.next.click(); pump(lambda: not ck.running(), 1500)
+check("all four ready", ck.progress.text() == "4 devices: 4 ready, 0 held back.", ck.progress.text())
+page.next.click(); page.next.click()
+row = {im.table.item(i, 0).text(): i for i in range(im.table.rowCount())}
+for n, img in (("asa1", ASA), ("bstack", XE), ("stack1", XE), ("ios1", IOS)):
+    pick(n).setCurrentIndex(pick(n).findData(img)); md5box(n).setText(MD5[img])
+typed_before = {n: len(f.commands) for n, f in fakes.items()}
+page.next.click(); pump(lambda: not tr.running(), 3000)
+steps = {tr.table.item(i, 0).text(): (tr.table.item(i, 1).text(), tr.table.item(i, 3).text()) for i in range(tr.table.rowCount())}
+since = {n: f.commands[typed_before[n]:] for n, f in fakes.items()}
+signin = lambda lines: [l for l in lines if l != "terminal width 511"]      # (netmiko's own ASA sign-in)
+check("ASA: the running image's boot line goes, the new one comes first, another line stays after it, saved", steps["asa1"][0] == "Done"
+      and signin(config_lines(since["asa1"])) == ["no boot system disk0:/asa9-16-4-smp-k8.bin", "no boot system disk0:/asa9-12-4-smp-k8.bin",
+                                                  f"boot system disk0:/{ASA}", "boot system disk0:/asa9-12-4-smp-k8.bin"]
+      and "write memory" in since["asa1"] and fakes["asa1"].saved_boot == [f"disk0:/{ASA}", "disk0:/asa9-12-4-smp-k8.bin"], (steps["asa1"], config_lines(since["asa1"]), fakes["asa1"].saved_boot))
+check("ASA boot lines: with only the running image's line, just the new one; adding it back never doubles it",
+      FW.boot_lines(R["asa1"], ASA, ["disk0:/asa9-16-4-smp-k8.bin"]) == ["no boot system disk0:/asa9-16-4-smp-k8.bin", f"boot system disk0:/{ASA}"]
+      and FW.boot_lines(R["asa1"], ASA, [f"disk0:/{ASA}", "disk0:/asa9-16-4-smp-k8.bin"]) == [f"no boot system disk0:/{ASA}", "no boot system disk0:/asa9-16-4-smp-k8.bin", f"boot system disk0:/{ASA}"])
+check("a BUNDLE stack: the image on both members, then boot system switch all", steps["bstack"][0] == "Done" and fakes["bstack"].fs["flash-2:"].files[XE][1] == MD5[XE]
+      and config_lines(since["bstack"]) == ["no boot system", f"boot system switch all flash:{XE}"] and "write memory" in since["bstack"])
+check("install add failing says so with the device's words", steps["stack1"] == ("Failed", "install add failed: FAILED: install_add : Super package already added. Add operation not allowed."), steps["stack1"])
+check("a boot statement that did not take says what show boot says", steps["ios1"] == ("Failed", "The boot statement did not take: show boot says c2960x-old.bin."), steps["ios1"])
+rows = audit.recent()
+check("audit: the ASA's boot change, and the two failures", any(a["action"] == "firmware boot" and a["detail"] == f"asa1: boot system disk0:/{ASA}, saved" for a in rows)
+      and any(a["action"] == "firmware boot" and a["detail"] == f"bstack: boot system switch all flash:{XE}, saved" for a in rows)
+      and any(a["action"] == "firmware failed" and a["detail"].startswith("stack1: install add failed") for a in rows)
+      and any(a["action"] == "firmware failed" and a["detail"].startswith("ios1: The boot statement did not take") for a in rows))
+check("the line under the table", tr.status.text() == "Done: 2 of 4 devices have the new image, 2 failed. Nothing was reloaded.", tr.status.text())
+check("still nothing reloaded, activated or committed, on any device", not [l for f in fakes.values() for l in f.commands if re.match(r"^(reload|install activate|install commit)", l)])
+everything = " ".join(tr.table.item(i, j).text() for i in range(tr.table.rowCount()) for j in (1, 3)) + " ".join(a["detail"] for a in audit.recent(2000))
+logs = "".join(FW.log_path(labdevs[n]).read_text(encoding="utf-8") for n in ("ios1", "asa1", "stack1", "nx1"))
+check("over everything: the server's and the devices' passwords appear nowhere", "Own-ftp-pass1" not in everything + logs and PW not in everything + logs)
 page.shutdown()
 for f in fakes.values(): f.stop()
 for s in (ftp, sftp_srv, own_ftp, own_tftp): s.stop()

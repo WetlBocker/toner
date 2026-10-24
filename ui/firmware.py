@@ -766,7 +766,7 @@ class TransferJob(QThread):
         def one(job):
             r, choice = job
             with db.within(r["dev"].get("org")):
-                then = self.then(r) if self.then else None
+                then = self.then(r, choice) if self.then else None
                 self.outcomes[r["key"]] = fw.transfer(r["dev"], r, choice, self.src, self.vrf, cancel=self.cancel, then=then,
                                                       on_step=lambda s, p, d, key=r["key"]: self.step.emit(key, s, p, d))
         with ThreadPoolExecutor(max_workers=max(1, min(fw.TRANSFER_WORKERS, len(self.work)))) as pool:
@@ -782,21 +782,31 @@ class TransferStep(QWidget):
         self.job, self.rows, self.bars, self.work = None, {}, {}, []
         self.table = _table(self.COLS)
         self.stop = QPushButton("Stop")
+        self.copy = QPushButton("Copy summary")
+        self.copy.setEnabled(False)
         self.status = _muted("")
+        self.note = _muted("")
+        self.note.setVisible(False)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self.table, 1)
         bar = QHBoxLayout()
         bar.addWidget(self.status, 1)
+        bar.addWidget(self.copy)
         bar.addWidget(self.stop)
         lay.addLayout(bar)
+        lay.addWidget(self.note)
         self.stop.clicked.connect(self.halt)
+        self.copy.clicked.connect(self.copy_summary)
 
     def start(self, work, src, vrf, then=None):
-        """work: [(result, {'name', 'size', 'md5'})]. then(result): the step after a verified copy on that device, or None."""
+        """work: [(result, {'name', 'size', 'md5'})]. then(result, choice): the step after a verified copy on that device, or None."""
         self.work, self.rows, self.bars = list(work), {}, {}
         self.table.setRowCount(0)
         self.status.setText("")
+        self.note.setText("")
+        self.note.setVisible(False)
+        self.copy.setEnabled(False)
         for r, _choice in self.work:
             row = self.table.rowCount()
             self.table.insertRow(row)
@@ -847,7 +857,20 @@ class TransferStep(QWidget):
         n = len(self.work)
         line = f"Done: {ok} of {n} device{'s' if n != 1 else ''} {'has' if ok == 1 and n == 1 else 'have'} the new image, {failed} failed. Nothing was reloaded."
         self.status.setText(line)
+        self.note.setText(fw.INSTALL_NOTE if ok else "")
+        self.note.setVisible(bool(ok))
+        self.copy.setEnabled(True)
         self._sync()
+
+    def summary(self):
+        """One line per device, the line under the table and the reminder about reloading: what Copy summary copies."""
+        rows = [(self.table.item(i, 0).text(), r["host"], self.table.item(i, 1).text(), self.table.item(i, 3).text())
+                for (r, _c), i in zip(self.work, range(self.table.rowCount()))]
+        return fw.summary_text(rows, self.status.text(), self.note.text())
+
+    def copy_summary(self):
+        from PySide6.QtWidgets import QApplication
+        QApplication.clipboard().setText(self.summary())
 
     def running(self):
         return self.job is not None and self.job.isRunning()
@@ -939,9 +962,11 @@ class FirmwareTab(QWidget):
             return
         self.go(i + 1)
 
-    def after_copy(self, r):
-        """What runs on a device once its image is copied and verified (slice 6: the boot statement or install add)."""
-        return None
+    def after_copy(self, r, choice):
+        """What runs on a device once its image is copied and verified: install add, or the boot statement (never a reload)."""
+        from core import profiles
+        src, _files, _vrf = self.server.chosen()
+        return fw.after_copy(r["dev"], r, choice["name"], [src.get("password") or "", profiles.secret(r["dev"], "main") or ""])
 
     def confirm_transfer(self, title, body):
         """The question before copying (the tests answer it)."""

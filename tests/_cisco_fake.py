@@ -109,6 +109,8 @@ class CiscoFake(ShellServer):
         self.install_files = list(install_files or [])                           # what install remove inactive would remove
         self.corrupt = set()                                                      # copies of these files arrive damaged
         self.protect = set()                                                      # deleting these is refused
+        self.install_fail = ""                                                    # install add answers FAILED with this
+        self.ignore_boot = False                                                  # boot lines are accepted but change nothing
         self.config_saved = True
         self.added = []                                                           # install add file ... that succeeded
         self.commands = []                                                        # every line typed, in order (all sessions)
@@ -360,6 +362,8 @@ class CiscoFake(ShellServer):
         fs, name = self.split(path)
         if fs is None or name not in fs.files:
             return f"FAILED: install_add : {path} not found\n"
+        if self.install_fail:
+            return f"install_add: START\ninstall_add: Adding PACKAGE\nFAILED: install_add : {self.install_fail}\n"
         self.added.append(name)
         return (f"install_add: START\ninstall_add: Adding PACKAGE\nFinished initial file syncing\n--- Starting Add ---\n"
                 f"Performing Add on all members\n  [1] Add package(s) on switch 1\n  [1] Finished Add on switch 1\nChecking status of Add on [1]\n"
@@ -467,6 +471,8 @@ class CiscoFake(ShellServer):
             return "", False
         if low == "terminal width 511":
             return "", False
+        if self.ignore_boot and ("boot " in low):
+            return "", False
         if low == "no boot system":
             self.boot = []
             self.config_saved = False
@@ -479,7 +485,8 @@ class CiscoFake(ShellServer):
         m = re.match(r"^boot system (?:switch all )?(\S+)$", cmd)
         if m:
             if self.platform == "cisco_asa":
-                self.boot.insert(0, m.group(1))         # ASA keeps the order the lines were given in: the first one boots
+                if m.group(1) not in self.boot:
+                    self.boot.append(m.group(1))        # an ASA adds the line at the end, and boots from the first one
             else:
                 self.boot = [m.group(1)]
             self.config_saved = False
