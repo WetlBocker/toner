@@ -285,6 +285,17 @@ check("stack members' flash: flash-2: on IOS XE, flash2: on classic IOS", FW.mem
       and FW.member_fs("cisco_xe", 1) == "flash:" and FW.member_fs("cisco_nxos", 1) == "bootflash:")
 check("all selected devices at once, up to 8 for checking and 4 for copying", FW.CHECK_WORKERS == 8 and FW.TRANSFER_WORKERS == 4)
 
+print("== the fake device's own fetch (what a device's copy does)")
+import _cisco_fake, paramiko
+want = open(os.path.join(images, "asa9-18-4-smp-k8.bin"), "rb").read()
+check("over SFTP and over SCP from Toner's SFTP / SCP server", _cisco_fake.fetch(f"sftp://toner:Sftp-pass-123@127.0.0.1:{sftp_srv.port}/firmware/asa9-18-4-smp-k8.bin") == want
+      and _cisco_fake.fetch(f"scp://toner:Sftp-pass-123@127.0.0.1:{sftp_srv.port}/firmware/asa9-18-4-smp-k8.bin") == want)
+def refused_host(h):
+    try: _cisco_fake.LoopbackOnly().missing_host_key(None, h, None); return False
+    except paramiko.SSHException: return True
+check("it accepts host keys only from this computer's test servers", not refused_host(f"[127.0.0.1]:{sftp_srv.port}") and not refused_host("[::1]:22")
+      and refused_host("10.0.0.5") and refused_host("[10.0.0.5]:22") and refused_host("evil.example"))
+
 print("== collecting from the devices")
 lab = orgs.create("Lab", "LAB")
 src = FW.own_source("ftp", own_ftp, "127.0.0.1")

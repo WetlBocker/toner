@@ -7,15 +7,34 @@ What a real device does and this does not: exact timing, every line of Cisco's o
 The fake follows the forms in Cisco's documentation and is meant to catch mistakes in the wizard, not to stand in for a lab."""
 import hashlib
 import io
+import ipaddress
+import os
 import re
 import socket
 import struct
+import tempfile
 import threading
 import time
+
+import paramiko
 
 from _ssh_shell import ShellServer
 
 PLATFORM_FS = {"cisco_ios": "flash:", "cisco_xe": "flash:", "cisco_nxos": "bootflash:", "cisco_asa": "disk0:"}
+
+
+class LoopbackOnly(paramiko.MissingHostKeyPolicy):
+    """The fake only ever pulls from the test's own servers on this computer, each with a key made for the test: a key from a
+    loopback address is accepted for that one connection (and not saved anywhere); any other host is refused."""
+
+    def missing_host_key(self, client, hostname, key):
+        host = hostname[1:].split("]")[0] if hostname.startswith("[") else hostname      # '[127.0.0.1]:2222' -> '127.0.0.1'
+        try:
+            loopback = host == "localhost" or ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            loopback = False
+        if not loopback:
+            raise paramiko.SSHException(f"the fake device only fetches from this computer, not {hostname}")
 
 
 class Fs:
@@ -48,9 +67,8 @@ def fetch(url):
         c.quit()
         return buf.getvalue()
     if proto in ("sftp", "scp"):
-        import paramiko
         cl = paramiko.SSHClient()
-        cl.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        cl.set_missing_host_key_policy(LoopbackOnly())
         cl.connect(host, int(port or 22), user, pw, look_for_keys=False, allow_agent=False, timeout=10)
         try:
             if proto == "sftp":
@@ -58,12 +76,11 @@ def fetch(url):
                 with sf.open(path, "rb") as fh:
                     return fh.read()
             from core.scp import Scp
-            import tempfile, os
-            tmp = tempfile.mktemp()
-            Scp(cl).download(path, tmp)
-            data = open(tmp, "rb").read()
-            os.remove(tmp)
-            return data
+            with tempfile.TemporaryDirectory(prefix="cisco_fake_") as folder:   # a private folder, removed afterwards
+                target = os.path.join(folder, "image")
+                Scp(cl).download(path, target)
+                with open(target, "rb") as fh:
+                    return fh.read()
         finally:
             cl.close()
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)            # tftp: a plain read request
