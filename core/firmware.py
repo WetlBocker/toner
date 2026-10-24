@@ -607,3 +607,135 @@ def collect_many(devices, src, vrf="management", on_result=None, cancel=None, op
         return r
     with ThreadPoolExecutor(max_workers=max(1, min(CHECK_WORKERS, len(devices)))) as pool:
         return [r for r in pool.map(one, devices) if r is not None]
+
+
+# ================================================================ step 4: Clean up
+IMAGE_EXT = (".bin", ".spa", ".pkg", ".tar")
+DELETE_WARNING = ("These files are deleted now and cannot be recovered. The running image and the files in the boot statement are not "
+                  "touched. Nothing is reloaded.")
+
+
+def file_note(r, name):
+    """(note, tickable, pre-ticked) for one file on a device read by collect(). The running image and the boot statement's files
+    can never be ticked; ASDM images are kept unless ticked; other image files are old images, ticked."""
+    low = name.lower()
+    if low == (r.get("image") or "").lower():
+        return "running image", False, False
+    if low in {b.lower() for b in r.get("boot") or []}:
+        return "in boot statement", False, False
+    if r["platform"] == "cisco_asa" and low.startswith("asdm"):
+        return "ASDM image", True, False
+    if low.endswith(IMAGE_EXT):
+        return "old image", True, True
+    return "", True, False
+
+
+def cleanup_plan(r):
+    """What the Clean up step shows for one device: {'install': True} on IOS XE in INSTALL mode, else
+    {'install': False, 'flashes': [{'fs', 'member', 'free', 'total', 'files': [{'name', 'size', 'note', 'tickable', 'ticked'}]}]}."""
+    if r["platform"] == "cisco_xe" and r.get("mode") == "INSTALL":
+        return {"install": True, "flashes": []}
+    out = []
+    for f in r["flashes"]:
+        files = []
+        for name, size in sorted(f["files"].items(), key=lambda kv: kv[0].lower()):
+            note, tickable, ticked = file_note(r, name)
+            files.append({"name": name, "size": size, "note": note, "tickable": tickable, "ticked": ticked})
+        out.append({"fs": f["fs"], "member": f["member"], "free": f["free"], "total": f["total"], "files": files})
+    return {"install": False, "flashes": out}
+
+
+def space_line(fs, free, total):
+    """'flash: 1.2 GB free of 11.0 GB'."""
+    if free is None or total is None:
+        return fs
+    return f"{fs} {human_size(free)} free of {human_size(total)}"
+
+
+def delete_command(platform, fs, name):
+    """The platform's delete that asks nothing: delete /force (IOS, IOS XE), ... no-prompt (NX-OS), delete /noconfirm (ASA)."""
+    if platform == "cisco_nxos":
+        return f"delete {fs}{name} no-prompt"
+    if platform == "cisco_asa":
+        return f"delete /noconfirm {fs}/{name}"
+    return f"delete /force {fs}{name}"
+
+
+def confirm_text(chosen):
+    """(title, body) of the one confirmation before anything is deleted. `chosen`: [(result, {'install': bool, 'files': [(fs, name, size)]})]
+    for the devices with something ticked, in page order."""
+    n = len(chosen)
+    lines = []
+    for r, pick in chosen:
+        lines.append(f"{r['name']} ({r['host']})")
+        if pick.get("install"):
+            lines.append("    install remove inactive")
+        for fs, name, size in pick.get("files", []):
+            lines.append(f"    {fs}{'/' if r['platform'] == 'cisco_asa' else ''}{name}  {human_size(size)}")
+    return f"Delete files on {n} device{'s' if n != 1 else ''}?", "\n".join(lines) + "\n\n" + DELETE_WARNING
+
+
+def _install_remove(c, prompt):
+    """install remove inactive, answering its y/n question with y. Returns (ok, the device's last words)."""
+    out = c.send_command("install remove inactive", expect_string=r"\[y/n\]|" + prompt, read_timeout=900)
+    if re.search(r"\[y/n\]", out):
+        out += c.send_command("y", expect_string=prompt, read_timeout=1800, cmd_verify=False)
+    ok = "SUCCESS" in out and "FAILED" not in out
+    last = next((l.strip() for l in reversed(out.splitlines()) if l.strip() and ("SUCCESS" in l or "FAILED" in l or "%" in l)), "")
+    return ok, last
+
+
+def cleanup(dev, r, pick, src_password="", on_item=None, opts=None):
+    """Delete what was ticked on one device (and only that), then read the free space again. `pick`: {'install': bool, 'files':
+    [(fs, name, size)]}. on_item(item, status) as each one goes: item is 'install' or (fs, name); status 'Deleting...', 'Deleted' or
+    'Failed: <reason>'. Every deletion is in the audit log. Returns {fs: free bytes} read afterwards."""
+    from core import audit, profiles
+    report = on_item or (lambda *_a: None)
+    secrets = [src_password, profiles.secret(dev, "main") or ""]
+    plat = platform_of(dev)
+    free = {}
+    log = io.BytesIO()
+    items = (["install"] if pick.get("install") else []) + [(fs, name) for fs, name, _s in pick.get("files", [])]
+    sizes = {(fs, name): size for fs, name, size in pick.get("files", [])}
+    try:
+        with connect(dev, log, opts) as c:
+            try:
+                c.enable()
+            except Exception:                               # noqa: BLE001
+                pass
+            prompt = _prompt_re(c)
+            for item in items:
+                report(item, "Deleting...")
+                if item == "install":
+                    ok, last = _install_remove(c, prompt)
+                    if ok:
+                        audit.log("firmware install remove inactive", f"{dev['name']}: done")
+                        report(item, "Deleted")
+                    else:
+                        audit.log("firmware failed", f"{dev['name']}: install remove inactive: {mask(last, secrets)}")
+                        report(item, f"Failed: {mask(last, secrets) or 'install remove inactive did not finish'}")
+                    continue
+                fs, name = item
+                out = c.send_command(delete_command(plat, fs, name), expect_string=prompt, read_timeout=120)
+                gone = name not in ((parse_dir(c.send_command(f"dir {fs}", expect_string=prompt, read_timeout=60)) or {}).get("files") or {})
+                where = f"{fs}{'/' if plat == 'cisco_asa' else ''}{name}"
+                if gone:
+                    audit.log("firmware delete", f"{dev['name']}: {where} ({human_size(sizes[item])})")
+                    report(item, "Deleted")
+                else:
+                    why = next((l.strip() for l in out.splitlines() if "%" in l or "rror" in l), "") or "the file is still there"
+                    audit.log("firmware failed", f"{dev['name']}: delete {where}: {mask(why, secrets)}")
+                    report(item, f"Failed: {mask(why, secrets)}")
+            for f in r["flashes"]:
+                listing = parse_dir(c.send_command(f"dir {f['fs']}", expect_string=prompt, read_timeout=60))
+                if listing is not None:
+                    free[f["fs"]] = listing["free"]
+                    f.update(listing)                        # the Images step works from what is there now
+    except Exception as e:                                  # noqa: BLE001
+        why = plain_error(e, secrets)
+        audit.log("firmware failed", f"{dev['name']}: clean up: {why}")
+        for item in items:
+            report(item, f"Failed: {why}")
+    finally:
+        save_log(dev, log, secrets)
+    return free

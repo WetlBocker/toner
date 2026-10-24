@@ -108,6 +108,7 @@ class CiscoFake(ShellServer):
         self.reach, self.vrf, self.copy_seconds = reach or {}, vrf, copy_seconds
         self.install_files = list(install_files or [])                           # what install remove inactive would remove
         self.corrupt = set()                                                      # copies of these files arrive damaged
+        self.protect = set()                                                      # deleting these is refused
         self.config_saved = True
         self.added = []                                                           # install add file ... that succeeded
         self.commands = []                                                        # every line typed, in order (all sessions)
@@ -325,6 +326,8 @@ class CiscoFake(ShellServer):
         quiet = "/force" in words or "/noconfirm" in words or "no-prompt" in words
         if not quiet:
             return "THE FAKE DEVICE WOULD HAVE ASKED: Delete filename? [confirm]\n"
+        if name in self.protect:
+            return f"%Error deleting {path} (Permission denied)\n"
         del fs.files[name]
         return ""
 

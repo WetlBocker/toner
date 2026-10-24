@@ -488,6 +488,166 @@ class CheckStep(QWidget):
             self.job.wait(60000)
 
 
+# =============================================================================== step 4: Clean up
+class CleanupJob(QThread):
+    """Deletes what was confirmed, device by device (up to 8 at once), reporting each file as it goes."""
+    item = Signal(str, object, str)                         # device key, 'install' or (fs, name), status
+
+    def __init__(self, work, src_password):
+        super().__init__()
+        self.work, self.src_password = work, src_password  # [(result, pick)]
+
+    def run(self):
+        from concurrent.futures import ThreadPoolExecutor
+
+        def one(job):
+            r, pick = job
+            with db.within(r["dev"].get("org")):
+                fw.cleanup(r["dev"], r, pick, self.src_password, on_item=lambda it, st, key=r["key"]: self.item.emit(key, it, st))
+        with ThreadPoolExecutor(max_workers=max(1, min(fw.CHECK_WORKERS, len(self.work)))) as pool:
+            list(pool.map(one, self.work))
+
+
+class CleanupStep(QWidget):
+    changed = Signal()
+    ITEM = Qt.ItemDataRole.UserRole                        # (device key, 'install' or (fs, name), size)
+
+    def __init__(self):
+        super().__init__()
+        self.results, self.src_password, self.job, self.items = [], "", None, {}
+        self.intro = _muted("Make room for the new image. Ticked files are deleted when you click Delete ticked files and confirm. Toner "
+                            "pre-ticks image files that are not the running image and not in the boot statement; untick anything to keep. "
+                            "IOS XE in INSTALL mode runs 'install remove inactive' instead, which removes packages no longer in use.")
+        self.tree = QTreeWidget()
+        self.tree.setColumnCount(3)
+        self.tree.setHeaderLabels(["Name", "Size", "Note"])
+        self.tree.header().setStretchLastSection(True)
+        self.notice = _muted("Nothing is deleted until you confirm.")
+        self.delete = QPushButton("Delete ticked files")
+        self.delete.setProperty("danger", True)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(self.intro)
+        lay.addWidget(self.tree, 1)
+        bar = QHBoxLayout()
+        bar.addWidget(self.notice, 1)
+        bar.addWidget(self.delete)
+        lay.addLayout(bar)
+        self.tree.itemChanged.connect(lambda *_: self._sync())
+        self.delete.clicked.connect(self.start)
+
+    def load(self, results, src_password=""):
+        """The devices that came through Check devices."""
+        self.results, self.src_password, self.items = list(results), src_password, {}
+        self.tree.blockSignals(True)
+        self.tree.clear()
+        for r in self.results:
+            top = QTreeWidgetItem([f"{db.label_org(r['key'])} ({r['host']})", "", ""])
+            top.setFlags(top.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)      # (Qt makes every row tickable unless told)
+            f = top.font(0)
+            f.setBold(True)
+            top.setFont(0, f)
+            self.tree.addTopLevelItem(top)
+            plan = fw.cleanup_plan(r)
+            if plan["install"]:
+                it = QTreeWidgetItem(["Run install remove inactive", "", ""])
+                it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                it.setCheckState(0, Qt.CheckState.Checked)
+                it.setData(0, self.ITEM, (r["key"], "install", 0))
+                top.addChild(it)
+                self.items[(r["key"], "install")] = it
+            for flash in plan["flashes"]:
+                fs_row = QTreeWidgetItem([fw.space_line(flash["fs"], flash["free"], flash["total"]), "", ""])
+                fs_row.setFlags(fs_row.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
+                top.addChild(fs_row)
+                for f in flash["files"]:
+                    it = QTreeWidgetItem([f["name"], fw.human_size(f["size"]), f["note"]])
+                    if f["tickable"]:
+                        it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                        it.setCheckState(0, Qt.CheckState.Checked if f["ticked"] else Qt.CheckState.Unchecked)
+                    else:                                  # the running image and the boot statement's files: never
+                        it.setFlags(it.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
+                    it.setData(0, self.ITEM, (r["key"], (flash["fs"], f["name"]), f["size"]))
+                    fs_row.addChild(it)
+                    self.items[(r["key"], (flash["fs"], f["name"]))] = it
+                fs_row.setExpanded(True)
+            top.setExpanded(True)
+        self.tree.blockSignals(False)
+        self._sync()
+
+    def chosen(self):
+        """[(result, {'install': bool, 'files': [(fs, name, size)]})] for the devices with something ticked, in page order."""
+        out = []
+        for r in self.results:
+            pick = {"install": False, "files": []}
+            for (key, item), it in self.items.items():
+                if key != r["key"] or not (it.flags() & Qt.ItemFlag.ItemIsUserCheckable) or it.checkState(0) != Qt.CheckState.Checked:
+                    continue
+                if item == "install":
+                    pick["install"] = True
+                else:
+                    pick["files"].append((item[0], item[1], it.data(0, self.ITEM)[2]))
+            if pick["install"] or pick["files"]:
+                out.append((r, pick))
+        return out
+
+    def confirm(self, title, body):
+        """The one question before anything is deleted (the tests answer it)."""
+        from PySide6.QtWidgets import QMessageBox
+        box = QMessageBox(QMessageBox.Icon.Warning, title, body, parent=self)
+        yes = box.addButton("Delete", QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        box.exec()
+        return box.clickedButton() is yes
+
+    def start(self):
+        work = self.chosen()
+        if not work or self.running() or not self.confirm(*fw.confirm_text(work)):
+            return
+        for r, pick in work:                               # what was not confirmed can no longer be ticked
+            for item in (["install"] if pick["install"] else []) + [(fs, n) for fs, n, _s in pick["files"]]:
+                it = self.items[(r["key"], item)]
+                it.setFlags(it.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
+        self.job = CleanupJob(work, self.src_password)
+        self.job.item.connect(self._status)
+        self.job.finished.connect(self._done)
+        self.job.start()
+        self._sync()
+
+    def _status(self, key, item, status):
+        it = self.items.get((key, item if item == "install" else tuple(item)))
+        if it is not None:
+            it.setText(2, status)
+            if status == "Deleted":
+                it.setData(0, Qt.ItemDataRole.CheckStateRole, None)
+
+    def _done(self):
+        for r in self.results:                             # the free space read again after the deletions
+            top = next((self.tree.topLevelItem(i) for i in range(self.tree.topLevelItemCount())
+                        if self.tree.topLevelItem(i).text(0).startswith(db.label_org(r["key"]) + " (")), None)
+            if top is None:
+                continue
+            rows = [top.child(i) for i in range(top.childCount()) if top.child(i).data(0, self.ITEM) is None]
+            for row, flash in zip(rows, r["flashes"]):
+                row.setText(0, fw.space_line(flash["fs"], flash["free"], flash["total"]))
+        self._sync()
+
+    def running(self):
+        return self.job is not None and self.job.isRunning()
+
+    def _sync(self):
+        self.delete.setEnabled(not self.running() and bool(self.chosen()))
+        self.changed.emit()
+
+    def ready(self):
+        return not self.running()
+
+    def shutdown(self):
+        if self.running():
+            self.job.wait(120000)
+
+
 # =============================================================================== the page
 class FirmwareTab(QWidget):
     def __init__(self, servers=lambda: {}):
@@ -499,6 +659,7 @@ class FirmwareTab(QWidget):
         self.devices = DevicesStep()
         self.server = ServerStep(servers)
         self.check = CheckStep()
+        self.cleanup = CleanupStep()
         self.stack = QStackedWidget()
         for step in self.steps():
             self.stack.addWidget(step)
@@ -522,7 +683,7 @@ class FirmwareTab(QWidget):
 
     def steps(self):
         """The steps built so far, in order."""
-        return [self.devices, self.server, self.check]
+        return [self.devices, self.server, self.check, self.cleanup]
 
     @staticmethod
     def blocked():
@@ -555,6 +716,9 @@ class FirmwareTab(QWidget):
         if index == 2 and forward:                        # coming from the Image server: read the devices again
             src, _files, vrf = self.server.chosen()
             self.check.start(self.devices.chosen(), src, vrf)
+        if index == 3 and forward:
+            src, _files, _vrf = self.server.chosen()
+            self.cleanup.load(self.check.ready_results(), src.get("password") or "")
         self._sync()
 
     def _sync(self, *_):
@@ -573,8 +737,9 @@ class FirmwareTab(QWidget):
         self.next.setEnabled(i + 1 < len(self.steps()) and step.ready() and not busy)
 
     def running(self):
-        return self.server.busy() or self.check.running()
+        return self.server.busy() or self.check.running() or self.cleanup.running()
 
     def shutdown(self):
         self.server.shutdown()
         self.check.shutdown()
+        self.cleanup.shutdown()

@@ -414,6 +414,92 @@ fakes["noping"].reach = {}
 page.next.click(); pump(lambda: sv.ready()); page.next.click(); pump(lambda: not ck.running(), 1500)
 check("when every device is held back, the step is not ready and Next stays off", ck.progress.text() == "2 devices: 0 ready, 2 held back." and not ck.ready()
       and not page.next.isEnabled(), ck.progress.text())
+
+# ================================================================ step 4: Clean up
+from core import audit
+print("== what is offered for deleting")
+r_ios, r_asa = R["ios1"], R["asa1"]
+notes = {f["name"]: (f["note"], f["tickable"], f["ticked"]) for f in FW.cleanup_plan(r_ios)["flashes"][0]["files"]}
+check("IOS: an old image is ticked; the running image cannot be ticked; other files are left unticked", notes ==
+      {"c2960x-old.bin": ("old image", True, True), "c2960x-universalk9-mz.152-7.E9.bin": ("running image", False, False), "config.text": ("", True, False)}, notes)
+notes = {f["name"]: f["note"] for f in FW.cleanup_plan(r_asa)["flashes"][0]["files"]}
+check("ASA: ASDM is kept unless ticked", notes == {"asa9-12-4-smp-k8.bin": "old image", "asa9-16-4-smp-k8.bin": "running image", "asdm-7181.bin": "ASDM image"}, notes)
+check("a file in the boot statement that is not running cannot be ticked either", FW.file_note({**r_ios, "boot": ["next.bin"]}, "next.bin") == ("in boot statement", False, False))
+check("IOS XE in INSTALL mode: install remove inactive, no file list", FW.cleanup_plan(R["stack1"]) == {"install": True, "flashes": []})
+check("a stack in BUNDLE mode lists every member's flash", [f["fs"] for f in FW.cleanup_plan({**R["stack1"], "mode": "BUNDLE"})["flashes"]] == ["flash:", "flash-2:", "flash-3:"])
+check("each platform's delete that asks nothing", [FW.delete_command(p, FW.MAIN_FS[p], "x.bin") for p in FW.PLATFORMS] ==
+      ["delete /force flash:x.bin", "delete /force flash:x.bin", "delete bootflash:x.bin no-prompt", "delete /noconfirm disk0:/x.bin"])
+check("the free space line", FW.space_line("flash:", int(1.2 * G), 11 * G) == "flash: 1.2 GB free of 11.0 GB")
+
+print("== the Clean up step")
+fakes["stack1"].install_files = ["cat9k-rpbase.17.03.04.SPA.pkg"]
+fakes["stack1"].fs["flash:"].files["cat9k-rpbase.17.03.04.SPA.pkg"] = [400000000, ""]
+fakes["noping"].reach = OK_REACH
+page.back.click(); page.back.click(); page.devices.untick_all.click(); tick("ios1", "stack1", "bundle1", "nx1", "asa1")
+page.next.click(); pump(lambda: sv.ready()); page.next.click(); pump(lambda: not ck.running(), 1500)
+check("Next leads on from Check devices", ck.ready() and page.next.isEnabled())
+before = {n: {fs: dict(f.files) for fs, f in fakes[n].fs.items()} for n in fakes}
+page.next.click()
+cu = page.cleanup
+check("Step 4 of 6: Clean up, with the agreed words", page.step_line.text() == "Step 4 of 6: Clean up" and cu.intro.text().startswith("Make room for the new image. Ticked files are deleted when you click Delete ticked files and confirm.")
+      and cu.notice.text() == "Nothing is deleted until you confirm." and cu.delete.text() == "Delete ticked files")
+def top_item(name): return next(cu.tree.topLevelItem(i) for i in range(cu.tree.topLevelItemCount()) if cu.tree.topLevelItem(i).text(0).startswith(name + " ("))
+def file_item(dev, name):
+    t = top_item(dev)
+    for i in range(t.childCount()):
+        fsrow = t.child(i)
+        for j in range(fsrow.childCount()):
+            if fsrow.child(j).text(0) == name: return fsrow.child(j)
+t = top_item("ios1")
+check("one row per device with its address; its flash with free and total space; its files under it", t.text(0) == "ios1 (127.0.0.1)"
+      and t.child(0).text(0) == FW.space_line("flash:", 122185728 - 51004000, 122185728) and t.child(0).childCount() == 3)
+check("the running image has no tick box", not (file_item("ios1", "c2960x-universalk9-mz.152-7.E9.bin").flags() & Qt.ItemFlag.ItemIsUserCheckable)
+      and file_item("ios1", "c2960x-universalk9-mz.152-7.E9.bin").text(2) == "running image")
+check("the old image is pre-ticked, with its size and note", file_item("ios1", "c2960x-old.bin").checkState(0) == Qt.CheckState.Checked
+      and file_item("ios1", "c2960x-old.bin").text(1) == FW.human_size(25000000) and file_item("ios1", "c2960x-old.bin").text(2) == "old image")
+check("IOS XE INSTALL: one ticked row to run install remove inactive", top_item("stack1").childCount() == 1 and top_item("stack1").child(0).text(0) == "Run install remove inactive"
+      and top_item("stack1").child(0).checkState(0) == Qt.CheckState.Checked)
+file_item("bundle1", "cat9k_iosxe.17.03.04.SPA.bin").setCheckState(0, Qt.CheckState.Unchecked)     # the technician keeps one
+fakes["nx1"].protect = {"nxos.9.3.8.bin"}                                                          # and the switch refuses one
+asked = []
+cu.confirm = lambda title, body: (asked.append((title, body)), False)[1]
+cu.delete.click()
+check("Cancel: nothing at all is deleted on any device", asked and {n: {fs: dict(f.files) for fs, f in fakes[n].fs.items()} for n in fakes} == before
+      and not any(l.startswith(("delete", "install remove")) for f in fakes.values() for l in f.commands))
+title, body = asked[0]
+check("the one confirmation names the number of devices", title == "Delete files on 4 devices?", title)
+check("...and lists every file on every device, with sizes, and the install remove, in the page's order", body == (
+      "asa1 (127.0.0.1)\n    disk0:/asa9-12-4-smp-k8.bin  " + FW.human_size(110000000) + "\n"
+      "ios1 (127.0.0.1)\n    flash:c2960x-old.bin  " + FW.human_size(25000000) + "\n"
+      "nx1 (127.0.0.1)\n    bootflash:nxos.9.3.8.bin  " + FW.human_size(1600000000) + "\n"
+      "stack1 (127.0.0.1)\n    install remove inactive\n\n"
+      "These files are deleted now and cannot be recovered. The running image and the files in the boot statement are not touched. Nothing is reloaded."), body)
+check("a device with nothing ticked is not in it", "bundle1" not in body)
+cu.confirm = lambda title, body: True
+cu.delete.click()
+check("Delete: Back, Next and Start over wait while it runs", cu.running() and not page.next.isEnabled() and not page.back.isEnabled() and not page.restart.isEnabled())
+pump(lambda: not cu.running(), 1500)
+check("each platform's own delete was sent", "delete /force flash:c2960x-old.bin" in fakes["ios1"].commands and "delete bootflash:nxos.9.3.8.bin no-prompt" in fakes["nx1"].commands
+      and "delete /noconfirm disk0:/asa9-12-4-smp-k8.bin" in fakes["asa1"].commands)
+check("the ticked files are gone, everything else is still there", "c2960x-old.bin" not in fakes["ios1"].fs["flash:"].files and "asa9-12-4-smp-k8.bin" not in fakes["asa1"].fs["disk0:"].files
+      and {"c2960x-universalk9-mz.152-7.E9.bin", "config.text"} <= set(fakes["ios1"].fs["flash:"].files) and "asdm-7181.bin" in fakes["asa1"].fs["disk0:"].files
+      and "cat9k_iosxe.17.03.04.SPA.bin" in fakes["bundle1"].fs["flash:"].files and not any(l.startswith("delete") for l in fakes["bundle1"].commands))
+check("install remove inactive ran and its question was answered y", "install remove inactive" in fakes["stack1"].commands
+      and fakes["stack1"].commands[fakes["stack1"].commands.index("install remove inactive") + 1] == "y" and "cat9k-rpbase.17.03.04.SPA.pkg" not in fakes["stack1"].fs["flash:"].files)
+check("each row says what happened", file_item("ios1", "c2960x-old.bin").text(2) == "Deleted" and top_item("stack1").child(0).text(2) == "Deleted"
+      and file_item("nx1", "nxos.9.3.8.bin").text(2) == "Failed: %Error deleting bootflash:nxos.9.3.8.bin (Permission denied)", file_item("nx1", "nxos.9.3.8.bin").text(2))
+check("the free space is read again", top_item("ios1").child(0).text(0) == FW.space_line("flash:", 122185728 - 26004000, 122185728), top_item("ios1").child(0).text(0))
+check("...and the next step works from it", R["ios1"]["flashes"][0]["free"] == 122185728 - 51004000 and
+      next(r for r in page.check.ready_results() if r["name"] == "ios1")["flashes"][0]["free"] == 122185728 - 26004000)
+rows = audit.recent()
+check("one audit line per deletion, per device", any(a["action"] == "firmware delete" and a["detail"] == f"ios1: flash:c2960x-old.bin ({FW.human_size(25000000)})" for a in rows)
+      and any(a["action"] == "firmware delete" and a["detail"] == f"asa1: disk0:/asa9-12-4-smp-k8.bin ({FW.human_size(110000000)})" for a in rows)
+      and any(a["action"] == "firmware install remove inactive" and a["detail"] == "stack1: done" for a in rows)
+      and any(a["action"] == "firmware failed" and a["detail"].startswith("nx1: delete bootflash:nxos.9.3.8.bin: %Error") for a in rows), [(a["action"], a["detail"]) for a in rows[:8]])
+check("a deleted file's row has no tick box any more; Delete waits for a new tick", not file_item("ios1", "c2960x-old.bin").data(0, Qt.ItemDataRole.CheckStateRole)
+      and not cu.delete.isEnabled())
+check("Next works whether or not anything was deleted", cu.ready() and page.back.isEnabled())
+check("no device was reloaded or had anything activated", not any("reload" in l or l.startswith(("install activate", "install commit")) for f in fakes.values() for l in f.commands))
 page.shutdown()
 for f in fakes.values(): f.stop()
 for s in (ftp, sftp_srv, own_ftp, own_tftp): s.stop()
