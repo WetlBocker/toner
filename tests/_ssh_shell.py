@@ -8,11 +8,13 @@ import paramiko
 
 
 class ShellServer:
-    def __init__(self, user="u", password="pw", banner="Welcome to R1\r\n", prompt="router# ", sftp_root=None):
+    def __init__(self, user="u", password="pw", banner="Welcome to R1\r\n", prompt="router# ", sftp_root=None, exec_handler=None):
         """sftp_root: a folder on this computer served as the device's file system over SFTP (None: no SFTP subsystem, as on
-        a switch). self.slow: seconds to sleep per SFTP write, so a transfer takes long enough to be cancelled."""
+        a switch). self.slow: seconds to sleep per SFTP write, so a transfer takes long enough to be cancelled.
+        exec_handler(command) -> (output bytes, exit status): answers a one-off command (SSH exec); None refuses them."""
         self.user, self.password, self.banner, self.prompt = user, password, banner, prompt
-        self.sftp_root, self.slow = sftp_root, 0.0
+        self.sftp_root, self.slow, self.exec_handler = sftp_root, 0.0, exec_handler
+        self.execs = []
         self.key = paramiko.RSAKey.generate(2048)
         self.lines, self.sizes, self.logins = [], [], []
         self.sock = socket.socket()
@@ -49,6 +51,24 @@ class ShellServer:
 
             def check_channel_window_change_request(self, ch, w, h, pw, ph):
                 srv.sizes.append((w, h))
+                return True
+
+            def check_channel_exec_request(self, ch, command):
+                if srv.exec_handler is None:
+                    return False
+                cmd = command.decode("utf-8", "replace") if isinstance(command, bytes) else command
+                srv.execs.append(cmd)
+
+                def answer():
+                    time.sleep(0.05)                      # (after the exec request is confirmed)
+                    out, status = srv.exec_handler(cmd)
+                    try:
+                        ch.sendall(out)
+                        ch.send_exit_status(status)
+                        ch.close()
+                    except Exception:
+                        pass
+                threading.Thread(target=answer, daemon=True).start()
                 return True
 
             def check_channel_shell_request(self, ch):

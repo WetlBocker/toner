@@ -29,6 +29,7 @@ def known_names():
         with db.within(org):
             names |= _names_here()
             names.add(db.qualify("service:agent-enroll"))       # each organization has its own agent sign-up key
+            names.add(db.qualify("firmware-source"))            # ...and its own Firmware Transfer image server login
     return sorted(names)
 
 
