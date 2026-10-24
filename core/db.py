@@ -127,6 +127,8 @@ DEFAULT_SETTINGS = {
     "install_uid": "", "demarc": {"address": "", "pin": "", "trusted": False, "enabled": False, "history": "all"},
     # Tools > API Tester (see core/apitool.py): how many sent requests History keeps
     "api_history_keep": 100,
+    # Tools > Firmware Transfer (see core/firmware.py): the image server remembered for the organization (its password is in the vault)
+    "firmware_source": {},
 }
 # Per-machine state that must not travel in an exported settings file (channel secrets stay in
 # the vault, so an imported channel would be broken).
@@ -971,7 +973,7 @@ GLOBAL_ONLY = {"window_geometry", "splitters", "sidebar_collapsed", "sessions_li
                "vault_provider", "vault_config", "vault_direct", "update_direct", "vault_keep_copies", "install_uid", "demarc"}
 # (agent sign-up, its interval and whether installed agents are told it are each organization's own: Settings > Agents)
 # ...and these belong to one organization's own lists, so an organization never borrows Global's:
-ORG_LOCAL = {"acks", "inventory_expanded", "sessions_expanded", "client_scope", "trend_last", "notify_snooze_until"}
+ORG_LOCAL = {"acks", "inventory_expanded", "sessions_expanded", "client_scope", "trend_last", "notify_snooze_until", "firmware_source"}
 
 _settings = {}                      # file -> (read at, {key: raw json})
 _settings_lock = threading.Lock()

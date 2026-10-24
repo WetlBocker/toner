@@ -23,7 +23,8 @@ A Windows desktop tool for checking, documenting and troubleshooting a multi-ven
   - [API Tester](#api-tester)
   - [OpenSSL](#openssl)
   - [SSH keys](#ssh-keys)
-  - [File servers (TFTP and SFTP)](#file-servers-tftp-and-sftp)
+  - [File servers (TFTP, SFTP / SCP and FTP)](#file-servers-tftp-sftp--scp-and-ftp)
+  - [Firmware Transfer (Cisco)](#firmware-transfer-cisco)
   - [SCP and xcopy](#scp-and-xcopy)
   - [iperf3](#iperf3)
 - [Automation (Ansible)](#automation-ansible)
@@ -127,7 +128,7 @@ and **Run checks** act on the devices shown (all of them when nothing is typed o
 | **Configs** | Backs up configurations (see below), keeps only versions that differ, shows diffs and searches every stored configuration. Passwords and keys are masked in stored copies by default. |
 | **History** | Charts any checks over time; hover for values. Checks on very different scales get their own chart. Uptime shows restarts. |
 | **Reports** | CSV, HTML and PDF. The **Trend report** (7, 30 or 90 days) compares with the period before: availability, worst offenders, repeat failures, what is still wrong, configuration changes, busiest CPUs and growing disks. Settings > Reports can make one every week or month. |
-| **Tools** | Command runner (the same commands on many devices, read-only by default: Cisco, Juniper, Arista, HPE and MikroTik by SSH, Windows computers by PowerShell, Fortinet and Palo Alto firewalls by SSH with a login set on the device), ping, traceroute, DNS, live ping graph, path monitor (MTR), port scanner, TLS certificate checker, subnet calculator, device discovery, LLDP / CDP topology map, SNMP (v1, v2c, v3), syslog and trap receivers, MAC lookup, Wake-on-LAN, Wi-Fi scanner, file servers, SCP and xcopy, OpenSSL, SSH keys, iperf3, an **API Tester** (a small Postman), and the Ansible **Playbook Editor**. |
+| **Tools** | Command runner (the same commands on many devices, read-only by default: Cisco, Juniper, Arista, HPE and MikroTik by SSH, Windows computers by PowerShell, Fortinet and Palo Alto firewalls by SSH with a login set on the device), ping, traceroute, DNS, live ping graph, path monitor (MTR), port scanner, TLS certificate checker, subnet calculator, device discovery, LLDP / CDP topology map, SNMP (v1, v2c, v3), syslog and trap receivers, MAC lookup, Wake-on-LAN, Wi-Fi scanner, file servers (TFTP, SFTP / SCP, FTP), a Cisco **Firmware Transfer** (a new image onto many IOS, IOS XE, NX-OS and ASA devices, MD5-checked, never reloaded), SCP and xcopy, OpenSSL, SSH keys, iperf3, an **API Tester** (a small Postman), and the Ansible **Playbook Editor**. |
 | **Sessions** | Saved connections in a folder tree (drag, rename, search, duplicate): SSH, Telnet and Serial open in tabs inside Toner, follow Settings > Terminal, and are logged. An SSH session can keep its password in the vault or use an inventory device's login, jump host and proxy. Serial has a Send break button for ROMMON. Open sessions can be shown side by side in an equal grid (Split view), popped out into their own window, or typed into all at once (Type in all sessions, with a Leave out tick on any session that should not get it); the session list can be hidden to give the terminals the whole width. An SSH session has a Files panel: this computer on one side, the device on the other (SFTP over the same login), with drag and drop, Upload and Download buttons, progress and Cancel. **Remote Desktop** runs inside a Toner tab, using the Remote Desktop control Windows ships (the one `mstsc.exe` is built on): Windows asks for the password and Toner never stores it. Fill the window or use a fixed size; clipboard, drives, printers, the console session and a gateway are options. Settings > Terminal can send it to Windows' own window instead. **Sessions from other programs:** Inventory > More > Import... also reads a MobaXterm export (`.mobaconf`), a PuTTY export (`.reg`) and SecureCRT (its `.xml` export, or any `.ini` in its Sessions folder); More > Import PuTTY sessions on this computer reads PuTTY's own list. They become sessions (not devices), in the same folders (for MobaXterm the root every bookmark shares, such as `My Sessions`, is left out); one already there is skipped. A MobaXterm "Stored Passwords" export adds the SSH passwords to the vault (importing it again fills in sessions that have none). Browser, VNC, FTP and other kinds Toner does not open are counted and skipped. |
 | **Automation** | Runs **Ansible** playbooks on Inventory devices: pick a playbook and devices, check first (nothing changes), then run for real after a confirmation naming the playbook and devices. Output streams live, with a recap per device and a history. See [Automation (Ansible)](#automation-ansible). More will be added here. |
 | **Settings** | Thresholds (overrides per vendor, folder, tag or device), which checks run and when (Checks has tabs for the list, the schedule and your own checks), timeouts, config backups, notifications (email, Teams, Slack, Discord, ntfy, webhook, desktop), credential profiles, proxy, agents, maintenance, appearance, terminal, reports, security (host keys, and older SSH algorithms: ssh-rsa and SHA-1 key exchange for devices such as older Cisco ASAs that offer nothing newer, tried last and on unless turned off), audit log, data and logs. Pages with unsaved edits are marked, and Save and Revert list exactly what changes. |
@@ -382,21 +383,56 @@ Toner saves each device's SSH host key the first time it connects and refuses a 
 answers on another device's address can't collect Toner's passwords. Settings > Security lists the saved keys. Choose **Reject
 unknown hosts** to only accept devices whose key was saved from the console first.
 
-### File servers (TFTP and SFTP)
+### File servers (TFTP, SFTP / SCP and FTP)
 
 Each serves one folder you choose, nothing outside it, and is off until you start it. Read-only until you tick "Allow uploads";
 replacing or deleting needs a second tick; you can limit them to named devices; they stop after a time you set. Every transfer is
 listed, and starts, stops, uploads, deletions, refusals and logins go to the audit log. TFTP has no passwords by design, so name
 the devices in "Allowed clients" whenever uploads are on. SFTP needs a user name and password (in the vault), has no
-shell, shows its fingerprint and locks an address out for five minutes after five wrong passwords. Whole drives and system folders
-are refused.
+shell, shows its fingerprint and locks an address out for five minutes after five wrong passwords; the same server also answers
+SCP (`copy scp://user:password@host/image.bin flash:`), for devices such as Cisco IOS and ASA that have an SCP client but no SFTP
+client. FTP needs a user name and password too, sends them in clear text as FTP always does, serves both active and passive
+mode (Cisco IOS uses active mode unless `ip ftp passive` is set) with a passive port range you choose, and is the fastest way to
+get a large image onto a device. Whole drives and system folders are refused.
+
+### Firmware Transfer (Cisco)
+
+Tools > File transfer > **Firmware Transfer** puts a new software image on Cisco IOS, IOS XE (INSTALL or BUNDLE mode, standalone
+or stacked), NX-OS and ASA devices, inside one organization (pick it in the sidebar first). It works in six steps:
+
+1. **Devices**: tick the Cisco devices. Other vendors' devices are listed, greyed, with the reason.
+2. **Image server**: where the images are. One of Toner's own file servers that is running (FTP, SFTP, SCP on the SFTP / SCP
+   server, or TFTP) at the address the devices see, or another FTP, SFTP or SCP server, whose login can be remembered for the
+   organization (the password in the vault). *Test and list files* lists the folder, and that list is what you pick from. Each
+   device pulls its image itself, so the server must be reachable from the devices, not only from this computer.
+3. **Check devices**: Toner signs in to each device the way the checks do (its login and credential profile, jump host and
+   proxy, the host key checked per Settings > Security), up to 8 at once, and reads the version, the install mode, the free
+   space on every flash (every stack member's) and the boot statement, then checks from the device itself that the server
+   answers: ping (through the VRF on NX-OS) and, on IOS and IOS XE, the port with the device's own telnet. Nothing is changed.
+   A device that cannot take part is held back with the reason, for example IOS and ASA, which have no SFTP client.
+4. **Clean up**: make room. IOS XE in INSTALL mode runs `install remove inactive`. Elsewhere each flash is listed with old
+   images pre-ticked; the running image and the files in the boot statement cannot be ticked. One confirmation lists every file
+   on every device before anything is deleted.
+5. **Images**: choose the image for each device and paste its MD5 from Cisco's download page. Toner does not go on without a
+   hash, and warns when an image will not fit on some member.
+6. **Transfer**: up to 4 devices at once. Each copies its image with a progress bar (a second session watches the file grow on
+   flash), checks the MD5 against the one you typed (a mismatch stops that device; the others go on), and copies it to every
+   stack member and checks it there. Then IOS XE in INSTALL mode runs `install add` only; IOS XE in BUNDLE mode and IOS get a new
+   boot statement and `write memory`; NX-OS gets `boot nxos` and `copy running-config startup-config`; ASA has its old
+   `boot system` line replaced and `write memory`. Each change is read back.
+
+**Toner never reloads, activates or commits anything**: do that in your maintenance window (`install activate` and
+`install commit` on IOS XE in INSTALL mode; a reload elsewhere). Stop lets devices that are copying finish their copy and changes
+nothing else on them. Passwords in copy URLs are masked on screen, in the audit log and in the session logs
+(`firmware-<device>.log` in the SSH logs folder). Every deletion, `install remove inactive`, copy, `install add` and boot change
+has its own audit line.
 
 ### SCP and xcopy
 
 Tools > File transfer. **SCP** copies files and folders to or from a device over SSH using its saved login, jump host and proxy
 (the device must allow it; Cisco IOS: `ip scp server enable` and a privilege-15 user). Names a device sends are checked so nothing
 is written outside your folder, and Stop leaves no half-written files. **xcopy** runs Windows xcopy between this computer and a
-network share, for example to move what the TFTP and SFTP servers received. Preview shows what would be copied, and overwriting
+network share, for example to move what the TFTP, SFTP and FTP servers received. Preview shows what would be copied, and overwriting
 asks first.
 
 ### iperf3

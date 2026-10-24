@@ -18,7 +18,8 @@ from core import db, notify, profiles, sessions
 MAGIC = b"TONERVAULT1"
 EXTENSION = ".tonervault"
 MIN_PASSWORD = 8
-SERVICE_NAMES = ("service:proxy", "service:proxy-otp", "service:ssh-tunnel", "service:ssh-tunnel-otp", "service:sftp-server", "service:agent-enroll", "service:ansible-server")
+SERVICE_NAMES = ("service:proxy", "service:proxy-otp", "service:ssh-tunnel", "service:ssh-tunnel-otp", "service:sftp-server", "service:ftp-server",
+                 "service:agent-enroll", "service:ansible-server")
 
 
 def known_names():
@@ -28,6 +29,7 @@ def known_names():
         with db.within(org):
             names |= _names_here()
             names.add(db.qualify("service:agent-enroll"))       # each organization has its own agent sign-up key
+            names.add(db.qualify("firmware-source"))            # ...and its own Firmware Transfer image server login
     return sorted(names)
 
 

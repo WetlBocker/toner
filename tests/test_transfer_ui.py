@@ -49,7 +49,8 @@ STORE[("netcheck", "branch-sw")] = "pw"
 print("== the tools are in the File transfer section")
 tools = T.ToolsTab(); tools.resize(1200, 800); tools.show()
 names = [tools.tabs.tabText(i) for i in range(tools.tabs.count())]
-check("four tools, in order, after the heading", names[names.index("TFTP Server"):names.index("TFTP Server") + 4] == ["TFTP Server", "SFTP Server", "SCP", "Copy Files (xcopy)"], names)
+check("five tools, in order, after the heading", names[names.index("TFTP Server"):names.index("TFTP Server") + 5]
+      == ["TFTP Server", "SFTP / SCP Server", "FTP Server", "SCP", "Copy Files (xcopy)" if sys.platform == "win32" else "Copy Files (rsync)"], names)
 check("the SCP page picks up devices like the other tools do", tools.scp in tools._pickers)
 
 print("== SCP page")
