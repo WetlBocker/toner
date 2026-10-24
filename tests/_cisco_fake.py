@@ -260,15 +260,17 @@ class CiscoFake(ShellServer):
 
     def dir(self, path):
         fs, rest = self.split(path)
-        if fs is None or rest:
+        if fs is None or (rest and rest not in fs.files):
             return f"%Error opening {path} (No such file or directory)\n"
+        with self.lock:
+            files = {rest: list(fs.files[rest])} if rest else {n: list(v) for n, v in fs.files.items()}   # `dir flash:x.bin`: that file only
         if self.platform == "cisco_nxos":
             out = ""
-            for name, (size, _m) in sorted(fs.files.items()):
+            for name, (size, _m) in sorted(files.items()):
                 out += f"{size:>12}    Oct 22 10:00:00 2026  {name}\n"
             return out + (f"\nUsage for {fs.name}//sup-local\n {fs.used()} bytes used\n {fs.free()} bytes free\n {fs.total} bytes total\n")
         out = f"\nDirectory of {fs.name}/\n\n"
-        for i, (name, (size, _m)) in enumerate(sorted(fs.files.items()), 2):
+        for i, (name, (size, _m)) in enumerate(sorted(files.items()), 2):
             if self.platform == "cisco_asa":
                 out += f"{i:<6} -rwx  {size:<10} 10:00:00 Oct 22 2026  {name}\n"
             else:

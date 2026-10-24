@@ -5,7 +5,7 @@ import threading
 from PySide6.QtCore import QThread, Qt, Signal
 from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-                               QPushButton, QRadioButton, QSpinBox, QStackedWidget, QTableWidgetItem, QTreeWidget, QTreeWidgetItem,
+                               QMessageBox, QProgressBar, QPushButton, QRadioButton, QSpinBox, QStackedWidget, QTableWidgetItem, QTreeWidget, QTreeWidgetItem,
                                QVBoxLayout, QWidget)
 
 from core import db, firmware as fw
@@ -648,6 +648,223 @@ class CleanupStep(QWidget):
             self.job.wait(120000)
 
 
+# =============================================================================== step 5: Images
+class ImagesStep(QWidget):
+    changed = Signal()
+    COLS = ["Device", "Version", "Mode", "Free space", "Reaches server", "Image", "MD5", "Fits"]
+    SKIP = "(skip this device)"
+
+    def __init__(self):
+        super().__init__()
+        self.results, self.files = [], []
+        self.intro = _muted("Choose the image for each device and type or paste its MD5 from Cisco's download page. Toner checks the hash on "
+                            "the device after the copy and stops that device if it differs.")
+        self.table = _table(self.COLS)
+        self.same = QPushButton("Use for all devices")
+        self.problems = QLabel()
+        self.problems.setWordWrap(True)
+        self.problems.setTextFormat(Qt.TextFormat.PlainText)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(self.intro)
+        lay.addWidget(self.table, 1)
+        lay.addLayout(_row(self.same))
+        lay.addWidget(self.problems)
+        self.same.clicked.connect(self.use_for_all)
+        self.table.currentCellChanged.connect(lambda *_: self._same_text())
+
+    def load(self, results, files):
+        """The devices that came through Check devices (and Clean up), and the files on the server. Choices already made are kept."""
+        keep = {r["key"]: (f["name"] if f else None, typed) for r, f, typed in self.rows()}
+        self.results, self.files = list(results), list(files)
+        self.table.setRowCount(0)
+        for r in self.results:
+            row = self.table.rowCount()
+            self.table.insertRow(row)
+            for col, text in enumerate((db.label_org(r["key"]), r["version"], r["mode"] or "–", fw.free_text(r), "Yes")):
+                self.table.setItem(row, col, QTableWidgetItem(text))
+            pick = QComboBox()
+            pick.addItem(self.SKIP, None)
+            for f in self.files:
+                pick.addItem(f["name"], f["name"])
+            md5 = QLineEdit()
+            name, typed = keep.get(r["key"], (None, ""))
+            if name and pick.findData(name) >= 0:
+                pick.setCurrentIndex(pick.findData(name))
+            md5.setText(typed or "")
+            self.table.setCellWidget(row, 5, pick)
+            self.table.setCellWidget(row, 6, md5)
+            self.table.setItem(row, 7, QTableWidgetItem(""))
+            pick.currentIndexChanged.connect(lambda *_: self._sync())
+            md5.textChanged.connect(lambda *_: self._sync())
+        self.table.resizeColumnsToContents()
+        if self.results:
+            self.table.setCurrentCell(0, 5)
+        self._sync()
+
+    def _file(self, name):
+        return next((f for f in self.files if f["name"] == name), None)
+
+    def rows(self):
+        """[(result, file dict or None, typed hash)] in table order."""
+        out = []
+        for row, r in enumerate(self.results):
+            pick, md5 = self.table.cellWidget(row, 5), self.table.cellWidget(row, 6)
+            if pick is None:
+                continue
+            out.append((r, self._file(pick.currentData()), md5.text()))
+        return out
+
+    def chosen(self):
+        """[(result, {'name', 'size', 'md5'})] for the devices with an image chosen."""
+        return [(r, {"name": f["name"], "size": f["size"], "md5": typed.strip()}) for r, f, typed in self.rows() if f is not None]
+
+    def use_for_all(self):
+        row = self.table.currentRow()
+        if not (0 <= row < len(self.results)):
+            return
+        plat = self.results[row]["platform"]
+        name, typed = self.table.cellWidget(row, 5).currentData(), self.table.cellWidget(row, 6).text()
+        for other, r in enumerate(self.results):
+            if other != row and r["platform"] == plat:
+                pick = self.table.cellWidget(other, 5)
+                pick.setCurrentIndex(max(0, pick.findData(name)))
+                self.table.cellWidget(other, 6).setText(typed)
+        self._sync()
+
+    def _same_text(self):
+        row = self.table.currentRow()
+        plat = self.results[row]["platform"] if 0 <= row < len(self.results) else ""
+        self.same.setText(f"Use for all {fw.PLATFORM_NAMES[plat]} devices" if plat else "Use for all devices")
+        self.same.setEnabled(bool(plat))
+
+    def _sync(self):
+        for row, (r, f, _typed) in enumerate(self.rows()):
+            self.table.item(row, 7).setText("" if f is None else ("No" if fw.room_for(r, f["name"], f["size"]) else "Yes"))
+        self.problems.setText("\n".join(text for text, _blocks in fw.image_problems(self.rows())))
+        self._same_text()
+        self.changed.emit()
+
+    def ready(self):
+        return bool(self.results) and not any(blocks for _t, blocks in fw.image_problems(self.rows()))
+
+
+# =============================================================================== step 6: Transfer
+class TransferJob(QThread):
+    """Copies to every chosen device, up to 4 at once (bandwidth), reporting each step as it goes."""
+    step = Signal(str, str, object, str)                     # device key, step, (done, total) or None, detail
+
+    def __init__(self, work, src, vrf, then=None):
+        super().__init__()
+        self.work, self.src, self.vrf, self.then = work, src, vrf, then
+        self.cancel = threading.Event()
+        self.outcomes = {}
+
+    def run(self):
+        from concurrent.futures import ThreadPoolExecutor
+
+        def one(job):
+            r, choice = job
+            with db.within(r["dev"].get("org")):
+                then = self.then(r) if self.then else None
+                self.outcomes[r["key"]] = fw.transfer(r["dev"], r, choice, self.src, self.vrf, cancel=self.cancel, then=then,
+                                                      on_step=lambda s, p, d, key=r["key"]: self.step.emit(key, s, p, d))
+        with ThreadPoolExecutor(max_workers=max(1, min(fw.TRANSFER_WORKERS, len(self.work)))) as pool:
+            list(pool.map(one, self.work))
+
+
+class TransferStep(QWidget):
+    changed = Signal()
+    COLS = ["Device", "Step", "Progress", "Detail"]
+
+    def __init__(self):
+        super().__init__()
+        self.job, self.rows, self.bars, self.work = None, {}, {}, []
+        self.table = _table(self.COLS)
+        self.stop = QPushButton("Stop")
+        self.status = _muted("")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(self.table, 1)
+        bar = QHBoxLayout()
+        bar.addWidget(self.status, 1)
+        bar.addWidget(self.stop)
+        lay.addLayout(bar)
+        self.stop.clicked.connect(self.halt)
+
+    def start(self, work, src, vrf, then=None):
+        """work: [(result, {'name', 'size', 'md5'})]. then(result): the step after a verified copy on that device, or None."""
+        self.work, self.rows, self.bars = list(work), {}, {}
+        self.table.setRowCount(0)
+        self.status.setText("")
+        for r, _choice in self.work:
+            row = self.table.rowCount()
+            self.table.insertRow(row)
+            self.table.setItem(row, 0, QTableWidgetItem(db.label_org(r["key"])))
+            self.table.setItem(row, 1, QTableWidgetItem("Waiting"))
+            bar = QProgressBar()
+            bar.setRange(0, 1000)
+            bar.setValue(0)
+            bar.setFormat("")
+            self.table.setCellWidget(row, 2, bar)
+            self.table.setItem(row, 3, QTableWidgetItem(""))
+            self.rows[r["key"]], self.bars[r["key"]] = row, bar
+        self.table.resizeColumnToContents(0)
+        self.job = TransferJob(self.work, src, vrf, then)
+        self.job.step.connect(self._step)
+        self.job.finished.connect(self._done)
+        self.job.start()
+        self._sync()
+
+    def _step(self, key, step, progress, detail):
+        row = self.rows.get(key)
+        if row is None:
+            return
+        self.table.item(row, 1).setText(step)
+        if detail or step in ("Done", "Failed", "Stopped", "Not started (stopped)"):
+            self.table.item(row, 3).setText(detail)
+            self.table.item(row, 3).setToolTip(detail)
+        if progress is not None:
+            done, total = progress
+            bar = self.bars[key]
+            bar.setValue(int(done * 1000 / total) if total else 0)
+            pct = int(done * 100 / total) if total else 0
+            bar.setFormat(f"{pct} %  ({fw.human_size(done)} of {fw.human_size(total)})")
+
+    def halt(self):
+        if self.running():
+            self.job.cancel.set()
+            self.status.setText("Stopping: devices that are copying finish their copy; nothing else is changed on them.")
+            self._sync()
+
+    def outcomes(self):
+        return dict(self.job.outcomes) if self.job is not None else {}
+
+    def _done(self):
+        got = self.outcomes()
+        ok = sum(1 for o in got.values() if o["ok"])
+        failed = sum(1 for o in got.values() if not o["ok"] and not o["stopped"])
+        n = len(self.work)
+        line = f"Done: {ok} of {n} device{'s' if n != 1 else ''} {'has' if ok == 1 and n == 1 else 'have'} the new image, {failed} failed. Nothing was reloaded."
+        self.status.setText(line)
+        self._sync()
+
+    def running(self):
+        return self.job is not None and self.job.isRunning()
+
+    def _sync(self):
+        self.stop.setEnabled(self.running() and not self.job.cancel.is_set())
+        self.changed.emit()
+
+    def ready(self):
+        return False
+
+    def shutdown(self):
+        if self.running():
+            self.job.cancel.set()
+            self.job.wait(3600 * 1000)
+
+
 # =============================================================================== the page
 class FirmwareTab(QWidget):
     def __init__(self, servers=lambda: {}):
@@ -660,6 +877,8 @@ class FirmwareTab(QWidget):
         self.server = ServerStep(servers)
         self.check = CheckStep()
         self.cleanup = CleanupStep()
+        self.images = ImagesStep()
+        self.transfer = TransferStep()
         self.stack = QStackedWidget()
         for step in self.steps():
             self.stack.addWidget(step)
@@ -678,12 +897,12 @@ class FirmwareTab(QWidget):
             step.changed.connect(self._sync)
         self.restart.clicked.connect(self.start_over)
         self.back.clicked.connect(lambda: self.go(self.stack.currentIndex() - 1))
-        self.next.clicked.connect(lambda: self.go(self.stack.currentIndex() + 1))
+        self.next.clicked.connect(self.forward)
         self.refresh()
 
     def steps(self):
         """The steps built so far, in order."""
-        return [self.devices, self.server, self.check, self.cleanup]
+        return [self.devices, self.server, self.check, self.cleanup, self.images, self.transfer]
 
     @staticmethod
     def blocked():
@@ -706,6 +925,57 @@ class FirmwareTab(QWidget):
         self.server.load()
         self.go(0)
 
+    def forward(self):
+        """Next; from Images it is Transfer, asked first."""
+        i = self.stack.currentIndex()
+        if i == 4:
+            work = self.images.chosen()
+            src, _files, vrf = self.server.chosen()
+            if not work or not self.confirm_transfer(*fw.transfer_text(work, src)):
+                return
+            self.stack.setCurrentIndex(5)
+            self.transfer.start(work, src, vrf, then=self.after_copy)
+            self._sync()
+            return
+        self.go(i + 1)
+
+    def after_copy(self, r):
+        """What runs on a device once its image is copied and verified (slice 6: the boot statement or install add)."""
+        return None
+
+    def confirm_transfer(self, title, body):
+        """The question before copying (the tests answer it)."""
+        box = QMessageBox(QMessageBox.Icon.Question, title, body, parent=self)
+        yes = box.addButton("Transfer", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        box.exec()
+        return box.clickedButton() is yes
+
+    def transferring(self):
+        return self.transfer.running()
+
+    def stop_question(self):
+        """The question when Toner is closing while devices copy (the tests answer it). True for Stop."""
+        box = QMessageBox(QMessageBox.Icon.Question, "Firmware Transfer",
+                          "Stop the transfer? Devices that are copying finish their copy; nothing else is changed on them.", parent=self)
+        stop = box.addButton("Stop", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Keep going", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        return box.clickedButton() is stop
+
+    def ask_stop(self):
+        """Toner is closing while devices copy: stop (they finish their copy first) or keep going. True when it may close."""
+        if not self.stop_question():
+            return False
+        from PySide6.QtWidgets import QApplication
+        self.transfer.halt()
+        while self.transfer.running():                     # the copies end on their own; the window stays alive meanwhile
+            QApplication.processEvents()
+            self.transfer.job.wait(100)
+        QApplication.processEvents()                       # the devices' last reports, so every row says how it ended
+        return True
+
     def go(self, index):
         index = max(0, min(index, len(self.steps()) - 1))
         forward = index > self.stack.currentIndex()
@@ -719,6 +989,9 @@ class FirmwareTab(QWidget):
         if index == 3 and forward:
             src, _files, _vrf = self.server.chosen()
             self.cleanup.load(self.check.ready_results(), src.get("password") or "")
+        if index == 4 and forward:
+            _src, files, _vrf = self.server.chosen()
+            self.images.load(self.check.ready_results(), files)
         self._sync()
 
     def _sync(self, *_):
@@ -733,13 +1006,15 @@ class FirmwareTab(QWidget):
             b.setVisible(not blocked)
         busy = self.running()
         self.restart.setEnabled(not busy)
-        self.back.setEnabled(i > 0 and not busy)
+        self.back.setEnabled(0 < i < 5 and not busy)          # once copying has started there is no going back
+        self.next.setText("Transfer" if i == 4 else "Next")
         self.next.setEnabled(i + 1 < len(self.steps()) and step.ready() and not busy)
 
     def running(self):
-        return self.server.busy() or self.check.running() or self.cleanup.running()
+        return self.server.busy() or self.check.running() or self.cleanup.running() or self.transfer.running()
 
     def shutdown(self):
         self.server.shutdown()
         self.check.shutdown()
         self.cleanup.shutdown()
+        self.transfer.shutdown()

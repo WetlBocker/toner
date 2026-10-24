@@ -14,6 +14,7 @@ import os
 import re
 import socket
 import stat
+import threading
 import time
 from datetime import datetime
 
@@ -739,3 +740,232 @@ def cleanup(dev, r, pick, src_password="", on_item=None, opts=None):
     finally:
         save_log(dev, log, secrets)
     return free
+
+
+# ================================================================ step 5: Images
+MD5_RE = re.compile(r"^[0-9a-fA-F]{32}$")
+
+
+def free_text(r):
+    """'1.2 GB' for one flash, 'switch 1: 1.2 GB, switch 2: 1.1 GB' for a stack."""
+    if len(r["flashes"]) == 1:
+        return human_size(r["flashes"][0]["free"])
+    return ", ".join(f"switch {f['member']}: {human_size(f['free'])}" for f in r["flashes"])
+
+
+def room_for(r, name, size):
+    """[(where, free)] for each flash the image does not fit on: 'switch 2' on a stack, the file system otherwise. A file of
+    the same name already there is replaced, so its size counts as free."""
+    out = []
+    for f in r["flashes"]:
+        if f["free"] is None or size is None:
+            continue
+        free = f["free"] + (f["files"].get(name) or 0)
+        if size > free:
+            out.append((f"switch {f['member']}" if len(r["flashes"]) > 1 else f["fs"], free))
+    return out
+
+
+def image_problems(rows):
+    """The lines under the Images table: [(text, blocks Next)]. `rows`: [(result, file dict or None, typed hash)]."""
+    out = []
+    for r, f, typed in rows:
+        if f is None:
+            continue
+        h = (typed or "").strip()
+        if not h:
+            out.append((f"{r['name']}: an image is chosen but no MD5 hash is typed.", True))
+        elif not MD5_RE.match(h):
+            out.append((f"{r['name']}: the MD5 hash must be 32 hexadecimal characters.", True))
+        for where, free in room_for(r, f["name"], f["size"]):
+            out.append((f"{r['name']}: {f['name']} ({human_size(f['size'])}) does not fit on {where} ({human_size(free)} free). "
+                        "Clean up first, or skip the device.", False))
+    if not any(f is not None for _r, f, _t in rows):
+        out.append(("No device has an image chosen.", True))
+    return out
+
+
+TRANSFER_STEPS = ("For each device Toner copies the image, checks its MD5, puts it on every stack member and checks it there, then:\n"
+                  "• IOS XE in INSTALL mode: install add only.\n"
+                  "• IOS XE in BUNDLE mode and IOS: sets the boot statement and saves the configuration.\n"
+                  "• NX-OS: sets the boot variable and saves the configuration.\n"
+                  "• ASA: replaces the boot system line and saves the configuration.\n"
+                  "Nothing is reloaded. Up to 4 devices copy at once.")
+
+
+def source_shown(src):
+    """The server as the confirmation shows it, never with its password: 'sftp://toner@10.0.0.5:2222', 'tftp://10.0.0.5'."""
+    user = "" if src["proto"] == "tftp" or src.get("anonymous") else (src.get("user") or "")
+    port = "" if int(src["port"]) == DEFAULT_PORTS[src["proto"]] else f":{src['port']}"
+    return f"{src['proto']}://{user + '@' if user else ''}{src['host']}{port}"
+
+
+def transfer_text(chosen, src):
+    """(title, body) of the confirmation before copying. `chosen`: [(result, file dict)]."""
+    n = len(chosen)
+    lines = [f"{r['name']} ({r['host']}): {f['name']}, {human_size(f['size'])}, from {source_shown(src)}" for r, f in chosen]
+    return f"Transfer images to {n} device{'s' if n != 1 else ''}?", "\n".join(lines) + "\n\n" + TRANSFER_STEPS
+
+
+# ================================================================ step 6: Transfer
+POLL_SECONDS = 3.0                 # how often the second session reads the file's size while it copies
+COPY_TIMEOUT = 3600                # the copy itself may take this long (a large image over a slow link)
+MD5_TIMEOUT = 900                  # verify /md5 reads the whole image
+
+
+def copy_url(src, name):
+    """The URL the device pulls `name` from, with the login in it (it is masked everywhere it could be shown)."""
+    proto = src["proto"]
+    port = "" if int(src["port"]) == DEFAULT_PORTS[proto] else f":{src['port']}"
+    folder = "" if src.get("own") else (src.get("folder") or "").strip("/")
+    path = f"{folder}/{name}" if folder else name
+    if proto == "tftp":
+        login = ""
+    elif src.get("anonymous"):
+        login = "anonymous:anonymous@"
+    else:
+        login = f"{src.get('user') or ''}:{src.get('password') or ''}@"
+    return f"{proto}://{login}{src['host']}{port}/{path}"
+
+
+def target_path(platform, fs, name):
+    """'flash:x.bin', 'bootflash:x.bin', 'disk0:/x.bin'."""
+    return f"{fs}/{name}" if platform == "cisco_asa" else f"{fs}{name}"
+
+
+def copy_command(platform, url, name, vrf):
+    """IOS and IOS XE copy to flash: (and answer the file name question); NX-OS needs the VRF; ASA asks nothing with /noconfirm."""
+    if platform == "cisco_nxos":
+        return f"copy {url} bootflash: vrf {vrf}"
+    if platform == "cisco_asa":
+        return f"copy /noconfirm {url} disk0:/{name}"
+    return f"copy {url} flash:"
+
+
+def _answering(c, command, prompt, timeout):
+    """Send a command that may ask 'Destination filename [x]?' or '[confirm]', answering each with Enter, until the prompt is back."""
+    asks = r"Destination filename \[[^\]]*\]\?|\[confirm\]|[Oo]ver ?write\?.*$"
+    out = c.send_command(command, expect_string=asks + "|" + prompt, read_timeout=timeout)
+    for _ in range(4):
+        if not re.search(asks, out.splitlines()[-1] if out.strip() else ""):
+            break
+        out += c.send_command(c.RETURN, expect_string=asks + "|" + prompt, read_timeout=timeout, cmd_verify=False)
+    return out
+
+
+def device_md5(c, platform, path, typed, prompt):
+    """(matches, what the device computed or '', its words when it could not)."""
+    if platform == "cisco_nxos":
+        out = c.send_command(f"show file {path} md5sum", expect_string=prompt, read_timeout=MD5_TIMEOUT)
+    else:
+        out = c.send_command(f"verify /md5 {path} {typed}", expect_string=prompt, read_timeout=MD5_TIMEOUT)
+    m = re.search(r"Computed signature\s*=\s*([0-9a-fA-F]{32})", out) or re.search(r"=\s*([0-9a-fA-F]{32})", out) \
+        or re.search(r"^\s*([0-9a-fA-F]{32})\s*$", out, re.M)
+    got = m.group(1).lower() if m else ""
+    if not got:
+        return False, "", next((l.strip() for l in out.splitlines() if "%" in l), out.strip()[:120])
+    return got == typed.lower() and "%Error" not in out, got, ""
+
+
+def _poll_size(dev, path, name, total, on_progress, done, poll, opts):
+    """The second session: read the file's size on flash while the copy runs, and report it against the server's size."""
+    try:
+        with connect(dev, None, opts) as c:
+            prompt = _prompt_re(c)
+            while not done.wait(poll):
+                listing = parse_dir(c.send_command(f"dir {path}", expect_string=prompt, read_timeout=60)) or {}
+                size = (listing.get("files") or {}).get(name)
+                if size is not None:
+                    on_progress(min(size, total), total)
+    except Exception:                                       # noqa: BLE001  (progress is a help; the copy itself decides)
+        pass
+
+
+def transfer(dev, r, choice, src, vrf="management", on_step=None, cancel=None, poll=None, opts=None, then=None):
+    """Copy the chosen image onto one device, check its MD5, put it on every stack member and check it there.
+    choice: {'name', 'size' (from the server), 'md5' (typed)}. on_step(step, (done, total) or None, detail).
+    then(c, prompt, report): the step after a verified copy (the boot statement or install add), or None.
+    Returns {'ok', 'stopped', 'detail'}."""
+    from core import audit, profiles
+    say = on_step or (lambda *_a: None)
+    plat, name, size, typed = platform_of(dev), choice["name"], choice["size"], choice["md5"].strip().lower()
+    secrets = [src.get("password") or "", profiles.secret(dev, "main") or ""]
+    url = copy_url(src, name)
+    shown = f"{source_shown(src)}/{url.split('/', 3)[3]}"
+    fs = r["flashes"][0]["fs"]
+    path = target_path(plat, fs, name)
+    log = io.BytesIO()
+
+    def fail(detail):
+        audit.log("firmware failed", f"{dev['name']}: {mask(detail, secrets)}")
+        say("Failed", None, mask(detail, secrets))
+        return {"ok": False, "stopped": False, "detail": mask(detail, secrets)}
+
+    if cancel is not None and cancel.is_set():
+        say("Not started (stopped)", None, "")
+        return {"ok": False, "stopped": True, "detail": ""}
+    signed_in = False
+    try:
+        with connect(dev, log, opts) as c:
+            signed_in = True
+            try:
+                c.enable()
+            except Exception:                               # noqa: BLE001
+                pass
+            prompt = _prompt_re(c)
+            say("Copying", (0, size), "")
+            done = threading.Event()
+            watcher = threading.Thread(target=_poll_size, args=(dev, path, name, size, lambda d, t: say("Copying", (d, t), ""), done,
+                                                                 POLL_SECONDS if poll is None else poll, opts), daemon=True)
+            watcher.start()
+            try:
+                out = _answering(c, copy_command(plat, url, name, vrf), prompt, COPY_TIMEOUT)
+            finally:
+                done.set()
+                watcher.join(10)
+            listing = parse_dir(c.send_command(f"dir {path}", expect_string=prompt, read_timeout=60)) or {}
+            got = (listing.get("files") or {}).get(name)
+            if re.search(r"%\s*Error|Error opening|Invalid input", out, re.I) and got != size:
+                words = next((l.strip() for l in out.splitlines() if re.search(r"%\s*Error|Error opening|Invalid", l, re.I)), "")
+                return fail(f"The copy failed: {mask(words, secrets)}.")
+            if got != size:
+                return fail(f"The copy stopped at {human_size(got or 0)} of {human_size(size)}.")
+            say("Copying", (size, size), "")
+            say("Checking MD5", None, "")
+            ok, computed, words = device_md5(c, plat, path, typed, prompt)
+            if not ok:
+                if computed:
+                    return fail(f"MD5 differs: the device computed {computed} and you typed {typed}. The file was left on flash; "
+                                "nothing else was changed on this device.")
+                return fail(f"The MD5 could not be read: {words}")
+            audit.log("firmware copy", f"{dev['name']}: {name} from {shown}, {human_size(size)}, MD5 verified")
+            if cancel is not None and cancel.is_set():
+                say("Stopped", None, "Stopped after the copy (MD5 verified). Nothing else was changed on this device.")
+                return {"ok": False, "stopped": True, "detail": "Stopped after the copy (MD5 verified). Nothing else was changed on this device."}
+            for f in r["flashes"][1:]:
+                n = f["member"]
+                say(f"Copying to switch {n}", None, "")
+                member_path = target_path(plat, f["fs"], name)
+                out = _answering(c, f"copy {path} {member_path}", prompt, COPY_TIMEOUT)
+                there = (parse_dir(c.send_command(f"dir {member_path}", expect_string=prompt, read_timeout=60)) or {}).get("files", {}).get(name)
+                if there != size:
+                    words = next((l.strip() for l in out.splitlines() if "%" in l), "") or f"switch {n} has {human_size(there or 0)} of {human_size(size)}"
+                    return fail(f"The copy failed: {words}.")
+                say(f"Checking MD5 on switch {n}", None, "")
+                ok, computed, words = device_md5(c, plat, member_path, typed, prompt)
+                if not ok:
+                    return fail(f"MD5 differs on switch {n}: the device computed {computed or '(nothing)'} and you typed {typed}. "
+                                "The file was left on flash; nothing else was changed on this device.")
+                audit.log("firmware stack copy", f"{dev['name']}: {name} to switch {n}, MD5 verified")
+            if then is not None:
+                result = then(c, prompt, lambda step, detail="": say(step, None, detail))
+                if result is not True:
+                    return fail(result)
+            say("Done", None, "")
+            return {"ok": True, "stopped": False, "detail": ""}
+    except Exception as e:                                  # noqa: BLE001
+        if not signed_in:
+            return fail(f"Could not sign in: {plain_error(e, secrets)}")
+        return fail(f"The copy failed: {plain_error(e, secrets)}.")
+    finally:
+        save_log(dev, log, secrets)

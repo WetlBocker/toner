@@ -658,6 +658,10 @@ class Main(QMainWindow):
             self._quitting = False
             event.ignore()
             return
+        if self.tools.firmware.transferring() and not self.tools.firmware.ask_stop():
+            self._quitting = False
+            event.ignore()
+            return
         for v in list(self.views.values()):
             v.close()
         self.tools.shutdown()          # stop any running ping/scan/transfer before exiting

@@ -500,6 +500,168 @@ check("a deleted file's row has no tick box any more; Delete waits for a new tic
       and not cu.delete.isEnabled())
 check("Next works whether or not anything was deleted", cu.ready() and page.back.isEnabled())
 check("no device was reloaded or had anything activated", not any("reload" in l or l.startswith(("install activate", "install commit")) for f in fakes.values() for l in f.commands))
+
+# ================================================================ step 5: Images
+import hashlib
+MD5 = {n: hashlib.md5(open(os.path.join(images, n), "rb").read()).hexdigest() for n in IMAGES}
+XE, IOS, NX, ASA = "cat9k_iosxe.17.09.04a.SPA.bin", "c2960x-universalk9-mz.152-7.E9.bin", "nxos64-cs.10.3.4a.M.bin", "asa9-18-4-smp-k8.bin"
+print("== the image rules")
+r_stack = next(r for r in page.check.ready_results() if r["name"] == "stack1")
+check("free space: one flash, or each stack member", FW.free_text(R["asa1"]) == FW.human_size(R["asa1"]["flashes"][0]["free"])
+      and FW.free_text(r_stack) == ", ".join(f"switch {n}: {FW.human_size(f['free'])}" for n, f in zip((1, 2, 3), r_stack["flashes"])))
+tiny = {**R["ios1"], "flashes": [{**R["ios1"]["flashes"][0], "free": 1000, "files": {}}]}
+check("an image that does not fit says where and how much is free, and does not block",
+      FW.image_problems([(tiny, {"name": IOS, "size": 2000}, MD5[IOS])]) == [(f"ios1: {IOS} (2 KB) does not fit on flash: (1000 bytes free). Clean up first, or skip the device.", False)])
+tiny_stack = {**r_stack, "flashes": [r_stack["flashes"][0], {**r_stack["flashes"][1], "free": 10, "files": {}}, r_stack["flashes"][2]]}
+check("...on a stack it names the member", FW.image_problems([(tiny_stack, {"name": XE, "size": 3000}, MD5[XE])])[0][0].startswith(f"stack1: {XE} (3 KB) does not fit on switch 2 (10 bytes free)."))
+check("a file of the same name already there counts as room", FW.room_for({**tiny, "flashes": [{**tiny["flashes"][0], "files": {IOS: 1500}}]}, IOS, 2000) == [])
+check("an image with no hash blocks", FW.image_problems([(R["ios1"], {"name": IOS, "size": 2000}, "  ")]) == [("ios1: an image is chosen but no MD5 hash is typed.", True)])
+check("a hash that is not 32 hexadecimal characters blocks", FW.image_problems([(R["ios1"], {"name": IOS, "size": 2000}, "abc123")]) == [("ios1: the MD5 hash must be 32 hexadecimal characters.", True)])
+check("nothing chosen blocks", FW.image_problems([(R["ios1"], None, "")]) == [("No device has an image chosen.", True)])
+osrc = FW.own_source("ftp", own_ftp, "127.0.0.1")
+check("the copy URL carries the login and a port that is not the usual one", FW.copy_url(osrc, XE) == f"ftp://toner:Own-ftp-pass1@127.0.0.1:{own_ftp.port}/{XE}"
+      and FW.copy_url({**osrc, "port": 21}, XE) == f"ftp://toner:Own-ftp-pass1@127.0.0.1/{XE}")
+check("...another server's folder is in the path; TFTP has no login; anonymous FTP signs in as anonymous",
+      FW.copy_url(fsrc, XE) == f"ftp://fwuser:Ftp-pass-123@127.0.0.1:{ftp.port}/firmware/{XE}"
+      and FW.copy_url({"own": True, "proto": "tftp", "host": "10.0.0.5", "port": 69}, XE) == f"tftp://10.0.0.5/{XE}"
+      and FW.copy_url({**fsrc, "anonymous": True, "port": 21}, XE) == f"ftp://anonymous:anonymous@127.0.0.1/firmware/{XE}")
+check("the server as shown never has the password", FW.source_shown(osrc) == f"ftp://toner@127.0.0.1:{own_ftp.port}" and FW.source_shown({**fsrc, "proto": "sftp", "port": 22}) == "sftp://fwuser@127.0.0.1")
+check("each platform's copy", [FW.copy_command(p, "URL", XE, "management") for p in FW.PLATFORMS] ==
+      ["copy URL flash:", "copy URL flash:", "copy URL bootflash: vrf management", f"copy /noconfirm URL disk0:/{XE}"])
+
+print("== the Images step")
+check("Next leads on from Clean up", page.next.isEnabled())
+page.next.click()
+im = page.images
+check("Step 5 of 6: Images, with the agreed words", page.step_line.text() == "Step 5 of 6: Images" and im.intro.text() ==
+      "Choose the image for each device and type or paste its MD5 from Cisco's download page. Toner checks the hash on the device after the copy and stops that device if it differs.")
+check("the columns", [im.table.horizontalHeaderItem(i).text() for i in range(im.table.columnCount())] == ["Device", "Version", "Mode", "Free space", "Reaches server", "Image", "MD5", "Fits"])
+names_im = [im.table.item(i, 0).text() for i in range(im.table.rowCount())]
+check("the devices that came through, in order", names_im == ["asa1", "bundle1", "ios1", "nx1", "stack1"], names_im)
+row = {n: i for i, n in enumerate(names_im)}
+pick = lambda n: im.table.cellWidget(row[n], 5)
+md5box = lambda n: im.table.cellWidget(row[n], 6)
+check("each starts skipped; the drop-down holds the server's files", pick("ios1").currentText() == "(skip this device)" and
+      [pick("ios1").itemText(i) for i in range(1, pick("ios1").count())] == WANT)
+check("the stack's free space per member, and the freed space after Clean up", im.table.item(row["stack1"], 3).text().startswith("switch 1: ")
+      and im.table.item(row["ios1"], 3).text() == FW.human_size(122185728 - 26004000))
+check("Next reads Transfer and waits: no device has an image chosen", page.next.text() == "Transfer" and not page.next.isEnabled()
+      and im.problems.text() == "No device has an image chosen.")
+pick("ios1").setCurrentIndex(pick("ios1").findData(IOS))
+check("an image without a hash blocks, saying so", not page.next.isEnabled() and im.problems.text() == "ios1: an image is chosen but no MD5 hash is typed.")
+md5box("ios1").setText("not-a-hash")
+check("a malformed hash blocks", not page.next.isEnabled() and im.problems.text() == "ios1: the MD5 hash must be 32 hexadecimal characters.")
+md5box("ios1").setText(MD5[IOS].upper())
+check("a good hash (any case) lets it go on; Fits says Yes", page.next.isEnabled() and im.problems.text() == "" and im.table.item(row["ios1"], 7).text() == "Yes")
+im.table.setCurrentCell(row["stack1"], 5)
+pick("stack1").setCurrentIndex(pick("stack1").findData(XE)); md5box("stack1").setText(MD5[XE])
+check("the button names the platform of the row", im.same.text() == "Use for all IOS XE devices")
+im.same.click()
+check("Use for all IOS XE devices fills the other IOS XE device, and no other", pick("bundle1").currentData() == XE and md5box("bundle1").text() == MD5[XE]
+      and pick("nx1").currentData() is None and pick("asa1").currentData() is None)
+pick("nx1").setCurrentIndex(pick("nx1").findData(NX)); md5box("nx1").setText(MD5[NX])
+pick("asa1").setCurrentIndex(pick("asa1").findData(ASA)); md5box("asa1").setText(MD5[ASA])
+fakes["asa1"].fs["disk0:"].total = fakes["asa1"].fs["disk0:"].used() + 100                   # (as if the ASA's disk were full)
+next(r for r in page.check.ready_results() if r["name"] == "asa1")["flashes"][0]["free"] = 100
+im._sync()
+check("an image that does not fit is a warning, not a stop", page.next.isEnabled() and im.table.item(row["asa1"], 7).text() == "No"
+      and im.problems.text() == f"asa1: {ASA} (1 KB) does not fit on disk0: (100 bytes free). Clean up first, or skip the device.", im.problems.text())
+pick("asa1").setCurrentIndex(0)
+check("skipping it clears the warning", im.problems.text() == "" and im.table.item(row["asa1"], 7).text() == "")
+
+print("== the Transfer confirmation")
+asked = []
+page.confirm_transfer = lambda title, body: (asked.append((title, body)), False)[1]
+page.next.click()
+check("Cancel: nothing is copied and the page stays on Images", asked and page.step_line.text() == "Step 5 of 6: Images"
+      and not any(l.startswith("copy ") and "://" in l for f in fakes.values() for l in f.commands))
+title, body = asked[0]
+check("the title counts the devices", title == "Transfer images to 4 devices?", title)
+shown = FW.source_shown(osrc)
+check("each device with its image, size and server (no password), then what happens after the copy", body == (
+      f"bundle1 (127.0.0.1): {XE}, 3 KB, from {shown}\n"
+      f"ios1 (127.0.0.1): {IOS}, 2 KB, from {shown}\n"
+      f"nx1 (127.0.0.1): {NX}, 2 KB, from {shown}\n"
+      f"stack1 (127.0.0.1): {XE}, 3 KB, from {shown}\n\n"
+      "For each device Toner copies the image, checks its MD5, puts it on every stack member and checks it there, then:\n"
+      "• IOS XE in INSTALL mode: install add only.\n"
+      "• IOS XE in BUNDLE mode and IOS: sets the boot statement and saves the configuration.\n"
+      "• NX-OS: sets the boot variable and saves the configuration.\n"
+      "• ASA: replaces the boot system line and saves the configuration.\n"
+      "Nothing is reloaded. Up to 4 devices copy at once.") and "Own-ftp-pass1" not in body, body)
+
+print("== the Transfer step")
+FW.POLL_SECONDS = 0.1
+for f in fakes.values(): f.copy_seconds = 1.5
+fakes["bundle1"].corrupt = {XE}                                       # its copy arrives damaged
+seen_progress = {}
+page.confirm_transfer = lambda title, body: True
+page.next.click()
+tr = page.transfer
+tr.job.step.connect(lambda key, step, prog, detail: prog is not None and seen_progress.setdefault(key, []).append(prog))
+check("Step 6 of 6: Transfer; no going back; Stop is on", page.step_line.text() == "Step 6 of 6: Transfer" and not page.back.isEnabled() and tr.stop.isEnabled()
+      and not page.next.isEnabled() and not page.restart.isEnabled())
+check("the columns, and every device waiting or under way", [tr.table.horizontalHeaderItem(i).text() for i in range(4)] == ["Device", "Step", "Progress", "Detail"]
+      and tr.table.rowCount() == 4)
+pump(lambda: not tr.running(), 3000)
+steps = {tr.table.item(i, 0).text(): (tr.table.item(i, 1).text(), tr.table.item(i, 3).text(), tr.table.cellWidget(i, 2)) for i in range(tr.table.rowCount())}
+check("the good copies are Done", all(steps[n][0] == "Done" for n in ("ios1", "nx1", "stack1")), {n: s[:2] for n, s in steps.items()})
+check("progress was polled from a second session and reached 100 %", all(any(0 < d < t for d, t in seen_progress.get(k, [])) for k in ("ios1", "stack1"))
+      and steps["ios1"][2].value() == 1000 and steps["ios1"][2].format() == "100 %  (2 KB of 2 KB)", (seen_progress.get("ios1"), steps["ios1"][2].format()))
+check("the image is on each device with the server's MD5", fakes["ios1"].fs["flash:"].files[IOS][1] == MD5[IOS] and fakes["nx1"].fs["bootflash:"].files[NX][1] == MD5[NX]
+      and fakes["stack1"].fs["flash:"].files[XE][1] == MD5[XE])
+check("the device fetched it from the URL Toner built (FTP, with Toner's FTP login)", f"copy ftp://toner:Own-ftp-pass1@127.0.0.1:{own_ftp.port}/{IOS} flash:" in fakes["ios1"].commands)
+check("NX-OS copied through the VRF and checked with show file ... md5sum", f"copy ftp://toner:Own-ftp-pass1@127.0.0.1:{own_ftp.port}/{NX} bootflash: vrf management" in fakes["nx1"].commands
+      and f"show file bootflash:{NX} md5sum" in fakes["nx1"].commands)
+check("IOS checked with verify /md5 against the typed hash", f"verify /md5 flash:{IOS} {MD5[IOS]}" in fakes["ios1"].commands)
+check("every stack member got the file, each checked", all(fakes["stack1"].fs[fs].files.get(XE, [0, ""])[1] == MD5[XE] for fs in ("flash-2:", "flash-3:"))
+      and f"copy flash:{XE} flash-2:{XE}" in fakes["stack1"].commands and f"verify /md5 flash-3:{XE} {MD5[XE]}" in fakes["stack1"].commands)
+damaged = hashlib.md5(open(os.path.join(images, XE), "rb").read() + b"damaged").hexdigest()
+check("a bad hash stops that device with a clear line", steps["bundle1"][0] == "Failed" and steps["bundle1"][1] ==
+      f"MD5 differs: the device computed {damaged} and you typed {MD5[XE]}. The file was left on flash; nothing else was changed on this device.", steps["bundle1"][1])
+check("...and the others carried on", steps["ios1"][0] == "Done" and steps["stack1"][0] == "Done")
+check("the line under the table", tr.status.text() == "Done: 3 of 4 devices have the new image, 1 failed. Nothing was reloaded.", tr.status.text())
+check("Start over is on once it is finished; Back stays off", page.restart.isEnabled() and not page.back.isEnabled() and not tr.stop.isEnabled())
+rows = audit.recent()
+check("audit: each verified copy, with the server shown without its password", any(a["action"] == "firmware copy" and a["detail"] == f"ios1: {IOS} from {shown}/{IOS}, 2 KB, MD5 verified" for a in rows)
+      and any(a["action"] == "firmware stack copy" and a["detail"] == f"stack1: {XE} to switch 3, MD5 verified" for a in rows)
+      and any(a["action"] == "firmware failed" and a["detail"].startswith("bundle1: MD5 differs") for a in rows), [(a["action"], a["detail"]) for a in rows[:6]])
+everything = " ".join(tr.table.item(i, j).text() for i in range(tr.table.rowCount()) for j in (1, 3)) + tr.status.text() + " ".join(a["detail"] for a in audit.recent(1000))
+logs = "".join(FW.log_path(labdevs[n]).read_text(encoding="utf-8") for n in ("ios1", "nx1", "stack1", "bundle1"))
+check("the FTP password is nowhere: screen, audit log, session logs", "Own-ftp-pass1" not in everything and "Own-ftp-pass1" not in logs and "copy ftp://toner:****@" in logs)
+check("...nor the devices' password", PW not in everything and PW not in logs)
+check("nothing beyond the copy and its checks was sent: no boot, install add, write or reload", not [l for f in fakes.values() for l in f.commands
+      if re.match(r"^(boot|no boot|install add|write|reload|install activate|install commit)", l)])
+
+print("== Stop")
+for f in fakes.values(): f.copy_seconds = 3.0; f.corrupt = set()
+page.restart.click(); page.devices.untick_all.click(); tick("ios1", "stack1", "bundle1", "nx1", "asa1")
+fakes["asa1"].fs["disk0:"].total = 8 * G
+page.next.click()
+check("Start over cleared the listing: the server must be listed again", not sv.ready() and not page.next.isEnabled())
+sv.own_btn.click(); sv.own.setCurrentIndex(sv.own.findData("ftp")); sv.address.setEditText("127.0.0.1"); sv.test.click(); pump(lambda: sv.ready())
+page.next.click(); pump(lambda: not ck.running(), 1500); page.next.click(); page.next.click()
+check("back at Images for the second run", page.step_line.text() == "Step 5 of 6: Images", page.step_line.text())
+for n, img in (("asa1", ASA), ("bundle1", XE), ("ios1", IOS), ("nx1", NX), ("stack1", XE)):
+    pick(n).setCurrentIndex(pick(n).findData(img)); md5box(n).setText(MD5[img])
+for f in fakes.values():
+    for fs in f.fs.values(): fs.files.pop(XE, None); fs.files.pop(IOS, None); fs.files.pop(NX, None); fs.files.pop(ASA, None)
+typed_before = {n: len(f.commands) for n, f in fakes.items()}
+page.next.click()
+pump(lambda: sum(tr.table.item(i, 1).text() == "Copying" for i in range(tr.table.rowCount())) >= 4, 500)
+page.stop_question = lambda: False
+check("closing Toner asks, and Keep going keeps it running", page.ask_stop() is False and tr.running())
+page.stop_question = lambda: True
+check("Stop: closing waits for the copies, then may close", page.ask_stop() is True and not tr.running())
+steps = {tr.table.item(i, 0).text(): (tr.table.item(i, 1).text(), tr.table.item(i, 3).text()) for i in range(tr.table.rowCount())}
+check("the four that were copying finished their copy, and nothing else", sum(s[0] == "Stopped" for s in steps.values()) == 4
+      and all(s[1] == "Stopped after the copy (MD5 verified). Nothing else was changed on this device." for s in steps.values() if s[0] == "Stopped"), steps)
+check("the fifth never started", sum(s[0] == "Not started (stopped)" for s in steps.values()) == 1, steps)
+check("the Stopping line was shown, and Stop is off", "Stopping: devices that are copying finish their copy; nothing else is changed on them." in tr.status.text()
+      or tr.status.text().startswith("Done: 0 of 5"), tr.status.text())
+since = {n: f.commands[typed_before[n]:] for n, f in fakes.items()}
+check("after Stop no stack member was copied to and nothing more was sent", not any(l.startswith(("copy flash:", "boot", "install add", "write")) for c in since.values() for l in c)
+      and not any(l.startswith("copy ") for l in since["stack1"]), {n: [l for l in c if l.startswith("copy")] for n, c in since.items()})
 page.shutdown()
 for f in fakes.values(): f.stop()
 for s in (ftp, sftp_srv, own_ftp, own_tftp): s.stop()
