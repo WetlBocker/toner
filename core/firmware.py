@@ -122,6 +122,8 @@ def _connect_failed(src, e):
 
 
 REFUSED = "The server refused the user name or password."
+NO_SFTP = ("Signed in to {host}, but the server did not start SFTP for this account. Check that the account is allowed to use SFTP "
+           "(not only FTP) and has a home folder.")
 
 
 def _no_folder(src):
@@ -260,7 +262,7 @@ def _list_ssh(src, timeout):
             sftp = client.open_sftp()
         except (OSError, EOFError, paramiko.SSHException) as e:
             if src["proto"] != "scp":
-                raise _connect_failed(src, e) from None
+                raise SourceError(NO_SFTP.format(host=src["host"])) from None     # the login worked; the server refused the SFTP channel
             return _ls_over_exec(client, src, timeout)
         try:
             entries = sftp.listdir_attr(folder)

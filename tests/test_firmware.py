@@ -103,6 +103,13 @@ from core import nettools
 check("...the SSH host key was saved the way Settings > Security says", f"[127.0.0.1]:{sftp_dev.port}" in nettools.known_hosts_path().read_text(encoding="utf-8"))
 check("a wrong password", raises(lambda: FW.list_files({**ssrc, "password": "nope"})) == "The server refused the user name or password.")
 check("a missing folder", raises(lambda: FW.list_files({**ssrc, "folder": "/nowhere"})) == "The folder /nowhere was not found on the server.")
+import paramiko as _pm
+_real_open_sftp = _pm.SSHClient.open_sftp
+_pm.SSHClient.open_sftp = lambda self: (_ for _ in ()).throw(_pm.SSHException("EOF during negotiation"))   # what Wing FTP does for an FTP-only account
+check("a login that works but gets no SFTP channel says so, not 'could not connect'",
+      raises(lambda: FW.list_files(ssrc)) == "Signed in to 127.0.0.1, but the server did not start SFTP for this account. Check that the "
+      "account is allowed to use SFTP (not only FTP) and has a home folder.")
+_pm.SSHClient.open_sftp = _real_open_sftp
 sftp_srv = F.SftpServer(base, "toner", "Sftp-pass-123", port=0, bind="127.0.0.1", host_key_path=os.path.join(SP, "fwhk")); sftp_srv.start()
 files = FW.list_files({**ssrc, "proto": "scp", "port": sftp_srv.port, "user": "toner", "password": "Sftp-pass-123"})
 check("an SCP server is listed over SFTP on the same login (Toner's SFTP / SCP server as another server)", names(files) == WANT, names(files))

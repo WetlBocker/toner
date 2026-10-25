@@ -137,6 +137,11 @@ QCheckBox::indicator { width: 16px; height: 16px; border: 1.5px solid %(muted)s;
 QCheckBox::indicator:hover { border-color: %(accent)s; }
 QCheckBox::indicator:checked { background: %(accent)s; border-color: %(accent)s; image: url(%(check)s); }
 QCheckBox::indicator:disabled { border-color: %(border)s; background: %(bg)s; }
+QRadioButton { spacing: 8px; }
+QRadioButton::indicator { width: 16px; height: 16px; border: 1.5px solid %(muted)s; border-radius: 9px; background: %(input)s; }
+QRadioButton::indicator:hover { border-color: %(accent)s; }
+QRadioButton::indicator:checked { border-color: %(accent)s; background: qradialgradient(cx:0.5, cy:0.5, radius:0.5, fx:0.5, fy:0.5, stop:0 %(accent)s, stop:0.42 %(accent)s, stop:0.5 %(input)s, stop:1 %(input)s); }
+QRadioButton::indicator:disabled { border-color: %(border)s; background: %(bg)s; }
 QListView::indicator, QTreeView::indicator, QTableView::indicator { width: 16px; height: 16px; border: 1.5px solid %(muted)s; border-radius: 5px; background: %(input)s; }
 QListView::indicator:hover, QTreeView::indicator:hover, QTableView::indicator:hover { border-color: %(accent)s; }
 QListView::indicator:checked, QTreeView::indicator:checked, QTableView::indicator:checked { background: %(accent)s; border-color: %(accent)s; image: url(%(check)s); }
@@ -238,6 +243,7 @@ QFrame#statusChip { border-radius: 2px; }
 QLabel[title="true"] { font-size: 13pt; font-weight: 700; }
 QLabel#brand { font-size: 13pt; }
 QCheckBox::indicator, QListView::indicator, QTreeView::indicator, QTableView::indicator { border-radius: 2px; width: 13px; height: 13px; }
+QRadioButton::indicator { width: 13px; height: 13px; border-radius: 8px; }
 QProgressBar { border-radius: 2px; }
 QProgressBar::chunk { border-radius: 2px; }
 """

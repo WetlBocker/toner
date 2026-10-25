@@ -50,7 +50,8 @@ class DevicesStep(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(_muted("Tick the Cisco devices to transfer firmware to. Devices of other vendors are listed but cannot be ticked."))
         finder = QHBoxLayout()
-        finder.addWidget(self.find, 1)
+        finder.addStretch(1)
+        finder.addWidget(self.find, 1)                 # on the right, as on Inventory and History
         finder.addWidget(self.funnel)
         lay.addLayout(finder)
         lay.addWidget(self.list, 1)

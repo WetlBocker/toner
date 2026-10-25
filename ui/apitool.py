@@ -6,14 +6,14 @@ import threading
 from PySide6.QtCore import QThread, Qt, Signal
 from PySide6.QtGui import QFontDatabase, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout,
-                               QHeaderView, QInputDialog, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QSpinBox, QSplitter,
+                               QHeaderView, QInputDialog, QLabel, QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSpinBox, QSplitter,
                                QStackedWidget, QTableWidget, QTableWidgetItem, QTabWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from core import apitool as A, db, profiles
 from ui import status as st
 from ui.orgfield import SHARED_CHOICE, choice_file, org_choices, show_row
 from ui.tools2 import _muted, _primary, _table
-from ui.widgets import EmptyHint, remember_sizes
+from ui.widgets import EmptyHint, flow, remember_sizes
 
 ROLE = Qt.ItemDataRole.UserRole
 DOTS = "•" * 8
@@ -322,17 +322,13 @@ class ApiTesterTab(QWidget):
         self.tree_hint = EmptyHint(self.tree, "No saved requests yet", "Fill in a request and click Save.")
         saved = QWidget()
         sl = QVBoxLayout(saved)
-        sl.setContentsMargins(0, 0, 0, 0)
-        bar = QHBoxLayout()
-        for b in (self.new_btn, self.folder_btn, self.save_btn):
-            bar.addWidget(b)
-        bar.addStretch(1)
-        bar2 = QHBoxLayout()
-        for b in (self.rename_btn, self.dup_btn, self.del_btn):
-            bar2.addWidget(b)
-        bar2.addStretch(1)
-        sl.addLayout(bar)
-        sl.addLayout(bar2)
+        sl.setContentsMargins(0, 8, 0, 0)                 # air between the tab bar's line and the buttons
+        self.new_btn.setProperty("primary", True)
+        self.more_btn = QPushButton("More")                         # the occasional buttons live in a menu, so the row stays one line (as on Sessions)
+        self.more_menu = QMenu(self.more_btn)
+        self.more_menu.aboutToShow.connect(self._fill_more)
+        self.more_btn.setMenu(self.more_menu)
+        sl.addLayout(flow(self.new_btn, self.save_btn, self.more_btn))
         sl.addWidget(self.tree, 1)
 
         self.keep = QSpinBox()
@@ -344,7 +340,7 @@ class ApiTesterTab(QWidget):
         self.history_hint = EmptyHint(self.history, "Nothing sent yet", "Requests you send appear here. Click one to load it again.")
         hist = QWidget()
         hl = QVBoxLayout(hist)
-        hl.setContentsMargins(0, 0, 0, 0)
+        hl.setContentsMargins(0, 8, 0, 0)
         hbar = QHBoxLayout()
         hbar.addWidget(QLabel(KEEP_LABEL))
         hbar.addWidget(self.keep)
@@ -869,6 +865,14 @@ class ApiTesterTab(QWidget):
         kind, ident, org = self.kind_of(item)
         if kind == "folder":
             (self.expanded.add if open_ else self.expanded.discard)((org, ident))
+
+    def _fill_more(self):
+        """The rarely used actions, each acting through its button (so they follow the same enabled state)."""
+        self.more_menu.clear()
+        for b in (self.folder_btn, self.rename_btn, self.dup_btn, self.del_btn):
+            act = self.more_menu.addAction(b.text())
+            act.setEnabled(b.isEnabled())
+            act.triggered.connect(lambda _=False, b=b: b.click())
 
     def _selected(self):
         if self._building:

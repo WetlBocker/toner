@@ -345,6 +345,8 @@ class PageStack(QWidget):
             i = self._rows.index(row)
             self.stack.setCurrentIndex(i)
             self.currentChanged.emit(i)
+            if row > 0 and not (self.list.item(row - 1).flags() & Qt.ItemFlag.ItemIsSelectable):
+                self.list.scrollToItem(self.list.item(row - 1))      # the first page of a group keeps its heading in view
 
     def count(self):
         return len(self._pages)
