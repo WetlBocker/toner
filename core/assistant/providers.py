@@ -131,7 +131,8 @@ class Claude(Provider):
     def list_models(self):
         try:
             out = []
-            for m in self._client(TEST_TIMEOUT).models.list(limit=100):
+            client = self._client(TEST_TIMEOUT)
+            for m in client.models.list(limit=100):
                 if getattr(m, "lifecycle", "active") == "retired":
                     continue
                 out.append((m.id, getattr(m, "display_name", "") or m.id))
@@ -202,7 +203,8 @@ class OpenAI(Provider):
 
     def list_models(self):
         try:
-            ids = [m.id for m in self._client(TEST_TIMEOUT).models.list()]
+            client = self._client(TEST_TIMEOUT)
+            ids = [m.id for m in client.models.list()]
         except Exception as e:                                           # noqa: BLE001
             raise self._wrap(e) from None
         keep = [i for i in ids if (i.startswith("gpt-") or i.startswith("o")) and not any(s in i for s in self.SKIP) and "-20" not in i]
@@ -301,7 +303,8 @@ class Gemini(Provider):
     def list_models(self):
         try:
             out = []
-            for m in self._client(TEST_TIMEOUT).models.list():
+            client = self._client(TEST_TIMEOUT)                       # held while the pager runs (a dropped client is closed)
+            for m in client.models.list():
                 name = (m.name or "").removeprefix("models/")
                 actions = getattr(m, "supported_actions", None) or []
                 if "gemini" in name and (not actions or "generateContent" in actions):

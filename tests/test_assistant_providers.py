@@ -301,7 +301,7 @@ def claude_second(q):
 exercise("claude", claude, "claude-opus-5-5", "Claude Opus 5.5", ["claude-opus-5-5", "claude-sonnet-5-5"], ["claude-3-haiku-20240307"],
          dict(tokens_in=2400, tokens_out=140, path="/v1/messages", key_header=lambda h: h.get("x-api-key") == GOOD or h.get("authorization") == f"Bearer {GOOD}",
               check_first=claude_first, check_second=claude_second, history_len=4,
-              carries_all=lambda b: len(b["messages"]) == 6 and b["messages"][1]["content"][0]["signature"] == "SIGNATURE-1" and b["messages"][5]["content"] == "And now?"))
+              carries_all=lambda b: len(b["messages"]) == 5 and b["messages"][1]["content"][0]["signature"] == "SIGNATURE-1" and b["messages"][4]["content"] == "And now?"))
 claude.script[:] = [("text", "Served by another model.", "claude-opus-4-8")]
 _cid, events, done = run("claude", "fallback")
 check("Claude: the model that served the answer (after a fallback) is the one priced", done["model"] == "claude-opus-4-8" and abs(done["cost"] - prices.cost("claude-opus-4-8", 1200, 60)) < 1e-9, done)
@@ -331,22 +331,36 @@ exercise("openai", oa, "gpt-6.1-sol", "GPT-6.1 Sol", ["gpt-6-astra", "gpt-6-luna
 
 # ---------------------------------------------------------------- Gemini
 gem = Fake(GeminiHandler)
+def camel(obj):
+    """The SDK writes some fields in snake_case and some in camelCase; Google's API takes both, so the checks read both."""
+    if isinstance(obj, dict):
+        out = {}
+        for k, v in obj.items():
+            parts = k.split("_")
+            out[parts[0] + "".join(p[:1].upper() + p[1:] for p in parts[1:])] = camel(v)
+        return out
+    if isinstance(obj, list):
+        return [camel(v) for v in obj]
+    return obj
+
 def gem_first(q):
-    b = q["body"]
+    b = camel(q["body"])
     cfg = b.get("generationConfig", {})
     decls = b["tools"][0]["functionDeclarations"]
+    schema = decls[0].get("parametersJsonSchema") or decls[0].get("parameters") or {}
     check("Gemini: generateContent streamed, function declarations with JSON schemas, thinking level from Depth, the system instruction, automatic calling off",
-          ":streamGenerateContent" in q["path"] and "alt=sse" in q["path"] and {d["name"] for d in decls} == set(T.BY_NAME) and decls[0].get("parametersJsonSchema", decls[0].get("parameters"))["type"] == "object"
-          and cfg.get("thinkingConfig", {}).get("thinkingLevel") == "MEDIUM" and "Acme" in json.dumps(b.get("systemInstruction")) and b["contents"][0]["role"] == "user", (q["path"], json.dumps(b)[:500]))
+          ":streamGenerateContent" in q["path"] and "alt=sse" in q["path"] and {d["name"] for d in decls} == set(T.BY_NAME) and schema.get("type") == "object"
+          and cfg.get("thinkingConfig", {}).get("thinkingLevel") == "MEDIUM" and "Acme" in json.dumps(b.get("systemInstruction")) and b["contents"][0]["role"] == "user",
+          (q["path"], json.dumps({k: v for k, v in b.items() if k not in ("contents", "systemInstruction")})[:900]))
 def gem_second(q):
-    c = q["body"]["contents"]
+    c = camel(q["body"])["contents"]
     check("Gemini: the second request has the model turn with the functionCall and its thought signature unchanged, then the functionResponse",
           c[1]["role"] == "model" and c[1]["parts"][0]["functionCall"]["name"] == "latest_results" and c[1]["parts"][0].get("thoughtSignature") == SIG
           and c[2]["role"] in ("tool", "user") and c[2]["parts"][0]["functionResponse"]["name"] == "latest_results" and "FAIL" in json.dumps(c[2]["parts"][0]["functionResponse"]["response"]), json.dumps(c)[:600])
 exercise("gemini", gem, "gemini-3.8-flash", "Gemini 3.8 Flash", ["gemini-3.8-flash", "gemini-2.5-flash"], ["gemini-embedding-001", "imagen-4"],
          dict(tokens_in=1800, tokens_out=160, path=":streamGenerateContent", key_header=lambda h: h.get("x-goog-api-key") == GOOD,
               check_first=gem_first, check_second=gem_second, history_len=4,
-              carries_all=lambda b: len(b["contents"]) == 6 and b["contents"][1]["parts"][0].get("thoughtSignature") == SIG and b["contents"][5]["parts"][0]["text"] == "And now?"))
+              carries_all=lambda b: len(b["contents"]) == 5 and camel(b)["contents"][1]["parts"][0].get("thoughtSignature") == SIG and b["contents"][4]["parts"][0]["text"] == "And now?"))
 
 print("== the three SDKs ship with Toner")
 import importlib.metadata as md

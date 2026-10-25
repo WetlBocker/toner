@@ -16,3 +16,6 @@ PySocks>=1.7.1
 pyserial>=3.5
 pypsrp>=0.9.1
 keeper-secrets-manager-core>=17.3
+anthropic>=2.3,<3
+openai>=3.37,<4
+google-genai>=2.33,<3
