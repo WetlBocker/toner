@@ -9,6 +9,7 @@ if (-not $Version) { $Version = (python -c "from core.version import VERSION; pr
 python -m PyInstaller --noconfirm --clean --windowed --onedir --name Toner --icon "$root\assets\toner.ico" `
     --collect-all netmiko --collect-all ntc_templates --collect-all pysnmp --hidden-import cli --hidden-import PySide6.QtAxContainer --collect-all pypsrp --collect-all spnego --collect-all sspilib `
     --collect-submodules keyring.backends --collect-submodules paramiko --collect-all keeper_secrets_manager_core `
+    --collect-submodules anthropic --collect-submodules openai --collect-submodules google.genai `
     --distpath build\dist --workpath build\work --specpath build app.py
 if ($LASTEXITCODE) { throw "PyInstaller failed" }
 

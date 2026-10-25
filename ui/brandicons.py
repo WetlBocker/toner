@@ -61,6 +61,46 @@ SVG = {
 }
 _cache = {}
 
+# ---- the Assistant's providers (Settings > AI). BRAND_SVG holds each company's own mark as published on its brand page, the whole
+# SVG file unmodified (see core/assistant). Until a mark is there, a plain tile stands in.
+BRAND_SVG = {}
+PROVIDER_FALLBACK = {
+    "claude": '<rect width="64" height="64" rx="14" fill="#D97757"/><path d="M20 16h8l12 32h-8z M36 16h8L32 48h-8z" fill="#fff"/>',
+    "openai": '<rect width="64" height="64" rx="14" fill="#000"/><circle cx="32" cy="32" r="15" fill="none" stroke="#fff" stroke-width="5"/>',
+    "gemini": '<rect width="64" height="64" rx="14" fill="#1F6FEB"/><path d="M32 12 Q34 30 52 32 Q34 34 32 52 Q30 34 12 32 Q30 30 32 12Z" fill="#fff"/>',
+}
+
+
+def _pixmap_doc(svg, size):
+    """Render a whole SVG document (its own viewBox) into a square of `size` pixels, keeping its proportions."""
+    img = QImage(size, size, QImage.Format.Format_ARGB32_Premultiplied)
+    img.fill(Qt.GlobalColor.transparent)
+    r = QSvgRenderer(QByteArray(svg.encode("utf-8")))
+    box = r.viewBoxF()
+    w, h = (box.width(), box.height()) if box.width() > 0 and box.height() > 0 else (r.defaultSize().width() or 1, r.defaultSize().height() or 1)
+    scale = size / max(w, h)
+    dw, dh = w * scale, h * scale
+    p = QPainter(img)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    r.render(p, QRectF((size - dw) / 2, (size - dh) / 2, dw, dh))
+    p.end()
+    return QPixmap.fromImage(img)
+
+
+def provider_icon(provider):
+    """The mark of an Assistant provider: 'claude', 'openai' or 'gemini'."""
+    key = "provider:" + provider
+    if key not in _cache:
+        ic = QIcon()
+        for size in (16, 24, 32, 48, 64):
+            if provider in BRAND_SVG:
+                ic.addPixmap(_pixmap_doc(BRAND_SVG[provider], size))
+            else:
+                svg = f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">{PROVIDER_FALLBACK.get(provider, PROVIDER_FALLBACK["claude"])}</svg>'
+                ic.addPixmap(_pixmap_doc(svg, size))
+        _cache[key] = ic
+    return _cache[key]
+
 
 def _pixmap(name, size):
     svg = f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">{SVG[name]}</svg>'

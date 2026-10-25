@@ -28,6 +28,7 @@ A Windows desktop tool for checking, documenting and troubleshooting a multi-ven
   - [SCP and xcopy](#scp-and-xcopy)
   - [iperf3](#iperf3)
 - [Automation (Ansible)](#automation-ansible)
+- [Assistant](#assistant)
 - [Without the window](#without-the-window)
 - [Updates and About](#updates-and-about)
 - [Build and test](#build-and-test)
@@ -130,7 +131,7 @@ and **Run checks** act on the devices shown (all of them when nothing is typed o
 | **Reports** | CSV, HTML and PDF. The **Trend report** (7, 30 or 90 days) compares with the period before: availability, worst offenders, repeat failures, what is still wrong, configuration changes, busiest CPUs and growing disks. Settings > Reports can make one every week or month. |
 | **Tools** | Command runner (the same commands on many devices, read-only by default: Cisco, Juniper, Arista, HPE and MikroTik by SSH, Windows computers by PowerShell, Fortinet and Palo Alto firewalls by SSH with a login set on the device), ping, traceroute, DNS, live ping graph, path monitor (MTR), port scanner, TLS certificate checker, subnet calculator, device discovery, LLDP / CDP topology map, SNMP (v1, v2c, v3), syslog and trap receivers, MAC lookup, Wake-on-LAN, Wi-Fi scanner, file servers (TFTP, SFTP / SCP, FTP), a Cisco **Firmware Transfer** (a new image onto many IOS, IOS XE, NX-OS and ASA devices, MD5-checked, never reloaded), SCP and xcopy, OpenSSL, SSH keys, iperf3, an **API Tester** (a small Postman), and the Ansible **Playbook Editor**. |
 | **Sessions** | Saved connections in a folder tree (drag, rename, search, duplicate): SSH, Telnet and Serial open in tabs inside Toner, follow Settings > Terminal, and are logged. An SSH session can keep its password in the vault or use an inventory device's login, jump host and proxy. Serial has a Send break button for ROMMON. Open sessions can be shown side by side in an equal grid (Split view), popped out into their own window, or typed into all at once (Type in all sessions, with a Leave out tick on any session that should not get it); the session list can be hidden to give the terminals the whole width. An SSH session has a Files panel: this computer on one side, the device on the other (SFTP over the same login), with drag and drop, Upload and Download buttons, progress and Cancel. **Remote Desktop** runs inside a Toner tab, using the Remote Desktop control Windows ships (the one `mstsc.exe` is built on): Windows asks for the password and Toner never stores it. Fill the window or use a fixed size; clipboard, drives, printers, the console session and a gateway are options. Settings > Terminal can send it to Windows' own window instead. **Sessions from other programs:** Inventory > More > Import... also reads a MobaXterm export (`.mobaconf`), a PuTTY export (`.reg`) and SecureCRT (its `.xml` export, or any `.ini` in its Sessions folder); More > Import PuTTY sessions on this computer reads PuTTY's own list. They become sessions (not devices), in the same folders (for MobaXterm the root every bookmark shares, such as `My Sessions`, is left out); one already there is skipped. A MobaXterm "Stored Passwords" export adds the SSH passwords to the vault (importing it again fills in sessions that have none). Browser, VNC, FTP and other kinds Toner does not open are counted and skipped. |
-| **Automation** | Runs **Ansible** playbooks on Inventory devices: pick a playbook and devices, check first (nothing changes), then run for real after a confirmation naming the playbook and devices. Output streams live, with a recap per device and a history. See [Automation (Ansible)](#automation-ansible). More will be added here. |
+| **Automation/AI** | Runs **Ansible** playbooks on Inventory devices: pick a playbook and devices, check first (nothing changes), then run for real after a confirmation naming the playbook and devices. Output streams live, with a recap per device and a history. See [Automation (Ansible)](#automation-ansible). Its **AI** section shows the **Assistant**: provider, connection, what it has cost this month here and across every organization, and the conversations (open or delete them). See [Assistant](#assistant). |
 | **Settings** | Thresholds (overrides per vendor, folder, tag or device), which checks run and when (Checks has tabs for the list, the schedule and your own checks), timeouts, config backups, notifications (email, Teams, Slack, Discord, ntfy, webhook, desktop), credential profiles, proxy, agents, maintenance, appearance, terminal, reports, security (host keys, and older SSH algorithms: ssh-rsa and SHA-1 key exchange for devices such as older Cisco ASAs that offer nothing newer, tried last and on unless turned off), audit log, data and logs. Pages with unsaved edits are marked, and Save and Revert list exactly what changes. |
 | **About** | Version, how this copy was installed, locations, library versions, license. **Copy details** puts it all on the clipboard for a bug report. |
 
@@ -468,6 +469,38 @@ are never in the inventory or any playbook: they go in a second file that exists
 a real run, which asks first and names the playbook and the devices. You can add tags and variables (`ntp=10.0.0.1`), raise verbosity, and
 stop a run. Every check and run is kept (newest 200 by default) under Automation > Run history, with its output and totals, and in the
 audit log.
+
+## Assistant
+
+The Assistant is an AI agent inside Toner that answers questions about the organization you are looking at from Toner's own
+data. Ask it on any section from the round button at the right edge of the window: a panel slides out beside the page (the page
+gets narrower, nothing is covered) with the conversation, the steps it takes as it takes them ("Reading core-sw1's history…"),
+and a line under each answer with the tokens used and what they cost. **Send**, **Stop** and **New conversation** are the buttons;
+Enter sends and Shift+Enter makes a new line. Switching organization switches to that organization's conversation.
+
+**What it can see.** Only what Toner already holds, through a fixed set of read-only tools: the device list and each device's
+details, the latest check results and each device's history, configuration backups (the masked copy only, never the unmasked one)
+and what changed between two versions, the Firmware Transfer check results, the audit log, terminal session logs, and what is on
+screen: the section and page, the organization, what is selected and the visible content on Inventory, Results, History, Configs,
+Tools > Command Runner and Firmware Transfer, Sessions, and Automation/AI. Every password, key and community string in Toner's
+vault is replaced by **** before anything leaves Toner, and no screenshot is ever taken. The Assistant cannot run commands on
+devices, change settings or send anything; every tool call is written to the audit log ("assistant", "read core-sw1's history").
+
+**Set it up** under **Settings > AI**: the **Provider** (Claude, OpenAI or Gemini, through each company's official library),
+your **API key** (kept in Toner's vault, never in the settings or an exported settings file), the **Model** (the list fills from
+the provider after **Test**; a sensible default is chosen for each provider), the **Depth** (**Quick / Normal / Thorough**: how hard
+the model thinks before it answers; it maps to each provider's own setting for that) and the **Monthly spend limit (USD)**, 20 by
+default. **Test** says **Connected: Claude Opus 5.5.** or why not (**Not connected: the API key was refused.** / **Not connected: no
+answer from api.openai.com.**). When Toner starts it runs the same test in the background; the line along the bottom of the window
+says **Assistant: connected** or **Assistant: not connected**, and the round button is only there while it is connected. One key
+serves the whole installation; conversations and their cost are kept per organization, in that organization's own file.
+
+**Cost.** Each answer's tokens in and out are recorded with the price of the model that served it (a small table in Toner, updated
+with each release; a model Toner has no price for is counted as 0 and the panel says so). The limit is the installation's total
+over every organization for the calendar month: when it is reached nothing more is sent and the panel says **This organization's
+monthly spend limit (USD 20) is reached. Raise it under Settings > AI.** The **Automation/AI > Assistant** page shows this
+organization's month (conversations, tokens, cost), **USD 14.90 of 20 across all organizations**, what the Assistant can see, and
+the conversation list; in Global it shows every organization's month side by side and the total.
 
 ## Without the window
 

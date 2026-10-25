@@ -6,9 +6,9 @@ import traceback
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence, QPainter, QPixmap, QShortcut
-from PySide6.QtWidgets import QApplication, QMainWindow, QMenu, QMessageBox, QSystemTrayIcon
+from PySide6.QtWidgets import QApplication, QMainWindow, QMenu, QMessageBox, QSplitter, QSystemTrayIcon
 from core import agents, audit, checks, db, demarc, display, legacyssh, notify, paths, reports, sessionlog, sessions, trends, trust, tunnel, updates
 from ui import theme
 from ui.about import AboutTab
@@ -26,6 +26,8 @@ from ui.results import ResultsTab
 from ui.scheduler import BackupScheduler, Scheduler
 from ui.sessions import SessionsTab
 from ui.automation import AutomationTab
+from ui.assistant import AssistantPanel, SideButton, PANEL_WIDTH
+from core import assistant as AI
 from ui.settings import SettingsTab
 from ui.tools import ToolsTab
 
@@ -83,6 +85,8 @@ def apply_look(app):
 
 
 class Main(QMainWindow):
+    ai_state_changed = Signal(object, str)          # the Assistant's connection was checked (on another thread): connected?, the sentence
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Toner")
@@ -171,11 +175,34 @@ class Main(QMainWindow):
                                   (self.inventory, "Inventory", "inventory"), (self.configs, "Configs", "configs"),
                                   (self.history, "History", "history"), (self.reports, "Reports", "reports"),
                                   (self.tools, "Tools", "tools"), (self.sessions, "Sessions", "sessions"),
-                                  (self.automation, "Automation", "automation"),
+                                  (self.automation, "Automation/AI", "automation"),
                                   (self.settings, "Settings", "settings"),
                                   (self.about, "About", "about")):
             tabs.addTab(page, label, icon)
-        self.setCentralWidget(tabs)
+        # the Assistant's panel sits beside the sections and pushes them narrower when it is open; its width is remembered
+        from ui.widgets import remember_sizes
+        self.assistant = AssistantPanel(self.screen_context)
+        self.assistant.hide()
+        self.body = QSplitter(Qt.Orientation.Horizontal)
+        self.body.setChildrenCollapsible(False)
+        self.body.setHandleWidth(1)
+        tabs.setMinimumWidth(600)                          # the sections can give the panel room (the top bar folds to icons by itself)
+        self.body.addWidget(tabs)
+        self.body.addWidget(self.assistant)
+        self.body.setStretchFactor(0, 1)
+        self.body.setStretchFactor(1, 0)
+        remember_sizes(self.body, "assistant_panel")
+        self.body.splitterMoved.connect(lambda *_: self._place_ai_button())
+        self.setCentralWidget(self.body)
+        self.ai_button = SideButton(self)                  # the round button at the right edge, on every section, while connected (a child of
+        self.ai_button.setAutoFillBackground(True)         # the window, not of the splitter, which would make it a pane)
+        self.ai_button.hide()
+        self.ai_button.clicked.connect(lambda: self.show_assistant(not self.assistant.isVisible()))
+        self.ai_state_changed.connect(self._ai_state)
+        AI.add_listener(lambda on, text: self.ai_state_changed.emit(on, text))
+        self.automation.assistant_page.open_requested.connect(self.open_assistant_conversation)
+        self.automation.assistant_page.settings_requested.connect(lambda: (self.go("Settings"), self.settings.select_page("AI")))
+        self.assistant.turn_done.connect(self.automation.assistant_page.refresh)
         from ui.statusstrip import StatusStrip
         self.strip = StatusStrip(self)
         self.statusBar().addWidget(self.strip, 1)
@@ -194,6 +221,7 @@ class Main(QMainWindow):
         tabs.leave_guard = lambda was, _to: tabs.stack.widget(was) is not self.settings or self.settings.confirm_leave()
         self.settings.orgs_changed.connect(self.refresh_orgs)
         self.refresh_orgs()
+        self.assistant.set_org(db.home())
         tabs.currentChanged.connect(lambda _i: self.update_headers())
         self.results.run_finished.connect(self.update_headers)
         self.inventory.changed.connect(self.update_headers)
@@ -212,10 +240,90 @@ class Main(QMainWindow):
         self.housekeeping.timeout.connect(self.do_housekeeping)
         self.housekeeping.start()
         QTimer.singleShot(5000, self.do_housekeeping)
+        QTimer.singleShot(0, AI.check_in_background)   # the same test as Settings > AI > Test, when a key is stored
+
+    # ---------- the Assistant (core/assistant, ui/assistant.py)
+    def _ai_state(self, connected, text):
+        """The connection check finished (startup, Test, Save): the strip's words, and the side button only while connected."""
+        self.strip.show_ai()
+        self.ai_button.set_provider(AI.provider_id())
+        self.ai_button.setVisible(bool(connected))
+        if not connected and self.assistant.isVisible():
+            self.show_assistant(False)
+        self.assistant.show_model()
+        self.automation.assistant_page.refresh()
+        self._place_ai_button()
+
+    def show_assistant(self, on=True):
+        """Open the panel (the sections get narrower, never covered) or close it."""
+        on = bool(on)
+        if on == self.assistant.isVisible():
+            return
+        if on:
+            self.assistant.setVisible(True)
+            sizes = self.body.sizes()
+            remembered = (db.get_setting("splitters") or {}).get("assistant_panel")
+            if len(sizes) == 2 and (not remembered or sizes[1] < self.assistant.minimumWidth()):
+                total = sum(sizes)
+                self.body.setSizes([max(300, total - PANEL_WIDTH), PANEL_WIDTH])
+            self.assistant.input.setFocus()
+        else:
+            self.assistant.setVisible(False)
+        self.ai_button.setChecked(on)
+        self._place_ai_button()
+
+    def open_assistant_conversation(self, conv_id, org):
+        """Automation/AI > Assistant > Open: that conversation in the panel (its organization is picked first when it is another)."""
+        if org != db.home():
+            self.set_org(org)
+        self.assistant.open_conversation(conv_id, org)
+        self.show_assistant(True)
+
+    def _place_ai_button(self):
+        """Pinned at the right edge of the window, vertically centred; at the panel's left edge while the panel is open."""
+        b = self.ai_button
+        x = (self.assistant.x() - b.width() // 2) if self.assistant.isVisible() else (self.body.width() - b.width() - 8)
+        from PySide6.QtCore import QPoint
+        b.move(self.body.mapTo(self, QPoint(max(0, x), max(0, (self.body.height() - b.height()) // 2))))
+        b.raise_()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if getattr(self, "ai_button", None) is not None:
+            self._place_ai_button()
+
+    def screen_context(self):
+        """What the Assistant is told about the screen: the section and page, the organization, and what the page says about itself."""
+        from core import orgs
+        page = self.tabs.currentWidget()
+        out = {"section": self.tabs.tabText(self.tabs.currentIndex()), "organization": orgs.name(db.home())}
+        inner = getattr(page, "tabs", None) or getattr(page, "pages", None)
+        if inner is not None and hasattr(inner, "currentWidget") and hasattr(inner, "tabText") and hasattr(inner, "indexOf"):
+            sub = inner.currentWidget()
+            try:
+                i = inner.indexOf(sub) if sub is not None else -1
+                if i >= 0:
+                    out["page"] = inner.tabText(i)
+            except Exception:
+                pass
+            if hasattr(sub, "screen_context") and not hasattr(page, "screen_context"):
+                page = sub
+        fn = getattr(page, "screen_context", None)
+        if callable(fn):
+            try:
+                detail = fn() or {}
+            except Exception as e:                                # noqa: BLE001  (a page that cannot describe itself does not stop the question)
+                detail = {"note": f"This page could not describe itself: {e}"}
+            if "page" in detail and "page" not in out:
+                out["page"] = detail.pop("page")
+            elif "page" in detail:
+                detail.pop("page")
+            out.update(detail)
+        return out
 
     # ---------- section headers
     HEADERS = (("inventory", "Inventory"), ("configs", "Configs"), ("history", "History"), ("reports", "Reports"), ("tools", "Tools"),
-               ("sessions", "Sessions"), ("automation", "Automation"), ("settings", "Settings"))
+               ("sessions", "Sessions"), ("automation", "Automation/AI"), ("settings", "Settings"))
 
     def _add_headers(self):
         """The same top line on every section: its name and a line of context (Overview and Results make their own; About is its own page)."""
@@ -303,8 +411,13 @@ class Main(QMainWindow):
 
     # ---------- navigation
     def go(self, section):
-        for i in range(self.tabs.count()):
-            if self.tabs.tabText(i) == section:
+        names = [self.tabs.tabText(i) for i in range(self.tabs.count())]
+        for i, name in enumerate(names):
+            if name == section:
+                self.tabs.setCurrentIndex(i)
+                return
+        for i, name in enumerate(names):                      # "Automation" still opens "Automation/AI"
+            if name.split("/")[0] == section:
                 self.tabs.setCurrentIndex(i)
                 return
 
@@ -353,6 +466,7 @@ class Main(QMainWindow):
 
     def _show_org(self):
         self.set_titles()
+        self.assistant.set_org(db.home())
         self.settings.reload(announce=False)           # its settings take effect here, once (the schedules too: the organization
         self.settings_applied(lists=False)             # being looked at runs through the sections)
         self._redraw_lists()
@@ -591,6 +705,7 @@ class Main(QMainWindow):
         app.setWindowIcon(app_icon(theme.current().get("accent", "#2563eb")))
         self.tabs.restyle()
         self.strip.restyle()
+        self.ai_button.restyle()
         self.inventory.refresh()
 
     def settings_applied(self, lists=True):
@@ -609,6 +724,9 @@ class Main(QMainWindow):
         self.backup_scheduler.apply()
         agents.apply()
         self.strip.restyle()
+        self.strip.show_ai()
+        self.ai_button.set_provider(AI.provider_id())
+        self.ai_button.restyle()
         if lists:
             self.results.refresh_groups()
             self.dashboard.refresh()
@@ -664,6 +782,7 @@ class Main(QMainWindow):
             return
         for v in list(self.views.values()):
             v.close()
+        self.assistant.shutdown()      # a question still being answered is stopped
         self.tools.shutdown()          # stop any running ping/scan/transfer before exiting
         self.automation.shutdown()     # stop a playbook that is still running
         self.sessions.shutdown()       # close every open terminal and finish its log

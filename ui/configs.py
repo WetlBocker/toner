@@ -398,3 +398,18 @@ class ConfigsTab(QWidget):
     def shutdown(self):
         if self.running():
             self.worker.wait(30000)
+
+
+    def screen_context(self):
+        """What the Assistant is told about this page: the device, the version(s) chosen, and the text shown (a configuration or a diff)."""
+        name = self.current_device()
+        out = {"page": "Configs", "selected_device": db.label(name) if name else ""}
+        rows = self.selected_rows()
+        if name and rows and self.versions:
+            out["selected_versions"] = [{"id": self.versions[r]["id"], "taken_at": self.versions[r]["taken_at"]} for r in rows if r < len(self.versions)]
+            comparing = len(rows) >= 2 or self.view.currentData() == "diff"
+            out["view"] = "comparison" if len(rows) >= 2 else ("changes from the previous version" if comparing else "full configuration")
+            out["note"] = self.note.text()
+            text = self.text.toPlainText() if comparing else backup.clean(self.text.toPlainText(), mask=True)
+            out["text"] = text[:20000] + ("\n[cut]" if len(text) > 20000 else "")
+        return out
