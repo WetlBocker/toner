@@ -388,7 +388,7 @@ def parse_dir(text):
     """`dir flash:` (IOS, IOS XE), `dir disk0:` (ASA) or `dir bootflash:` (NX-OS): {'files': {name: size}, 'total', 'free'}; None when
     the totals are not there. Folders (a 'd' flag, or a name ending in /) are left out."""
     t = text or ""
-    m = re.search(r"(\d+)\s+bytes total\s*\((\d+)\s+bytes free\)", t)
+    m = re.search(r"(\d+)\s+bytes total\s*\((\d+)\s+bytes free[^)]*\)", t)     # an ASA adds '/94% free' inside the brackets
     if m:
         total, free = int(m.group(1)), int(m.group(2))
     else:

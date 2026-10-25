@@ -281,6 +281,11 @@ check("dir on IOS: files with sizes, folders left out, total and free", FW.parse
 nx_dir = "  1979260416    Oct 22 10:00:00 2026  nxos64-cs.10.3.4a.M.bin\n        4096    Oct 22 10:00:00 2026  .rpmstore/\n\nUsage for bootflash://sup-local\n 2539487232 bytes used\n 50766032896 bytes free\n 53305520128 bytes total\n"
 check("dir bootflash: on NX-OS (its totals are on separate lines)", FW.parse_dir(nx_dir) == {"files": {"nxos64-cs.10.3.4a.M.bin": 1979260416}, "total": 53305520128, "free": 50766032896})
 check("no totals: unreadable", FW.parse_dir("% Invalid input detected at '^' marker.") is None)
+real_asa = ("\nDirectory of disk0:/\n\n89     -rwx  32738244     18:30:26 May 11 2020  asdm-792-152.bin\n4      drwx  4096         17:29:48 Nov 01 2018  log\n"
+            "94     -rwx  107698176    19:56:14 Sep 26 2024  asa9-12-4-67-smp-k8.bin\n\n5 file(s) total size: 432483693 bytes\n"
+            "8238170112 bytes total (7804764160 bytes free/94% free)\n")
+check("dir disk0: on an ASA 5515 (its free line adds a percentage)", FW.parse_dir(real_asa) ==
+      {"files": {"asdm-792-152.bin": 32738244, "asa9-12-4-67-smp-k8.bin": 107698176}, "total": 8238170112, "free": 7804764160})
 check("boot statements per platform; on IOS XE the current and the next reload's both count", FW.parse_boot("cisco_xe", "BOOT variable = flash:packages.conf;\nBoot Variables on next reload:\nBOOT variable = flash:x.bin;") == ["packages.conf", "x.bin"]
       and FW.parse_boot("cisco_xe", "BOOT variable = flash:a.bin;\nBOOT variable = flash:a.bin;") == ["a.bin"]
       and FW.parse_boot("cisco_ios", "BOOT path-list      : flash:/a.bin;flash:/b.bin\n") == ["a.bin", "b.bin"]

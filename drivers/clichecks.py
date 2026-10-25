@@ -122,8 +122,9 @@ def junos_ntp(text):
 
 # ---------------------------------------------------------------- storage
 def flash_usage(text):
-    """`dir flash:` / `dir bootflash:` end with '7651819520 bytes total (6342328320 bytes free)' -> (used %, free bytes); None if absent."""
-    m = re.search(r"(\d+)\s+bytes total\s*\((\d+)\s+bytes free\)", text or "")
+    """`dir flash:` / `dir bootflash:` end with '7651819520 bytes total (6342328320 bytes free)' -> (used %, free bytes); None if absent.
+    An ASA writes '(7804764160 bytes free/94% free)'."""
+    m = re.search(r"(\d+)\s+bytes total\s*\((\d+)\s+bytes free[^)]*\)", text or "")
     if not m or int(m.group(1)) == 0:
         return None
     total, free = int(m.group(1)), int(m.group(2))

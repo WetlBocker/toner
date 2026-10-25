@@ -67,6 +67,7 @@ check("not saved: the last change is newer, and says when", r[0] is True and "20
 check("never saved: a change and no save", C.unsaved_ios("! Last configuration change at 10:21:33 UTC Tue Oct 6 2026\n")[0] is True)
 check("nothing readable: None", C.unsaved_ios("") is None)
 check("flash: used percentage and free bytes", C.flash_usage("Directory of flash:/\n122185728 bytes total (80211968 bytes free)\n")[0] == (122185728 - 80211968) / 122185728 * 100 and C.flash_usage("nope") is None)
+check("flash on an ASA: its free line adds a percentage", C.flash_usage("8238170112 bytes total (7804764160 bytes free/94% free)\n")[1] == 7804764160)
 
 print("== Cisco: stacks, redundancy, port-channels, failover")
 sw = "Switch/Stack Mac Address : 0011.2233.4455 - Local Mac Address\n                                           H/W   Current\nSwitch#  Role    Mac Address     Priority Version  State \n----------------------------------------------------------\n*1       Active   0011.2233.4455     15     V01     Ready\n 2       Standby  0011.2233.4466     14     V01     Ready\n 3       Member   0011.2233.4477      1     V01     Version Mismatch\n"

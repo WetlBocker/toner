@@ -311,6 +311,8 @@ class CiscoFake(ShellServer):
                 out += f"{i:<6} -rwx  {size:<10} 10:00:00 Oct 22 2026  {name}\n"
             else:
                 out += f"{i:>6}  -rw-  {size:>12}  Oct 22 2026 10:00:00 +00:00  {name}\n"
+        if self.platform == "cisco_asa":                       # as an ASA 5515 prints it, percentage and all
+            return out + f"\n{len(files)} file(s) total size: {fs.used()} bytes\n{fs.total} bytes total ({fs.free()} bytes free/{fs.free() * 100 // fs.total}% free)\n"
         return out + f"\n{fs.total} bytes total ({fs.free()} bytes free)\n"
 
     def show_boot(self):
