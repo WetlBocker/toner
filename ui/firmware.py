@@ -696,9 +696,14 @@ class ImagesStep(QWidget):
             self.table.setCellWidget(row, 5, pick)
             self.table.setCellWidget(row, 6, md5)
             self.table.setItem(row, 7, QTableWidgetItem(""))
+            self.table.setRowHeight(row, pick.sizeHint().height() + 6)        # the editors are taller than a text row
             pick.currentIndexChanged.connect(lambda *_: self._sync())
             md5.textChanged.connect(lambda *_: self._sync())
-        self.table.resizeColumnsToContents()
+        for col in range(5):                                # one by one: resizeColumnsToContents() undoes the stretched last column
+            self.table.resizeColumnToContents(col)
+        widest = max([self.table.cellWidget(i, 5).sizeHint().width() for i in range(self.table.rowCount())] or [0])
+        self.table.setColumnWidth(5, widest + 12)
+        self.table.setColumnWidth(6, self.table.fontMetrics().horizontalAdvance("0" * 34) + 24)
         if self.results:
             self.table.setCurrentCell(0, 5)
         self._sync()
@@ -821,6 +826,7 @@ class TransferStep(QWidget):
             self.table.setItem(row, 3, QTableWidgetItem(""))
             self.rows[r["key"]], self.bars[r["key"]] = row, bar
         self.table.resizeColumnToContents(0)
+        self.table.setColumnWidth(2, self.table.fontMetrics().horizontalAdvance("100 %  (999.9 MB of 999.9 MB)") + 24)
         self.job = TransferJob(self.work, src, vrf, then)
         self.job.step.connect(self._step)
         self.job.finished.connect(self._done)

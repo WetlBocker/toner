@@ -835,6 +835,15 @@ def target_path(platform, fs, name):
     return f"{fs}/{name}" if platform == "cisco_asa" else f"{fs}{name}"
 
 
+def cant_reach_hint(words, src):
+    """What to add when the device's words say it could not open a connection to the server (Toner itself listed the server
+    from this computer, so the server is up): where to look. '' for any other failure."""
+    if not re.search(r"Resource temporarily unavailable|Timed out|refused|unreachable", words, re.I):
+        return ""
+    return (f" The device could not connect to {src['host']} port {src['port']}; Toner could, from this computer. Check the server's "
+            f"firewall from the device's side{' and, for FTP, its passive-mode settings' if src['proto'] == 'ftp' else ''}.")
+
+
 def copy_command(platform, url, name, vrf):
     """IOS and IOS XE copy to flash: (and answer the file name question); NX-OS needs the VRF; ASA asks nothing with /noconfirm."""
     if platform == "cisco_nxos":
@@ -929,7 +938,7 @@ def transfer(dev, r, choice, src, vrf="management", on_step=None, cancel=None, p
             got = (listing.get("files") or {}).get(name)
             if re.search(r"%\s*Error|Error opening|Invalid input", out, re.I) and got != size:
                 words = next((l.strip() for l in out.splitlines() if re.search(r"%\s*Error|Error opening|Invalid", l, re.I)), "")
-                return fail(f"The copy failed: {mask(words, secrets)}.")
+                return fail(f"The copy failed: {mask(words, secrets)}.{cant_reach_hint(words, src)}")
             if got != size:
                 return fail(f"The copy stopped at {human_size(got or 0)} of {human_size(size)}.")
             say("Copying", (size, size), "")

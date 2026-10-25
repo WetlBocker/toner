@@ -385,6 +385,17 @@ with db.within(lab):
 check("with the enable password on the device, the check reads the ASA's flash", not r["held"] and r["flashes"][0]["fs"] == "disk0:"
       and r["flashes"][0]["free"] is not None and r["version"] == "9.16(4)", r)
 check("...the enable password was typed to the device, not the login password a second time", asa_en.commands.count("En-pw-9") >= 1)
+HINT = " The device could not connect to 10.0.0.10 port 2121; Toner could, from this computer. Check the server's firewall from the device's side and, for FTP, its passive-mode settings."
+asa_words = "%Error opening ftp://WetlesenFTP:****@10.0.0.10:2121/asa9-14-4-smp-k8.bin (Resource temporarily unavailable)"
+check("a device that could not open the server gets the agreed hint", FW.cant_reach_hint(asa_words, {"proto": "ftp", "host": "10.0.0.10", "port": 2121}) == HINT
+      and FW.cant_reach_hint("%Error opening tftp://10.0.0.10/x.bin (Timed out)", {"proto": "tftp", "host": "10.0.0.10", "port": 69})
+      == " The device could not connect to 10.0.0.10 port 69; Toner could, from this computer. Check the server's firewall from the device's side.")
+check("any other failure gets none", FW.cant_reach_hint("%Error opening ftp://x/y.bin (No such file or directory)", src) == "")
+dead = {**src, "port": 1}                                        # nothing listens there: the device's copy is refused
+r_tr = FW.transfer(dev_en, r, {"name": "asa9-18-1-smp-k8.bin", "size": 100, "md5": "0" * 32}, dead, poll=0.1)
+check("the refused copy says so with the device's words, then where to look", not r_tr["ok"] and "refused" in r_tr["detail"].lower()
+      and r_tr["detail"].endswith(" The device could not connect to 127.0.0.1 port 1; Toner could, from this computer. Check the server's firewall from the "
+                                  "device's side and, for FTP, its passive-mode settings."), r_tr["detail"])
 CHANGES = re.compile(r"^(copy|delete|install|boot|no |write|reload)", re.I)
 def config_lines(cmds):
     """What was typed in configuration mode."""
@@ -583,6 +594,10 @@ check("the devices that came through, in order", names_im == ["asa1", "bundle1",
 row = {n: i for i, n in enumerate(names_im)}
 pick = lambda n: im.table.cellWidget(row[n], 5)
 md5box = lambda n: im.table.cellWidget(row[n], 6)
+check("the rows are as tall as their editors; Image and MD5 fit; Fits stretches to the edge", im.table.rowHeight(row["ios1"]) >= pick("ios1").sizeHint().height()
+      and im.table.columnWidth(5) >= pick("ios1").sizeHint().width() and im.table.columnWidth(6) >= im.table.fontMetrics().horizontalAdvance("0" * 32)
+      and im.table.horizontalHeader().stretchLastSection() and sum(im.table.columnWidth(i) for i in range(8)) >= im.table.viewport().width(),
+      (im.table.rowHeight(0), pick("ios1").sizeHint().height(), [im.table.columnWidth(i) for i in range(8)], im.table.viewport().width()))
 check("each starts skipped; the drop-down holds the server's files", pick("ios1").currentText() == "(skip this device)" and
       [pick("ios1").itemText(i) for i in range(1, pick("ios1").count())] == WANT)
 check("the stack's free space per member, and the freed space after Clean up", im.table.item(row["stack1"], 3).text().startswith("switch 1: ")
@@ -648,6 +663,7 @@ check("the columns, and every device waiting or under way", [tr.table.horizontal
 pump(lambda: not tr.running(), 3000)
 steps = {tr.table.item(i, 0).text(): (tr.table.item(i, 1).text(), tr.table.item(i, 3).text(), tr.table.cellWidget(i, 2)) for i in range(tr.table.rowCount())}
 check("the good copies are Done", all(steps[n][0] == "Done" for n in ("ios1", "nx1", "stack1")), {n: s[:2] for n, s in steps.items()})
+check("the Progress column fits its longest text", tr.table.columnWidth(2) >= tr.table.fontMetrics().horizontalAdvance("100 %  (999.9 MB of 999.9 MB)") + 16)
 check("progress was polled from a second session and reached 100 %", all(any(0 < d < t for d, t in seen_progress.get(k, [])) for k in ("ios1", "stack1"))
       and steps["ios1"][2].value() == 1000 and steps["ios1"][2].format() == "100 %  (2 KB of 2 KB)", (seen_progress.get("ios1"), steps["ios1"][2].format()))
 check("the image is on each device with the server's MD5", fakes["ios1"].fs["flash:"].files[IOS][1] == MD5[IOS] and fakes["nx1"].fs["bootflash:"].files[NX][1] == MD5[NX]
