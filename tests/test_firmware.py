@@ -5,7 +5,7 @@ import os as _os, sys as _sys, tempfile as _tmp
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-import logging, os, re, socket, sys, time
+import logging, os, re, socket, sys, threading, time
 SP = os.environ["SP"]
 os.environ["NETCHECK_DB"] = os.path.join(SP, "fw%d.db" % int(time.time())); os.environ["APPDATA"] = os.path.join(SP, "fwapp%d" % int(time.time()))
 import keyring
@@ -122,6 +122,66 @@ missing = ShellServer(user="u", password="scp-pw", exec_handler=lambda cmd: (b""
 check("...and a missing folder there", raises(lambda: FW.list_files({**ssrc, "proto": "scp", "port": missing.port, "password": "scp-pw", "folder": "/nowhere"}))
       == "The folder /nowhere was not found on the server.")
 
+print("== another server: HTTP and HTTPS (typed file names, each checked with a HEAD request)")
+import base64 as _b64, http.server as _hs, ssl as _ssl
+from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+class ImagesSite(_hs.SimpleHTTPRequestHandler):
+    """The images folder on the web, behind a basic-auth login."""
+    def __init__(self, *a, **k): super().__init__(*a, directory=base, **k)
+    def log_message(self, *a): pass
+    def _ok(self):
+        if self.headers.get("Authorization") != "Basic " + _b64.b64encode(b"web:Web-pass-9").decode():
+            self.send_response(401); self.send_header("WWW-Authenticate", 'Basic realm="images"'); self.end_headers(); return False
+        return True
+    def do_HEAD(self):
+        if self._ok(): super().do_HEAD()
+    def do_GET(self):
+        if self._ok(): super().do_GET()
+def make_cert(folder, name):
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+    import ipaddress
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "fake-images")])
+    now = _dt.now(_tz.utc)
+    cert = (x509.CertificateBuilder().subject_name(subject).issuer_name(subject).public_key(key.public_key())
+            .serial_number(x509.random_serial_number()).not_valid_before(now - _td(days=1)).not_valid_after(now + _td(days=30))
+            .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]), False).sign(key, hashes.SHA256()))
+    cp, kp = os.path.join(folder, name + ".crt"), os.path.join(folder, name + ".key")
+    open(cp, "wb").write(cert.public_bytes(serialization.Encoding.PEM))
+    open(kp, "wb").write(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+    return cp, kp
+web = _hs.ThreadingHTTPServer(("127.0.0.1", 0), ImagesSite); threading.Thread(target=web.serve_forever, daemon=True).start()
+tls = _hs.ThreadingHTTPServer(("127.0.0.1", 0), ImagesSite)
+_cp, _kp = make_cert(SP, "images-self-signed")
+_ctx = _ssl.SSLContext(_ssl.PROTOCOL_TLS_SERVER); _ctx.minimum_version = _ssl.TLSVersion.TLSv1_2; _ctx.load_cert_chain(_cp, _kp); tls.socket = _ctx.wrap_socket(tls.socket, server_side=True)
+threading.Thread(target=tls.serve_forever, daemon=True).start()
+WEB_PORT, TLS_PORT = web.server_address[1], tls.server_address[1]
+XE_, IOS_ = "cat9k_iosxe.17.09.04a.SPA.bin", "c2960x-universalk9-mz.152-7.E9.bin"
+hsrc = {"own": False, "proto": "http", "host": "127.0.0.1", "port": WEB_PORT, "user": "web", "password": "Web-pass-9", "folder": "/firmware",
+        "anonymous": False, "files": [XE_, IOS_], "insecure": False}
+check("the protocols another server can be, and their usual ports", FW.OTHER_PROTOS == ("ftp", "sftp", "scp", "tftp", "http", "https") and FW.NAMED == ("tftp", "http", "https")
+      and [FW.DEFAULT_PORTS[p] for p in FW.NAMED] == [69, 80, 443] and [FW.PROTO_NAMES[p] for p in ("http", "https")] == ["HTTP", "HTTPS"]
+      and all(FW.can_fetch(p, x) for p in FW.PLATFORMS for x in ("http", "https")))
+files = FW.list_files(hsrc)
+check("HTTP: each typed name is asked for and its size read; no date", [(f["name"], f["size"], f["modified"]) for f in files] == [(IOS_, IMAGES[IOS_], None), (XE_, IMAGES[XE_], None)], files)
+check("...and the line under the list", FW.summary(hsrc, files) == "2 files in /firmware on 127.0.0.1 (HTTP).")
+check("a name that is not there, in the agreed words", raises(lambda: FW.list_files({**hsrc, "files": [XE_, "nope.bin"]})) == "nope.bin was not found on the server.")
+check("a wrong login", raises(lambda: FW.list_files({**hsrc, "password": "x"})) == FW.REFUSED)
+check("nothing listening", (raises(lambda: FW.list_files({**hsrc, "port": 1})) or "").startswith("Could not connect to 127.0.0.1 port 1:"))
+ssl_src = {**hsrc, "proto": "https", "port": TLS_PORT}
+why = raises(lambda: FW.list_files(ssl_src)) or ""
+check("HTTPS with a self-signed certificate is not accepted from this computer unless the box is ticked", why.startswith("Could not connect to 127.0.0.1 port") and "certificate" in why
+      and [f["size"] for f in FW.list_files({**ssl_src, "insecure": True})] == [IMAGES[IOS_], IMAGES[XE_]], why)
+check("the copy URL over HTTP(S) carries the login like FTP, and none when there is no user", FW.copy_url(hsrc, XE_) == f"http://web:Web-pass-9@127.0.0.1:{WEB_PORT}/firmware/{XE_}"
+      and FW.copy_url({**ssl_src, "port": 443, "user": "", "password": ""}, XE_) == f"https://127.0.0.1/firmware/{XE_}")
+check("...and its password is masked", FW.mask(f"copy {FW.copy_url(hsrc, XE_)} flash:", []) == f"copy http://web:****@127.0.0.1:{WEB_PORT}/firmware/{XE_} flash:")
+import _cisco_fake
+check("the fake device fetches over HTTP and HTTPS (no trustpoint, like a lab)", _cisco_fake.fetch(FW.copy_url(hsrc, XE_)) == open(os.path.join(images, XE_), "rb").read()
+      and _cisco_fake.fetch(FW.copy_url(ssl_src, IOS_)) == open(os.path.join(images, IOS_), "rb").read())
+
 print("== Toner's own servers")
 own_ftp = F.FtpServer(images, "toner", "Own-ftp-pass1", port=0, bind="127.0.0.1", passive_ports=(50540, 50550)); own_ftp.start()
 own_tftp = F.TftpServer(images, port=0, bind="127.0.0.1"); own_tftp.start()
@@ -138,6 +198,25 @@ check("Toner's own source signs in with the server's own login, at the address t
 files = FW.list_files(FW.own_source("tftp", own_tftp, "10.0.0.5"))
 check("its folder is listed from this computer, without the unfinished upload or the sub-folder (TFTP cannot list)", names(files) == WANT, names(files))
 check("this computer's addresses are offered", FW.addresses() and all(a.count(".") == 3 for a in FW.addresses()))
+
+print("== another server: TFTP (typed file names, the size asked for with tsize)")
+tsrc = {"own": False, "proto": "tftp", "host": "127.0.0.1", "port": own_tftp.port, "user": "", "password": "", "folder": "/", "anonymous": False, "files": [IOS_], "insecure": False}
+check("the size comes from the server's tsize answer; nothing is downloaded", [(f["name"], f["size"]) for f in FW.list_files(tsrc)] == [(IOS_, IMAGES[IOS_])])
+check("a name that is not there", raises(lambda: FW.list_files({**tsrc, "files": ["nope.bin"]})) == "nope.bin was not found on the server.")
+check("no answer", (raises(lambda: FW.list_files({**tsrc, "port": 1}, timeout=1)) or "").startswith("Could not connect to 127.0.0.1 port 1:"))
+plain = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); plain.bind(("127.0.0.1", 0))              # a TFTP server that knows no options
+def _no_options():
+    import struct
+    while True:
+        try: _pkt, who = plain.recvfrom(2000)
+        except OSError: return
+        plain.sendto(struct.pack("!HH", 3, 1) + b"x" * 10, who)
+threading.Thread(target=_no_options, daemon=True).start()
+nosize = FW.list_files({**tsrc, "port": plain.getsockname()[1]})
+check("a server that gives no size: the file is listed without one, and the line under the list says so", nosize[0]["size"] is None
+      and FW.summary(tsrc, nosize) == f"1 file in / on 127.0.0.1 (TFTP). The server did not give the size of {IOS_}; Fits is not checked for it.")
+check("...and Fits is not checked for it", FW.room_for({"flashes": [{"free": 10, "files": {}}]}, IOS_, None) == [])
+
 
 print("== remembering the other server, per organization")
 acme, beta = orgs.create("Acme", "ACME"), orgs.create("Beta", "BETA")
@@ -231,7 +310,20 @@ sv.other_btn.click()
 check("another server: the form, FTP on port 21, anonymous offered", sv.where.currentIndex() == 1 and sv.proto.currentData() == "ftp" and sv.port.value() == 21 and sv.anonymous.isVisibleTo(sv))
 check("Test waits for a host and a user name", not sv.test.isEnabled())
 sv.proto.setCurrentIndex(sv.proto.findData("sftp")); check("SFTP: port 22, no anonymous", sv.port.value() == 22 and not sv.anonymous.isVisibleTo(sv))
-sv.proto.setCurrentIndex(sv.proto.findData("ftp")); check("back to FTP: port 21", sv.port.value() == 21)
+check("the protocols offered", [sv.proto.itemText(i) for i in range(sv.proto.count())] == ["FTP", "SFTP", "SCP", "TFTP", "HTTP", "HTTPS"])
+sv.proto.setCurrentIndex(sv.proto.findData("http"))
+check("HTTP: port 80, a box for the file names, Check files, a login but no anonymous", sv.port.value() == 80 and sv.names_box.isVisibleTo(sv) and sv.test.text() == "Check files"
+      and sv.login_box.isVisibleTo(sv) and not sv.anonymous.isVisibleTo(sv) and not sv.insecure.isVisibleTo(sv))
+sv.proto.setCurrentIndex(sv.proto.findData("https"))
+check("HTTPS: port 443 and the certificate box", sv.port.value() == 443 and sv.insecure.isVisibleTo(sv)
+      and sv.insecure.text() == "Don't check the server's certificate from this computer (self-signed)")
+sv.proto.setCurrentIndex(sv.proto.findData("tftp"))
+check("TFTP: port 69, no login", sv.port.value() == 69 and not sv.login_box.isVisibleTo(sv) and sv.names_box.isVisibleTo(sv) and not sv.insecure.isVisibleTo(sv))
+sv.host.setText("127.0.0.1"); check("Check files waits for a file name", not sv.test.isEnabled())
+sv.names.setPlainText("x.bin\n"); check("...and goes once one is typed, with no login needed", sv.test.isEnabled() and sv.source()["files"] == ["x.bin"] and sv.source()["user"] == "")
+sv.names.clear(); sv.host.clear()
+sv.proto.setCurrentIndex(sv.proto.findData("ftp")); check("back to FTP: port 21, Test and list files, the login back", sv.port.value() == 21 and sv.test.text() == "Test and list files"
+                                                          and sv.login_box.isVisibleTo(sv) and not sv.names_box.isVisibleTo(sv))
 sv.host.setText("127.0.0.1"); sv.port.setValue(ftp.port); sv.user.setText("fwuser"); sv.password.setText("Ftp-pass-123"); sv.folder.setText("/firmware")
 check("the password is shown as dots", sv.password.echoMode() == sv.password.EchoMode.Password)
 sv.anonymous.setChecked(True); check("anonymous: no user name or password to type", not sv.user.isEnabled() and not sv.password.isEnabled()); sv.anonymous.setChecked(False)
@@ -246,6 +338,17 @@ sv.password.setText("Ftp-pass-123"); sv.remember.setChecked(False); sv.test.clic
 with db.within(acme):
     check("listing with Remember unticked forgets what was remembered", sv.ready() and FW.saved() is None and ("netcheck", f"org{acme}/firmware-source") not in STORE)
 sv.remember.setChecked(True); sv.test.click(); pump(lambda: not sv.busy() and sv.status.text() != "Listing...")
+sv.proto.setCurrentIndex(sv.proto.findData("http")); sv.port.setValue(WEB_PORT); sv.user.setText("web"); sv.password.setText("Web-pass-9"); sv.names.setPlainText(f"{XE_}\nnope.bin")
+sv.test.click(); pump(lambda: not sv.busy() and sv.status.text() != "Listing...")
+check("Check files over HTTP: a name that is not there stops it, in the agreed words", sv.status.text() == "nope.bin was not found on the server." and not sv.ready(), sv.status.text())
+sv.names.setPlainText(XE_); sv.test.click(); pump(lambda: not sv.busy() and sv.status.text() != "Listing...")
+check("...with good names the sizes are shown and the step is ready", sv.ready() and sv.table.rowCount() == 1 and sv.table.item(0, 0).text() == XE_
+      and sv.table.item(0, 1).text() == FW.human_size(IMAGES[XE_]) and sv.table.item(0, 2).text() == "" and sv.status.text() == "1 file in /firmware on 127.0.0.1 (HTTP).", sv.status.text())
+with db.within(acme):
+    check("the typed names are remembered with the server", FW.saved()["files"] == [XE_] and FW.saved()["proto"] == "http")
+sv.load(); check("...and come back when the page loads", sv.proto.currentData() == "http" and sv.names.toPlainText() == XE_ and sv.test.text() == "Check files")
+sv.proto.setCurrentIndex(sv.proto.findData("ftp")); sv.port.setValue(ftp.port); sv.user.setText("fwuser"); sv.password.setText("Ftp-pass-123")
+sv.test.click(); pump(lambda: not sv.busy() and sv.status.text() != "Listing...")
 
 print("== NX-OS, starting over, and another organization")
 page.back.click(); check("Back goes to Devices with the ticks kept", page.step_line.text() == "Step 1 of 6: Devices" and set(page.devices.ticked_keys()) == {"sw-core", "fw1"})
@@ -396,6 +499,21 @@ r_tr = FW.transfer(dev_en, r, {"name": "asa9-18-1-smp-k8.bin", "size": 100, "md5
 check("the refused copy says so with the device's words, then where to look", not r_tr["ok"] and "refused" in r_tr["detail"].lower()
       and r_tr["detail"].endswith(" The device could not connect to 127.0.0.1 port 1; Toner could, from this computer. Check the server's firewall from the "
                                   "device's side and, for FTP, its passive-mode settings."), r_tr["detail"])
+print("== a copy over HTTP (the ASA pulls from the web server)")
+import hashlib as _hl
+ASA_ = "asa9-18-4-smp-k8.bin"
+asa_md5 = _hl.md5(open(os.path.join(images, ASA_), "rb").read()).hexdigest()
+OK_REACH["127.0.0.1"]["ports"].add(WEB_PORT)
+with db.within(lab):
+    r_web = FW.collect(dev_en, hsrc)
+check("Check devices with an HTTP source: the ASA pings the server (its port is not checked)", not r_web["held"] and r_web["ping"] and r_web["note"] == f"Port {WEB_PORT} not checked (ping only)", r_web)
+r_tr = FW.transfer(dev_en, r_web, {"name": ASA_, "size": IMAGES[ASA_], "md5": asa_md5}, hsrc, poll=0.1)
+check("the copy over HTTP: fetched with the login in the URL, MD5 verified", r_tr["ok"] and f"copy /noconfirm http://web:Web-pass-9@127.0.0.1:{WEB_PORT}/firmware/{ASA_} disk0:/{ASA_}" in asa_en.commands
+      and asa_en.fs["disk0:"].files[ASA_][1] == asa_md5, r_tr)
+check("...the web login is masked in the session log", "http://web:****@" in FW.log_path(dev_en).read_text(encoding="utf-8") and "Web-pass-9" not in FW.log_path(dev_en).read_text(encoding="utf-8"))
+r_tr = FW.transfer(dev_en, r_web, {"name": ASA_, "size": None, "md5": asa_md5}, hsrc, poll=0.1)
+check("a file whose size the server did not give still copies: the device's own size counts", r_tr["ok"], r_tr)
+
 CHANGES = re.compile(r"^(copy|delete|install|boot|no |write|reload)", re.I)
 def config_lines(cmds):
     """What was typed in configuration mode."""

@@ -402,9 +402,12 @@ or stacked), NX-OS and ASA devices, inside one organization (pick it in the side
 
 1. **Devices**: tick the Cisco devices. Other vendors' devices are listed, greyed, with the reason.
 2. **Image server**: where the images are. One of Toner's own file servers that is running (FTP, SFTP, SCP on the SFTP / SCP
-   server, or TFTP) at the address the devices see, or another FTP, SFTP or SCP server, whose login can be remembered for the
-   organization (the password in the vault). *Test and list files* lists the folder, and that list is what you pick from. Each
-   device pulls its image itself, so the server must be reachable from the devices, not only from this computer.
+   server, or TFTP) at the address the devices see, or another FTP, SFTP, SCP, TFTP, HTTP or HTTPS server, whose login can be
+   remembered for the organization (the password in the vault). *Test and list files* lists the folder, and that list is what
+   you pick from. TFTP, HTTP and HTTPS cannot list a folder: there you type the image file names, one per line, and *Check
+   files* asks the server for each one and its size (a self-signed HTTPS certificate can be skipped for Toner's own check; the
+   devices check it their own way). Each device pulls its image itself, so the server must be reachable from the devices, not
+   only from this computer.
 3. **Check devices**: Toner signs in to each device the way the checks do (its login and credential profile, jump host and
    proxy, the host key checked per Settings > Security), up to 8 at once, and reads the version, the install mode, the free
    space on every flash (every stack member's) and the boot statement, then checks from the device itself that the server

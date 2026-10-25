@@ -1,11 +1,13 @@
 """Tools > File transfer > Firmware Transfer: put a firmware image on Cisco devices (IOS, IOS XE, NX-OS, ASA).
 
-Each device pulls its image itself from a source server: Toner's own FTP, SFTP / SCP or TFTP server, or another FTP, SFTP or
-SCP server. Toner lists the source's folder from here so the technician picks from what is really there. Nothing in this
-module reloads a device, ever.
+Each device pulls its image itself from a source server: Toner's own FTP, SFTP / SCP or TFTP server, or another FTP, SFTP,
+SCP, TFTP, HTTP or HTTPS server. Toner lists the source's folder from here so the technician picks from what is really there;
+TFTP and HTTP(S) cannot list, so there the technician types the file names and Toner checks each one. Nothing in this module
+reloads a device, ever.
 
 Sources are plain dicts:
-    {"own": bool, "proto": "ftp"|"sftp"|"scp"|"tftp", "host", "port", "user", "password", "folder", "anonymous": bool}
+    {"own": bool, "proto": "ftp"|"sftp"|"scp"|"tftp"|"http"|"https", "host", "port", "user", "password", "folder",
+     "anonymous": bool, "files": [typed names, for tftp/http/https], "insecure": bool (https: Toner's own check skips the certificate)}
 For Toner's own server, "host" is this computer's address as the devices see it and "folder" is the server's folder on disk.
 """
 import ftplib
@@ -24,11 +26,14 @@ from core import db, vendors
 PLATFORMS = ("cisco_ios", "cisco_xe", "cisco_nxos", "cisco_asa")
 PLATFORM_NAMES = dict(vendors.VENDORS["cisco"]["platforms"])          # cisco_xe -> 'IOS XE'
 # the copy clients each platform has (IOS and ASA have no SFTP client)
-CLIENTS = {"cisco_ios": ("ftp", "scp", "tftp"), "cisco_xe": ("ftp", "sftp", "scp", "tftp"),
-           "cisco_nxos": ("ftp", "sftp", "scp", "tftp"), "cisco_asa": ("ftp", "scp", "tftp")}
-PROTO_NAMES = {"ftp": "FTP", "sftp": "SFTP", "scp": "SCP", "tftp": "TFTP"}
-DEFAULT_PORTS = {"ftp": 21, "sftp": 22, "scp": 22, "tftp": 69}
-OTHER_PROTOS = ("ftp", "sftp", "scp")                                # what "Another server" offers
+CLIENTS = {"cisco_ios": ("ftp", "scp", "tftp", "http", "https"), "cisco_xe": ("ftp", "sftp", "scp", "tftp", "http", "https"),
+           "cisco_nxos": ("ftp", "sftp", "scp", "tftp", "http", "https"), "cisco_asa": ("ftp", "scp", "tftp", "http", "https")}
+PROTO_NAMES = {"ftp": "FTP", "sftp": "SFTP", "scp": "SCP", "tftp": "TFTP", "http": "HTTP", "https": "HTTPS"}
+DEFAULT_PORTS = {"ftp": 21, "sftp": 22, "scp": 22, "tftp": 69, "http": 80, "https": 443}
+OTHER_PROTOS = ("ftp", "sftp", "scp", "tftp", "http", "https")      # what "Another server" offers
+NAMED = ("tftp", "http", "https")                                     # cannot list a folder: the file names are typed, each checked
+NOT_FOUND = "{name} was not found on the server."
+NO_SIZE = "The server did not give the size of {name}; Fits is not checked for it."
 SETTING = "firmware_source"                                           # the remembered server, per organization
 SECRET = "firmware-source"                                            # its password, in the vault under the organization's prefix
 NOT_CISCO = "Not a Cisco device ({vendor}). The wizard handles Cisco IOS, IOS XE, NX-OS and ASA."
@@ -78,7 +83,8 @@ def summary(src, files):
     if not files:
         return f"No files in {folder}. Put the images there and click Test and list files again."
     n = len(files)
-    return f"{n} file{'s' if n != 1 else ''} in {folder} on {src['host']} ({proto_label(src)})."
+    line = f"{n} file{'s' if n != 1 else ''} in {folder} on {src['host']} ({proto_label(src)})."
+    return " ".join([line] + [NO_SIZE.format(name=f["name"]) for f in files if "size" in f and f["size"] is None])
 
 
 # ---------------------------------------------------------------- Toner's own servers
@@ -135,11 +141,72 @@ def list_files(src, timeout=15):
     Raises SourceError with the line to show."""
     if src.get("own"):
         files = _list_local(src)
+    elif src["proto"] in NAMED:
+        files = _check_named(src, timeout)
     elif src["proto"] == "ftp":
         files = _list_ftp(src, timeout)
     else:
         files = _list_ssh(src, timeout)
     return sorted(files, key=lambda f: f["name"].lower())
+
+
+def _check_named(src, timeout):
+    """TFTP, HTTP and HTTPS cannot list a folder, so each typed name (src['files']) is asked for: HTTP(S) with a HEAD request
+    (the size from its Content-Length), TFTP with a read request that asks for the size (tsize) and is cancelled straight away.
+    A size the server does not give is None."""
+    folder = (src.get("folder") or "").strip("/")
+    out = []
+    for name in src.get("files") or []:
+        path = f"{folder}/{name}" if folder else name
+        size = _http_size(src, path, name, timeout) if src["proto"] in ("http", "https") else _tftp_size(src, path, name, timeout)
+        out.append({"name": name, "size": size, "modified": None})
+    return out
+
+
+def _http_size(src, path, name, timeout):
+    import requests
+    url = f"{src['proto']}://{src['host']}:{src['port']}/{path}"
+    auth = (src["user"], src.get("password") or "") if src.get("user") else None
+    try:
+        r = requests.head(url, auth=auth, timeout=timeout, verify=not src.get("insecure"), allow_redirects=True)
+    except requests.exceptions.SSLError:
+        raise _connect_failed(src, ValueError("the certificate was not accepted (self-signed?)")) from None
+    except requests.RequestException as e:
+        raise _connect_failed(src, getattr(e, "__context__", None) or e) from None
+    if r.status_code == 404:
+        raise SourceError(NOT_FOUND.format(name=name))
+    if r.status_code in (401, 403):
+        raise SourceError(REFUSED)
+    if r.status_code >= 400:
+        raise SourceError(f"The server answered {r.status_code} {r.reason} for {name}.")
+    length = r.headers.get("Content-Length", "")
+    return int(length) if length.isdigit() else None
+
+
+def _tftp_size(src, path, name, timeout):
+    """A read request with the tsize option (RFC 2349): the server answers with the size (OACK), or starts sending without
+    one, or says the file is not there. Toner cancels at once, so nothing is downloaded."""
+    import struct
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.settimeout(timeout)
+    try:
+        s.sendto(struct.pack("!H", 1) + path.encode() + b"\0octet\0tsize\x000\0", (src["host"], int(src["port"] or 69)))
+        try:
+            pkt, addr = s.recvfrom(70000)
+        except OSError as e:
+            raise _connect_failed(src, e) from None
+        op = struct.unpack("!H", pkt[:2])[0]
+        s.sendto(struct.pack("!HH", 5, 0) + b"size only\0", addr)
+        if op == 5:
+            code, words = struct.unpack("!H", pkt[2:4])[0], pkt[4:].rstrip(b"\0").decode(errors="replace")
+            raise SourceError(NOT_FOUND.format(name=name) if code == 1 else f"The server refused {name}: {words}.")
+        if op == 6:
+            fields = pkt[2:].split(b"\0")
+            opts = dict(zip(fields[0::2], fields[1::2]))
+            return int(opts[b"tsize"]) if opts.get(b"tsize", b"").isdigit() else None
+        return None
+    finally:
+        s.close()
 
 
 def _list_local(src):
@@ -310,7 +377,8 @@ def saved():
     if not data.get("host"):
         return None
     out = {"own": False, "proto": data.get("proto", "ftp"), "host": data["host"], "port": int(data.get("port") or 0),
-           "user": data.get("user", ""), "folder": data.get("folder", ""), "anonymous": bool(data.get("anonymous")), "password": ""}
+           "user": data.get("user", ""), "folder": data.get("folder", ""), "anonymous": bool(data.get("anonymous")), "password": "",
+           "files": list(data.get("files") or []), "insecure": bool(data.get("insecure"))}
     try:
         import keyring
         out["password"] = keyring.get_password(db.SERVICE, db.qualify(SECRET)) or ""
@@ -321,7 +389,7 @@ def saved():
 
 def remember(src):
     """Keep another server and its login for this organization: the password in the vault, the rest in its settings."""
-    db.set_setting(SETTING, {k: src.get(k) for k in ("proto", "host", "port", "user", "folder", "anonymous")})
+    db.set_setting(SETTING, {k: src.get(k) for k in ("proto", "host", "port", "user", "folder", "anonymous", "files", "insecure")})
     if src.get("password") and not src.get("anonymous"):
         db.set_secret(db.qualify(SECRET), src["password"])
     else:
@@ -339,7 +407,7 @@ def mask(text, secrets):
     out = str(text)
     for s in sorted({s for s in secrets if s}, key=len, reverse=True):
         out = out.replace(s, "****")
-    return re.sub(r"(\b(?:ftp|sftp|scp|tftp)://[^:/@\s]*:)[^@\s]*@", r"\1****@", out)
+    return re.sub(r"(\b(?:ftp|sftp|scp|tftp|https?)://[^:/@\s]*:)[^@\s]*@", r"\1****@", out)
 
 
 # ================================================================ reading the devices (step 3: Check devices)
@@ -821,7 +889,7 @@ def copy_url(src, name):
     port = "" if int(src["port"]) == DEFAULT_PORTS[proto] else f":{src['port']}"
     folder = "" if src.get("own") else (src.get("folder") or "").strip("/")
     path = f"{folder}/{name}" if folder else name
-    if proto == "tftp":
+    if proto == "tftp" or not (src.get("user") or src.get("anonymous")):     # TFTP has no login; HTTP(S) may have none
         login = ""
     elif src.get("anonymous"):
         login = "anonymous:anonymous@"
@@ -887,7 +955,7 @@ def _poll_size(dev, path, name, total, on_progress, done, poll, opts):
                 listing = parse_dir(c.send_command(f"dir {path}", expect_string=prompt, read_timeout=60)) or {}
                 size = (listing.get("files") or {}).get(name)
                 if size is not None:
-                    on_progress(min(size, total), total)
+                    on_progress(size if total is None else min(size, total), total)
     except Exception:                                       # noqa: BLE001  (progress is a help; the copy itself decides)
         pass
 
@@ -936,6 +1004,8 @@ def transfer(dev, r, choice, src, vrf="management", on_step=None, cancel=None, p
                 watcher.join(10)
             listing = parse_dir(c.send_command(f"dir {path}", expect_string=prompt, read_timeout=60)) or {}
             got = (listing.get("files") or {}).get(name)
+            if size is None and got:                        # the server gave no size (TFTP without tsize): the device's copy decides
+                size = got
             if re.search(r"%\s*Error|Error opening|Invalid input", out, re.I) and got != size:
                 words = next((l.strip() for l in out.splitlines() if re.search(r"%\s*Error|Error opening|Invalid", l, re.I)), "")
                 return fail(f"The copy failed: {mask(words, secrets)}.{cant_reach_hint(words, src)}")

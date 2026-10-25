@@ -4,7 +4,7 @@ import threading
 
 from PySide6.QtCore import QThread, Qt, Signal
 from PySide6.QtGui import QPalette
-from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
+from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QPlainTextEdit,
                                QMessageBox, QProgressBar, QPushButton, QRadioButton, QSpinBox, QStackedWidget, QTableWidgetItem, QTreeWidget, QTreeWidgetItem,
                                QVBoxLayout, QWidget)
 
@@ -183,14 +183,26 @@ class ServerStep(QWidget):
         self.show_pw = QCheckBox("Show")
         self.folder = QLineEdit()
         self.folder.setPlaceholderText("/firmware")
+        self.names = QPlainTextEdit()                        # TFTP, HTTP, HTTPS: no listing, so the names are typed
+        self.names.setPlaceholderText("asa9-16-4-smp-k8.bin")
+        self.names.setMaximumHeight(90)
+        self.insecure = QCheckBox("Don't check the server's certificate from this computer (self-signed)")
         self.remember = QCheckBox("Remember this server and login for this organization")
         self.remember.setChecked(True)
         other_box = QWidget()
         xl = QVBoxLayout(other_box)
         xl.setContentsMargins(0, 0, 0, 0)
         xl.addLayout(_row("Protocol", self.proto, "Host", self.host, "Port", self.port))
-        xl.addLayout(_row(self.anonymous, "User name", self.user, "Password", self.password, self.show_pw))
+        self.login_box = QWidget()                           # hidden for TFTP, which has no login
+        self.login_box.setLayout(_row(self.anonymous, "User name", self.user, "Password", self.password, self.show_pw))
+        self.login_box.layout().setContentsMargins(0, 0, 0, 0)
+        xl.addWidget(self.login_box)
         xl.addLayout(_row("Folder", self.folder))
+        self.names_box = QWidget()
+        self.names_box.setLayout(_row("Image files on the server, one per line", self.names))
+        self.names_box.layout().setContentsMargins(0, 0, 0, 0)
+        xl.addWidget(self.names_box)
+        xl.addWidget(self.insecure)
         xl.addWidget(self.remember)
         self.where = QStackedWidget()
         self.where.addWidget(own_box)
@@ -210,7 +222,8 @@ class ServerStep(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(_muted("Where the firmware images are. Each device pulls its image from here itself, so the server must be "
-                             "reachable from the devices, not only from this computer."))
+                             "reachable from the devices, not only from this computer. Over HTTPS each device checks the server's "
+                             "certificate its own way; Toner cannot change that."))
         lay.addLayout(_row(self.own_btn, self.other_btn))
         lay.addWidget(self.where)
         lay.addWidget(self.vrf_row)
@@ -223,16 +236,18 @@ class ServerStep(QWidget):
         self.anonymous.toggled.connect(self._anonymous)
         self.show_pw.toggled.connect(lambda on: self.password.setEchoMode(QLineEdit.EchoMode.Normal if on else QLineEdit.EchoMode.Password))
         self.test.clicked.connect(self.start_test)
-        for w in (self.host, self.user, self.password, self.folder):
+        for w in (self.host, self.user, self.password, self.folder, self.names):
             w.textChanged.connect(self._edited)
-        for sig in (self.own.currentIndexChanged, self.address.currentTextChanged, self.port.valueChanged, self.anonymous.toggled):
+        for sig in (self.own.currentIndexChanged, self.address.currentTextChanged, self.port.valueChanged, self.anonymous.toggled,
+                    self.insecure.toggled):
             sig.connect(self._edited)
         self.load()
 
     # ---- filling in
     def load(self):
         """What the organization remembered, and the servers Toner is running now."""
-        saved = fw.saved() or {"proto": "ftp", "host": "", "port": 21, "anonymous": False, "user": "", "password": "", "folder": ""}
+        saved = fw.saved() or {"proto": "ftp", "host": "", "port": 21, "anonymous": False, "user": "", "password": "", "folder": "",
+                               "files": [], "insecure": False}
         self.proto.setCurrentIndex(max(0, self.proto.findData(saved["proto"])))
         self.host.setText(saved["host"])                     # (always set: another organization's login must never stay on screen)
         self.port.setValue(saved["port"] or fw.DEFAULT_PORTS[saved["proto"]])
@@ -241,6 +256,9 @@ class ServerStep(QWidget):
         self.password.setText(saved["password"])
         self.show_pw.setChecked(False)
         self.folder.setText(saved["folder"])
+        self.names.setPlainText("\n".join(saved["files"]))
+        self.insecure.setChecked(saved["insecure"])
+        self._proto_changed()
         self.remember.setChecked(True)
         self.vrf.setText("management")
         self.files, self.listed_for = [], None
@@ -278,6 +296,10 @@ class ServerStep(QWidget):
         self.anonymous.setVisible(p == "ftp")
         if p != "ftp":
             self.anonymous.setChecked(False)
+        self.login_box.setVisible(p != "tftp")
+        self.names_box.setVisible(p in fw.NAMED)
+        self.insecure.setVisible(p == "https")
+        self.test.setText("Check files" if p in fw.NAMED else "Test and list files")
         self._edited()
 
     def _anonymous(self, on):
@@ -303,12 +325,18 @@ class ServerStep(QWidget):
             return fw.own_source(proto, server, self.address.currentText().strip() or fw.addresses()[0])
         if not self.host.text().strip():
             return None
-        anonymous = self.anonymous.isChecked() and self.proto.currentData() == "ftp"
-        if not anonymous and not self.user.text().strip():
+        p = self.proto.currentData()
+        anonymous = self.anonymous.isChecked() and p == "ftp"
+        if not anonymous and not self.user.text().strip() and p not in fw.NAMED:      # TFTP has no login; HTTP(S) may have none
             return None
-        return {"own": False, "proto": self.proto.currentData(), "host": self.host.text().strip(), "port": self.port.value(),
-                "user": "" if anonymous else self.user.text().strip(), "password": "" if anonymous else self.password.text(),
-                "folder": self.folder.text().strip() or "/", "anonymous": anonymous}
+        names = [l.strip() for l in self.names.toPlainText().splitlines() if l.strip()] if p in fw.NAMED else []
+        if p in fw.NAMED and not names:
+            return None
+        user = "" if anonymous or p == "tftp" else self.user.text().strip()
+        return {"own": False, "proto": p, "host": self.host.text().strip(), "port": self.port.value(),
+                "user": user, "password": self.password.text() if user else "",
+                "folder": self.folder.text().strip() or "/", "anonymous": anonymous, "files": names,
+                "insecure": p == "https" and self.insecure.isChecked()}
 
     @staticmethod
     def _key(src):
@@ -746,7 +774,7 @@ class ImagesStep(QWidget):
 
     def _sync(self):
         for row, (r, f, _typed) in enumerate(self.rows()):
-            self.table.item(row, 7).setText("" if f is None else ("No" if fw.room_for(r, f["name"], f["size"]) else "Yes"))
+            self.table.item(row, 7).setText("" if f is None or f["size"] is None else ("No" if fw.room_for(r, f["name"], f["size"]) else "Yes"))
         self.problems.setText("\n".join(text for text, _blocks in fw.image_problems(self.rows())))
         self._same_text()
         self.changed.emit()
@@ -846,7 +874,7 @@ class TransferStep(QWidget):
             bar = self.bars[key]
             bar.setValue(int(done * 1000 / total) if total else 0)
             pct = int(done * 100 / total) if total else 0
-            bar.setFormat(f"{pct} %  ({fw.human_size(done)} of {fw.human_size(total)})")
+            bar.setFormat(f"{pct} %  ({fw.human_size(done)} of {fw.human_size(total)})" if total is not None else fw.human_size(done))
 
     def halt(self):
         if self.running():

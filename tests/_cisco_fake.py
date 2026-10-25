@@ -1,7 +1,7 @@
 """A fake Cisco device for the Firmware Transfer tests, on the test SSH server (tests/_ssh_shell.py): IOS, IOS XE (INSTALL or
 BUNDLE mode, standalone or a stack), NX-OS or ASA. It answers the commands the wizard sends with the platform's own wording,
 keeps one state for every SSH session to it (a second session sees a copy growing), and really fetches what `copy` asks for
-from the URL it was given (FTP, SFTP, SCP or TFTP), so the URL the wizard builds is checked and sizes and MD5s are real.
+from the URL it was given (FTP, SFTP, SCP, TFTP, HTTP or HTTPS), so the URL the wizard builds is checked and sizes and MD5s are real.
 
 What a real device does and this does not: exact timing, every line of Cisco's output, prompts that differ between releases.
 The fake follows the forms in Cisco's documentation and is meant to catch mistakes in the wizard, not to stand in for a lab."""
@@ -53,10 +53,23 @@ class Fs:
 
 def fetch(url):
     """The bytes at an ftp://, sftp://, scp:// or tftp:// URL, as the device would get them. Raises OSError with the reason."""
-    m = re.match(r"^(ftp|sftp|scp|tftp)://(?:([^:@/]*)(?::([^@/]*))?@)?([^/:]+)(?::(\d+))?(/.*)$", url)
+    m = re.match(r"^(ftp|sftp|scp|tftp|https?)://(?:([^:@/]*)(?::([^@/]*))?@)?([^/:]+)(?::(\d+))?(/.*)$", url)
     if not m:
         raise OSError("%Error parsing URL")
     proto, user, pw, host, port, path = m.groups()
+    if proto in ("http", "https"):
+        import base64, ssl, urllib.error, urllib.request
+        req = urllib.request.Request(f"{proto}://{host}:{port or (443 if proto == 'https' else 80)}{path}")
+        if user:
+            req.add_header("Authorization", "Basic " + base64.b64encode(f"{user}:{pw or ''}".encode()).decode())
+        ctx = ssl._create_unverified_context() if proto == "https" else None      # a device with no trustpoint for the lab's cert
+        try:
+            with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
+                return resp.read()
+        except urllib.error.HTTPError as e:
+            raise OSError(f"{e.code} {e.reason}") from None
+        except urllib.error.URLError as e:
+            raise OSError(str(e.reason)) from None
     if proto == "ftp":
         import ftplib
         c = ftplib.FTP()
@@ -416,7 +429,7 @@ class CiscoFake(ShellServer):
         if src == "running-config" and dst == "startup-config":
             self.saved_boot = list(self.boot)
             return "[########################################] 100%\nCopy complete.\n", False
-        if re.match(r"^(ftp|sftp|scp|tftp)://", src):
+        if re.match(r"^(ftp|sftp|scp|tftp|https?)://", src):
             name = src.rstrip("/").rsplit("/", 1)[-1]
             dfs, dname = self.split(dst)
             dname = dname or name
