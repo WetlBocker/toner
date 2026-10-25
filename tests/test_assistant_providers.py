@@ -30,6 +30,18 @@ def check(name, cond, extra=""):
     if cond: ok += 1; print("  ok  ", name)
     else: bad += 1; print("  FAIL", name, extra)
 
+missing = []
+for mod in ("anthropic", "openai", "google.genai"):
+    try:
+        __import__(mod)
+    except ImportError:
+        missing.append(mod)
+check("the three SDKs are installed (anthropic, openai, google-genai)", not missing, missing)
+if missing:
+    print(f"
+{ok} passed, {bad} failed")
+    sys.exit(1)
+
 GOOD = "test-key-GOOD-1234567890"
 acme = orgs.create("Acme", "acme")
 db.set_home(acme)
