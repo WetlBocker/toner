@@ -56,9 +56,12 @@ class SideButton(QToolButton):
         self.restyle()
 
     def set_provider(self, provider):
+        self.provider = provider
+        self.setIconSize(QSize(40, 40) if brandicons.has_brand_mark(provider) else QSize(24, 24))
         self.setIcon(brandicons.provider_icon(provider))
 
     def restyle(self):
+        self.set_provider(getattr(self, "provider", AI.provider_id()))    # the mark's light or dark version follows the theme
         t = theme.current() or {}
         self.setStyleSheet(f"QToolButton {{ border-radius: {BUTTON // 2}px; border: 1px solid {t.get('border', '#ccc')}; background: {t.get('surface', '#fff')}; }}"
                            f"QToolButton:hover {{ background: {t.get('hover', '#eee')}; }}"

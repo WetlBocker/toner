@@ -291,6 +291,24 @@ pg.provider.setCurrentIndex(pg.provider.findData("claude")); settle(); pg.depth.
 check("the provider can be switched back without typing the key again (it is still in the vault)", AI.provider_id() == "claude" and AI.has_key("claude") and AI.model_for() == "claude-opus-5-5")
 tab.close()
 
+print("== the provider marks")
+import hashlib
+from ui import brandicons
+check("OpenAI's Blossom is the published file, unmodified (light and dark versions)", hashlib.sha256(brandicons.BRAND_SVG["openai"]["light"].encode()).hexdigest() == "75c1e9fffa5e8c437bec1d67197a73992bca45d166c6ff23215185dea8fae92a"
+      and hashlib.sha256(brandicons.BRAND_SVG["openai"]["dark"].encode()).hexdigest() == "01d158767c4eec0e47bd617e67759c33da0accd1438be1a8d29dfdb99ce87285")
+def drawn(provider):
+    img = brandicons.provider_icon(provider).pixmap(64, 64).toImage()
+    return sum(1 for x in range(0, 64, 2) for y in range(0, 64, 2) if img.pixelColor(x, y).alpha() > 100)
+check("each provider's mark draws something; the placeholders stand in for Claude and Gemini", drawn("openai") > 40 and drawn("claude") > 200 and drawn("gemini") > 200 and not brandicons.has_brand_mark("claude") and not brandicons.has_brand_mark("gemini"))
+brandicons._cache.clear()
+db.set_setting("theme", "Dark"); A.apply_look(app)
+dark_img = brandicons.provider_icon("openai").pixmap(64, 64).toImage()
+db.set_setting("theme", "Light"); A.apply_look(app)
+light_img = brandicons.provider_icon("openai").pixmap(64, 64).toImage()
+mid = lambda img: next((img.pixelColor(x, y).lightness() for x in range(0, 64) for y in range(0, 64) if img.pixelColor(x, y).alpha() > 200), None)
+check("the white Blossom on the dark theme, the black one on the light theme", mid(dark_img) is not None and mid(dark_img) > 200 and mid(light_img) is not None and mid(light_img) < 60, (mid(dark_img), mid(light_img)))
+db.set_setting("theme", "System"); A.apply_look(app)
+
 print("== the status strip, the side button and the panel")
 db.set_home(db.GLOBAL)
 AI._state.update(connected=None, text="", checked=False, model="")
