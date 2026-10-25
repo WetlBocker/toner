@@ -38,8 +38,7 @@ for mod in ("anthropic", "openai", "google.genai"):
         missing.append(mod)
 check("the three SDKs are installed (anthropic, openai, google-genai)", not missing, missing)
 if missing:
-    print(f"
-{ok} passed, {bad} failed")
+    print(f"\n{ok} passed, {bad} failed")
     sys.exit(1)
 
 GOOD = "test-key-GOOD-1234567890"
