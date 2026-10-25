@@ -41,6 +41,9 @@ class DeviceDialog(QDialog):
         self.ssh_pw = QLineEdit()                                  # a firewall's SSH password, for the Command Runner (its checks use the API key)
         self.ssh_pw.setEchoMode(QLineEdit.EchoMode.Password)
         self.ssh_pw.setPlaceholderText("leave blank to keep the stored value")
+        self.enable_pw = QLineEdit()                               # Cisco: enable mode's own password, when it differs from the login
+        self.enable_pw.setEchoMode(QLineEdit.EchoMode.Password)
+        self.enable_pw.setToolTip("Cisco devices: the password for enable mode, when it differs from the login password.")
         self.host.setPlaceholderText("10.0.0.2  or  core-sw1.corp.example.com")
         self.host.editingFinished.connect(self._mark_host)
         self.host.textEdited.connect(lambda _t: self.host.setStyleSheet("") or self.host.setToolTip(""))
@@ -183,7 +186,7 @@ class DeviceDialog(QDialog):
                                              ("Details", self.details), ("", self.enabled)))
         self.form.setRowVisible(self.org_pick, bool(orgs.list_orgs()))      # nothing to choose before there are organizations
         self.page_access, self.access = page((("Credential profile", self.profile), ("Username", self.username), ("SSH password", self.ssh_pw),
-                                              ("Password", self.secret), ("", self.link_row), ("", self.get_key), ("Site", self.site),
+                                              ("Password", self.secret), ("Enable password", self.enable_pw), ("", self.link_row), ("", self.get_key), ("Site", self.site),
                                               ("Jump host", self.jump), ("Proxy", self.proxy_mode), ("Proxy Type", self.proxy_kind),
                                               ("Proxy Address", self.proxy_host), ("Proxy Port", self.proxy_port),
                                               ("Proxy User", self.proxy_user), ("Proxy Password", self.proxy_pw),
@@ -272,6 +275,8 @@ class DeviceDialog(QDialog):
                 self.proxy_pw.setPlaceholderText("saved; leave blank to keep")
             if keyring.get_password(db.SERVICE, db.secret_name(dev["name"], "ssh")):
                 self.ssh_pw.setPlaceholderText("saved; leave blank to keep")
+            if keyring.get_password(db.SERVICE, db.secret_name(dev["name"], "enable")):
+                self.enable_pw.setPlaceholderText("saved; leave blank to keep")
             try:
                 own = json.loads(dev.get("snmp") or "{}")
             except ValueError:
@@ -355,6 +360,7 @@ class DeviceDialog(QDialog):
         self.access.setRowVisible(self.ha, info["ha"])
         self.access.setRowVisible(self.verify, info["kind"] == "api")
         self.access.setRowVisible(self.jump, info["kind"] == "ssh")
+        self.access.setRowVisible(self.enable_pw, info["kind"] == "ssh")
         login = vendors.has_login(vendor)
         self.form.setRowVisible(self.preset, vendor == "cloud")
         self.host.setPlaceholderText({"cloud": "the status page's address, e.g. www.githubstatus.com",
@@ -443,8 +449,11 @@ class DeviceDialog(QDialog):
         return ""
 
     def ssh_secrets(self):
-        """A firewall's SSH password, when one was typed."""
-        return {"ssh": self.ssh_pw.text()} if self._vendor() in vendors.CLI_TYPES and self.ssh_pw.text() else {}
+        """A firewall's SSH password and a Cisco device's enable password, when they were typed."""
+        out = {"ssh": self.ssh_pw.text()} if self._vendor() in vendors.CLI_TYPES and self.ssh_pw.text() else {}
+        if self.enable_pw.text():
+            out["enable"] = self.enable_pw.text()
+        return out
 
     def proxy_secrets(self):
         v = self._proxy_values()
@@ -483,7 +492,8 @@ class DeviceDialog(QDialog):
 
     def _snapshot(self):
         try:
-            return json.dumps([self.values(), self.secret.text(), self.proxy_pw.text(), self.proxy_otp_key.text(), self.snmp_secrets(), self.ssh_pw.text()], sort_keys=True, default=str)
+            return json.dumps([self.values(), self.secret.text(), self.proxy_pw.text(), self.proxy_otp_key.text(), self.snmp_secrets(), self.ssh_pw.text(),
+                               self.enable_pw.text()], sort_keys=True, default=str)
         except Exception:
             return ""
 

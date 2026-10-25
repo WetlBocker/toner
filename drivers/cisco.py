@@ -40,7 +40,7 @@ class CiscoDriver(CliRows, Driver):
     def connect(self):
         d, t = self.dev, self.opts["ssh_timeout"]
         args = dict(device_type=self.plat, host=d["host"], username=d["username"], password=self.password,
-                    secret=self.password, timeout=t, conn_timeout=t)
+                    secret=self.enable_secret, timeout=t, conn_timeout=t)
         if d.get("port"):
             args["port"] = d["port"]
         if getattr(self, "session_log", None):          # Command Runner records the session (passwords left out)

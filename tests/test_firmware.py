@@ -362,6 +362,24 @@ check("a device that cannot ping the server is held back, saying so", R["noping"
 check("one that pings it but finds the port closed", R["closed"]["held"] == f"Reaches 127.0.0.1, but port {own_ftp.port} is closed.", R["closed"]["held"])
 check("a stack with a member that is not Ready", R["provisioned"]["held"] == "Stack member 3 is not Ready (Provisioned).")
 check("a device with no login, without trying to sign in", R["nologin"]["held"] == "No user name or password: set one on the device or its profile.")
+
+print("== an ASA whose login lands in user mode")
+asa_en = CiscoFake("cisco_asa", "asa-en", enable_secret="En-pw-9", files={"asa9-16-4-smp-k8.bin": (118000000, "")}, image="asa9-16-4-smp-k8.bin", reach=OK_REACH)
+asa_en.password = PW
+add("asa-en", "cisco", "cisco_asa", lab, host="127.0.0.1")
+with db.within(lab):
+    d = next(x for x in db.list_devices() if x["name"] == "asa-en"); db.save_device({**d, "port": asa_en.port, "username": "admin"})
+    db.set_secret(db.secret_name("asa-en"), PW)
+    dev_en = next(x for x in db.list_devices() if x["name"] == "asa-en")
+    r = FW.collect(dev_en, src)
+check("without an enable password Toner is held in user mode, and says what to add", r["held"] == FW.NO_ENABLE, r["held"])
+check("...it tried enable with the login password and was refused", "enable" in asa_en.commands and PW in asa_en.commands)
+with db.within(lab):
+    db.set_secret(db.secret_name("asa-en", "enable"), "En-pw-9")
+    r = FW.collect(dev_en, src)
+check("with the enable password on the device, the check reads the ASA's flash", not r["held"] and r["flashes"][0]["fs"] == "disk0:"
+      and r["flashes"][0]["free"] is not None and r["version"] == "9.16(4)", r)
+check("...the enable password was typed to the device, not the login password a second time", asa_en.commands.count("En-pw-9") >= 1)
 CHANGES = re.compile(r"^(copy|delete|install|boot|no |write|reload)", re.I)
 def config_lines(cmds):
     """What was typed in configuration mode."""

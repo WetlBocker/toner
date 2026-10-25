@@ -11,6 +11,7 @@ import time
 
 from netmiko import ConnectHandler
 from netmiko.cisco.cisco_asa_ssh import CiscoAsaSSH
+from netmiko.exceptions import ReadTimeout
 
 PROMPT = re.compile(r"\S[>#]\s?$")
 MORE = re.compile(r"<-+\s*More\s*-+>|--\s*More\s*--", re.IGNORECASE)
@@ -37,6 +38,13 @@ class AsaSSH(CiscoAsaSSH):
     def session_preparation(self) -> None:
         self.wait_for_prompt(self.prompt_wait)
         super().session_preparation()
+
+    def enable(self, *args, **kw):
+        """A refused enable password leaves netmiko's ASA enable waiting for '#' until it times out; say what happened instead."""
+        try:
+            return super().enable(*args, **kw)
+        except ReadTimeout as e:
+            raise ValueError("Failed to enter enable mode: the enable password was refused.") from e
 
     def wait_for_prompt(self, seconds):
         """Read until something that looks like 'name>' or 'name#' ends the output. A sign-in banner longer than a screen

@@ -105,11 +105,14 @@ def fetch(url):
 class CiscoFake(ShellServer):
     def __init__(self, platform="cisco_xe", hostname="sw1", user="admin", password="pw", version=None, mode=None,
                  members=1, member_states=None, image=None, boot=None, fs_total=8 * 1024 ** 3, files=None, member_files=None,
-                 reach=None, vrf=None, copy_seconds=1.0, install_files=None):
+                 reach=None, vrf=None, copy_seconds=1.0, install_files=None, enable_secret=None):
         """reach: {host: {"ping": bool, "ports": {21, ...}}} what the device can get to (anything else: nothing).
-        vrf: NX-OS only: the VRF the source is reached through (ping and copy without it fail)."""
+        vrf: NX-OS only: the VRF the source is reached through (ping and copy without it fail).
+        enable_secret: the login lands in user mode (prompt '>'); `enable` asks for this password, and the privileged
+        commands (dir, copy, delete, configure, install, verify, the boot lines) are refused until it is given."""
         super().__init__(user=user, password=password, banner="", prompt=f"{hostname}#")
         self.platform, self.hostname = platform, hostname
+        self.enable_secret = enable_secret
         self.mode = mode if platform == "cisco_xe" else None
         self.version = version or {"cisco_ios": "15.2(7)E9", "cisco_xe": "17.06.05", "cisco_nxos": "10.2(5)", "cisco_asa": "9.16(4)"}[platform]
         fs = PLATFORM_FS[platform]
@@ -147,7 +150,7 @@ class CiscoFake(ShellServer):
 
     # ---------------------------------------------------------------- the shell
     def _shell(self, ch):
-        sess = {"conf": False, "ask": None, "telnet": False, "esc": False}
+        sess = {"conf": False, "ask": None, "telnet": False, "esc": False, "priv": self.enable_secret is None}
         try:
             ch.send(self.banner + self.prompt_of(sess))
             buf = b""
@@ -189,7 +192,9 @@ class CiscoFake(ShellServer):
             pass
 
     def prompt_of(self, sess):
-        return f"{self.hostname}(config)#" if sess["conf"] else f"{self.hostname}#"
+        if sess["conf"]:
+            return f"{self.hostname}(config)#"
+        return f"{self.hostname}#" if sess.get("priv", True) else f"{self.hostname}>"
 
     def answer(self, line, sess):
         """(output, waiting): waiting is True when the device asked a question and prints no prompt yet."""
@@ -205,10 +210,22 @@ class CiscoFake(ShellServer):
         if sess["conf"]:
             return self.config(cmd, sess)
         low = cmd.lower()
+        if low == "enable" and not sess.get("priv", True):
+            def typed(pw):
+                if pw == self.enable_secret:
+                    sess["priv"] = True
+                    return "", False
+                return ("Invalid password.\n" if self.platform == "cisco_asa" else "% Access denied\n"), False
+            sess["ask"] = typed
+            return "Password: ", True
         if low in ("terminal length 0", "terminal width 511", "terminal pager 0", "enable"):
             return "", False
         if low == "show curpriv":
-            return "Username : admin\nCurrent privilege level : 15\nCurrent Mode/s : P_PRIV\n", False
+            level = 15 if sess.get("priv", True) else 1
+            return f"Username : admin\nCurrent privilege level : {level}\nCurrent Mode/s : {'P_PRIV' if level == 15 else 'P_UNPR'}\n", False
+        if not sess.get("priv", True) and low.startswith(("dir ", "copy ", "delete ", "install ", "verify ", "show running-config",
+                                                          "show boot", "configure terminal", "conf t")):
+            return ("ERROR: " if self.platform == "cisco_asa" else "") + "% Invalid input detected at '^' marker.\n", False
         if low in ("configure terminal", "conf t"):
             sess["conf"] = True
             return "Enter configuration commands, one per line.  End with CNTL/Z.\n", False

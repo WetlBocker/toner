@@ -636,9 +636,10 @@ def move_secret(old, new):
     except Exception:
         quiet.ignored()
 
-# A device can hold up to four secrets: its password/token, and an SNMP community or v3 auth/privacy passwords.
+# A device can hold several secrets: its password/token, an SNMP community or v3 auth/privacy passwords, a proxy password,
+# an SSH password, and (Cisco) an enable password.
 SECRET_KINDS = {"main": "", "snmp": ":snmp", "snmp_auth": ":snmp-auth", "snmp_priv": ":snmp-priv", "proxy": ":proxy",
-                "agent": ":agent", "ssh": ":ssh", "proxy_otp": ":proxy-otp"}
+                "agent": ":agent", "ssh": ":ssh", "proxy_otp": ":proxy-otp", "enable": ":enable"}
 
 def qualify(name):
     """A vault entry name for the organization being written to: Global keeps the plain name (so nothing stored before

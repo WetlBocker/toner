@@ -347,6 +347,7 @@ CHECK_WORKERS, TRANSFER_WORKERS = 8, 4                 # all selected devices at
 MAIN_FS = {"cisco_ios": "flash:", "cisco_xe": "flash:", "cisco_nxos": "bootflash:", "cisco_asa": "disk0:"}
 NO_LOGIN = "No user name or password: set one on the device or its profile."
 NO_CLIENT = "{platform} has no SFTP client: use FTP, SCP or TFTP."
+NO_ENABLE = "Could not enter enable mode. Add the enable password to the device or its credential profile."
 
 
 def member_fs(platform, n):
@@ -549,10 +550,7 @@ def collect(dev, src, vrf="management", opts=None, append_log=False):
     log = io.BytesIO()
     try:
         with connect(dev, log, opts) as c:
-            try:
-                c.enable()
-            except Exception:                               # noqa: BLE001  (already privileged, or no enable password)
-                pass
+            c.enable()                                      # a no-op when the login is privileged already
             prompt = _prompt_re(c)
 
             def run(cmd, t=60):
@@ -582,7 +580,8 @@ def collect(dev, src, vrf="management", opts=None, append_log=False):
                 else:
                     out["port"] = port_open(c, host, port)
     except Exception as e:                                  # noqa: BLE001  (the reason is shown beside the device)
-        out["held"] = f"Could not sign in: {plain_error(e, secrets)}"
+        # netmiko says "enable mode" when `enable` was refused (the ASA's runs while signing in: see netconn.AsaSSH.enable)
+        out["held"] = NO_ENABLE if "enable mode" in str(e) else f"Could not sign in: {plain_error(e, secrets)}"
     finally:
         save_log(dev, log, secrets, append=append_log)
     if not out["held"]:

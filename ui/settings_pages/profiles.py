@@ -20,6 +20,9 @@ class ProfileDialog(QDialog):
         self.setMinimumWidth(440)
         self.name, self.username, self.secret = QLineEdit(), QLineEdit(), QLineEdit()
         self.secret.setEchoMode(QLineEdit.EchoMode.Password)
+        self.enable_pw = QLineEdit()                                  # Cisco: enable mode's own password, when it differs from the login
+        self.enable_pw.setEchoMode(QLineEdit.EchoMode.Password)
+        self.enable_pw.setToolTip("Cisco devices: the password for enable mode, when it differs from the login password.")
         self.notes = QLineEdit()
         self.use_snmp = QCheckBox("Include SNMP settings")
         self.snmp = SnmpFields()
@@ -30,7 +33,7 @@ class ProfileDialog(QDialog):
         from ui.linkitem import LinkRow, wanted
         self.link_row = LinkRow()                                    # Link... to a password manager item (when one is chosen)
         for label, w in (("Name", self.name), ("Username", self.username), ("Password / token / API key", self.secret),
-                         ("", self.link_row), ("Notes", self.notes)):
+                         ("Enable password", self.enable_pw), ("", self.link_row), ("Notes", self.notes)):
             form.addRow(label, w)
         form.setRowVisible(self.link_row, wanted())
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
@@ -58,12 +61,14 @@ class ProfileDialog(QDialog):
             have = {k: profiles.has_secret(profile["name"], k, org) for k in ("snmp", "snmp_auth", "snmp_priv")}
             self.secret.setPlaceholderText("leave blank to keep the stored value" if profiles.has_secret(profile["name"], "main", org)
                                            else "")
+            self.enable_pw.setPlaceholderText("leave blank to keep the stored value" if profiles.has_secret(profile["name"], "enable", org)
+                                              else "")
         self.snmp.set_stored(have)
         self.use_snmp.toggled.connect(self.snmp.setEnabled)
         self.snmp.setEnabled(self.use_snmp.isChecked())
 
     def values(self):
-        secrets = {"main": self.secret.text()}
+        secrets = {"main": self.secret.text(), "enable": self.enable_pw.text()}
         if self.use_snmp.isChecked():
             secrets.update(self.snmp.secrets())
         return ({"id": self.profile.get("id"), "org": self.org.file(), "shared": self.org.shared(),

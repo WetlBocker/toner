@@ -54,6 +54,11 @@ class Driver:
         """Password or API token: explicit value (used by Test), the device's own, or its profile's."""
         return self.dev.get("password") or profiles.secret(self.dev, "main")
 
+    @property
+    def enable_secret(self):
+        """The enable password (the device's own, else its profile's); the login password when there is none."""
+        return profiles.secret(self.dev, "enable") or self.password
+
     def enabled(self, check_key):
         """False if this check is switched off in Settings > Checks."""
         return checks.key(self.dev["vendor"], check_key) not in self.opts["disabled"]
