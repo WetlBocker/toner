@@ -424,7 +424,11 @@ def member_fs(platform, n):
 
 
 def parse_version(platform, text):
-    """{'version', 'image' (the file it booted, without the file system), 'mode' ('INSTALL', 'BUNDLE' or '')} from `show version`."""
+    """{'version', 'image' (the file it booted, without the file system), 'mode' ('INSTALL', 'BUNDLE' or '')} from `show version`.
+    IOS XE prints the mode in up to two places: the table of switches ("Switch Ports Model SW Version SW Image Mode", one row
+    per stack member, the active one marked *) and, on some releases only, a line "Installation mode is INSTALL". Catalyst 9000
+    software prints the table alone, so the table is read first and the line second; a stack reports its active switch's row.
+    When neither is there the mode is '' and collect() falls back on the booted file's name and `show install summary`."""
     t = text or ""
     if platform == "cisco_nxos":
         v = re.search(r"NXOS:\s*version\s+(\S+)", t) or re.search(r"system:\s*version\s+(\S+)", t)
@@ -437,9 +441,80 @@ def parse_version(platform, text):
         img = re.search(r'System image file is "([^"]+)"', t)
     mode = ""
     if platform == "cisco_xe":
-        m = re.search(r"Installation mode is\s+(\w+)", t)
-        mode = m.group(1).upper() if m else ""
+        m = re.search(r"Installation mode is\s+(INSTALL|BUNDLE)\b", t, re.I)
+        mode = xe_mode_table(t) or (m.group(1).upper() if m else "")
     return {"version": v.group(1) if v else "", "image": file_name(img.group(1)) if img else "", "mode": mode}
+
+
+_XE_ROW = re.compile(r"^\s*(\*?)\s*\d+\s+\d+\s+\S+\s+\S+\s+\S+(.*)$")       # [*] switch, ports, model, version, image, [mode]
+
+
+def _mode_word(text):
+    m = re.search(r"\b(INSTALL|BUNDLE)\b", text or "", re.I)
+    return m.group(1).upper() if m else ""
+
+
+def xe_mode_table(text):
+    """The mode from `show version`'s table of switches, as Catalyst 3850 and 9000 software prints it:
+        Switch Ports Model              SW Version        SW Image              Mode
+        ------ ----- -----              ----------        ----------            ----
+        *    1 41    C9300-24P          17.09.04a         CAT9K_IOSXE           INSTALL
+             2 41    C9300-24P          17.09.04a         CAT9K_IOSXE           INSTALL
+    The active switch's row (marked *) counts, else the first row. A narrow terminal can wrap a row's last column onto the next
+    line; that line is read as part of the row. '' when there is no such table."""
+    rows = []                                               # [active, mode] per switch
+    in_table = False
+    for line in (text or "").splitlines():
+        if re.match(r"^\s*Switch\s+Ports\s+Model\b.*\bMode\b", line, re.I):
+            in_table, rows = True, []
+            continue
+        if not in_table:
+            continue
+        if not line.strip():
+            if rows:
+                break
+            continue
+        if line.lstrip().startswith("-"):
+            continue
+        m = _XE_ROW.match(line)
+        if m:
+            rows.append([m.group(1) == "*", _mode_word(m.group(2))])
+        elif rows and not rows[-1][1] and _mode_word(line) and len(line.split()) == 1:
+            rows[-1][1] = _mode_word(line)                  # the Mode column, wrapped onto its own line
+        else:
+            break
+    if not rows:                                            # a table with another heading: any row that ends in the mode
+        for line in (text or "").splitlines():
+            m = _XE_ROW.match(line)
+            if m and re.fullmatch(r"\s*(INSTALL|BUNDLE)\s*", m.group(2), re.I):
+                rows.append([m.group(1) == "*", _mode_word(m.group(2))])
+    for active, mode in rows:
+        if active and mode:
+            return mode
+    return next((mode for _active, mode in rows if mode), "")
+
+
+def xe_mode_of_image(image):
+    """The mode an IOS XE device must be in from the file it booted: INSTALL mode always boots packages.conf, BUNDLE mode a .bin.
+    '' when the name says neither."""
+    name = (image or "").lower()
+    if name == "packages.conf":
+        return "INSTALL"
+    if name.endswith(".bin"):
+        return "BUNDLE"
+    return ""
+
+
+def parse_install_summary(text):
+    """The mode from `show install summary`, for IOS XE software whose `show version` does not say: 'INSTALL' when the running
+    image is listed as an installed package ("IMG   C    17.06.05.0.5797", activated and committed, or U while uncommitted),
+    'BUNDLE' when the device answers that it is not in INSTALL mode, else ''."""
+    t = text or ""
+    if re.search(r"not in INSTALL mode", t, re.I):
+        return "BUNDLE"
+    if re.search(r"Installed Package\(s\) Information", t) and re.search(r"^\s*IMG\s+[CU]\s+\S+", t, re.M):
+        return "INSTALL"
+    return ""
 
 
 def file_name(path):
@@ -624,6 +699,8 @@ def collect(dev, src, vrf="management", opts=None, append_log=False):
             def run(cmd, t=60):
                 return c.send_command(cmd, read_timeout=t, expect_string=prompt)
             out.update(parse_version(plat, run("show version")))
+            if plat == "cisco_xe" and not out["mode"]:     # show version said neither: the booted file's name, then install's own view
+                out["mode"] = xe_mode_of_image(out["image"]) or parse_install_summary(run("show install summary"))
             members = []
             if plat in ("cisco_ios", "cisco_xe"):
                 from drivers import clichecks
