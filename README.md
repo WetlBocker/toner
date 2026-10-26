@@ -473,8 +473,9 @@ audit log.
 ## Assistant
 
 The Assistant is an AI agent inside Toner that answers questions about the organization you are looking at from Toner's own
-data. Ask it on any section from the round button at the right edge of the window: a panel slides out beside the page (the page
-gets narrower, nothing is covered) with the conversation, the steps it takes as it takes them ("Reading core-sw1's history…"),
+data. Ask it on any section from the round button at the edge of the window (drag the button to the left or right edge and to any
+height you like; Toner remembers where you put it): a panel slides out beside the page (the page gets narrower, nothing is
+covered) with the conversation, the steps it takes as it takes them ("Reading core-sw1's history…"),
 and a line under each answer with the tokens used and what they cost. **Send**, **Stop** and **New conversation** are the buttons;
 Enter sends and Shift+Enter makes a new line. Switching organization switches to that organization's conversation.
 

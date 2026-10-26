@@ -132,12 +132,14 @@ DEFAULT_SETTINGS = {
     # the Assistant (see core/assistant): one provider, model and depth per installation; the API key is in the vault; the spend
     # limit is the installation's total over every organization, in US dollars per month
     "ai_provider": "claude", "ai_model": {}, "ai_depth": "normal", "ai_spend_limit": 20,
+    # where the Assistant's round button sits (per computer): which side edge, and how far down the window (0 top, 1 bottom)
+    "assistant_button": {"side": "right", "y": 0.5},
 }
 # Per-machine state that must not travel in an exported settings file (channel secrets stay in
 # the vault, so an imported channel would be broken).
 NOT_PORTABLE = {"vault_provider", "vault_config", "org_current", "window_geometry", "splitters", "ansible_distro", "ansible_playbooks", "ansible_server", "ansible_server_device", "sidebar_collapsed", "sessions_list_hidden", "acks", "client_scope", "onboarding_done", "inventory_columns", "results_columns", "notify_channels", "notify_snooze_until", "inventory_expanded", "snippets", "fileserver", "iperf_path", "openssl_path",
                 "update_last_check", "update_skip", "update_pending", "sessions_expanded", "agent_enabled", "agent_enroll", "agent_bind",
-                "agent_address", "install_uid", "demarc"}
+                "agent_address", "install_uid", "demarc", "assistant_button"}
 
 DEVICE_FIELDS = ["name", "vendor", "host", "port", "platform", "username",
                  "site", "verify_ssl", "ha_expected", "enabled", "location", "details", "folder_id",
@@ -991,7 +993,7 @@ GLOBAL_ONLY = {"window_geometry", "splitters", "sidebar_collapsed", "sessions_li
                "ssh_log_days",
                "agent_cert_warned", "agent_enabled", "agent_token_days", "agent_port", "agent_bind", "agent_address",
                "vault_provider", "vault_config", "vault_direct", "update_direct", "vault_keep_copies", "install_uid", "demarc",
-               "ai_provider", "ai_model", "ai_depth", "ai_spend_limit"}
+               "ai_provider", "ai_model", "ai_depth", "ai_spend_limit", "assistant_button"}
 # (agent sign-up, its interval and whether installed agents are told it are each organization's own: Settings > Agents)
 # ...and these belong to one organization's own lists, so an organization never borrows Global's:
 ORG_LOCAL = {"acks", "inventory_expanded", "sessions_expanded", "client_scope", "trend_last", "notify_snooze_until", "firmware_source"}
