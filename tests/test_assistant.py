@@ -130,8 +130,8 @@ with db.within(acme):
     check("every vault value is known to the masker, the Assistant's own key too", secrets_in_vault <= set(T.secrets()))
     def tool(name, **args):
         text = T.run(name, args)
-        leaked = [s for s in secrets_in_vault if s in text]
-        check(f"{name}: no vault secret in the result", not leaked, leaked)
+        leaked = sum(1 for s in secrets_in_vault if s in text)          # a count: the values themselves are never printed
+        check(f"{name}: no vault secret in the result", not leaked, f"{leaked} leaked")
         return json.loads(text)
     r = tool("list_devices")
     check("list_devices: the organization's devices with status and folder", r["count"] == 2 and {d["name"] for d in r["devices"]} == {"core-sw1", "edge-fw"} and r["devices"][0]["status"] in ("FAIL", "OK") and "organization" not in r["devices"][0])
