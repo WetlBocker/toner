@@ -14,7 +14,8 @@ from core.assistant import prices, providers, store, tools as T
 MAX_ROUNDS = 15                 # tool rounds in one turn before the Assistant is told to answer with what it has
 
 SYSTEM = """You are the Assistant inside Toner, a network monitoring program used by a managed service provider (MSP) to look after
-its clients' networks. You are talking to the network engineer who runs Toner. Today is {now}.
+its clients' networks. You are talking to the network engineer who runs Toner. Each question starts with the date and time it
+was asked.
 
 You are looking at the organization "{org}"{scope}. Everything you know about its network comes from the tools: the device list,
 each device's latest check results and history, configuration backups (passwords masked) and their differences, the Firmware
@@ -31,9 +32,16 @@ it short. Use a short list or table when comparing several devices. Do not menti
 
 
 def system_prompt(org):
+    """The same text for the whole conversation: Claude binds its thinking blocks to the system prompt, the tools and the earlier
+    messages, so nothing that changes (the clock) may be in here. The time goes with each question instead."""
     name = db.org_name(org)
     scope = " (Global: every organization's devices are listed, each marked with its organization)" if not org else ""
-    return SYSTEM.format(now=datetime.now().strftime("%A %d %B %Y, %H:%M"), org=name, scope=scope)
+    return SYSTEM.format(org=name, scope=scope)
+
+
+def stamped(question, when=None):
+    """What the model is sent for a question: when it was asked, then the words."""
+    return f"Asked on {(when or datetime.now()).strftime('%A %d %B %Y at %H:%M')}:\n{question}"
 
 
 def run_turn(conv_id, org, question, screen, on_event, cancel=None, provider=None):
@@ -52,7 +60,7 @@ def _run(conv_id, question, screen, on_event, cancel, provider):
         return None
     prov = provider or AI.make(conv["provider"], model=conv.get("model") or None)
     history = list(conv["history"])
-    history += prov.user_message(question)
+    history += prov.user_message(stamped(question))
     store.set_title(conv_id, question)
     store.add_turn(conv_id, "user", question)
     system = system_prompt(db.target())

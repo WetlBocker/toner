@@ -231,7 +231,10 @@ check("the loop: tools first (each announced), then the streamed answer, then do
 check("the steps read as approved", [p for k, p in events if k == "tool"] == ["Reading core-sw1's latest results…", "Reading what is on screen…"])
 check("done carries the text, model, tokens summed over both rounds and the cost", done["text"].strip() == "core-sw1 is failing on CPU." and done["tokens_in"] == 2000 and done["tokens_out"] == 200 and abs(done["cost"] - prices.cost("claude-opus-5-5", 2000, 200)) < 1e-9 and done["priced"] and done["note"] == "")
 sys_prompt, hist1, toolnames = prov.seen[0]
-check("the system prompt names the organization and the date; every tool is offered", "Acme Charter Schools" in sys_prompt and time.strftime("%Y") in sys_prompt and set(toolnames) == set(T.BY_NAME))
+check("the system prompt names the organization but carries no clock (Claude binds thinking to it); every tool is offered", "Acme Charter Schools" in sys_prompt and time.strftime("%Y") not in sys_prompt
+      and ":" not in sys_prompt.split("Each question")[0][-60:] and set(toolnames) == set(T.BY_NAME))
+check("the date and time go with each question instead", hist1[0]["content"].startswith("Asked on ") and time.strftime("%Y") in hist1[0]["content"] and hist1[0]["content"].endswith("\nWhat is wrong with core-sw1?"))
+check("asked twice, the system prompt is the same text", agent.system_prompt(acme) == sys_prompt)
 hist2 = prov.seen[1][1]
 check("the second round got the thinking block back unchanged and a tool_result per call", hist2[1]["content"][0] == {"type": "thinking", "thinking": "", "signature": "SIG1"} and [b["tool_use_id"] for b in hist2[2]["content"]] == ["toolu_0", "toolu_1"]
       and "FAIL" in hist2[2]["content"][0]["content"] and "Results" in hist2[2]["content"][1]["content"])

@@ -106,6 +106,10 @@ class Provider:
         name = type(e).__name__
         status = getattr(e, "status_code", None) or getattr(e, "code", None)
         text = str(getattr(e, "message", "") or e)
+        body = getattr(e, "body", None)                                  # the SDKs keep the API's own message here
+        if isinstance(body, dict):
+            inner = body.get("error") if isinstance(body.get("error"), dict) else body
+            text = str(inner.get("message") or text)
         if "Authentication" in name or "PermissionDenied" in name or status in (401, 403):
             return KeyRefused("the API key was refused")
         if "Connection" in name or "Connect" in name or "Timeout" in name or "Transport" in name:
@@ -118,7 +122,10 @@ class Provider:
 # =============================================================================== Claude
 class Claude(Provider):
     name, label, host, default_model = "claude", "Claude", "api.anthropic.com", "claude-opus-5-5"
-    BETAS = ["server-side-fallback-2026-07-01"]
+    BETAS = ["server-side-fallback-2026-07-01", "thinking-binding-controls-2026-08-01"]
+    # thinking is on by itself on the Claude 5 models; naming it lets us ask that a thinking block whose prefix no longer matches
+    # (an organization renamed, a tool added in a newer Toner) is dropped rather than the whole request refused
+    THINKING = {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "drop_block"}}
     KEEP = ("text", "thinking", "redacted_thinking", "tool_use")       # blocks that go back into the history
 
     def _client(self, timeout=TIMEOUT):
@@ -147,14 +154,20 @@ class Claude(Provider):
     def complete(self, system, history, tools, on_text, cancel=None):
         reply = Reply()
         kw = dict(model=self.model, max_tokens=MAX_TOKENS, system=system, messages=history, tools=self.tool_defs(tools),
-                  output_config={"effort": self.EFFORT.get(self.depth, "medium")}, fallbacks="default", betas=self.BETAS)
+                  output_config={"effort": self.EFFORT.get(self.depth, "medium")}, fallbacks="default", betas=self.BETAS,
+                  thinking=dict(self.THINKING))
         try:
-            with self._client().beta.messages.stream(**kw) as stream:
-                for text in stream.text_stream:
-                    _check(cancel)
-                    reply.text += text
-                    on_text(text)
-                message = stream.get_final_message()
+            try:
+                message = self._stream(kw, reply, on_text, cancel)
+            except Cancelled:
+                raise
+            except Exception as e:                                       # noqa: BLE001
+                if getattr(e, "status_code", None) == 400 and "thinking" in str(e).lower():
+                    kw.pop("thinking", None)                             # a model that takes no thinking setting
+                    reply.text = ""
+                    message = self._stream(kw, reply, on_text, cancel)
+                else:
+                    raise
         except Cancelled:
             raise
         except Exception as e:                                           # noqa: BLE001
@@ -181,6 +194,14 @@ class Claude(Provider):
         elif stop in ("max_tokens", "model_context_window_exceeded"):
             reply.stop = "length"
         return reply
+
+    def _stream(self, kw, reply, on_text, cancel):
+        with self._client().beta.messages.stream(**kw) as stream:
+            for text in stream.text_stream:
+                _check(cancel)
+                reply.text += text
+                on_text(text)
+            return stream.get_final_message()
 
     def user_message(self, text):
         return [{"role": "user", "content": text}]

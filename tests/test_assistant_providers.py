@@ -291,9 +291,11 @@ def claude_first(q):
     check("Claude: streaming, tools with input_schema, effort from Depth, fallbacks default with its beta, no thinking block (on by default)",
           b.get("stream") is True and b["tools"][0]["input_schema"]["type"] == "object" and {t["name"] for t in b["tools"]} == set(T.BY_NAME)
           and b["output_config"] == {"effort": "medium"} and b["fallbacks"] == "default" and "server-side-fallback-2026-07-01" in h.get("anthropic-beta", "")
-          and "thinking" not in b and b["model"] == "claude-opus-5-5" and b["max_tokens"] >= 4096 and "Acme" in (b["system"] if isinstance(b["system"], str) else json.dumps(b["system"])), (b.keys(), h.get("anthropic-beta")))
+          and b["thinking"] == {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "drop_block"}} and "thinking-binding-controls-2026-08-01" in h.get("anthropic-beta", "")
+          and b["model"] == "claude-opus-5-5" and b["max_tokens"] >= 4096 and "Acme" in (b["system"] if isinstance(b["system"], str) else json.dumps(b["system"])), (b.keys(), h.get("anthropic-beta")))
 def claude_second(q):
     m = q["body"]["messages"]
+    check("Claude: the system prompt of the second request is byte for byte the first one's (the thinking block stays bound)", q["body"]["system"] == claude.requests[-2]["body"]["system"] if len(claude.requests) >= 2 else False)
     check("Claude: the second request has the assistant turn with the thinking block unchanged (signature included) and the tool_use, then the tool_result",
           m[0]["role"] == "user" and m[1]["role"] == "assistant" and m[1]["content"][0] == {"type": "thinking", "thinking": "", "signature": "SIGNATURE-1"}
           and m[1]["content"][1]["type"] == "tool_use" and m[1]["content"][1]["id"] == "toolu_1" and m[1]["content"][1]["input"] == {"device": "core-sw1"}
@@ -301,7 +303,8 @@ def claude_second(q):
 exercise("claude", claude, "claude-opus-5-5", "Claude Opus 5.5", ["claude-opus-5-5", "claude-sonnet-5-5"], ["claude-3-haiku-20240307"],
          dict(tokens_in=2400, tokens_out=140, path="/v1/messages", key_header=lambda h: h.get("x-api-key") == GOOD or h.get("authorization") == f"Bearer {GOOD}",
               check_first=claude_first, check_second=claude_second, history_len=4,
-              carries_all=lambda b: len(b["messages"]) == 5 and b["messages"][1]["content"][0]["signature"] == "SIGNATURE-1" and b["messages"][4]["content"] == "And now?"))
+              carries_all=lambda b: len(b["messages"]) == 5 and b["messages"][1]["content"][0]["signature"] == "SIGNATURE-1" and b["messages"][4]["content"].endswith("\nAnd now?")
+              and b["system"] == claude.requests[0]["body"]["system"]))
 claude.script[:] = [("text", "Served by another model.", "claude-opus-4-8")]
 _cid, events, done = run("claude", "fallback")
 check("Claude: the model that served the answer (after a fallback) is the one priced", done["model"] == "claude-opus-4-8" and abs(done["cost"] - prices.cost("claude-opus-4-8", 1200, 60)) < 1e-9, done)
@@ -317,7 +320,7 @@ def oa_first(q):
     check("OpenAI: the Responses API with function tools, streaming, reasoning effort from Depth, nothing stored on the server, the system text as instructions",
           b.get("stream") is True and b["tools"][0]["type"] == "function" and b["tools"][0]["parameters"]["type"] == "object" and {t["name"] for t in b["tools"]} == set(T.BY_NAME)
           and b["reasoning"] == {"effort": "medium"} and b.get("store") is False and "Acme" in b["instructions"] and b["model"] == "gpt-6.1-sol"
-          and b["input"][0] == {"role": "user", "content": "What is wrong with core-sw1?"}, (b.keys(), b.get("reasoning")))
+          and b["input"][0]["role"] == "user" and b["input"][0]["content"].endswith("\nWhat is wrong with core-sw1?"), (b.keys(), b.get("reasoning")))
 def oa_second(q):
     i = q["body"]["input"]
     types = [x.get("type") for x in i]
@@ -327,7 +330,7 @@ def oa_second(q):
 exercise("openai", oa, "gpt-6.1-sol", "GPT-6.1 Sol", ["gpt-6-astra", "gpt-6-luna", "gpt-6.1-sol", "o3"], ["gpt-image-2", "text-embedding-3-large", "gpt-realtime", "gpt-4.1-2025-04-14"],
          dict(tokens_in=2000, tokens_out=110, path="/v1/responses", key_header=lambda h: h.get("authorization") == f"Bearer {GOOD}",
               check_first=oa_first, check_second=oa_second, history_len=5,
-              carries_all=lambda b: len(b["input"]) == 6 and b["input"][1]["type"] == "reasoning" and b["input"][5] == {"role": "user", "content": "And now?"}))
+              carries_all=lambda b: len(b["input"]) == 6 and b["input"][1]["type"] == "reasoning" and b["input"][5]["role"] == "user" and b["input"][5]["content"].endswith("\nAnd now?")))
 
 # ---------------------------------------------------------------- Gemini
 gem = Fake(GeminiHandler)
@@ -360,7 +363,7 @@ def gem_second(q):
 exercise("gemini", gem, "gemini-3.8-flash", "Gemini 3.8 Flash", ["gemini-3.8-flash", "gemini-2.5-flash"], ["gemini-embedding-001", "imagen-4"],
          dict(tokens_in=1800, tokens_out=160, path=":streamGenerateContent", key_header=lambda h: h.get("x-goog-api-key") == GOOD,
               check_first=gem_first, check_second=gem_second, history_len=4,
-              carries_all=lambda b: len(b["contents"]) == 5 and camel(b)["contents"][1]["parts"][0].get("thoughtSignature") == SIG and b["contents"][4]["parts"][0]["text"] == "And now?"))
+              carries_all=lambda b: len(b["contents"]) == 5 and camel(b)["contents"][1]["parts"][0].get("thoughtSignature") == SIG and b["contents"][4]["parts"][0]["text"].endswith("\nAnd now?")))
 
 print("== the three SDKs ship with Toner")
 import importlib.metadata as md
