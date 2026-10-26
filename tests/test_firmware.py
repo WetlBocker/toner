@@ -376,6 +376,42 @@ check("show version: version, the image it booted, the mode", FW.parse_version("
       and FW.parse_version("cisco_nxos", " NXOS: version 10.2(5)\n  NXOS image file is: bootflash:///nxos64-cs.10.2.5.M.bin\n")["image"] == "nxos64-cs.10.2.5.M.bin"
       and FW.parse_version("cisco_asa", 'Cisco Adaptive Security Appliance Software Version 9.16(4)\nSystem image file is "disk0:/asa9-16-4-smp-k8.bin"\n')
       == {"version": "9.16(4)", "image": "asa9-16-4-smp-k8.bin", "mode": ""})
+# Catalyst 9300 on 17.x (Cisco's own capture): the mode is in the table of switches only, no "Installation mode is" line
+C9K_HEAD = ("Cisco IOS XE Software, Version 17.15.03\nCisco IOS Software [IOSXE], Catalyst L3 Switch Software (CAT9K_IOSXE), Version 17.15.3, RELEASE SOFTWARE (fc1)\n"
+            "sw1 uptime is 2 weeks, 1 day\n")
+C9K_TABLE = ("\nSwitch Ports Model              SW Version        SW Image              Mode   \n"
+             "------ ----- -----              ----------        ----------            ----   \n")
+c9k_install = C9K_HEAD + 'System image file is "flash:packages.conf"\n' + C9K_TABLE + "*    1 65    C9300-48UXM        17.15.03          CAT9K_IOSXE           INSTALL\n\n\nConfiguration register is 0x102\n"
+c9k_bundle = C9K_HEAD + 'System image file is "flash:cat9k_iosxe.17.15.03.SPA.bin"\n' + C9K_TABLE + "*    1 65    C9300-48UXM        17.15.03          CAT9K_IOSXE           BUNDLE\n\nConfiguration register is 0x102\n"
+check("Catalyst 9000: the mode comes from the table of switches when there is no 'Installation mode is' line",
+      FW.parse_version("cisco_xe", c9k_install) == {"version": "17.15.03", "image": "packages.conf", "mode": "INSTALL"} and FW.parse_version("cisco_xe", c9k_bundle)["mode"] == "BUNDLE")
+stack_rows = ("     1 41    C9300-24P          17.09.04a         CAT9K_IOSXE           BUNDLE\n*    2 41    C9300-24P          17.09.04a         CAT9K_IOSXE           INSTALL\n"
+              "     3 41    C9300-24P          17.09.04a         CAT9K_IOSXE           BUNDLE\n\nConfiguration register is 0x102\n")
+check("a stack reports the active switch's row (marked *), wherever it is", FW.parse_version("cisco_xe", C9K_HEAD + C9K_TABLE + stack_rows)["mode"] == "INSTALL"
+      and FW.parse_version("cisco_xe", C9K_HEAD + C9K_TABLE + stack_rows.replace("*    2", "     2"))["mode"] == "BUNDLE")
+wrapped = C9K_HEAD + C9K_TABLE + "*    1 41    C9300-24P          17.09.04a         CAT9K_IOSXE\nINSTALL\n     2 41    C9300-24P          17.09.04a         CAT9K_IOSXE\nINSTALL\n\n"
+check("the Mode column wrapped onto the next line by a narrow terminal", FW.parse_version("cisco_xe", wrapped)["mode"] == "INSTALL")
+c3850 = ("Cisco IOS XE Software, Version 16.12.04\nSystem image file is \"flash:packages.conf\"\nInstallation mode is INSTALL\n" + C9K_TABLE
+         + "*    1 56    WS-C3850-48P       16.12.04          CAT3K_CAA-UNIVERSALK9 INSTALL\n\nConfiguration register is 0x102\n")
+check("Catalyst 3850: both the line and the table; the line alone (older software); the table without its usual heading",
+      FW.parse_version("cisco_xe", c3850)["mode"] == "INSTALL" and FW.parse_version("cisco_xe", "Installation mode is BUNDLE\n")["mode"] == "BUNDLE"
+      and FW.parse_version("cisco_xe", "Member Ports Type  Version  Image  Mode\n*    1 41    C9300-24P   17.09.04a   CAT9K_IOSXE   BUNDLE\n")["mode"] == "BUNDLE"
+      and FW.parse_version("cisco_xe", "Installation mode is install\n")["mode"] == "INSTALL")
+check("show version that says neither: the mode is empty, nothing is guessed from unrelated text",
+      FW.parse_version("cisco_xe", C9K_HEAD + 'System image file is "flash:packages.conf"\n' + "Configuration register is 0x102\n")["mode"] == ""
+      and FW.parse_version("cisco_xe", C9K_HEAD + "Switch Ports Model SW Version SW Image Mode\n------\n\nConfiguration register is 0x102\n")["mode"] == ""
+      and FW.parse_version("cisco_ios", c9k_install)["mode"] == "")
+check("the booted file's name settles it when show version does not: packages.conf is INSTALL mode, a .bin is BUNDLE",
+      FW.xe_mode_of_image("packages.conf") == "INSTALL" and FW.xe_mode_of_image("cat9k_iosxe.17.15.03.SPA.bin") == "BUNDLE" and FW.xe_mode_of_image("") == ""
+      and FW.xe_mode_of_image("isr4300-universalk9.16.09.04.SPA.bin") == "BUNDLE" and FW.xe_mode_of_image("cat9k_iosxe.17.15.03.SPA.pkg") == "")
+summary = ("[ R0 ] Installed Package(s) Information:\nState (St): I - Inactive, U - Activated & Uncommitted,\n            C - Activated & Committed, D - Deactivated & Uncommitted\n"
+           "--------------------------------------------------------------------------------\nType  St   Filename/Version\n"
+           "--------------------------------------------------------------------------------\nIMG   C    17.06.05.0.5797\nIMG   I    17.11.01.0.1324\n\n"
+           "--------------------------------------------------------------------------------\nAuto abort timer: inactive\n")
+check("show install summary: an installed and committed image means INSTALL mode; a refusal means BUNDLE; anything else nothing",
+      FW.parse_install_summary(summary) == "INSTALL" and FW.parse_install_summary(summary.replace("IMG   C ", "IMG   U ")) == "INSTALL"
+      and FW.parse_install_summary("FAILED: install_summary : Device is not in INSTALL mode\n") == "BUNDLE"
+      and FW.parse_install_summary("% Invalid input detected at '^' marker.\n") == "" and FW.parse_install_summary(summary.replace("IMG   C ", "IMG   I ")) == "")
 real_ios = ("Directory of flash:/\n\n    2  -rwx        1048   Mar 1 1993 00:02:43 +00:00  config.text\n"
             "    3  drwx         512   Mar 1 1993 00:02:43 +00:00  c2960x-universalk9-mz.152-7.E9\n"
             "  442  -rwx    26789376  Jun 12 2023 10:04:15 +00:00  c2960x-universalk9-mz.152-7.E9.bin\n\n122185728 bytes total (88324608 bytes free)\n")
@@ -420,9 +456,9 @@ fakes = {
     "ios1": CiscoFake("cisco_ios", "ios1", files={"c2960x-universalk9-mz.152-7.E9.bin": (26000000, "a" * 32), "c2960x-old.bin": (25000000, "b" * 32), "config.text": (4000, "")},
                       image="c2960x-universalk9-mz.152-7.E9.bin", reach=OK_REACH, fs_total=122185728),
     "stack1": CiscoFake("cisco_xe", "stack1", mode="INSTALL", members=3, files={"packages.conf": (8000, ""), "cat9k-rpbase.17.06.05.SPA.pkg": (500000000, "")},
-                        reach=OK_REACH, fs_total=11 * G),
+                        reach=OK_REACH, fs_total=11 * G, version_style="table"),
     "bundle1": CiscoFake("cisco_xe", "bundle1", mode="BUNDLE", files={"cat9k_iosxe.17.06.05.SPA.bin": (900000000, ""), "cat9k_iosxe.17.03.04.SPA.bin": (880000000, "")},
-                         image="cat9k_iosxe.17.06.05.SPA.bin", reach=OK_REACH),
+                         image="cat9k_iosxe.17.06.05.SPA.bin", reach=OK_REACH, version_style="both"),
     "nx1": CiscoFake("cisco_nxos", "nx1", files={"nxos64-cs.10.2.5.M.bin": (1900000000, ""), "nxos.9.3.8.bin": (1600000000, "")}, image="nxos64-cs.10.2.5.M.bin",
                      reach=OK_REACH, vrf="management"),
     "asa1": CiscoFake("cisco_asa", "asa1", files={"asa9-16-4-smp-k8.bin": (118000000, ""), "asa9-12-4-smp-k8.bin": (110000000, ""), "asdm-7181.bin": (90000000, "")},
@@ -457,9 +493,10 @@ check("IOS: version, the image it runs, no mode, free space, the boot file", r["
 check("...it reaches the server: ping and the FTP port, through its own telnet", r["ping"] is True and r["port"] is True and not r["held"] and r["note"] == "", r)
 check("...and telnet was left cleanly (Ctrl-^ x, disconnect, confirmed)", any(l.startswith("telnet 127.0.0.1 ") for l in fakes["ios1"].commands) and "disconnect" in fakes["ios1"].commands, fakes["ios1"].commands)
 r = R["stack1"]
-check("IOS XE stack in INSTALL mode: every member under the primary, each with its own flash", r["mode"] == "INSTALL" and [(f["member"], f["role"], f["fs"]) for f in r["flashes"]]
+check("IOS XE stack in INSTALL mode (the mode in the table of switches only): every member under the primary, each with its own flash", r["mode"] == "INSTALL" and [(f["member"], f["role"], f["fs"]) for f in r["flashes"]]
       == [(1, "Active", "flash:"), (2, "Standby", "flash-2:"), (3, "Member", "flash-3:")] and all(f["free"] == 11 * G - 500008000 for f in r["flashes"]) and not r["held"], r["flashes"])
 check("IOS XE BUNDLE: the mode and the bundle it boots", R["bundle1"]["mode"] == "BUNDLE" and R["bundle1"]["boot"] == ["cat9k_iosxe.17.06.05.SPA.bin"] and not R["bundle1"]["held"])
+check("show install summary is not asked for while show version says the mode", not any("show install summary" in f.commands for f in fakes.values()))
 r = R["nx1"]
 check("NX-OS: bootflash:, pinged through the management VRF (it reaches the server only there)", r["flashes"][0]["fs"] == "bootflash:" and r["ping"] is True and not r["held"]
       and "ping 127.0.0.1 vrf management" in fakes["nx1"].commands, fakes["nx1"].commands)
@@ -470,6 +507,33 @@ check("a device that cannot ping the server is held back, saying so", R["noping"
 check("one that pings it but finds the port closed", R["closed"]["held"] == f"Reaches 127.0.0.1, but port {own_ftp.port} is closed.", R["closed"]["held"])
 check("a stack with a member that is not Ready", R["provisioned"]["held"] == "Stack member 3 is not Ready (Provisioned).")
 check("a device with no login, without trying to sign in", R["nologin"]["held"] == "No user name or password: set one on the device or its profile.")
+
+print("== IOS XE software whose show version does not say the mode")
+
+
+def collect_fake(name, fake):
+    fake.password = PW
+    add(name, "cisco", fake.platform, lab, host="127.0.0.1")
+    with db.within(lab):
+        d = next(x for x in db.list_devices() if x["name"] == name); db.save_device({**d, "port": fake.port, "username": "admin"})
+        db.set_secret(db.secret_name(name), PW)
+        return FW.collect(next(x for x in db.list_devices() if x["name"] == name), src)
+
+
+wrap = CiscoFake("cisco_xe", "wrap", mode="INSTALL", members=2, files={"packages.conf": (8000, "")}, reach=OK_REACH, version_style="wrapped")
+r = collect_fake("wrap", wrap)
+check("a stack whose table wrapped the Mode column: INSTALL, no extra command", r["mode"] == "INSTALL" and not r["held"] and "show install summary" not in wrap.commands, r)
+img_i = CiscoFake("cisco_xe", "img-i", mode="INSTALL", files={"packages.conf": (8000, "")}, reach=OK_REACH, version_style="image")
+img_b = CiscoFake("cisco_xe", "img-b", mode="BUNDLE", files={"cat9k_iosxe.17.06.05.SPA.bin": (900, "")}, image="cat9k_iosxe.17.06.05.SPA.bin", reach=OK_REACH, version_style="image")
+r1, r2 = collect_fake("img-i", img_i), collect_fake("img-b", img_b)
+check("neither the table nor the line: the booted file's name says it (packages.conf: INSTALL, a .bin: BUNDLE), still no extra command",
+      r1["mode"] == "INSTALL" and r2["mode"] == "BUNDLE" and not r1["held"] and not r2["held"] and "show install summary" not in img_i.commands + img_b.commands, (r1["mode"], r2["mode"]))
+bare_i = CiscoFake("cisco_xe", "bare-i", mode="INSTALL", files={"packages.conf": (8000, "")}, reach=OK_REACH, version_style="bare")
+bare_b = CiscoFake("cisco_xe", "bare-b", mode="BUNDLE", files={"a.bin": (900, "")}, image="a.bin", reach=OK_REACH, version_style="bare")
+r1, r2 = collect_fake("bare-i", bare_i), collect_fake("bare-b", bare_b)
+check("not even the booted file: show install summary is asked, and read (INSTALL when it lists the image, BUNDLE on its refusal)",
+      r1["mode"] == "INSTALL" and r2["mode"] == "BUNDLE" and "show install summary" in bare_i.commands and "show install summary" in bare_b.commands and not r1["held"], (r1, r2))
+check("...and the Clean up and after-copy steps follow that mode", FW.cleanup_plan(r1) == {"install": True, "flashes": []} and FW.cleanup_plan(r2)["install"] is False)
 
 print("== an ASA whose login lands in user mode")
 asa_en = CiscoFake("cisco_asa", "asa-en", enable_secret="En-pw-9", files={"asa9-16-4-smp-k8.bin": (118000000, "")}, image="asa9-16-4-smp-k8.bin", reach=OK_REACH)

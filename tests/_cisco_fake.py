@@ -118,8 +118,12 @@ def fetch(url):
 class CiscoFake(ShellServer):
     def __init__(self, platform="cisco_xe", hostname="sw1", user="admin", password="pw", version=None, mode=None,
                  members=1, member_states=None, image=None, boot=None, fs_total=8 * 1024 ** 3, files=None, member_files=None,
-                 reach=None, vrf=None, copy_seconds=1.0, install_files=None, enable_secret=None):
+                 reach=None, vrf=None, copy_seconds=1.0, install_files=None, enable_secret=None, version_style="line"):
         """reach: {host: {"ping": bool, "ports": {21, ...}}} what the device can get to (anything else: nothing).
+        version_style (IOS XE): where `show version` says the mode. "line": an "Installation mode is X" line (older releases);
+        "table": the table of switches with a Mode column and no such line (Catalyst 9000); "both": the line and the table
+        (Catalyst 3850 on 16.x); "wrapped": the table with the Mode column wrapped onto the next line; "image": neither, only
+        the System image file line; "bare": neither, and no System image file line either.
         vrf: NX-OS only: the VRF the source is reached through (ping and copy without it fail).
         enable_secret: the login lands in user mode (prompt '>'); `enable` asks for this password, and the privileged
         commands (dir, copy, delete, configure, install, verify, the boot lines) are refused until it is given."""
@@ -127,6 +131,7 @@ class CiscoFake(ShellServer):
         self.platform, self.hostname = platform, hostname
         self.enable_secret = enable_secret
         self.mode = mode if platform == "cisco_xe" else None
+        self.version_style = version_style
         self.version = version or {"cisco_ios": "15.2(7)E9", "cisco_xe": "17.06.05", "cisco_nxos": "10.2(5)", "cisco_asa": "9.16(4)"}[platform]
         fs = PLATFORM_FS[platform]
         self.members = [(n, "Active" if n == 1 else "Standby" if n == 2 else "Member", (member_states or {}).get(n, "Ready"))
@@ -246,6 +251,8 @@ class CiscoFake(ShellServer):
             return self.show_version(), False
         if low == "show switch":
             return self.show_switch(), False
+        if low in ("show install summary", "show install sum"):
+            return self.show_install_summary(), False
         if low.startswith("dir "):
             return self.dir(cmd[4:].strip()), False
         if low in ("show boot", "show bootvar", "show running-config boot", "show running-config | include ^boot"):
@@ -285,16 +292,43 @@ class CiscoFake(ShellServer):
                     f"{self.hostname} uptime is 1 year, 2 weeks, 3 days, 4 hours, 5 minutes\n"
                     f'System image file is "{fs}/{img}"\n')
         if self.platform == "cisco_xe":
-            return (f"Cisco IOS XE Software, Version {self.version}\n"
-                    f"Cisco IOS Software [Bengaluru], Catalyst L3 Switch Software (CAT9K_IOSXE), Version {self.version}, RELEASE SOFTWARE (fc2)\n"
-                    f"{self.hostname} uptime is 12 weeks, 3 days, 4 hours, 5 minutes\n"
-                    f'System image file is "{fs}{img}"\n'
-                    f"Installation mode is {self.mode}\n")
+            style = self.version_style
+            out = (f"Cisco IOS XE Software, Version {self.version}\n"
+                   f"Cisco IOS Software [Bengaluru], Catalyst L3 Switch Software (CAT9K_IOSXE), Version {self.version}, RELEASE SOFTWARE (fc2)\n"
+                   f"{self.hostname} uptime is 12 weeks, 3 days, 4 hours, 5 minutes\n")
+            if style != "bare":
+                out += f'System image file is "{fs}{img}"\n'
+            if style in ("line", "both"):
+                out += f"Installation mode is {self.mode}\n"
+            if style in ("table", "both", "wrapped"):                 # as a Catalyst 9300 prints it, the active switch marked *
+                out += ("\nSwitch Ports Model              SW Version        SW Image              Mode   \n"
+                        "------ ----- -----              ----------        ----------            ----   \n")
+                for n, _role, _state in (self.members or [(1, "Active", "Ready")]):
+                    row = f"{'*' if n == 1 else ' '}    {n} 41    C9300-24P          {self.version:<17} CAT9K_IOSXE           "
+                    out += row + ("\n" + self.mode if style == "wrapped" else self.mode) + "\n"
+                out += "\n\nConfiguration register is 0x102\n"
+            return out
         if self.platform == "cisco_nxos":
             return (f"Cisco Nexus Operating System (NX-OS) Software\nSoftware\n  BIOS: version 05.45\n NXOS: version {self.version}\n"
                     f"  NXOS image file is: bootflash:///{img}\n")
         return (f"Cisco Adaptive Security Appliance Software Version {self.version}\nSSP Operating System Version 2.10(1.162)\n"
                 f'System image file is "disk0:/{img}"\n{self.hostname} up 12 days 3 hours\n')
+
+    def show_install_summary(self):
+        if self.platform != "cisco_xe":
+            return "% Invalid input detected at '^' marker.\n"
+        if self.mode != "INSTALL":        # the real wording on a BUNDLE-mode switch has not been seen; this follows install remove's refusal
+            return "FAILED: install_summary : Device is not in INSTALL mode\n"
+        return ("[ R0 ] Installed Package(s) Information:\n"
+                "State (St): I - Inactive, U - Activated & Uncommitted,\n"
+                "            C - Activated & Committed, D - Deactivated & Uncommitted\n"
+                "--------------------------------------------------------------------------------\n"
+                "Type  St   Filename/Version\n"
+                "--------------------------------------------------------------------------------\n"
+                f"IMG   C    {self.version}.0.5797\n\n"
+                "--------------------------------------------------------------------------------\n"
+                "Auto abort timer: inactive\n"
+                "--------------------------------------------------------------------------------\n")
 
     def show_switch(self):
         if self.platform not in ("cisco_ios", "cisco_xe"):
