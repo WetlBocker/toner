@@ -2,9 +2,9 @@
 page that shows what it has cost and lists the conversations. The work is in core/assistant; this is the furniture."""
 import threading
 
-from PySide6.QtCore import QEvent, QSize, Qt, QThread, Signal
+from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QThread, Signal
 from PySide6.QtGui import QFont, QTextCursor, QTextDocumentFragment
-from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QLabel, QMessageBox, QPlainTextEdit, QPushButton, QSizePolicy, QTableWidget,
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QHBoxLayout, QLabel, QMessageBox, QPlainTextEdit, QPushButton, QSizePolicy, QTableWidget,
                                QTableWidgetItem, QTextEdit, QToolButton, QVBoxLayout, QWidget)
 
 from core import db, orgs
@@ -41,11 +41,26 @@ class Worker(QThread):
         agent.run_turn(self.conv_id, self.org, self.question, self.screen, lambda kind, payload: self.event.emit(kind, payload), self.cancel)
 
 
+def button_place():
+    """Where the button sits: ('left' or 'right', how far down the window as 0..1), from the setting, kept sane."""
+    raw = db.get_setting("assistant_button") or {}
+    side = "left" if raw.get("side") == "left" else "right"
+    try:
+        y = min(1.0, max(0.0, float(raw.get("y", 0.5))))
+    except (TypeError, ValueError):
+        y = 0.5
+    return side, y
+
+
 class SideButton(QToolButton):
-    """The round button at the right edge of the window, carrying the connected provider's mark."""
+    """The round button at a side edge of the window, carrying the connected provider's mark. A click opens the panel; a drag
+    moves it, and on release it snaps to the nearest side edge at the height it was dropped (remembered per computer)."""
+    moved = Signal(str, float)                      # the side it snapped to, and how far down the window (0..1)
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._press = self._start = None
+        self._dragging = False
         self.setFixedSize(BUTTON, BUTTON)
         self.setIconSize(QSize(24, 24))
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -57,8 +72,44 @@ class SideButton(QToolButton):
 
     def set_provider(self, provider):
         self.provider = provider
-        self.setIconSize(QSize(BUTTON, BUTTON) if brandicons.has_brand_mark(provider) else QSize(24, 24))   # a company's file carries its own clear space
+        self.setIconSize(QSize(*brandicons.mark_size(provider, BUTTON)))
         self.setIcon(brandicons.provider_icon(provider))
+
+    # ---- dragging
+    def mousePressEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton:
+            self._press, self._start, self._dragging = e.globalPosition().toPoint(), self.pos(), False
+        super().mousePressEvent(e)
+
+    def mouseMoveEvent(self, e):
+        if self._press is None or not (e.buttons() & Qt.MouseButton.LeftButton):
+            return super().mouseMoveEvent(e)
+        delta = e.globalPosition().toPoint() - self._press
+        if not self._dragging and delta.manhattanLength() < QApplication.startDragDistance():
+            return
+        self._dragging = True
+        parent = self.parentWidget()
+        new = self._start + delta
+        if parent is not None:
+            new = QPoint(min(max(0, new.x()), max(0, parent.width() - self.width())), min(max(0, new.y()), max(0, parent.height() - self.height())))
+        self.move(new)
+
+    def mouseReleaseEvent(self, e):
+        if self._dragging and e.button() == Qt.MouseButton.LeftButton:
+            self._dragging, self._press = False, None
+            self.setDown(False)                     # a drag is not a click
+            parent = self.parentWidget()
+            if parent is not None and parent.width() > 0 and parent.height() > 0:
+                side = "left" if self.x() + self.width() / 2 < parent.width() / 2 else "right"
+                y = min(1.0, max(0.0, (self.y() + self.height() / 2) / parent.height()))
+                self.moved.emit(side, y)
+            e.accept()
+            return
+        self._press = None
+        super().mouseReleaseEvent(e)
+
+    def dragging(self):
+        return self._dragging
 
     def restyle(self):
         self.set_provider(getattr(self, "provider", AI.provider_id()))    # the mark's light or dark version follows the theme

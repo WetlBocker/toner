@@ -198,6 +198,7 @@ class Main(QMainWindow):
         self.ai_button.setAutoFillBackground(True)         # the window, not of the splitter, which would make it a pane)
         self.ai_button.hide()
         self.ai_button.clicked.connect(lambda: self.show_assistant(not self.assistant.isVisible()))
+        self.ai_button.moved.connect(self._ai_button_moved)
         self.ai_state_changed.connect(self._ai_state)
         AI.add_listener(lambda on, text: self.ai_state_changed.emit(on, text))
         self.automation.assistant_page.open_requested.connect(self.open_assistant_conversation)
@@ -279,12 +280,26 @@ class Main(QMainWindow):
         self.assistant.open_conversation(conv_id, org)
         self.show_assistant(True)
 
+    def _ai_button_moved(self, side, y):
+        """Dropped after a drag: it snaps to that side edge at that height, and the place is remembered on this computer."""
+        db.set_setting("assistant_button", {"side": side, "y": round(y, 3)})
+        self._place_ai_button()
+
     def _place_ai_button(self):
-        """Pinned at the right edge of the window, vertically centred; at the panel's left edge while the panel is open."""
+        """Pinned at a side edge of the window (the right by default) at the remembered height; at the panel's left edge while the
+        panel is open on that side."""
+        from ui.assistant import button_place
         b = self.ai_button
-        x = (self.assistant.x() - b.width() // 2) if self.assistant.isVisible() else (self.body.width() - b.width() - 8)
+        if b.dragging():
+            return
+        side, frac = button_place()
+        if side == "left":
+            x = 8
+        else:
+            x = (self.assistant.x() - b.width() // 2) if self.assistant.isVisible() else (self.body.width() - b.width() - 8)
+        y = int(round(frac * self.body.height() - b.height() / 2))
         from PySide6.QtCore import QPoint
-        b.move(self.body.mapTo(self, QPoint(max(0, x), max(0, (self.body.height() - b.height()) // 2))))
+        b.move(self.body.mapTo(self, QPoint(max(0, x), min(max(0, y), max(0, self.body.height() - b.height())))))
         b.raise_()
 
     def resizeEvent(self, event):

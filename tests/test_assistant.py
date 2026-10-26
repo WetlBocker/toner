@@ -299,7 +299,11 @@ check("OpenAI's Blossom is the published file, unmodified (light and dark versio
 def drawn(provider):
     img = brandicons.provider_icon(provider).pixmap(64, 64).toImage()
     return sum(1 for x in range(0, 64, 2) for y in range(0, 64, 2) if img.pixelColor(x, y).alpha() > 100)
-check("each provider's mark draws something; the placeholders stand in for Claude and Gemini", drawn("openai") > 40 and drawn("claude") > 200 and drawn("gemini") > 200 and not brandicons.has_brand_mark("claude") and not brandicons.has_brand_mark("gemini"))
+check("Claude's and Gemini's icons are the uxwing files, unmodified", hashlib.sha256(brandicons.BRAND_SVG["claude"]["light"].encode()).hexdigest() == "f3a857f44b5b542ee79e200dd64a4b8ede3ce5f9b99693a39bd1024cb2b7f76a"
+      and hashlib.sha256(brandicons.BRAND_SVG["gemini"]["light"].encode()).hexdigest() == "cda2df6631d5fa227de3fa04ed78cf354f910ba92a9f086e7455655c10ad9d09"
+      and brandicons.BRAND_SVG["claude"]["dark"] == brandicons.BRAND_SVG["claude"]["light"])
+check("each provider's mark draws something", drawn("openai") > 40 and drawn("claude") > 200 and drawn("gemini") > 100 and all(brandicons.has_brand_mark(p) for p in ("claude", "openai", "gemini")))
+check("the marks are sized for the button: OpenAI's whole, the tiles inside, a placeholder small", brandicons.mark_size("openai", 44) == (44, 44) and brandicons.mark_size("claude", 44) == (28, 28) and brandicons.mark_size("nope", 44) == (24, 24))
 brandicons._cache.clear()
 db.set_setting("theme", "Dark"); A.apply_look(app)
 dark_img = brandicons.provider_icon("openai").pixmap(64, 64).toImage()
@@ -347,6 +351,44 @@ w.strip.navigate.connect(lambda s, p: gone.append((s, p)))
 w.strip.ai.clicked.emit()
 check("clicking the strip's part opens Settings > AI", gone == [("Settings", "AI")])
 AI.set_state(True, "Connected: Claude Opus 5.5.", "Claude Opus 5.5"); settle()
+
+print("== dragging the button")
+from PySide6.QtCore import QPoint, Qt
+from PySide6.QtTest import QTest
+from ui.assistant import button_place
+b = w.ai_button
+check("by default it sits at the right edge, halfway down", button_place() == ("right", 0.5) and b.x() > w.width() - 80)
+def drag(button, dx, dy):
+    """Press, move in a few steps, release (the way a mouse would)."""
+    start = QPoint(button.width() // 2, button.height() // 2)
+    origin = button.mapToGlobal(start)                       # the button moves under the mouse, so aim in screen coordinates
+    QTest.mousePress(button, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, start)
+    for k in range(1, 6):
+        QTest.mouseMove(button, button.mapFromGlobal(origin + QPoint(dx * k // 5, dy * k // 5)))
+        settle(2)
+    QTest.mouseRelease(button, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, button.mapFromGlobal(origin + QPoint(dx, dy)))
+    settle()
+was_open = w.assistant.isVisible()
+drag(b, -(w.width() - 200), 150)
+side, frac = button_place()
+check("dragged far to the left and down: it snaps to the left edge at the height it was dropped, and that is remembered", side == "left" and b.x() == w.body.mapTo(w, QPoint(8, 0)).x()
+      and 0.6 < frac < 0.8 and abs(b.y() + b.height() // 2 - (w.body.mapTo(w, QPoint(0, 0)).y() + frac * w.body.height())) <= 2
+      and db.get_setting("assistant_button") == {"side": "left", "y": round(frac, 3)}, (side, frac, b.pos().toTuple()))
+check("a drag is not a click: the panel did not toggle", w.assistant.isVisible() == was_open and not b.isChecked())
+w.resize(1000, 700); settle()
+check("after a resize it keeps its side and its height as a share of the window", b.x() == w.body.mapTo(w, QPoint(8, 0)).x() and abs(b.y() + b.height() // 2 - (w.body.mapTo(w, QPoint(0, 0)).y() + frac * w.body.height())) <= 2, b.pos().toTuple())
+w.resize(1300, 820); settle()
+QTest.mouseClick(b, Qt.MouseButton.LeftButton); settle()
+check("a plain click still opens the panel, and the button stays on the left while the panel is on the right", w.assistant.isVisible() and b.x() == w.body.mapTo(w, QPoint(8, 0)).x() and b.x() + b.width() < w.assistant.x())
+QTest.mouseClick(b, Qt.MouseButton.LeftButton); settle()
+check("and closes it again", not w.assistant.isVisible())
+drag(b, w.width() - 100, -300)
+check("dragged back to the right and up: the right edge, higher up", button_place()[0] == "right" and button_place()[1] < 0.4 and b.x() > w.width() - 80, button_place())
+QTest.mousePress(b, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(10, 10)); QTest.mouseMove(b, QPoint(12, 11)); QTest.mouseRelease(b, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(12, 11)); settle()
+check("a wobble of a pixel or two is a click, not a drag", w.assistant.isVisible() and button_place()[0] == "right")
+QTest.mouseClick(b, Qt.MouseButton.LeftButton); settle()
+db.set_setting("assistant_button", {"side": "right", "y": 0.5}); w._place_ai_button(); settle()
+check("the setting is per computer, not exported", "assistant_button" in db.NOT_PORTABLE and "assistant_button" in db.GLOBAL_ONLY)
 
 print("== the panel asks, with the scripted provider")
 REAL_MAKE = AI.make
