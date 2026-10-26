@@ -529,3 +529,18 @@ class HistoryTab(QWidget):
         with db.within(db.split_key(d or "")[1]):                         # that organization's limits
             th = db.get_thresholds()
         self.chart.set_series(series, th.get(picked[0].split(" (")[0]) if picked else None)
+
+
+    def screen_context(self):
+        """What the Assistant is told about this page: the chosen run and its rows, and the device and checks on the chart."""
+        out = {"page": "History"}
+        row = self.runs.currentRow()
+        if 0 <= row < len(self.run_ids) and self.runs.item(row, 0) is not None:
+            out["selected_run"] = {"time": self.runs.item(row, 0).text(), "ok": self.runs.item(row, 1).text(), "warn": self.runs.item(row, 2).text(),
+                                   "fail": self.runs.item(row, 3).text(), "error": self.runs.item(row, 4).text(), "organization": self.runs.item(row, 5).text()}
+            out["rows"] = [{"device": self.detail.item(i, 0).text(), "check": self.detail.item(i, 1).text(), "status": self.detail.item(i, 2).text(),
+                            "value": self.detail.item(i, 3).text(), "message": self.detail.item(i, 4).text()}
+                           for i in range(min(self.detail.rowCount(), 400)) if self.detail.item(i, 0) is not None]
+        if self.dev.currentData():
+            out["chart"] = {"device": db.label(self.dev.currentData()), "checks": self.chk.selected()}
+        return out

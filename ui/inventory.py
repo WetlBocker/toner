@@ -1930,3 +1930,22 @@ class InventoryTab(QWidget):
         QMessageBox.information(self, "Import", "\n".join(lines))
         if made:
             toast(self, orgassign.created_text(made))
+
+
+    def screen_context(self):
+        """What the Assistant is told about this page: the selected device(s), the folder, the search."""
+        devs = self.selected_devices()
+        out = {"page": "Inventory", "selected_devices": [d["name"] for d in devs], "devices_shown": sum(1 for k in self.payload if k.startswith("device:"))}
+        if len(devs) == 1:
+            d = devs[0]
+            out["selected_device"] = {"name": d["name"], "vendor": d["vendor"], "host": d["host"], "location": d.get("location") or "",
+                                      "tags": d.get("tags") or "", "details": d.get("details") or "", "enabled": bool(d.get("enabled", 1)),
+                                      "status": self._status_word(d)}
+        folders = self.selected_folders()
+        if folders:
+            paths = db.folder_paths()
+            out["selected_folders"] = [paths.get(f, str(f)) for f in folders]
+        words = self._words()
+        if words:
+            out["search"] = " ".join(words)
+        return out

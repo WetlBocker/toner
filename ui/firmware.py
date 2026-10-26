@@ -499,6 +499,11 @@ class CheckStep(QWidget):
 
     def _done(self):
         self._progress()
+        try:
+            from core.assistant import tools as T
+            T.firmware_snapshot([self.results[k] for k in self.rows if k in self.results])    # the Assistant's firmware_check tool reads these
+        except Exception:                                                              # noqa: BLE001
+            pass
         self.changed.emit()
 
     def ready_results(self):
@@ -1078,3 +1083,33 @@ class FirmwareTab(QWidget):
         self.check.shutdown()
         self.cleanup.shutdown()
         self.transfer.shutdown()
+
+
+    def screen_context(self):
+        """What the Assistant is told about this page: the step it is on and what that step's table shows."""
+        i = self.stack.currentIndex()
+        out = {"page": "Firmware Transfer", "step": f"Step {i + 1} of {len(STEPS)}: {STEPS[i]}" if 0 <= i < len(STEPS) else ""}
+        try:
+            if i == 0:
+                out["devices"] = [d["name"] for d in self.devices.chosen()]
+            elif i == 1:
+                src, files, vrf = self.server.chosen()
+                out["server"] = fw.source_shown(src) if src and src.get("proto") and src.get("host") else ""
+                out["files"] = [f.get("name") if isinstance(f, dict) else str(f) for f in (files or [])][:200]
+            elif i == 2:
+                from core.assistant import tools as T
+                T.firmware_snapshot([self.check.results[k] for k in self.check.rows if k in self.check.results])
+                out["results"] = (T.LATEST.get("firmware_check") or {}).get("results", [])
+                out["progress"] = self.check.progress.text()
+            elif i == 3:
+                out["ticked_for_deletion"] = [{"device": r.get("name", ""), "install_remove_inactive": pick["install"], "files": [n for _fs, n, _s in pick["files"]]}
+                                              for r, pick in (self.cleanup.chosen() or [])][:100]
+            elif i == 4:
+                out["images"] = [{"device": r.get("name", ""), "image": f["name"] if f else "", "md5_typed": bool(typed.strip())} for r, f, typed in (self.images.rows() or [])][:100]
+            elif i == 5:
+                t = self.transfer.table
+                out["transfers"] = [{"device": t.item(r, 0).text() if t.item(r, 0) else "", "step": t.item(r, 1).text() if t.item(r, 1) else "",
+                                     "detail": t.item(r, 3).text() if t.item(r, 3) else ""} for r in range(t.rowCount())]
+        except Exception as e:                                           # noqa: BLE001
+            out["note"] = f"could not read the step's table: {e}"
+        return out

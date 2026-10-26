@@ -78,12 +78,12 @@ w = A.Main(); w.resize(1300, 820); w.show(); app.processEvents()
 
 print("== in the sidebar")
 names = [w.tabs.tabText(i) for i in range(w.tabs.count())]
-check("Automation is below Sessions and above Settings", names.index("Automation") == names.index("Sessions") + 1 and names.index("Settings") == names.index("Automation") + 1, names)
+check("Automation is below Sessions and above Settings", names.index("Automation/AI") == names.index("Sessions") + 1 and names.index("Settings") == names.index("Automation/AI") + 1, names)
 w.go("Automation"); app.processEvents()
 check("it opens, with a header saying what it is for", w.tabs.currentWidget() is w.automation and "playbooks" in w.headers["automation"].context.text())
-check("its list has Ansible's Playbooks and Run history", [w.automation.pages.tabText(i) for i in range(w.automation.pages.count())] == ["Playbooks", "Run history"])
+check("its list has Ansible's Playbooks and Run history", [w.automation.pages.tabText(i) for i in range(w.automation.pages.count())] == ["Playbooks", "Run history", "Assistant"])
 w.open_palette(); labels = [e[0] for e in w.palette.entries]
-check("the search offers Go to Automation, the editor as a tool, the settings page and a new playbook", "Go to Automation" in labels and "Tool: Playbook Editor" in labels and "Settings: Ansible" in labels and "New playbook" in labels, [l for l in labels if "laybook" in l or "Ansible" in l])
+check("the search offers Go to Automation, the editor as a tool, the settings page and a new playbook", "Go to Automation/AI" in labels and "Tool: Playbook Editor" in labels and "Settings: Ansible" in labels and "New playbook" in labels, [l for l in labels if "laybook" in l or "Ansible" in l])
 w.palette.close()
 
 print("== Tools > Playbook Editor")

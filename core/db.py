@@ -129,6 +129,9 @@ DEFAULT_SETTINGS = {
     "api_history_keep": 100,
     # Tools > Firmware Transfer (see core/firmware.py): the image server remembered for the organization (its password is in the vault)
     "firmware_source": {},
+    # the Assistant (see core/assistant): one provider, model and depth per installation; the API key is in the vault; the spend
+    # limit is the installation's total over every organization, in US dollars per month
+    "ai_provider": "claude", "ai_model": {}, "ai_depth": "normal", "ai_spend_limit": 20,
 }
 # Per-machine state that must not travel in an exported settings file (channel secrets stay in
 # the vault, so an imported channel would be broken).
@@ -595,8 +598,24 @@ def _m9_api_tester(c):
     """)
 
 
+def _m10_assistant(c):
+    """The Assistant's conversations (core/assistant): one row per conversation with the provider's own message history, and one row
+    per line of the transcript (a question, an answer with its tokens and cost, a tool step). Each organization keeps its own."""
+    c.executescript("""
+    CREATE TABLE IF NOT EXISTS ai_conversations (
+        id INTEGER PRIMARY KEY, provider TEXT NOT NULL, model TEXT DEFAULT '', title TEXT DEFAULT '', started TEXT NOT NULL,
+        updated TEXT DEFAULT '', turns INTEGER DEFAULT 0, tokens_in INTEGER DEFAULT 0, tokens_out INTEGER DEFAULT 0,
+        cost REAL DEFAULT 0, history BLOB);
+    CREATE TABLE IF NOT EXISTS ai_turns (
+        id INTEGER PRIMARY KEY, conversation_id INTEGER NOT NULL REFERENCES ai_conversations(id) ON DELETE CASCADE,
+        at TEXT NOT NULL, kind TEXT NOT NULL, text TEXT DEFAULT '', model TEXT DEFAULT '',
+        tokens_in INTEGER DEFAULT 0, tokens_out INTEGER DEFAULT 0, cost REAL DEFAULT 0);
+    CREATE INDEX IF NOT EXISTS idx_ai_turns_conv ON ai_turns(conversation_id, id);
+    """)
+
+
 MIGRATIONS = [(1, _m1_legacy_columns), (2, _m2_agent_history), (3, _m3_agent_tokens), (4, _m4_device_checks), (5, _m5_ansible_runs),
-              (6, _m6_shared), (7, _m7_org_uids), (8, _m8_faster_history), (9, _m9_api_tester)]
+              (6, _m6_shared), (7, _m7_org_uids), (8, _m8_faster_history), (9, _m9_api_tester), (10, _m10_assistant)]
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 
 
@@ -971,7 +990,8 @@ GLOBAL_ONLY = {"window_geometry", "splitters", "sidebar_collapsed", "sessions_li
                "ansible_check_default", "ansible_keep_runs", "fileserver", "iperf_path", "openssl_path", "snippets",
                "ssh_log_days",
                "agent_cert_warned", "agent_enabled", "agent_token_days", "agent_port", "agent_bind", "agent_address",
-               "vault_provider", "vault_config", "vault_direct", "update_direct", "vault_keep_copies", "install_uid", "demarc"}
+               "vault_provider", "vault_config", "vault_direct", "update_direct", "vault_keep_copies", "install_uid", "demarc",
+               "ai_provider", "ai_model", "ai_depth", "ai_spend_limit"}
 # (agent sign-up, its interval and whether installed agents are told it are each organization's own: Settings > Agents)
 # ...and these belong to one organization's own lists, so an organization never borrows Global's:
 ORG_LOCAL = {"acks", "inventory_expanded", "sessions_expanded", "client_scope", "trend_last", "notify_snooze_until", "firmware_source"}

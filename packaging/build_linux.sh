@@ -10,6 +10,7 @@ version="${1:-$(python -c 'from core.version import VERSION; print(VERSION)')}" 
 python -m PyInstaller --noconfirm --clean --windowed --onedir --name Toner \
     --collect-all netmiko --collect-all ntc_templates --collect-all pysnmp --hidden-import cli --collect-all pypsrp --collect-all spnego \
     --collect-submodules keyring.backends --collect-submodules paramiko --collect-all keeper_secrets_manager_core \
+    --collect-submodules anthropic --collect-submodules openai --collect-submodules google.genai \
     --distpath build/dist --workpath build/work --specpath build app.py
 
 appdir="build/AppDir"

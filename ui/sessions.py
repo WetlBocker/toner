@@ -1694,3 +1694,26 @@ class SessionsTab(QWidget):
         for win in list(self.popped.values()):                # the popped-out windows go with the application, without a question
             win._closing_quietly = True
             win.close()
+
+
+    def screen_context(self):
+        """What the Assistant is told about this page: the selected saved session(s), and the open session's log so far."""
+        out = {"page": "Sessions", "selected_sessions": [{"name": s.get("name", ""), "type": s.get("kind", ""), "host": s.get("host", ""), "port": s.get("port", 0),
+                                                           "username": s.get("username", ""), "device": s.get("device", "")} for s in self.selected_sessions()]}
+        pane = self.current_pane()
+        spec = getattr(pane, "spec", None) or {}
+        if pane is not None:
+            out["open_session"] = {"name": spec.get("name", ""), "host": spec.get("host", ""), "type": spec.get("kind", ""),
+                                   "connected": bool(pane.connected()) if hasattr(pane, "connected") else None}
+        path = getattr(getattr(pane, "log", None), "path", None)
+        if path:
+            try:
+                from core import sessionlog
+                with open(path, "rb") as f:
+                    f.seek(0, 2)
+                    size = f.tell()
+                    f.seek(max(0, size - 20000))
+                    out["log"] = sessionlog.clean(f.read().decode("utf-8", "replace"))
+            except OSError:
+                pass
+        return out

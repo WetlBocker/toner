@@ -10,6 +10,7 @@ from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QProgressBar, QWidget
 
 from core import agents, db, display, notify, proxy, tunnel
+from core import assistant as AI
 from ui import status as st
 from ui import theme
 
@@ -44,6 +45,8 @@ class StatusStrip(QWidget):
         self.probed.connect(self._on_probe)
         self.tunnel_done.connect(self._on_tunnel_done)
         self.run, self.schedule, self.backups, self.receiver, self.notify = Part(), Part(), Part(), Part(), Part()
+        self.ai, self.ai_dot = Part(), QLabel("·")                       # the Assistant's connection (Settings > AI); hidden while there is no key
+        self.ai_dot.setProperty("muted", True)
         self.progress = QProgressBar()
         self.progress.setMaximumWidth(160)
         self.progress.setMaximumHeight(12)
@@ -61,6 +64,10 @@ class StatusStrip(QWidget):
                 dot.setProperty("muted", True)
                 lay.addWidget(dot)
             lay.addWidget(w)
+        lay.addWidget(self.ai_dot)
+        lay.addWidget(self.ai)
+        self.ai.clicked.connect(lambda: self.navigate.emit("Settings", "AI"))
+        self.show_ai()
         self.proxy.clicked.connect(self._proxy_clicked)
         self.vault.clicked.connect(self._vault_clicked)
         self.run.clicked.connect(lambda: self.navigate.emit("Results", ""))
@@ -78,6 +85,17 @@ class StatusStrip(QWidget):
         self.vault_timer.timeout.connect(self.show_vault)
         self.vault_timer.start()
         self.restyle()
+
+    def show_ai(self):
+        """Assistant: connected / not connected, from the last check (startup, Test, Save); nothing while no key is stored."""
+        s = AI.state()
+        on = s.get("connected")
+        self.ai.setVisible(on is not None)
+        self.ai_dot.setVisible(on is not None)
+        if on is None:
+            return
+        self.ai.setText(AI.STRIP_ON if on else AI.STRIP_OFF)
+        self.ai.setToolTip((s.get("text") or "") + chr(10) + "Settings > AI")
 
     def _tick(self):
         self.check_proxy()

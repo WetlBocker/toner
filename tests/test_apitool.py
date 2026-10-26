@@ -373,7 +373,7 @@ A.clear_history(); check("clear history empties it", A.list_history() == [])
 def tables(org):
     with db.within(org), db.connect() as c:
         return {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-check("the migration is numbered and every organization's file has the tables", db.schema_version() == 9 and all(
+check("the migration is numbered and every organization's file has the tables", db.schema_version() >= 9 and all(
     {"api_requests", "api_folders", "api_history", "api_variables"} <= tables(o) for o in (db.GLOBAL, acme, globex)))
 
 # ================================================================ the page

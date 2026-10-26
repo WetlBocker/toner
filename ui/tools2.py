@@ -1011,6 +1011,20 @@ class CommandRunnerTab(QWidget):
 
 
 # =============================================================================== TLS certificates
+
+
+    def screen_context(self):
+        """What the Assistant is told about this page: the devices ticked, the commands, and the last run's output."""
+        out = {"page": "Command Runner", "devices_ticked": [d["name"] for d in self.checked_devices()], "commands": self.commands.toPlainText(),
+               "read_only_mode": self.safe.isChecked(), "status": self.status.text()}
+        if self.results:
+            out["results"] = [{"device": r["device"], "ok": r["ok"], "seconds": round(r.get("seconds", 0), 1), "error": r.get("error") or "",
+                               "output": "\n\n".join(f"$ {c}\n{o}" for c, o in r.get("outputs", []))[-8000:]} for r in list(self.results.values())[:40]]
+        shown = self.output.toPlainText()
+        if shown:
+            out["output_shown"] = shown[-20000:]
+        return out
+
 class TlsWorker(QThread):
     done = Signal(object)
 

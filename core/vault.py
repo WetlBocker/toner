@@ -19,7 +19,8 @@ MAGIC = b"TONERVAULT1"
 EXTENSION = ".tonervault"
 MIN_PASSWORD = 8
 SERVICE_NAMES = ("service:proxy", "service:proxy-otp", "service:ssh-tunnel", "service:ssh-tunnel-otp", "service:sftp-server", "service:ftp-server",
-                 "service:agent-enroll", "service:ansible-server")
+                 "service:agent-enroll", "service:ansible-server",
+                 "service:ai-claude", "service:ai-openai", "service:ai-gemini")      # the Assistant's API keys (Settings > AI)
 
 
 def known_names():

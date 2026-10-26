@@ -1,4 +1,4 @@
-"""Automation section: run Ansible playbooks on Inventory devices and look back at earlier runs. (More automation will be added here later.)"""
+"""Automation/AI section: run Ansible playbooks on Inventory devices and look back at earlier runs, and the Assistant's page (ui/assistant.py)."""
 import json
 import threading
 from datetime import datetime
@@ -13,6 +13,7 @@ from ui import status as st
 from ui.nav import PageStack
 from ui.widgets import EmptyHint, filling, flow, remember_sizes
 from ui.finder import FilterButton, SearchBox, device_sections, shown_devices
+from ui.assistant import AssistantOverviewPage
 
 MODES = {"check": "Check", "run": "Run", "syntax": "Syntax"}
 VERBOSITY = ["Normal output", "More (-v)", "Even more (-vv)", "Debug (-vvv)"]
@@ -433,6 +434,9 @@ class AutomationTab(QWidget):
         self.pages.addSection("Ansible")
         self.pages.addTab(self.playbooks, "Playbooks")
         self.pages.addTab(self.history, "Run history")
+        self.assistant_page = AssistantOverviewPage()
+        self.pages.addSection("AI")
+        self.pages.addTab(self.assistant_page, "Assistant")
         lay = QVBoxLayout(self)
         lay.addWidget(self.pages, 1)
         self.playbooks.edit_requested.connect(self.edit_requested.emit)
@@ -441,6 +445,27 @@ class AutomationTab(QWidget):
 
     def refresh(self):
         self.playbooks.refresh()
+        self.assistant_page.refresh()
+
+    def screen_context(self):
+        """What the Assistant is told about this section: the playbook or run being looked at."""
+        page = self.pages.currentWidget()
+        if page is self.playbooks:
+            out = {"page": "Playbooks", "playbook": self.playbooks.selected(), "devices_ticked": [d["name"] for d in self.playbooks.checked_devices()],
+                   "check_mode": self.playbooks.check.isChecked(), "status": self.playbooks.status.text()}
+            text = self.playbooks.output.toPlainText()
+            if text:
+                out["output"] = text[-20000:]
+            return out
+        if page is self.history:
+            rid = self.history.selected_id()
+            run = AN.get_run(rid) if rid else None
+            out = {"page": "Run history"}
+            if run:
+                out["run"] = {k: run.get(k) for k in ("started_at", "playbook", "mode", "backend", "targets", "ok", "changed", "unreachable", "failed", "exit_code", "seconds")}
+                out["output"] = (run.get("output") or "")[-20000:]
+            return out
+        return {"page": "Assistant"}
 
     def select_playbook(self, name):
         self.pages.setCurrentWidget(self.playbooks)

@@ -418,3 +418,21 @@ class ResultsTab(QWidget):
         self.run_btn.setEnabled(True)
         self.progress.emit(len(self.last_ran), len(self.last_ran))
         self.run_finished.emit()
+
+
+    def screen_context(self):
+        """What the Assistant is told about this page: the selected devices and their rows (every row shown when nothing is selected)."""
+        picked = []
+        for it in self.table.selectedItems():
+            top = it.parent() or it
+            if top not in picked:
+                picked.append(top)
+        tops = picked or [self.table.topLevelItem(i) for i in range(min(self.table.topLevelItemCount(), 60))]
+        rows = []
+        for top in tops:
+            name = db.label(top.data(0, ROLE) or top.text(0))
+            kids = [top.child(k) for k in range(top.childCount())] or [top]
+            for ch in kids:
+                rows.append({"device": name, "check": ch.text(1), "status": ch.text(2), "value": ch.text(3), "message": ch.text(4)})
+        return {"page": "Results", "selected_devices": [db.label(t.data(0, ROLE) or t.text(0)) for t in picked], "summary": self.summary.text(),
+                "filter": self.FILTERS[self.status_mode()] if 0 <= self.status_mode() < len(self.FILTERS) else "", "rows": rows[:400]}

@@ -115,7 +115,7 @@ for n in ("core1", "edge-fw"): dev(n, "fortinet" if n == "edge-fw" else "cisco")
 db.save_run([Result("core1", "cpu", "WARN", "85%", numeric=85.0), Result("edge-fw", "wan links", "OK", "2/2")])
 w = A.Main(); w.show()
 w.inventory.edit_device = lambda d: None            # the real one opens a modal dialog
-check("sections, with the overview first", [w.tabs.tabText(i) for i in range(w.tabs.count())] == ["Overview", "Results", "Inventory", "Configs", "History", "Reports", "Tools", "Sessions", "Automation", "Settings", "About"])
+check("sections, with the overview first", [w.tabs.tabText(i) for i in range(w.tabs.count())] == ["Overview", "Results", "Inventory", "Configs", "History", "Reports", "Tools", "Sessions", "Automation/AI", "Settings", "About"])
 check("the overview is filled from stored results at startup", w.dashboard.cards["warn"].value.text() == "1")
 db.save_run([Result("core1", "cpu", "WARN", "85%", numeric=85.0), Result("core1", "events", "FAIL", "295", "errors"), Result("edge-fw", "wan links", "OK", "2/2")])
 w.dashboard.refresh()
