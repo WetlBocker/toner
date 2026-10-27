@@ -78,12 +78,14 @@ def set_title(conv_id, question):
 
 
 # ---------------------------------------------------------------- the transcript
-def add_turn(conv_id, kind, text, model="", tokens_in=0, tokens_out=0, cost=0.0):
-    """One line of the transcript: 'user', 'assistant' (with its tokens and cost), 'tool' (a step) or 'note' (a stop, an error)."""
+def add_turn(conv_id, kind, text, model="", tokens_in=0, tokens_out=0, cost=0.0, searches=0, sources=None):
+    """One line of the transcript: 'user', 'assistant' (with its tokens, searches, sources and cost), 'tool' (a step) or 'note' (a
+    stop, an error)."""
     now = _now()
     with db.connect() as c:
-        tid = c.execute("INSERT INTO ai_turns(conversation_id, at, kind, text, model, tokens_in, tokens_out, cost) VALUES(?,?,?,?,?,?,?,?)",
-                        (conv_id, now, kind, text, model, int(tokens_in or 0), int(tokens_out or 0), float(cost or 0))).lastrowid
+        tid = c.execute("INSERT INTO ai_turns(conversation_id, at, kind, text, model, tokens_in, tokens_out, cost, searches, sources) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                        (conv_id, now, kind, text, model, int(tokens_in or 0), int(tokens_out or 0), float(cost or 0), int(searches or 0),
+                         json.dumps(sources, ensure_ascii=False) if sources else "")).lastrowid
         if kind == "assistant":
             c.execute("UPDATE ai_conversations SET turns=turns+1, tokens_in=tokens_in+?, tokens_out=tokens_out+?, cost=cost+?, updated=? WHERE id=?",
                       (int(tokens_in or 0), int(tokens_out or 0), float(cost or 0), now, conv_id))
@@ -95,7 +97,10 @@ def add_turn(conv_id, kind, text, model="", tokens_in=0, tokens_out=0, cost=0.0)
 def turns(conv_id, org=None):
     with db.within(org):
         with db.connect() as c:
-            return [dict(r) for r in c.execute("SELECT * FROM ai_turns WHERE conversation_id=? ORDER BY id", (conv_id,))]
+            rows = [dict(r) for r in c.execute("SELECT * FROM ai_turns WHERE conversation_id=? ORDER BY id", (conv_id,))]
+    for r in rows:
+        r["sources"] = json.loads(r["sources"]) if r.get("sources") else []
+    return rows
 
 
 # ---------------------------------------------------------------- what it cost

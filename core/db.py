@@ -131,7 +131,7 @@ DEFAULT_SETTINGS = {
     "firmware_source": {},
     # the Assistant (see core/assistant): one provider, model and depth per installation; the API key is in the vault; the spend
     # limit is the installation's total over every organization, in US dollars per month
-    "ai_provider": "claude", "ai_model": {}, "ai_depth": "normal", "ai_spend_limit": 20, "ai_run_commands": False,
+    "ai_provider": "claude", "ai_model": {}, "ai_depth": "normal", "ai_spend_limit": 20, "ai_run_commands": False, "ai_search": True,
     # where the Assistant's round button sits (per computer): which side edge, and how far down the window (0 top, 1 bottom)
     "assistant_button": {"side": "right", "y": 0.5},
 }
@@ -627,8 +627,19 @@ def _m11_device_software(c):
             c.execute(f"ALTER TABLE devices ADD COLUMN {col} TEXT DEFAULT ''")
 
 
+def _m12_assistant_searches(c):
+    """An answer's web searches: how many the provider made for it (priced into its cost) and the pages it rests on (JSON list of
+    [title, url]), both on the assistant turn."""
+    cols = {r[1] for r in c.execute("PRAGMA table_info(ai_turns)")}
+    if "searches" not in cols:
+        c.execute("ALTER TABLE ai_turns ADD COLUMN searches INTEGER DEFAULT 0")
+    if "sources" not in cols:
+        c.execute("ALTER TABLE ai_turns ADD COLUMN sources TEXT DEFAULT ''")
+
+
 MIGRATIONS = [(1, _m1_legacy_columns), (2, _m2_agent_history), (3, _m3_agent_tokens), (4, _m4_device_checks), (5, _m5_ansible_runs),
-              (6, _m6_shared), (7, _m7_org_uids), (8, _m8_faster_history), (9, _m9_api_tester), (10, _m10_assistant), (11, _m11_device_software)]
+              (6, _m6_shared), (7, _m7_org_uids), (8, _m8_faster_history), (9, _m9_api_tester), (10, _m10_assistant), (11, _m11_device_software),
+              (12, _m12_assistant_searches)]
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 
 
@@ -1046,7 +1057,7 @@ GLOBAL_ONLY = {"window_geometry", "splitters", "sidebar_collapsed", "sessions_li
                "ssh_log_days",
                "agent_cert_warned", "agent_enabled", "agent_token_days", "agent_port", "agent_bind", "agent_address",
                "vault_provider", "vault_config", "vault_direct", "update_direct", "vault_keep_copies", "install_uid", "demarc",
-               "ai_provider", "ai_model", "ai_depth", "ai_spend_limit", "ai_run_commands", "assistant_button"}
+               "ai_provider", "ai_model", "ai_depth", "ai_spend_limit", "ai_run_commands", "ai_search", "assistant_button"}
 # (agent sign-up, its interval and whether installed agents are told it are each organization's own: Settings > Agents)
 # ...and these belong to one organization's own lists, so an organization never borrows Global's:
 ORG_LOCAL = {"acks", "inventory_expanded", "sessions_expanded", "client_scope", "trend_last", "notify_snooze_until", "firmware_source"}

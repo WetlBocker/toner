@@ -199,7 +199,7 @@ class Scripted(providers.Provider):
     def __init__(self, script, hold=None):
         super().__init__("k", "claude-opus-5-5", "normal"); self.script = list(script); self.seen = []; self.hold = hold
     def list_models(self): return [("claude-opus-5-5", "Claude Opus 5.5")]
-    def complete(self, system, history, tools, on_text, cancel=None):
+    def complete(self, system, history, tools, on_text, cancel=None, search=False, on_search=None):
         self.seen.append((system, [dict(m) for m in history], [t.name for t in tools]))
         step = self.script.pop(0)
         r = providers.Reply(); r.model = "claude-opus-5-5"; r.tokens_in, r.tokens_out = 1000, 100

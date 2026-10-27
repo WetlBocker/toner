@@ -13,6 +13,12 @@ Shapes were checked against each provider's current documentation and SDK source
   item (reasoning items included) goes back in the next input; results as function_call_output; Depth maps to reasoning.effort.
 - Gemini: generate_content_stream with FunctionDeclaration / Tool, automatic function calling off; function_call parts answered
   with function_response parts; Depth maps to thinking_config.thinking_level; thought signatures go back unchanged.
+- Web search (Settings > AI, `search=True` on complete): each provider's own server-side search. Claude: the web_search_20260209
+  and web_fetch_20260209 tools, server_tool_use blocks announced as they stream, usage.server_tool_use.web_search_requests counted,
+  the pages from the text blocks' citations; stop_reason pause_turn is reported as "pause" so the loop asks again. OpenAI: the
+  web_search tool, web_search_call items announced as they complete and counted, the pages from url_citation annotations.
+  Gemini: the google_search tool beside the function declarations, the queries and pages from the answer's grounding metadata
+  (so they are known only with the answer); a model that refuses the mix is asked again without search and the reply says so.
 
 The SDKs are imported inside each class, so Toner starts (and the rest of this package works) even when one is missing.
 """
@@ -48,7 +54,8 @@ class Reply:
     def __init__(self):
         self.text, self.calls, self.native = "", [], []       # calls: [(call id, tool name, arguments dict)]
         self.tokens_in = self.tokens_out = 0
-        self.stop, self.model, self.refusal = "end", "", ""    # stop: end | tool | refusal | length
+        self.stop, self.model, self.refusal = "end", "", ""    # stop: end | tool | refusal | length | pause
+        self.searches, self.queries, self.sources, self.note = 0, [], [], ""   # queries seen only with the answer (Gemini); sources: [(title, url)]
 
 
 def _args(raw):
@@ -79,8 +86,9 @@ class Provider:
         """[(id, display name)] from the provider's own list, the ones that take a conversation."""
         raise NotImplementedError
 
-    def complete(self, system, history, tools, on_text, cancel=None):
-        """One round: ask with the history and tools, stream text through on_text, return a Reply."""
+    def complete(self, system, history, tools, on_text, cancel=None, search=False, on_search=None):
+        """One round: ask with the history and tools (and the provider's web search when `search`), stream text through on_text,
+        announce each search through on_search(kind, text) as it happens ("search", the query; "fetch", the address), return a Reply."""
         raise NotImplementedError
 
     def user_message(self, text):
@@ -119,6 +127,14 @@ class Provider:
         return ProviderError(text.strip().rstrip(".")[:300] or f"{self.label} answered with an error")
 
 
+def _add_source(reply, title, url):
+    if url and url not in [u for _t, u in reply.sources]:
+        reply.sources.append((title or "", url))
+
+
+NO_SEARCH = "Search was not available with this model."
+
+
 # =============================================================================== Claude
 class Claude(Provider):
     name, label, host, default_model = "claude", "Claude", "api.anthropic.com", "claude-opus-5-5"
@@ -126,7 +142,8 @@ class Claude(Provider):
     # thinking is on by itself on the Claude 5 models; naming it lets us ask that a thinking block whose prefix no longer matches
     # (an organization renamed, a tool added in a newer Toner) is dropped rather than the whole request refused
     THINKING = {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "drop_block"}}
-    KEEP = ("text", "thinking", "redacted_thinking", "tool_use")       # blocks that go back into the history
+    KEEP = ("text", "thinking", "redacted_thinking", "tool_use", "server_tool_use", "web_search_tool_result", "web_fetch_tool_result")  # blocks that go back into the history
+    SEARCH_TOOLS = [{"type": "web_search_20260209", "name": "web_search"}, {"type": "web_fetch_20260209", "name": "web_fetch"}]
 
     def _client(self, timeout=TIMEOUT):
         import anthropic
@@ -151,21 +168,21 @@ class Claude(Provider):
     def tool_defs(tools):
         return [{"name": t.name, "description": t.description, "input_schema": t.schema} for t in tools]
 
-    def complete(self, system, history, tools, on_text, cancel=None):
+    def complete(self, system, history, tools, on_text, cancel=None, search=False, on_search=None):
         reply = Reply()
-        kw = dict(model=self.model, max_tokens=MAX_TOKENS, system=system, messages=history, tools=self.tool_defs(tools),
+        kw = dict(model=self.model, max_tokens=MAX_TOKENS, system=system, messages=history, tools=self.tool_defs(tools) + (self.SEARCH_TOOLS if search else []),
                   output_config={"effort": self.EFFORT.get(self.depth, "medium")}, fallbacks="default", betas=self.BETAS,
                   thinking=dict(self.THINKING))
         try:
             try:
-                message = self._stream(kw, reply, on_text, cancel)
+                message = self._stream(kw, reply, on_text, cancel, on_search)
             except Cancelled:
                 raise
             except Exception as e:                                       # noqa: BLE001
                 if getattr(e, "status_code", None) == 400 and "thinking" in str(e).lower():
                     kw.pop("thinking", None)                             # a model that takes no thinking setting
                     reply.text = ""
-                    message = self._stream(kw, reply, on_text, cancel)
+                    message = self._stream(kw, reply, on_text, cancel, on_search)
                 else:
                     raise
         except Cancelled:
@@ -179,14 +196,23 @@ class Claude(Provider):
             blocks.append(b.model_dump(mode="json", exclude_none=True))
             if b.type == "tool_use":
                 reply.calls.append((b.id, b.name, _args(b.input)))
+            elif b.type == "server_tool_use" and b.name == "web_search":
+                reply.queries.append(str((b.input or {}).get("query") or ""))
+            for cit in (getattr(b, "citations", None) or []) if b.type == "text" else []:
+                if getattr(cit, "type", "") == "web_search_result_location":
+                    _add_source(reply, getattr(cit, "title", ""), getattr(cit, "url", ""))
         reply.native = [{"role": "assistant", "content": blocks}] if blocks else []
         u = message.usage
         reply.tokens_in = (u.input_tokens or 0) + (getattr(u, "cache_creation_input_tokens", 0) or 0) + (getattr(u, "cache_read_input_tokens", 0) or 0)
         reply.tokens_out = u.output_tokens or 0
+        st = getattr(u, "server_tool_use", None)
+        reply.searches = (getattr(st, "web_search_requests", 0) or 0) if st is not None else len(reply.queries)
         reply.model = message.model or self.model
         stop = message.stop_reason
         if stop == "tool_use" and reply.calls:
             reply.stop = "tool"
+        elif stop == "pause_turn":
+            reply.stop = "pause"
         elif stop == "refusal":
             reply.stop = "refusal"
             details = getattr(message, "stop_details", None)
@@ -195,12 +221,20 @@ class Claude(Provider):
             reply.stop = "length"
         return reply
 
-    def _stream(self, kw, reply, on_text, cancel):
+    def _stream(self, kw, reply, on_text, cancel, on_search=None):
         with self._client().beta.messages.stream(**kw) as stream:
-            for text in stream.text_stream:
+            for event in stream:
                 _check(cancel)
-                reply.text += text
-                on_text(text)
+                if event.type == "text":
+                    reply.text += event.text
+                    on_text(event.text)
+                elif event.type == "content_block_stop" and on_search is not None:
+                    b = getattr(event, "content_block", None)
+                    if getattr(b, "type", "") == "server_tool_use":
+                        if b.name == "web_search":
+                            on_search("search", str((b.input or {}).get("query") or ""))
+                        elif b.name == "web_fetch":
+                            on_search("fetch", str((b.input or {}).get("url") or ""))
             return stream.get_final_message()
 
     def user_message(self, text):
@@ -243,23 +277,23 @@ class OpenAI(Provider):
     def tool_defs(tools):
         return [{"type": "function", "name": t.name, "description": t.description, "parameters": t.schema} for t in tools]
 
-    def complete(self, system, history, tools, on_text, cancel=None):
-        kw = dict(model=self.model, input=history, instructions=system, tools=self.tool_defs(tools), store=False, stream=True,
-                  reasoning={"effort": self.EFFORT.get(self.depth, "medium")})
+    def complete(self, system, history, tools, on_text, cancel=None, search=False, on_search=None):
+        kw = dict(model=self.model, input=history, instructions=system, tools=self.tool_defs(tools) + ([{"type": "web_search"}] if search else []),
+                  store=False, stream=True, reasoning={"effort": self.EFFORT.get(self.depth, "medium")})
         try:
-            return self._stream(kw, on_text, cancel)
+            return self._stream(kw, on_text, cancel, on_search)
         except Cancelled:
             raise
         except Exception as e:                                           # noqa: BLE001
             if getattr(e, "status_code", None) == 400 and "reasoning" in str(e).lower():
                 kw.pop("reasoning", None)                                # a model with no reasoning setting
                 try:
-                    return self._stream(kw, on_text, cancel)
+                    return self._stream(kw, on_text, cancel, on_search)
                 except Exception as e2:                                  # noqa: BLE001
                     raise self._wrap(e2) from None
             raise self._wrap(e) from None
 
-    def _stream(self, kw, on_text, cancel):
+    def _stream(self, kw, on_text, cancel, on_search=None):
         reply, final = Reply(), None
         stream = self._client().responses.create(**kw)
         try:
@@ -269,6 +303,12 @@ class OpenAI(Provider):
                 if kind == "response.output_text.delta":
                     reply.text += event.delta
                     on_text(event.delta)
+                elif kind == "response.output_item.done" and on_search is not None and getattr(event.item, "type", "") == "web_search_call":
+                    action = getattr(event.item, "action", None)
+                    if getattr(action, "type", "") == "search":
+                        on_search("search", getattr(action, "query", "") or "")
+                    elif getattr(action, "type", "") == "open_page":
+                        on_search("fetch", getattr(action, "url", "") or "")
                 elif kind in ("response.completed", "response.incomplete"):
                     final = event.response
                 elif kind == "response.failed":
@@ -288,10 +328,18 @@ class OpenAI(Provider):
             kind = getattr(item, "type", "")
             if kind == "function_call":
                 reply.calls.append((item.call_id, item.name, _args(item.arguments)))
+            elif kind == "web_search_call":
+                reply.searches += 1
+                action = getattr(item, "action", None)
+                if getattr(action, "type", "") == "search":
+                    reply.queries.append(getattr(action, "query", "") or "")
             elif kind == "message":
                 for part in getattr(item, "content", None) or []:
                     if getattr(part, "type", "") == "refusal":
                         reply.stop, reply.refusal = "refusal", getattr(part, "refusal", "") or ""
+                    for a in getattr(part, "annotations", None) or []:
+                        if getattr(a, "type", "") == "url_citation":
+                            _add_source(reply, getattr(a, "title", ""), getattr(a, "url", ""))
         if getattr(final, "usage", None) is not None:
             reply.tokens_in, reply.tokens_out = final.usage.input_tokens or 0, final.usage.output_tokens or 0
         reply.model = getattr(final, "model", "") or self.model
@@ -341,33 +389,42 @@ class Gemini(Provider):
             return KeyRefused("the API key was refused")
         return super()._wrap(e)
 
-    def _config(self, system, tools, thinking=True):
+    def _config(self, system, tools, thinking=True, search=False):
         from google.genai import types
         decls = [types.FunctionDeclaration(name=t.name, description=t.description, parameters_json_schema=t.schema) for t in tools]
-        kw = dict(system_instruction=system, tools=[types.Tool(function_declarations=decls)] if decls else None,
+        tool_list = ([types.Tool(function_declarations=decls)] if decls else []) + ([types.Tool(google_search=types.GoogleSearch())] if search else [])
+        kw = dict(system_instruction=system, tools=tool_list or None,
                   automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True), max_output_tokens=MAX_TOKENS)
         if thinking:
             kw["thinking_config"] = types.ThinkingConfig(thinking_level=self.LEVEL.get(self.depth, "MEDIUM"))
         return types.GenerateContentConfig(**kw)
 
-    def complete(self, system, history, tools, on_text, cancel=None):
+    def complete(self, system, history, tools, on_text, cancel=None, search=False, on_search=None):
         try:
-            return self._stream(system, history, tools, on_text, cancel, thinking=True)
+            return self._stream(system, history, tools, on_text, cancel, thinking=True, search=search)
         except Cancelled:
             raise
         except Exception as e:                                           # noqa: BLE001
-            if (getattr(e, "code", None) == 400) and "thinking" in str(e).lower():
+            text = str(e).lower()
+            if getattr(e, "code", None) == 400 and search and "search" in text:
+                try:                                                     # a model that will not mix Toner's tools and Google Search
+                    reply = self._stream(system, history, tools, on_text, cancel, thinking=True, search=False)
+                    reply.note = NO_SEARCH
+                    return reply
+                except Exception as e2:                                  # noqa: BLE001
+                    raise self._wrap(e2) from None
+            if getattr(e, "code", None) == 400 and "thinking" in text:
                 try:                                                     # a model that takes no thinking level: ask without one
-                    return self._stream(system, history, tools, on_text, cancel, thinking=False)
+                    return self._stream(system, history, tools, on_text, cancel, thinking=False, search=search)
                 except Exception as e2:                                  # noqa: BLE001
                     raise self._wrap(e2) from None
             raise self._wrap(e) from None
 
-    def _stream(self, system, history, tools, on_text, cancel, thinking):
+    def _stream(self, system, history, tools, on_text, cancel, thinking, search=False):
         reply, parts, usage, finish = Reply(), [], None, ""
         client = self._client()
         contents = [self._content(c) for c in history]
-        for chunk in client.models.generate_content_stream(model=self.model, contents=contents, config=self._config(system, tools, thinking)):
+        for chunk in client.models.generate_content_stream(model=self.model, contents=contents, config=self._config(system, tools, thinking, search)):
             _check(cancel)
             if getattr(chunk, "usage_metadata", None) is not None:
                 usage = chunk.usage_metadata
@@ -378,6 +435,15 @@ class Gemini(Provider):
                 continue
             if getattr(cand, "finish_reason", None):
                 finish = str(cand.finish_reason).rsplit(".", 1)[-1].upper()
+            gm = getattr(cand, "grounding_metadata", None)
+            if gm is not None:
+                for q in getattr(gm, "web_search_queries", None) or []:
+                    if q and q not in reply.queries:
+                        reply.queries.append(q)
+                for ch in getattr(gm, "grounding_chunks", None) or []:
+                    web = getattr(ch, "web", None)
+                    if web is not None:
+                        _add_source(reply, getattr(web, "title", ""), getattr(web, "uri", ""))
             for p in (cand.content.parts if cand.content and cand.content.parts else []):
                 d = self._part_out(p)
                 if d is None:
@@ -400,6 +466,8 @@ class Gemini(Provider):
             reply.tokens_in = getattr(usage, "prompt_token_count", 0) or 0
             reply.tokens_out = (getattr(usage, "candidates_token_count", 0) or 0) + (getattr(usage, "thoughts_token_count", 0) or 0)
         reply.model = reply.model or self.model
+        if reply.queries:                                                # Gemini 2.5 bills the answer, Gemini 3 and newer each query
+            reply.searches = 1 if (reply.model or "").removeprefix("models/").startswith("gemini-2.5") else len(reply.queries)
         if reply.calls:
             reply.stop = "tool"
         elif finish in ("SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII", "IMAGE_SAFETY", "RECITATION"):

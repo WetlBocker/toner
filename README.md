@@ -498,17 +498,32 @@ commands in full ("ran on core-sw1: show interfaces; show logging | include Gi1/
 the device)") and one session log of type ASSISTANT under Tools > Session logs with each command and what the device answered.
 While the box is unticked the Assistant is not offered the ability at all.
 
+**Searching the internet.** On by default; untick **Let the Assistant search the internet** under Settings > AI to stop it. The
+Assistant searches through the provider's own web search (Claude, OpenAI or Gemini; with Claude it can also read the pages it
+finds) for public information: security advisories and CVEs ("are these switches affected by CVE-2026-0235"), release notes,
+end-of-life dates, documentation. It is told never to put anything from your network in a search: no device, organization or
+people's names, no addresses, serial numbers or configuration lines; product names, versions and advisory ids only. Toner cannot
+stop a search the provider runs on its side, so a query that does name a device, an address or the organization is marked in the
+panel and the audit log with "(named a device)". Every search is one audit line ("searched the web: CVE-2026-0235 Catalyst 9300")
+and a step in the panel as it happens ("Searching the web for …"; Gemini reports its queries only with the answer, so there the
+line reads "Searched the web for …" after it). Under the answer, **Sources** lists the pages it rests on as links, and the usage
+line counts the searches. A search costs about USD 0.01 (Claude, OpenAI), 0.014 (Gemini 3 and newer, per query, after 5,000 free
+a month) or 0.035 (Gemini 2.5, per answer that searched, after 1,500 free a day) on top of tokens; the free allowances are not
+modelled, so the figure Toner shows can be above the bill. Some Gemini models refuse a request that carries both Toner's tools
+and Google Search; Toner then asks again without search and the answer's note says **Search was not available with this model.**
+While the box is unticked the search tools are not offered at all and the Assistant says so when a question needs the internet.
+
 **Set it up** under **Settings > AI**: the **Provider** (Claude, OpenAI or Gemini, through each company's official library),
 your **API key** (kept in Toner's vault, never in the settings or an exported settings file), the **Model** (the list fills from
 the provider after **Test**; a sensible default is chosen for each provider), the **Depth** (**Quick / Normal / Thorough**: how hard
 the model thinks before it answers; it maps to each provider's own setting for that), the **Monthly spend limit (USD)**, 20 by
-default, and **Let the Assistant run show commands on devices** (see above). **Test** says **Connected: Claude Opus 5.5.** or why not (**Not connected: the API key was refused.** / **Not connected: no
+default, **Let the Assistant run show commands on devices** and **Let the Assistant search the internet** (see above). **Test** says **Connected: Claude Opus 5.5.** or why not (**Not connected: the API key was refused.** / **Not connected: no
 answer from api.openai.com.**). When Toner starts it runs the same test in the background; the line along the bottom of the window
 says **Assistant: connected** or **Assistant: not connected**, and the round button is only there while it is connected. One key
 serves the whole installation; conversations and their cost are kept per organization, in that organization's own file.
 
-**Cost.** Each answer's tokens in and out are recorded with the price of the model that served it (a small table in Toner, updated
-with each release; a model Toner has no price for is counted as 0 and the panel says so). The limit is the installation's total
+**Cost.** Each answer's tokens in and out, and its web searches, are recorded with the price of the model that served it (a small
+table in Toner, updated with each release; a model Toner has no price for is counted as 0 and the panel says so). The limit is the installation's total
 over every organization for the calendar month: when it is reached nothing more is sent and the panel says **This organization's
 monthly spend limit (USD 20) is reached. Raise it under Settings > AI.** The **Automation/AI > Assistant** page shows this
 organization's month (conversations, tokens, cost), **USD 14.90 of 20 across all organizations**, what the Assistant can see, and

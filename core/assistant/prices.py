@@ -4,6 +4,10 @@ Read from each provider's published price list when this release was made (updat
 A model that is not listed is priced like the nearest listed one of its family (the longest matching prefix), and a model
 with no family at all costs nothing in the totals, which the Automation/AI page says. Thinking and reasoning tokens are billed as
 output by every provider, so they are counted in tokens_out.
+
+A web search is priced per provider (SEARCH, US dollars per search): Claude and OpenAI per search, Gemini 3 and newer per query
+and Gemini 2.5 per answer that searched (the provider's own counting, which providers.py follows). Free allowances (Gemini's
+5,000 a month or 1,500 a day) are not modelled, so the total shown can be above the bill.
 """
 
 PRICES = {
@@ -31,6 +35,16 @@ PRICES = {
 }
 
 
+SEARCH = {"claude": 0.010, "gpt": 0.010, "o": 0.010, "gemini-2.5": 0.035, "gemini": 0.014}
+
+
+def search_rate(model):
+    """US dollars per web search for the model's provider (0 when unknown)."""
+    m = (model or "").lower().removeprefix("models/")
+    best = max((k for k in SEARCH if m.startswith(k)), key=len, default=None)
+    return SEARCH[best] if best else 0.0
+
+
 def rate(model):
     """(USD per million tokens in, out) for a model id, or None when nothing is known about it."""
     m = (model or "").lower().removeprefix("models/")
@@ -40,12 +54,12 @@ def rate(model):
     return PRICES[best] if best else None
 
 
-def cost(model, tokens_in, tokens_out):
-    """What one turn cost, in US dollars (0 for a model with no known price)."""
+def cost(model, tokens_in, tokens_out, searches=0):
+    """What one turn cost, in US dollars (0 for a model with no known price), its web searches included."""
     r = rate(model)
     if not r:
         return 0.0
-    return (tokens_in or 0) * r[0] / 1_000_000 + (tokens_out or 0) * r[1] / 1_000_000
+    return (tokens_in or 0) * r[0] / 1_000_000 + (tokens_out or 0) * r[1] / 1_000_000 + (searches or 0) * search_rate(model)
 
 
 def known(model):

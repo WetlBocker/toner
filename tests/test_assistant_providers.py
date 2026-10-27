@@ -18,7 +18,7 @@ keyring.set_password = lambda s, u, p: STORE.__setitem__((s, u), p)
 keyring.get_password = lambda s, u: STORE.get((s, u))
 keyring.delete_password = lambda s, u: STORE.pop((s, u), None)
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from core import db, orgs
+from core import audit, db, orgs
 db.init()
 from core import assistant as AI
 from core.assistant import agent, prices, providers, store, tools as T
@@ -112,7 +112,7 @@ class ClaudeHandler(Handler):
         if not self.authed(): return
         step = self.server.next_step()
         self.start_sse()
-        model = step[2] if len(step) > 2 else body.get("model", "claude-opus-5-5")
+        model = step[2] if step[0] == "text" and len(step) > 2 else body.get("model", "claude-opus-5-5")
         self.sse({"type": "message_start", "message": {"id": "msg_1", "type": "message", "role": "assistant", "model": model, "content": [], "stop_reason": None, "stop_sequence": None,
                                                         "usage": {"input_tokens": 1200, "output_tokens": 1}}}, "message_start")
         if step[0] == "tool":
@@ -131,6 +131,20 @@ class ClaudeHandler(Handler):
                 self.sse({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": piece}}, "content_block_delta")
             self.sse({"type": "content_block_stop", "index": 0}, "content_block_stop")
             self.sse({"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"input_tokens": 1200, "output_tokens": 60}}, "message_delta")
+        elif step[0] == "search":
+            self.sse({"type": "content_block_start", "index": 0, "content_block": {"type": "server_tool_use", "id": "srvtoolu_1", "name": "web_search", "input": {}}}, "content_block_start")
+            self.sse({"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": json.dumps({"query": step[1]})}}, "content_block_delta")
+            self.sse({"type": "content_block_stop", "index": 0}, "content_block_stop")
+            self.sse({"type": "content_block_start", "index": 1, "content_block": {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_1",
+                                                                                   "content": [{"type": "web_search_result", "url": ADVISORY, "title": "Cisco Security Advisory", "encrypted_content": "ENC", "page_age": None}]}}, "content_block_start")
+            self.sse({"type": "content_block_stop", "index": 1}, "content_block_stop")
+            self.sse({"type": "content_block_start", "index": 2, "content_block": {"type": "text", "text": "", "citations": []}}, "content_block_start")
+            for piece in step[2].split("|"):
+                self.sse({"type": "content_block_delta", "index": 2, "delta": {"type": "text_delta", "text": piece}}, "content_block_delta")
+            self.sse({"type": "content_block_delta", "index": 2, "delta": {"type": "citations_delta", "citation": {"type": "web_search_result_location", "url": ADVISORY, "title": "Cisco Security Advisory",
+                                                                                                                   "cited_text": "Affected", "encrypted_index": "IDX"}}}, "content_block_delta")
+            self.sse({"type": "content_block_stop", "index": 2}, "content_block_stop")
+            self.sse({"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"input_tokens": 1200, "output_tokens": 70, "server_tool_use": {"web_search_requests": 1, "web_fetch_requests": 0}}}, "message_delta")
         elif step[0] == "refusal":
             self.sse({"type": "message_delta", "delta": {"stop_reason": "refusal", "stop_sequence": None, "stop_details": {"category": "bio", "recommended_model": None}},
                       "usage": {"input_tokens": 1200, "output_tokens": 0}}, "message_delta")
@@ -182,6 +196,17 @@ class OpenAIHandler(Handler):
                 self.sse({"type": "response.output_text.delta", "sequence_number": 2, "item_id": "msg_1", "output_index": 0, "content_index": 0, "delta": piece, "logprobs": []}, "response.output_text.delta")
             self.sse({"type": "response.output_item.done", "sequence_number": 3, "output_index": 0, "item": msg}, "response.output_item.done")
             self.sse({"type": "response.completed", "sequence_number": 4, "response": self.response_obj(body, "completed", [msg], dict(usage, output_tokens=60))}, "response.completed")
+        elif step[0] == "search":
+            call = {"type": "web_search_call", "id": "ws_1", "status": "completed", "action": {"type": "search", "query": step[1], "sources": [{"type": "url", "url": ADVISORY}]}}
+            self.sse({"type": "response.output_item.added", "sequence_number": 1, "output_index": 0, "item": dict(call, status="in_progress")}, "response.output_item.added")
+            self.sse({"type": "response.output_item.done", "sequence_number": 2, "output_index": 0, "item": call}, "response.output_item.done")
+            text = step[2].replace("|", "")
+            msg = {"type": "message", "id": "msg_1", "role": "assistant", "status": "completed",
+                   "content": [{"type": "output_text", "text": text, "annotations": [{"type": "url_citation", "url": ADVISORY, "title": "Cisco Security Advisory", "start_index": 0, "end_index": 8}]}]}
+            for piece in step[2].split("|"):
+                self.sse({"type": "response.output_text.delta", "sequence_number": 3, "item_id": "msg_1", "output_index": 1, "content_index": 0, "delta": piece, "logprobs": []}, "response.output_text.delta")
+            self.sse({"type": "response.output_item.done", "sequence_number": 4, "output_index": 1, "item": msg}, "response.output_item.done")
+            self.sse({"type": "response.completed", "sequence_number": 5, "response": self.response_obj(body, "completed", [call, msg], dict(usage, output_tokens=70))}, "response.completed")
         elif step[0] == "refusal":
             msg = {"type": "message", "id": "msg_2", "role": "assistant", "status": "completed", "content": [{"type": "refusal", "refusal": "I can't help with that."}]}
             self.sse({"type": "response.output_item.done", "sequence_number": 1, "output_index": 0, "item": msg}, "response.output_item.done")
@@ -211,10 +236,23 @@ class GeminiHandler(Handler):
     def do_POST(self):
         body = self.body(); self.record(body)
         if not self.authed(): return
+        body["_model"] = self.path.split("/models/")[-1].split(":")[0] if "/models/" in self.path else "gemini-3.8-flash"
+        if getattr(self.server, "refuse_mix", False) and any("googleSearch" in json.dumps(camel(t)) for t in body.get("tools") or []):
+            self.send_json(400, {"error": {"code": 400, "message": "Multiple tools are supported only when they are all search tools.", "status": "INVALID_ARGUMENT"}})
+            return
         step = self.server.next_step()
         self.start_sse()
         usage = {"promptTokenCount": 900, "candidatesTokenCount": 40, "thoughtsTokenCount": 30, "totalTokenCount": 970}
-        if step[0] == "tool":
+        if step[0] == "search":
+            pieces = step[2].split("|")
+            for i, piece in enumerate(pieces):
+                chunk = {"candidates": [{"content": {"role": "model", "parts": [{"text": piece}]}, "index": 0}], "modelVersion": body.get("_model", "gemini-3.8-flash")}
+                if i == len(pieces) - 1:
+                    chunk["candidates"][0]["finishReason"] = "STOP"
+                    chunk["candidates"][0]["groundingMetadata"] = {"webSearchQueries": [step[1]], "groundingChunks": [{"web": {"uri": ADVISORY, "title": "Cisco Security Advisory"}}]}
+                    chunk["usageMetadata"] = dict(usage, candidatesTokenCount=70, totalTokenCount=1000)
+                self.sse(chunk)
+        elif step[0] == "tool":
             self.sse({"candidates": [{"content": {"role": "model", "parts": [{"functionCall": {"name": "latest_results", "args": {"device": "core-sw1"}}, "thoughtSignature": SIG}]},
                                       "index": 0, "finishReason": "STOP"}], "usageMetadata": usage, "modelVersion": "gemini-3.8-flash"})
         elif step[0] == "text":
@@ -228,6 +266,9 @@ class GeminiHandler(Handler):
         elif step[0] == "refusal":
             self.sse({"candidates": [{"finishReason": "SAFETY", "index": 0, "safetyRatings": []}], "usageMetadata": usage, "modelVersion": "gemini-3.8-flash"})
         self.end_sse()
+
+
+ADVISORY = "https://sec.cloudapps.cisco.com/security/center/content/CiscoSecurityAdvisory/cisco-sa-iosxe-2026-0235"
 
 
 def closed_port():
@@ -282,6 +323,20 @@ def exercise(pid, server, model, display, model_list, bad_models, reads):
     server.script[:] = [("refusal",)]
     cid, events, done = run(pid, "Something it declines")
     check("a refusal is a normal end: the panel is told in words, the turn is kept", done is not None and done["note"] == AI.REFUSED and events[-1][0] == "done", (events, done))
+    server.script[:] = [("search", "CVE-2026-0235 Catalyst 9300", "Affected: |17.09.04a and below.")]
+    cid, events, done = run(pid, "Are these switches affected by CVE-2026-0235?")
+    step = "Searching the web for CVE-2026-0235 Catalyst 9300…"
+    if pid == "gemini":
+        check("Gemini: the query is known only with the answer, so the step comes after it", [p for k, p in events if k == "tool"] == [] and done["after"] == ["Searched the web for CVE-2026-0235 Catalyst 9300…"], (events, done))
+    else:
+        check("the search is announced as it happens, before the text", events[0] == ("tool", step) and done["after"] == [], events)
+    check("one search counted and priced, the page it rests on named", done["searches"] == 1 and done["sources"] == [("Cisco Security Advisory", ADVISORY)] and done["text"] == "Affected: 17.09.04a and below."
+          and abs(done["cost"] - prices.cost(done["model"], done["tokens_in"], done["tokens_out"], 1)) < 1e-9 and prices.search_rate(done["model"]) > 0, done)
+    with db.within(acme):
+        db.set_home(acme)
+        lines = [e["detail"] for e in audit.recent(5)]
+        last = [t for t in store.turns(cid) if t["kind"] == "assistant"][-1]
+    check("the audit line and the stored turn (searches and sources)", "searched the web: CVE-2026-0235 Catalyst 9300" in lines and last["searches"] == 1 and last["sources"] == [["Cisco Security Advisory", ADVISORY]], (lines, last))
 
 
 # ---------------------------------------------------------------- Claude
@@ -289,7 +344,8 @@ claude = Fake(ClaudeHandler)
 def claude_first(q):
     b, h = q["body"], q["headers"]
     check("Claude: streaming, tools with input_schema, effort from Depth, fallbacks default with its beta, no thinking block (on by default)",
-          b.get("stream") is True and b["tools"][0]["input_schema"]["type"] == "object" and {t["name"] for t in b["tools"]} == set(T.BY_NAME) - {"run_commands"}
+          b.get("stream") is True and b["tools"][0]["input_schema"]["type"] == "object" and {t["name"] for t in b["tools"] if "input_schema" in t} == set(T.BY_NAME) - {"run_commands"}
+          and [t["type"] for t in b["tools"] if "input_schema" not in t] == ["web_search_20260209", "web_fetch_20260209"]
           and b["output_config"] == {"effort": "medium"} and b["fallbacks"] == "default" and "server-side-fallback-2026-07-01" in h.get("anthropic-beta", "")
           and b["thinking"] == {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "drop_block"}} and "thinking-binding-controls-2026-08-01" in h.get("anthropic-beta", "")
           and b["model"] == "claude-opus-5-5" and b["max_tokens"] >= 4096 and "Acme" in (b["system"] if isinstance(b["system"], str) else json.dumps(b["system"])), (b.keys(), h.get("anthropic-beta")))
@@ -305,6 +361,16 @@ exercise("claude", claude, "claude-opus-5-5", "Claude Opus 5.5", ["claude-opus-5
               check_first=claude_first, check_second=claude_second, history_len=4,
               carries_all=lambda b: len(b["messages"]) == 5 and b["messages"][1]["content"][0]["signature"] == "SIGNATURE-1" and b["messages"][4]["content"].endswith("\nAnd now?")
               and b["system"] == claude.requests[0]["body"]["system"]))
+claude.script[:] = [("search", "core-sw1 CVE-2026-0235", "Yes.")]
+_cid, events, done = run("claude", "Is core-sw1 affected?")
+check("Claude: a query that names a device is marked in the panel and the audit log", events[0] == ("tool", "Searching the web for core-sw1 CVE-2026-0235… (named a device)")
+      and "searched the web: core-sw1 CVE-2026-0235 (named a device)" in [e["detail"] for e in audit.recent(5)], events[:1])
+db.set_setting("ai_search", False)
+claude.script[:] = [("text", "I cannot reach the internet.")]
+_cid, events, done = run("claude", "CVE?")
+body = [q for q in claude.requests if q["body"]][-1]["body"]
+check("Claude: with the box unticked no search tool is offered and the instructions say so", all("input_schema" in t for t in body["tools"]) and "You cannot reach the internet." in body["system"] and done["searches"] == 0, body["tools"][-1])
+db.set_setting("ai_search", True)
 claude.script[:] = [("text", "Served by another model.", "claude-opus-4-8")]
 _cid, events, done = run("claude", "fallback")
 check("Claude: the model that served the answer (after a fallback) is the one priced", done["model"] == "claude-opus-4-8" and abs(done["cost"] - prices.cost("claude-opus-4-8", 1200, 60)) < 1e-9, done)
@@ -318,8 +384,8 @@ oa = Fake(OpenAIHandler)
 def oa_first(q):
     b = q["body"]
     check("OpenAI: the Responses API with function tools, streaming, reasoning effort from Depth, nothing stored on the server, the system text as instructions",
-          b.get("stream") is True and b["tools"][0]["type"] == "function" and b["tools"][0]["parameters"]["type"] == "object" and {t["name"] for t in b["tools"]} == set(T.BY_NAME) - {"run_commands"}
-          and b["reasoning"] == {"effort": "medium"} and b.get("store") is False and "Acme" in b["instructions"] and b["model"] == "gpt-6.1-sol"
+          b.get("stream") is True and b["tools"][0]["type"] == "function" and b["tools"][0]["parameters"]["type"] == "object" and {t["name"] for t in b["tools"] if t["type"] == "function"} == set(T.BY_NAME) - {"run_commands"}
+          and {"type": "web_search"} in b["tools"] and b["reasoning"] == {"effort": "medium"} and b.get("store") is False and "Acme" in b["instructions"] and b["model"] == "gpt-6.1-sol"
           and b["input"][0]["role"] == "user" and b["input"][0]["content"].endswith("\nWhat is wrong with core-sw1?"), (b.keys(), b.get("reasoning")))
 def oa_second(q):
     i = q["body"]["input"]
@@ -349,7 +415,8 @@ def camel(obj):
 def gem_first(q):
     b = camel(q["body"])
     cfg = b.get("generationConfig", {})
-    decls = b["tools"][0]["functionDeclarations"]
+    decls = next(t["functionDeclarations"] for t in b["tools"] if "functionDeclarations" in t)
+    check("Gemini: Google Search rides beside the function declarations", len(b["tools"]) == 2 and any("googleSearch" in t for t in b["tools"]), b["tools"])
     schema = decls[0].get("parametersJsonSchema") or decls[0].get("parameters") or {}
     check("Gemini: generateContent streamed, function declarations with JSON schemas, thinking level from Depth, the system instruction, automatic calling off",
           ":streamGenerateContent" in q["path"] and "alt=sse" in q["path"] and {d["name"] for d in decls} == set(T.BY_NAME) - {"run_commands"} and schema.get("type") == "object"
@@ -364,6 +431,19 @@ exercise("gemini", gem, "gemini-3.8-flash", "Gemini 3.8 Flash", ["gemini-3.8-fla
          dict(tokens_in=1800, tokens_out=160, path=":streamGenerateContent", key_header=lambda h: h.get("x-goog-api-key") == GOOD,
               check_first=gem_first, check_second=gem_second, history_len=4,
               carries_all=lambda b: len(b["contents"]) == 5 and camel(b)["contents"][1]["parts"][0].get("thoughtSignature") == SIG and b["contents"][4]["parts"][0]["text"].endswith("\nAnd now?")))
+
+gem.refuse_mix = True
+gem.script[:] = [("text", "From what I know, yes.")]
+_cid, events, done = run("gemini", "Affected by CVE-2026-0235?")
+bodies = [q["body"] for q in gem.requests if q["body"]][-2:]
+check("Gemini: a model that refuses the mix is asked again without search, and the note says so", done["text"] == "From what I know, yes." and done["note"] == "Search was not available with this model."
+      and len(bodies[0]["tools"]) == 2 and len(bodies[1]["tools"]) == 1 and events[-1][0] == "done", (done, [len(b["tools"]) for b in bodies]))
+gem.refuse_mix = False
+AI.set_model("gemini", "gemini-2.5-flash")
+gem.script[:] = [("search", "CVE-2026-0235", "Yes.")]
+_cid, events, done = run("gemini", "Affected?")
+check("Gemini 2.5: one answer that searched is one billable search at its own rate", done["model"] == "gemini-2.5-flash" and done["searches"] == 1 and abs(done["cost"] - prices.cost("gemini-2.5-flash", done["tokens_in"], done["tokens_out"], 1)) < 1e-9
+      and abs(prices.search_rate("gemini-2.5-flash") - 0.035) < 1e-9 and abs(prices.search_rate("gemini-3.8-flash") - 0.014) < 1e-9, done)
 
 print("== the three SDKs ship with Toner")
 import importlib.metadata as md

@@ -7,7 +7,7 @@ history…"), ("done", {...}), ("stopped", None) or ("error", message).
 import threading
 from datetime import datetime
 
-from core import db
+from core import audit, db
 from core import assistant as AI
 from core.assistant import prices, providers, store, tools as T
 
@@ -24,6 +24,8 @@ about this network, and say plainly when the data does not hold the answer. Neve
 
 {ability}
 
+{internet}
+
 Passwords, keys and community strings are masked as **** wherever they appear; never try to reconstruct them and never ask for one.
 
 Answer in plain, concrete words for a network engineer who is busy: lead with the finding, name the devices and values, and keep
@@ -36,6 +38,14 @@ stored data is too old or does not hold the answer; prefer the stored results fo
 opens one login, so send the few commands you need together. Anything that could change a device is refused before it is sent; do
 not try to get around that. When asked to change something, say that the Assistant cannot, and suggest what the person can do in
 Toner instead."""
+CAN_SEARCH = """You can search the internet through your own web search for public information: security advisories and CVEs, release notes,
+end-of-life and end-of-support dates, and documentation. Never put anything from this network in a search: no device, organization
+or people's names, no addresses, serial numbers or configuration lines; search by product, model, version and advisory id only. Say
+which pages the answer rests on, and say when a page did not settle the question. Searching costs money: search when the question
+needs current or public facts, never for what the tools hold."""
+NO_INTERNET = """You cannot reach the internet. When a question needs public information you do not hold (an advisory, a CVE, a release note, an
+end-of-life date), say so, answer from what you know with the date your knowledge ends, and say that searching can be allowed under
+Settings > AI."""
 
 
 def system_prompt(org):
@@ -43,7 +53,16 @@ def system_prompt(org):
     messages, so nothing that changes (the clock) may be in here. The time goes with each question instead."""
     name = db.org_name(org)
     scope = " (Global: every organization's devices are listed, each marked with its organization)" if not org else ""
-    return SYSTEM.format(org=name, scope=scope, ability=CAN_RUN if AI.commands_allowed() else READ_ONLY)
+    return SYSTEM.format(org=name, scope=scope, ability=CAN_RUN if AI.commands_allowed() else READ_ONLY,
+                         internet=CAN_SEARCH if AI.search_allowed() else NO_INTERNET)
+
+
+def search_step(kind, text, named=False):
+    """The panel's line for a search as it happens ("Searching the web for …") or a page being read, and the audit line."""
+    mark = " (named a device)" if named else ""
+    if kind == "fetch":
+        return f"Reading the page {text}…" + mark, f"read the page: {text}" + mark
+    return f"Searching the web for {text}…" + mark, f"searched the web: {text}" + mark
 
 
 def stamped(question, when=None):
@@ -72,18 +91,42 @@ def _run(conv_id, question, screen, on_event, cancel, provider):
     store.add_turn(conv_id, "user", question)
     system = system_prompt(db.target())
     secrets = T.secrets()
-    tokens_in = tokens_out = 0
+    tokens_in = tokens_out = searches = 0
     cost = 0.0
-    text, model, outcome = "", prov.model, ""
+    text, model, outcome, notes, sources, after = "", prov.model, "", [], [], []
+    search = AI.search_allowed()
+    announced = []
+
+    def on_search(kind, what):
+        """A search (or a page read) as the provider reports it: a step in the panel and an audit line."""
+        step, line = search_step(kind, what, kind == "search" and T.names_network(what))
+        announced.append(what)
+        audit.log("assistant", line)
+        on_event("tool", step)
+        store.add_turn(conv_id, "tool", step)
+
     try:
         for _round in range(MAX_ROUNDS):
-            reply = prov.complete(system, history, T.offered(), lambda piece: on_event("text", piece), cancel)
+            reply = prov.complete(system, history, T.offered(), lambda piece: on_event("text", piece), cancel, search=search, on_search=on_search)
             history += reply.native
             tokens_in += reply.tokens_in
             tokens_out += reply.tokens_out
+            searches += reply.searches
             model = reply.model or model
-            cost += prices.cost(model, reply.tokens_in, reply.tokens_out)
+            cost += prices.cost(model, reply.tokens_in, reply.tokens_out, reply.searches)
             text += reply.text
+            for q in reply.queries:
+                if q not in announced:                                   # Gemini: the queries come with the answer
+                    step, line = search_step("search", q, T.names_network(q))
+                    audit.log("assistant", line)
+                    after.append(step.replace("Searching", "Searched", 1))
+            for s in reply.sources:
+                if s[1] not in [u for _t, u in sources]:
+                    sources.append(s)
+            if reply.note and reply.note not in notes:
+                notes.append(reply.note)
+            if reply.stop == "pause":
+                continue                                                 # the provider paused a long search loop: ask it to go on
             if reply.stop == "tool":
                 results = []
                 for call in reply.calls:
@@ -120,17 +163,19 @@ def _run(conv_id, question, screen, on_event, cancel, provider):
         on_event("error", f"{type(e).__name__}: {e}")
         return None
     store.set_history(conv_id, history)
-    store.add_turn(conv_id, "assistant", text, model, tokens_in, tokens_out, cost)
-    note = ""
+    store.add_turn(conv_id, "assistant", text, model, tokens_in, tokens_out, cost, searches, sources)
     if outcome == "refusal":
-        note = AI.REFUSED
+        notes.append(AI.REFUSED)
     elif outcome == "length":
-        note = AI.CUT_SHORT
+        notes.append(AI.CUT_SHORT)
     elif outcome == "rounds":
-        note = AI.TOO_MANY_STEPS
+        notes.append(AI.TOO_MANY_STEPS)
+    note = " ".join(notes)
     if note:
         store.add_turn(conv_id, "note", note)
+    for step in after:
+        store.add_turn(conv_id, "tool", step)
     done = {"text": text, "model": model, "tokens_in": tokens_in, "tokens_out": tokens_out, "cost": cost, "note": note,
-            "priced": prices.known(model)}
+            "priced": prices.known(model), "searches": searches, "sources": sources, "after": after}
     on_event("done", done)
     return done

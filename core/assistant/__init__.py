@@ -40,6 +40,11 @@ def commands_allowed():
     return bool(db.get_setting("ai_run_commands"))
 
 
+def search_allowed():
+    """Settings > AI: whether the Assistant may search the internet through the provider's own search (on unless switched off)."""
+    return bool(db.get_setting("ai_search"))
+
+
 def model_for(provider=None):
     provider = provider or provider_id()
     return (db.get_setting("ai_model") or {}).get(provider) or PROVIDERS[provider]["default_model"]

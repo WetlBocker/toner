@@ -5,7 +5,8 @@ import threading
 from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QThread, Signal
 from PySide6.QtGui import QFont, QTextCursor, QTextDocumentFragment
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QHBoxLayout, QLabel, QMessageBox, QPlainTextEdit, QPushButton, QSizePolicy, QTableWidget,
-                               QTableWidgetItem, QTextEdit, QToolButton, QVBoxLayout, QWidget)
+                               QTableWidgetItem, QTextBrowser, QTextEdit, QToolButton, QVBoxLayout, QWidget)
+from urllib.parse import urlsplit
 
 from core import db, orgs
 from core import assistant as AI
@@ -23,10 +24,17 @@ def fmt_tokens(n):
     return f"{int(n or 0):,}"
 
 
-def usage_line(tokens_in, tokens_out, cost, priced=True):
-    """The line under each answer: '1,234 tokens in, 567 out · USD 0.02' (or 'no price known' for a model not in the table)."""
+def usage_line(tokens_in, tokens_out, cost, priced=True, searches=0):
+    """The line under each answer: '1,234 tokens in, 567 out, 2 searches · USD 0.02' (or 'no price known' for a model not in the table)."""
     money = f"USD {cost:.2f}" if cost >= 0.005 else f"USD {cost:.4f}" if cost else "USD 0"
-    return f"{fmt_tokens(tokens_in)} tokens in, {fmt_tokens(tokens_out)} out  ·  " + (money if priced else "no price known for this model")
+    n = int(searches or 0)
+    return f"{fmt_tokens(tokens_in)} tokens in, {fmt_tokens(tokens_out)} out" + (f", {n} search{'es' if n != 1 else ''}" if n else "") + "  ·  " \
+        + (money if priced else "no price known for this model")
+
+
+def sources_text(sources):
+    """'Sources: Cisco Security Advisory … (sec.cloudapps.cisco.com), CVE-2026-0235 (nvd.nist.gov)'."""
+    return "Sources: " + ", ".join(f"{t or urlsplit(u).hostname or u} ({urlsplit(u).hostname or u})" for t, u in sources)
 
 
 class Worker(QThread):
@@ -135,7 +143,8 @@ class AssistantPanel(QWidget):
         self.model_line = QLabel("")
         self.model_line.setProperty("muted", True)
         self.model_line.setWordWrap(True)
-        self.view = QTextEdit()
+        self.view = QTextBrowser()                           # a browser, so the Sources links open in the system browser
+        self.view.setOpenExternalLinks(True)
         self.view.setReadOnly(True)
         self.view.setAcceptRichText(True)
         self.view.setFrameShape(QTextEdit.Shape.NoFrame)
@@ -214,7 +223,9 @@ class AssistantPanel(QWidget):
                     elif t["kind"] == "assistant":
                         self._begin_answer()
                         self._end_answer(t["text"])
-                        self._line(usage_line(t["tokens_in"], t["tokens_out"], t["cost"], True), "muted")
+                        if t.get("sources"):
+                            self._sources(t["sources"])
+                        self._line(usage_line(t["tokens_in"], t["tokens_out"], t["cost"], True, t.get("searches", 0)), "muted")
                     elif t["kind"] == "tool":
                         self._line(t["text"], "muted")
                     else:
@@ -249,6 +260,12 @@ class AssistantPanel(QWidget):
     def _line(self, text, what="muted"):
         self.entries.append((what, text))
         self._append_html(f'<i style="color:{self._color(what)}">{self._html(text)}</i>')
+
+    def _sources(self, sources):
+        """The pages an answer rests on, as links."""
+        self.entries.append(("sources", sources_text(sources)))
+        links = ", ".join(f'<a href="{self._html(u)}">{self._html(t or urlsplit(u).hostname or u)}</a> ({self._html(urlsplit(u).hostname or u)})' for t, u in sources)
+        self._append_html(f'<span style="color:{self._color("muted")}">Sources: {links}</span>')
 
     def _begin_answer(self):
         self.view.moveCursor(QTextCursor.MoveOperation.End)
@@ -357,9 +374,13 @@ class AssistantPanel(QWidget):
             self._answer_text = ""
         elif kind == "done":
             self._end_answer(payload["text"])
+            if payload.get("sources"):
+                self._sources(payload["sources"])
             if payload.get("note"):
                 self._line(payload["note"], "note")
-            self._line(usage_line(payload["tokens_in"], payload["tokens_out"], payload["cost"], payload.get("priced", True)), "muted")
+            self._line(usage_line(payload["tokens_in"], payload["tokens_out"], payload["cost"], payload.get("priced", True), payload.get("searches", 0)), "muted")
+            for step in payload.get("after") or []:
+                self._line(step, "muted")
             self.turn_done.emit()
         elif kind == "stopped":
             self._end_answer(self._answer_text)

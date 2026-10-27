@@ -1,6 +1,6 @@
 """Settings > AI: which provider and model the Assistant uses, its API key (kept in the vault), how deeply it thinks, the
-monthly spend limit across every organization, and whether it may run show commands on devices. Test reaches the provider with
-the key and fills the model list."""
+monthly spend limit across every organization, whether it may run show commands on devices and whether it may search the
+internet. Test reaches the provider with the key and fills the model list."""
 import threading
 
 from PySide6.QtCore import Qt, Signal
@@ -11,11 +11,16 @@ from ui.settings_base import Page, TrimSpin, compact_row, note
 
 INTRO = ("The Assistant answers questions about the organization you are looking at from Toner's own data: devices, check results, "
          "configuration backups (passwords masked), logs and what is on screen. It only reads, and runs show commands on devices only "
-         "when you allow that below. One provider and key serve the whole installation; conversations and their cost are kept per "
-         "organization.")
+         "when you allow that below. It can search the internet for public information unless you switch that off below. One provider "
+         "and key serve the whole installation; conversations and their cost are kept per organization.")
 RUN_NOTE = ("Off by default. When on, the Assistant may send commands that only look (show, display, get, dir, ping, traceroute; "
             "Get-… in PowerShell) to the devices the Command Runner can command, with the Command Runner's read-only block and no way "
             "past it. Every command is written to the audit log and to a session log under Tools > Session logs.")
+SEARCH_NOTE = ("When on, the Assistant may search the web through the provider's own search (Claude, OpenAI or Gemini; with Claude it can "
+               "also read the pages it finds) for public information: security advisories and CVEs, release notes, end-of-life dates, "
+               "documentation. It is told never to put anything from your network in a search: no device, organization or people's names, "
+               "addresses, serial numbers or configuration lines; product names, versions and advisory ids only. Each search is written to "
+               "the audit log, costs about USD 0.01 to 0.035 on top of tokens, and counts toward the monthly spend limit.")
 KEY_SAVED = "saved; leave blank to keep"
 TESTING = "Testing…"
 
@@ -51,6 +56,8 @@ class AiPage(Page):
         self.result.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.run_cmds = QCheckBox("Let the Assistant run show commands on devices")
         self.run_cmds.setToolTip(RUN_NOTE)
+        self.search = QCheckBox("Let the Assistant search the internet")
+        self.search.setToolTip(SEARCH_NOTE)
         self.form.addRow("Provider", self.provider)
         self.form.addRow("API key", self.key)
         self.form.addRow("Model", self.model)
@@ -60,6 +67,8 @@ class AiPage(Page):
         self.form.addRow("", self.result)
         self.form.addRow("", self.run_cmds)
         self.form.addRow("", note(RUN_NOTE))
+        self.form.addRow("", self.search)
+        self.form.addRow("", note(SEARCH_NOTE))
         self.provider.currentIndexChanged.connect(self._provider_changed)
         self.test_btn.clicked.connect(self.test)
         self.tested.connect(self._tested)
@@ -76,6 +85,7 @@ class AiPage(Page):
         self.depth.setCurrentIndex(max(0, self.depth.findData(AI.depth())))
         self.limit.setValue(AI.spend_limit())
         self.run_cmds.setChecked(AI.commands_allowed())
+        self.search.setChecked(AI.search_allowed())
         self.key.clear()
         self.key.setPlaceholderText(KEY_SAVED if AI.has_key(pid) else "")
         s = AI.state()
@@ -100,6 +110,7 @@ class AiPage(Page):
         db.set_setting("ai_depth", self.depth.currentData())
         db.set_setting("ai_spend_limit", float(self.limit.value()))
         db.set_setting("ai_run_commands", self.run_cmds.isChecked())
+        db.set_setting("ai_search", self.search.isChecked())
         typed = self.key.text().strip()
         if typed:
             AI.set_key(pid, typed)

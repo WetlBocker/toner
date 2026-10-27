@@ -67,7 +67,7 @@ print("== switched on")
 db.set_setting("ai_run_commands", True)
 check("the tool is offered and the instructions change", "run_commands" in [t.name for t in T.offered()] and "run commands that only look" in agent.system_prompt(acme)
       and "You can only read." not in agent.system_prompt(acme) and "do\nnot try to get around that" in agent.system_prompt(acme))
-check("what it can see gains the line", T.what_it_sees()[-1] == "show commands on devices, when allowed under Settings > AI")
+check("what it can see gains the line", "show commands on devices, when allowed under Settings > AI" in T.what_it_sees())
 check("the tool's description, as approved", T.BY_NAME["run_commands"].description.startswith("Run one or more commands that only look (show, display, get, dir, ping, traceroute on network devices and firewalls; Get-… in PowerShell on Windows)")
       and T.BY_NAME["run_commands"].description.endswith("At most 10 commands in one call, 60 seconds each.") and set(T.BY_NAME["run_commands"].schema["required"]) == {"device", "commands"})
 check("the step line: one command named, several counted", T.BY_NAME["run_commands"].step({"device": "core-sw1", "commands": ["show interfaces"]}) == "Running show interfaces on core-sw1…"
@@ -149,7 +149,7 @@ class Scripted(providers.Provider):
     def __init__(self, script):
         super().__init__("k", "claude-opus-5-5", "normal"); self.script = list(script); self.seen = []
     def list_models(self): return [("claude-opus-5-5", "Claude Opus 5.5")]
-    def complete(self, system, history, tools, on_text, cancel=None):
+    def complete(self, system, history, tools, on_text, cancel=None, search=False, on_search=None):
         self.seen.append((system, [dict(m) for m in history], [t.name for t in tools]))
         step = self.script.pop(0)
         r = providers.Reply(); r.model = "claude-opus-5-5"; r.tokens_in, r.tokens_out = 10, 1

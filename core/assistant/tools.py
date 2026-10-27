@@ -457,6 +457,20 @@ def _which(a):
     return cmds[0] if len(cmds) == 1 else f"{len(cmds)} commands"
 
 
+def names_network(text):
+    """True when a search query holds something from this network: a device name or address, or the organization's name."""
+    low = (text or "").lower()
+    if not low:
+        return False
+    words = [db.org_name(db.target())] if db.target() else []
+    for d in db.gather(db.list_devices) if db.everything() else db.list_devices():
+        words += [d.get("name") or "", d.get("host") or ""]
+    return any(len(w) >= 3 and w.lower() in low for w in words)
+
+
+SEARCH_SEES = "the internet, through the provider's own search (allowed under Settings > AI)"
+
+
 def offered():
     """The tools the model is given: every reader, and run_commands only while Settings > AI allows it."""
     from core import assistant as AI
@@ -464,7 +478,8 @@ def offered():
 
 
 def what_it_sees():
-    return WHAT_THEY_READ + ([CAN_RUN] if any(t.name == "run_commands" for t in offered()) else [])
+    from core import assistant as AI
+    return WHAT_THEY_READ + ([CAN_RUN] if any(t.name == "run_commands" for t in offered()) else []) + ([SEARCH_SEES] if AI.search_allowed() else [])
 
 
 def run(name, args, screen=None, values=None):
