@@ -55,7 +55,7 @@ found = SI.Found("MobaXterm", [entry("core-sw1", "10.1.1.1"),                   
 with db.within(acero):
     device("dup", "10.2.1.1")
     r = SI.save(found)
-    check("save() says which sessions it added", r["added"] == 9 and len(r["ids"]) == 9 and all(isinstance(i, int) for i in r["ids"]), r)
+    check("save() says which sessions it added", r["added"] == 9 and len(r["ids"]) == 9 and all(isinstance(i, int) for i in r["ids"]), (r["added"], r["ids"]))
     link = SI.link_devices(r["ids"])
     s = by_name()
 check("the session with a device's name is linked to it", s[("core-sw1", "")]["device"] == "core-sw1")
@@ -80,7 +80,7 @@ with db.within(acero):
           and sessions.get(s[("nobody", "")]["id"])["device"] == "", link3)
     again = SI.save(found)
     check("importing the same file again adds no sessions, so there is nothing to link", again["added"] == 0 and again["ids"] == []
-          and SI.link_devices(again["ids"]) == {"linked": 0, "unlinked": []}, again)
+          and SI.link_devices(again["ids"]) == {"linked": 0, "unlinked": []}, (again["added"], again["ids"]))
 check("nothing with no ids at all", SI.link_devices([]) == {"linked": 0, "unlinked": []} and SI.link_devices(None) == {"linked": 0, "unlinked": []})
 
 print("== a Shared device from Global")
