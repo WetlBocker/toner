@@ -319,6 +319,12 @@ check("each organization gets only its own devices", in_org(ja, lambda: [(d["nam
 check("the stored passwords come along", in_org(koch, lambda: keyring.get_password(db.SERVICE, db.secret_name("CINCIB-9300X-CORE"))) == "Core!pass")
 check("a refused host is still skipped, with its reason", "typo-host: Host must be an IP address or DNS name" in told[-1] and "typo-host" not in kd)
 check("the device list shows them straight away", inv.table.topLevelItemCount() > 0)
+ks = {s["name"]: s for s in in_org(koch, sessions._sessions_here)}
+check("each session is linked to the device made from it, and the result says so", "\nLinked 6 sessions to inventory devices with the same name." in told[-1]
+      and ks["CINCIB-9300X-CORE"]["device"] == "CINCIB-9300X-CORE" and ks["dc01"]["device"] == "dc01"
+      and in_org(ja, lambda: sessions._sessions_here()[0]["device"]) == "ja-core", (told[-1:], {n: x["device"] for n, x in ks.items()}))
+check("one whose device was not added (its address was already there under another name) stays unlinked", ks["KATECORE-02"]["device"] == ""
+      and ks["kiosk-vnc"]["device"] == "" and "Not linked" not in told[-1])
 
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)
