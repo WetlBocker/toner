@@ -407,8 +407,9 @@ def _count(n):
 def link_devices(session_ids):
     """Point each of these sessions (just added, in the organization being written to) at the inventory device with the same
     name, capitals aside, among the devices the session editor offers there (the organization's own plus Global's Shared ones;
-    in Global, every organization's). A session that already has a device keeps it. Two devices with that name, or two of these
-    sessions sharing a name, link nothing, with the reason. Returns {'linked', 'unlinked': [reasons]}."""
+    in Global, every organization's), when the session's address is the device's. A session that already has a device keeps it.
+    Two devices with that name, two of these sessions sharing a name, or a device at another address link nothing, with the
+    reason. Returns {'linked', 'unlinked': [reasons]}."""
     from core import db
     out = {"linked": 0, "unlinked": []}
     wanted = {int(i) for i in session_ids or ()}
@@ -416,7 +417,7 @@ def link_devices(session_ids):
         return out
     devices = {}
     for d in db.list_devices():
-        devices.setdefault(d["name"].strip().lower(), []).append(d["name"])
+        devices.setdefault(d["name"].strip().lower(), []).append(d)
     mine = [s for s in sessions._sessions_here() if s["id"] in wanted and s["kind"] in LINKABLE_KINDS and not s.get("device")]
     shared_names = Counter(s["name"].strip().lower() for s in mine)
     said = set()
@@ -432,7 +433,11 @@ def link_devices(session_ids):
                     out["unlinked"].append(f"{s['name']}: {_count(len(found))} inventory devices have this name." if len(found) > 1
                                            else f"{s['name']}: {_count(shared_names[key])} imported sessions have this name.")
                 continue
-            c.execute("UPDATE sessions SET device=? WHERE id=?", (found[0], s["id"]))
+            dev = found[0]
+            if (dev.get("host") or "").strip().lower() != (s.get("host") or "").strip().lower():
+                out["unlinked"].append(f"{s['name']}: the inventory device of that name is at {dev.get('host')}, the session at {s.get('host')}.")
+                continue
+            c.execute("UPDATE sessions SET device=? WHERE id=?", (dev["name"], s["id"]))
             out["linked"] += 1
     return out
 

@@ -41,6 +41,7 @@ with db.within(acero):
     device("dc01", "10.1.1.10", vendor="windows", platform="winrm")
     device("console-box", "10.1.1.11")
     device("kiosk", "10.1.1.12")
+    device("moved", "10.1.1.40")
 
 print("== after an import")
 found = SI.Found("MobaXterm", [entry("core-sw1", "10.1.1.1"),                                 # the same name: linked
@@ -51,11 +52,12 @@ found = SI.Found("MobaXterm", [entry("core-sw1", "10.1.1.1"),                   
                                entry("dup", "10.3.1.1", folder=["West"]),
                                entry("dc01", "10.1.1.10", kind="rdp"),                        # Remote Desktop links too
                                entry("kiosk", "10.1.1.12", kind="vnc"),                       # so does VNC
+                               entry("moved", "10.1.1.50"),                                   # the name matches, the address does not
                                {"kind": "serial", "name": "console-box", "folder": [], "host": "COM3", "port": 0, "username": "", "options": {"baud": 9600}}])
 with db.within(acero):
     device("dup", "10.2.1.1")
     r = SI.save(found)
-    check("save() says which sessions it added", r["added"] == 9 and len(r["ids"]) == 9 and all(isinstance(i, int) for i in r["ids"]), (r["added"], r["ids"]))
+    check("save() says which sessions it added", r["added"] == 10 and len(r["ids"]) == 10 and all(isinstance(i, int) for i in r["ids"]), (r["added"], r["ids"]))
     link = SI.link_devices(r["ids"])
     s = by_name()
 check("the session with a device's name is linked to it", s[("core-sw1", "")]["device"] == "core-sw1")
@@ -66,7 +68,9 @@ check("a serial session never does (its editor offers no device)", s[("console-b
 check("two devices with the name: not linked, with the reason", s[("Twin", "")]["device"] == "" and "Twin: two inventory devices have this name." in link["unlinked"])
 check("two imported sessions with the name: neither is linked, said once", s[("dup", "East")]["device"] == "" and s[("dup", "West")]["device"] == ""
       and link["unlinked"].count("dup: two imported sessions have this name.") == 1, link["unlinked"])
-check("the counts: 4 linked, 2 reasons", link["linked"] == 4 and len(link["unlinked"]) == 2, link)
+check("a device of that name at another address: not linked, and the reason names both addresses", s[("moved", "")]["device"] == ""
+      and "moved: the inventory device of that name is at 10.1.1.40, the session at 10.1.1.50." in link["unlinked"], link["unlinked"])
+check("the counts: 4 linked, 3 reasons", link["linked"] == 4 and len(link["unlinked"]) == 3, link)
 
 print("== what is left alone")
 with db.within(acero):
@@ -74,7 +78,7 @@ with db.within(acero):
     before = sessions.get(sid)["device"]
     link2 = SI.link_devices([sid])
     check("a session that already points at a device keeps it", before == "core-sw1" and sessions.get(sid)["device"] == "core-sw1" and link2 == {"linked": 0, "unlinked": []}, link2)
-    other = sessions.save({"kind": "ssh", "name": "plain", "folder_id": sessions.ensure_folder_path("Old"), "host": "10.9.9.8", "port": 22, "username": "x", "options": {}})
+    other = sessions.save({"kind": "ssh", "name": "plain", "folder_id": sessions.ensure_folder_path("Old"), "host": "10.1.1.3", "port": 22, "username": "x", "options": {}})
     link3 = SI.link_devices([other])
     check("one not in this import is never touched, even with a matching name", link3["linked"] == 1 and sessions.get(other)["device"] == "plain"
           and sessions.get(s[("nobody", "")]["id"])["device"] == "", link3)
