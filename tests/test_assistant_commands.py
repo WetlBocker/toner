@@ -128,9 +128,10 @@ with db.within(acme):
 check("devices that cannot take commands, each with the reason", rm["error"] == "mer1 cannot take commands: commands cannot be run on this kind of device."
       and ra["error"] == "pc-agent cannot take commands: it reports through an agent, which only sends."
       and rf["error"] == "fw1 cannot take commands: no SSH login is stored for it (Edit device > Access).", (rm, ra, rf))
-fake.stop()
+import socket
+_s = socket.socket(); _s.bind(("127.0.0.1", 0)); dead_port = _s.getsockname()[1]; _s.close()   # a port nobody listens on (stopping the fake is not enough on Linux)
 with db.within(acme):
-    db.save_device({**sw1, "port": fake.port})
+    db.save_device({**sw1, "port": dead_port})
     n_logs = len(sessionlog.list_sessions())
     r = json.loads(T.run("run_commands", {"device": "sw1", "commands": ["show version"]}))
     newest = sorted(sessionlog.list_sessions(), key=lambda s: s["id"])[-1]
