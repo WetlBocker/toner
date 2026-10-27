@@ -21,6 +21,9 @@ class MikrotikDriver(CliRows, SshDriver):
                 ("firmware", self.firmware), ("interfaces", self.interfaces), ("ospf", self.ospf),
                 ("health", self.health), ("disk", self.disk), ("routerboard", self.routerboard), ("ntp", self.ntp)]
 
+    def software(self, c):
+        self.found_software(self._res(c).get("version", ""))
+
     def _res(self, c):
         cmd = "/system resource print"
         kv = dict(re.findall(r"(?m)^\s*([a-z-]+):\s*(.*?)\s*$", self.cmd(c, cmd)))

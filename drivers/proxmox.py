@@ -25,6 +25,7 @@ class ProxmoxDriver(RestApi):
     def run(self):
         out = []
         version = self.data("/version") or {}
+        self.found_software(version.get("version", ""))
         if self.enabled("reachability"):
             out.append(self.result("reachability", OK, f"Proxmox VE {version.get('version', '')}".strip(), version.get("release") and f"release {version['release']}" or ""))
         resources = self.data("/cluster/resources") or []

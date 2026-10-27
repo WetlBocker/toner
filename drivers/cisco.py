@@ -17,10 +17,15 @@ class CiscoDriver(CliRows, Driver):
         d = self.dev
         self.plat = d.get("platform") or "cisco_ios"
         out = []
+        self._cache = {}
         with self.connect() as conn:
             c = Recorder(conn, self.transcript)
             try:
                 c.enable()
+            except Exception:
+                quiet.ignored()
+            try:
+                self.software(c)
             except Exception:
                 quiet.ignored()
             for name, fn in (("cpu", self.cpu), ("memory", self.memory), ("uptime", self.uptime),
@@ -56,6 +61,21 @@ class CiscoDriver(CliRows, Driver):
     def unreadable(what, command):
         return ValueError(f"could not read {what} from '{command}' (unexpected output)")
 
+    def cmd(self, c, command):
+        """Run a command once per run, even if several readers want it (show version: the software and the uptime)."""
+        if not hasattr(self, "_cache"):
+            self._cache = {}
+        if command not in self._cache:
+            self._cache[command] = c.send_command(command)
+        return self._cache[command]
+
+    def software(self, c):
+        """The version, running image and (IOS XE) mode, read the way the Firmware Transfer wizard reads them; kept on the
+        device record by the runner. `show version` is sent once and the uptime check reads the same text."""
+        from core import firmware
+        sw = firmware.read_software(self.plat, lambda command: self.cmd(c, command))
+        self.found_software(sw["version"], sw["image"], sw["mode"])
+
     def cpu(self, c):
         if "asa" in self.plat:
             pct = clichecks.asa_cpu(c.send_command("show cpu usage"))
@@ -84,11 +104,11 @@ class CiscoDriver(CliRows, Driver):
 
     def uptime(self, c):
         if "asa" in self.plat:                     # 'fw1 up 12 days 3 hours'
-            text = clichecks.asa_uptime(c.send_command("show version"))
+            text = clichecks.asa_uptime(self.cmd(c, "show version"))
             if text is None:
                 raise self.unreadable("the uptime", "show version")
         else:
-            m = re.search(r"uptime is (.+)", c.send_command("show version"))
+            m = re.search(r"uptime is (.+)", self.cmd(c, "show version"))
             if not m:
                 return []
             text = m.group(1).strip()

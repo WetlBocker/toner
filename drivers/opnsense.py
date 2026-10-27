@@ -32,6 +32,7 @@ class OpnsenseDriver(RestApi):
     def run(self):
         out = []
         fw = self.get("/api/core/firmware/status")
+        self.found_software(fw.get("product_version", ""))
         if self.enabled("reachability"):
             out.append(self.result("reachability", OK, f"OPNsense {fw.get('product_version', '')}".strip(), ""))
         if self.enabled("firmware"):

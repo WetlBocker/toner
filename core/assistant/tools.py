@@ -122,12 +122,26 @@ def _device_row(d, health=None):
     row = {"name": d["name"], "vendor": display.vendor_name(d["vendor"]), "host": d["host"], "platform": d.get("platform") or "",
            "location": d.get("location") or "", "tags": db.split_tags(d.get("tags")), "folder": folder, "details": d.get("details") or "",
            "enabled": bool(d.get("enabled", 1)), "status": (h or {}).get("status") or ("Not checked" if d.get("enabled", 1) else "Disabled"),
-           "last_checked": (h or {}).get("at") or ""}
+           "last_checked": (h or {}).get("at") or "", "software": _software(d)}
     if db.several():
         row["organization"] = db.org_name(d.get("org"))
     if d.get("shared"):
         row["shared"] = True
     return row
+
+
+def _software(d):
+    """The software the device runs as the checks (or the Firmware Transfer wizard) last read it: {'version', 'image', 'mode',
+    'read_at'}, the image and mode only where they apply; or a note when nothing was read yet."""
+    sw = db.software_of(d)
+    if not sw["version"]:
+        return {"version": "", "note": "Not read yet: the checks read it when they next sign in to the device."}
+    out = {"version": sw["version"], "read_at": sw["read_at"]}
+    if sw["image"]:
+        out["running_image"] = sw["image"]
+    if sw["mode"]:
+        out["mode"] = sw["mode"]
+    return out
 
 
 def _cut(text, limit=TEXT_LIMIT):
@@ -315,9 +329,10 @@ def _screen(args, screen=None):
 
 TOOLS = [
     Tool("list_devices", "Every device in the organization being looked at: name, kind, address, location, tags, folder, whether it is enabled, "
-         "and its latest status (OK, WARN, FAIL, ERROR, Not checked).",
+         "its latest status (OK, WARN, FAIL, ERROR, Not checked) and its software version as last read by the checks.",
          _schema(), list_devices, lambda a: "Reading the device list"),
-    Tool("device_details", "One device in full: its settings (never its passwords), its latest health check results, its problems and when it was last backed up.",
+    Tool("device_details", "One device in full: its settings (never its passwords), its software version (and image and mode where they apply) "
+         "and when that was read, its latest health check results, its problems and when it was last backed up.",
          _schema(device=DEVICE_ARG), device_details, lambda a: f"Reading {a.get('device', '')}'s details"),
     Tool("latest_results", "A device's newest health check results: one row per check with its status, value and message.",
          _schema(device=DEVICE_ARG), latest_results, lambda a: f"Reading {a.get('device', '')}'s latest results"),
@@ -353,7 +368,8 @@ TOOLS = [
          _schema(), _screen, lambda a: "Reading what is on screen"),
 ]
 BY_NAME = {t.name: t for t in TOOLS}
-WHAT_THEY_READ = ["the device list and each device's details", "the latest check results and each device's history",
+WHAT_THEY_READ = ["the device list and each device's details (with its software version as last read by the checks)",
+                  "the latest check results and each device's history",
                   "configuration backups (passwords masked) and what changed between versions", "the Firmware Transfer check results",
                   "the audit log", "terminal session logs", "what is on screen"]
 

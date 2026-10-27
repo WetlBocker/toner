@@ -446,6 +446,16 @@ def parse_version(platform, text):
     return {"version": v.group(1) if v else "", "image": file_name(img.group(1)) if img else "", "mode": mode}
 
 
+def read_software(platform, run):
+    """{'version', 'image', 'mode'} from a signed-in Cisco device: `show version` through parse_version and, for IOS XE software
+    whose show version does not say the mode, the booted file's name, then `show install summary`. `run(command)` returns the
+    text. The health checks (drivers/cisco.py) and the wizard's Check devices (collect) read it the same way."""
+    out = parse_version(platform, run("show version"))
+    if platform == "cisco_xe" and not out["mode"]:         # show version said neither: the booted file's name, then install's own view
+        out["mode"] = xe_mode_of_image(out["image"]) or parse_install_summary(run("show install summary"))
+    return out
+
+
 _XE_ROW = re.compile(r"^\s*(\*?)\s*\d+\s+\d+\s+\S+\s+\S+\s+\S+(.*)$")       # [*] switch, ports, model, version, image, [mode]
 
 
@@ -698,9 +708,7 @@ def collect(dev, src, vrf="management", opts=None, append_log=False):
 
             def run(cmd, t=60):
                 return c.send_command(cmd, read_timeout=t, expect_string=prompt)
-            out.update(parse_version(plat, run("show version")))
-            if plat == "cisco_xe" and not out["mode"]:     # show version said neither: the booted file's name, then install's own view
-                out["mode"] = xe_mode_of_image(out["image"]) or parse_install_summary(run("show install summary"))
+            out.update(read_software(plat, run))
             members = []
             if plat in ("cisco_ios", "cisco_xe"):
                 from drivers import clichecks
@@ -729,6 +737,12 @@ def collect(dev, src, vrf="management", opts=None, append_log=False):
         out["held"] = NO_ENABLE if "enable mode" in str(e) else f"Could not sign in: {plain_error(e, secrets)}"
     finally:
         save_log(dev, log, secrets, append=append_log)
+    if out["version"]:                                      # the device record keeps what was read (see db.set_software)
+        try:
+            db.set_software(dev, out)
+        except Exception:
+            from core import quiet
+            quiet.ignored()
     if not out["held"]:
         bad = [f for f in out["flashes"] if f["state"].strip().lower() != "ready"]
         if bad:

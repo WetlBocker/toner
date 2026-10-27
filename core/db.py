@@ -144,6 +144,7 @@ NOT_PORTABLE = {"vault_provider", "vault_config", "org_current", "window_geometr
 DEVICE_FIELDS = ["name", "vendor", "host", "port", "platform", "username",
                  "site", "verify_ssl", "ha_expected", "enabled", "location", "details", "folder_id",
                  "tags", "fields", "profile_id", "snmp", "jump", "proxy", "winopts", "checkopts", "shared"]
+SOFTWARE_FIELDS = ["sw_version", "sw_image", "sw_mode", "sw_read_at"]        # see set_software; not in DEVICE_FIELDS on purpose
 ALL_DEVICES = "All devices"
 
 
@@ -616,8 +617,18 @@ def _m10_assistant(c):
     """)
 
 
+def _m11_device_software(c):
+    """The software each device runs, as the checks (and the Firmware Transfer wizard) last read it: the version, the running image
+    (Cisco), the mode (IOS XE: INSTALL or BUNDLE) and when it was read. Written by set_software only, never by save_device, so editing
+    a device keeps them."""
+    cols = {r[1] for r in c.execute("PRAGMA table_info(devices)")}
+    for col in SOFTWARE_FIELDS:
+        if col not in cols:
+            c.execute(f"ALTER TABLE devices ADD COLUMN {col} TEXT DEFAULT ''")
+
+
 MIGRATIONS = [(1, _m1_legacy_columns), (2, _m2_agent_history), (3, _m3_agent_tokens), (4, _m4_device_checks), (5, _m5_ansible_runs),
-              (6, _m6_shared), (7, _m7_org_uids), (8, _m8_faster_history), (9, _m9_api_tester), (10, _m10_assistant)]
+              (6, _m6_shared), (7, _m7_org_uids), (8, _m8_faster_history), (9, _m9_api_tester), (10, _m10_assistant), (11, _m11_device_software)]
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 
 
@@ -855,6 +866,48 @@ def delete_device(dev_id, org=None):
     with within(org):
         with connect() as c:
             c.execute("DELETE FROM devices WHERE id=?", (dev_id,))
+
+
+# ---------- the software a device runs, as last read ----------
+def set_software(dev, info, when=None):
+    """Keep what a check (or the Firmware Transfer wizard) just read from a device: info is {'version', 'image' (optional),
+    'mode' (optional)}. Nothing is written without a version. The device is found by its id in its own organization's file, so
+    the row's other columns are untouched. When the version differs from the one stored, one audit line says so.
+    Returns the stored {'version', 'image', 'mode', 'read_at'}, or None when nothing was written."""
+    version = str((info or {}).get("version") or "").strip()
+    if not version or not dev.get("id"):
+        return None
+    image, mode = str(info.get("image") or "").strip(), str(info.get("mode") or "").strip().upper()
+    now = (when or datetime.now()).strftime("%Y-%m-%d %H:%M:%S")
+    with within(dev.get("org")):
+        with connect() as c:
+            row = c.execute("SELECT name, sw_version FROM devices WHERE id=?", (dev["id"],)).fetchone()
+            if not row:
+                return None
+            c.execute("UPDATE devices SET sw_version=?, sw_image=?, sw_mode=?, sw_read_at=? WHERE id=?",
+                      (version, image, mode, now, dev["id"]))
+        before = row["sw_version"] or ""
+        if before and before != version:
+            from core import audit
+            audit.log("version", f"{row['name']} now runs {version} (was {before})")
+    return {"version": version, "image": image, "mode": mode, "read_at": now}
+
+
+def software_of(dev):
+    """{'version', 'image', 'mode', 'read_at'} from a device row ('' each when nothing was read yet)."""
+    return {"version": dev.get("sw_version") or "", "image": dev.get("sw_image") or "", "mode": dev.get("sw_mode") or "",
+            "read_at": dev.get("sw_read_at") or ""}
+
+
+def copy_software(src_dev, dst_dev):
+    """A device moved or copied to another organization keeps what was last read from it."""
+    sw = software_of(src_dev)
+    if not (sw["version"] and dst_dev.get("id")):
+        return
+    with within(dst_dev.get("org")):
+        with connect() as c:
+            c.execute("UPDATE devices SET sw_version=?, sw_image=?, sw_mode=?, sw_read_at=? WHERE id=?",
+                      (sw["version"], sw["image"], sw["mode"], sw["read_at"], dst_dev["id"]))
 
 
 # ---------- folders ----------

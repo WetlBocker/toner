@@ -4,7 +4,7 @@ import re
 from core.netconn import connect as ConnectHandler      # netmiko's, with Toner's fixes for some devices (ASA)
 
 from .base import Driver, OK, WARN, FAIL, SEVERITY, grade_low
-from core import display
+from core import display, quiet
 
 _UNITS = {"year": 8760, "week": 168, "day": 24, "hour": 1, "minute": 1 / 60}
 
@@ -53,6 +53,10 @@ class SshDriver(Driver):
     def prepare(self, c):
         """Hook run once after login (e.g. to switch off paging)."""
 
+    def software(self, c):
+        """Hook run once after prepare: the driver reads the software version and calls found_software. A failure here is
+        ignored (the checks still run); drivers that have nothing to read leave it alone."""
+
     def connect(self):
         d = self.dev
         t = self.opts["ssh_timeout"]
@@ -76,6 +80,10 @@ class SshDriver(Driver):
         with self.connect() as conn:
             c = Recorder(conn, self.transcript)
             self.prepare(c)
+            try:
+                self.software(c)
+            except Exception:
+                quiet.ignored()
             for name, fn in self.checks():
                 if self.enabled(name):
                     self.safe(out, name, lambda fn=fn: fn(c))

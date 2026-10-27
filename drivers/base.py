@@ -48,6 +48,14 @@ class Driver:
         self._new_baseline = {}
         self.transcript = {}             # command -> output, kept so a failed parse can be reported with evidence
         self.custom = []
+        self.facts = {}                  # what the run learned about the device besides results: {'software': {...}} (see found_software)
+
+    def found_software(self, version, image="", mode=""):
+        """The software the device runs, read during this run; the runner keeps it on the device record (db.set_software).
+        Nothing is kept without a version."""
+        version = str(version or "").strip()
+        if version and version != "?":
+            self.facts["software"] = {"version": version, "image": str(image or "").strip(), "mode": str(mode or "").strip()}
 
     @property
     def password(self):

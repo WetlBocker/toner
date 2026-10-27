@@ -15,6 +15,9 @@ class AristaDriver(CliRows, SshDriver):
                 ("temperature", self.temperature), ("interfaces", self.interfaces),
                 ("bgp", self.bgp), ("ospf", self.ospf), ("environment", self.environment), ("mlag", self.mlag), ("ntp", self.ntp), ("flash", self.flash)]
 
+    def software(self, c):
+        self.found_software(self.json(c, "show version").get("version", ""))
+
     def json(self, c, command):
         out = self.cmd(c, command + " | json")
         try:

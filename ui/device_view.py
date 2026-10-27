@@ -171,6 +171,7 @@ class DeviceView(QDialog):
             fields = {}
         health = db.device_health().get(d["name"])
         rows = [("Status", (health["status"] + f"  ({health['at']})") if health else "no results yet"),
+                ("Version", display.software_line(db.software_of(d), long=True)),     # "17.09.04a (INSTALL mode, ...), read 26 Oct 2026 at 14:02"
                 ("Checks and limits", self._own_settings(d)),
                 ("Folder", db.folder_paths().get(d.get("folder_id"), "(top level)")),
                 ("Location", d.get("location") or ""), ("Tags", d.get("tags") or ""),

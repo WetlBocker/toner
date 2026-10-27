@@ -39,7 +39,8 @@ class PaloAltoDriver(Driver):
     def run(self):
         out = []
         try:
-            self._system()                                   # a rejected key is said once, not once per check
+            s = self._system()                               # a rejected key is said once, not once per check
+            self.found_software(s.findtext("sw-version") or "")
         except AuthRejected:
             raise
         except Exception:

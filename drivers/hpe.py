@@ -25,6 +25,16 @@ class HpeDriver(CliRows, SshDriver):
     def ntp(self, c):
         return self.ntp_row(clichecks.ntp_state(self.cmd(c, "show ntp status"))) if self.cx else []
 
+    def software(self, c):
+        """AOS-CX: 'ArubaOS-CX Version : FL.10.08.1021' on `show system` (the uptime's screen); AOS-S: 'Software revision : WC.16.10.0012'
+        on `show system information`."""
+        if self.cx:
+            m = re.search(r"(?im)^\s*(?:ArubaOS-CX|Software) Version\s*:\s*(\S+)", self.cmd(c, "show system"))
+        else:
+            m = re.search(r"(?im)^\s*Software revision\s*:\s*(\S+)", self._info(c))
+        if m:
+            self.found_software(m.group(1))
+
     # AOS-S: everything is on one screen; AOS-CX: resource usage and system info are separate commands.
     def _info(self, c):
         return self.cmd(c, "show system information")

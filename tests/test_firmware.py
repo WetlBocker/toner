@@ -497,6 +497,13 @@ check("IOS XE stack in INSTALL mode (the mode in the table of switches only): ev
       == [(1, "Active", "flash:"), (2, "Standby", "flash-2:"), (3, "Member", "flash-3:")] and all(f["free"] == 11 * G - 500008000 for f in r["flashes"]) and not r["held"], r["flashes"])
 check("IOS XE BUNDLE: the mode and the bundle it boots", R["bundle1"]["mode"] == "BUNDLE" and R["bundle1"]["boot"] == ["cat9k_iosxe.17.06.05.SPA.bin"] and not R["bundle1"]["held"])
 check("show install summary is not asked for while show version says the mode", not any("show install summary" in f.commands for f in fakes.values()))
+with db.within(lab):
+    kept = {d["name"]: db.software_of(d) for d in db.list_devices()}
+check("Check devices keeps what it read on each device record (version, image, mode, when), so the Inventory and the Assistant have it",
+      kept["stack1"]["version"] == "17.06.05" and kept["stack1"]["mode"] == "INSTALL" and kept["stack1"]["image"] == "packages.conf" and kept["stack1"]["read_at"][:10] == time.strftime("%Y-%m-%d")
+      and kept["bundle1"]["mode"] == "BUNDLE" and kept["ios1"] == {**kept["ios1"], "version": "15.2(7)E9", "image": "c2960x-universalk9-mz.152-7.E9.bin", "mode": ""}
+      and kept["nx1"]["version"] == "10.2(5)" and kept["asa1"]["version"] == "9.16(4)", kept)
+check("...a device it could not sign in to keeps nothing", kept["nologin"]["version"] == "" and kept["nologin"]["read_at"] == "")
 r = R["nx1"]
 check("NX-OS: bootflash:, pinged through the management VRF (it reaches the server only there)", r["flashes"][0]["fs"] == "bootflash:" and r["ping"] is True and not r["held"]
       and "ping 127.0.0.1 vrf management" in fakes["nx1"].commands, fakes["nx1"].commands)

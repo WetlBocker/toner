@@ -66,7 +66,9 @@ S = tab.STATUS
 check("the Status column says it in words", [items[n].text(S) for n in ("sw-ok", "sw-warn", "sw-off", "sw-new")] == ["OK", "WARN", "Disabled", "Not checked"], [items[n].text(S) for n in items])
 check("there is no 'Enabled' column any more", "Enabled" not in tab.COLS and tab.COLS[S] == "Status")
 check("a disabled device is dimmed", items["sw-off"].foreground(0).color() == items["sw-off"].foreground(S).color() and items["sw-off"].foreground(0).color() != items["sw-ok"].foreground(0).color())
-check("Site, Details and Tags that say nothing are left out; Tags shows once a device has one", tab.table.isColumnHidden(5) and tab.table.isColumnHidden(6) and not tab.table.isColumnHidden(7))
+col = tab.COLS.index
+check("Site, Details and Tags that say nothing are left out; Tags shows once a device has one", tab.table.isColumnHidden(col("Site")) and tab.table.isColumnHidden(col("Details")) and not tab.table.isColumnHidden(col("Tags")))
+check("so is Version, until a check has read one", tab.table.isColumnHidden(col("Version")))
 from ui import icons
 a = icons.icon_with_dot("device", "#888888", "#2e9e5b", shape="circle").pixmap(20, 20).toImage()
 b = icons.icon_with_dot("device", "#888888", "#e0a100", shape="triangle").pixmap(20, 20).toImage()

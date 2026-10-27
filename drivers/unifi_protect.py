@@ -26,8 +26,9 @@ class UnifiProtectDriver(UnifiApi):
     def run(self):
         out = []
         info = self.get("/meta/info")
+        version = info.get("applicationVersion", "") if isinstance(info, dict) else ""
+        self.found_software(version)
         if self.enabled("reachability"):
-            version = info.get("applicationVersion", "") if isinstance(info, dict) else ""
             out.append(self.result("reachability", OK, f"Protect {version}" if version else "answering", "UniFi Protect API"))
         if self.enabled("nvr"):
             self.safe(out, "nvr", self.nvr)

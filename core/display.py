@@ -10,6 +10,32 @@ ACRONYMS = {"cpu": "CPU", "bgp": "BGP", "ospf": "OSPF", "eigrp": "EIGRP", "ha": 
             "tx": "TX", "rx": "RX", "isp": "ISP", "nvr": "NVR", "sd": "SD", "dns": "DNS", "tls": "TLS", "ip": "IP", "ssid": "SSID", "poe": "PoE"}
 
 
+def read_on(stamp):
+    """'26 Oct 2026 at 14:02' for a stored time such as '2026-10-26 14:02:37'. Unreadable: as it is."""
+    from datetime import datetime
+    try:
+        return datetime.strptime(str(stamp)[:19], "%Y-%m-%d %H:%M:%S").strftime("%d %b %Y at %H:%M").lstrip("0")
+    except (TypeError, ValueError):
+        return stamp or ""
+
+
+def software_line(sw, long=False):
+    """The software a device runs, from db.software_of: the Version cell's tooltip ("17.09.04a, INSTALL mode, image
+    cat9k_iosxe.17.09.04a.SPA.bin. Read 26 Oct 2026 at 14:02.") or, long, the device page's row ("17.09.04a (INSTALL mode,
+    cat9k_iosxe.17.09.04a.SPA.bin), read 26 Oct 2026 at 14:02"). Mode and image only where they apply. '' when nothing was read."""
+    if not sw or not sw.get("version"):
+        return ""
+    extra = [f"{sw['mode']} mode"] if sw.get("mode") else []
+    if sw.get("image"):
+        extra.append(sw["image"] if long else f"image {sw['image']}")
+    when = read_on(sw.get("read_at"))
+    if long:
+        text = sw["version"] + (f" ({', '.join(extra)})" if extra else "")
+        return text + (f", read {when}" if when else "")
+    text = ", ".join([sw["version"]] + extra)
+    return text + (f". Read {when}." if when else "")
+
+
 def vendor_name(v):
     """What the Vendor column says. All the UniFi types are 'UniFi'; type_name() tells them apart."""
     from core import vendors

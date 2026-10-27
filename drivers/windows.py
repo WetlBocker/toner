@@ -30,6 +30,8 @@ class WindowsDriver(Driver):
     def run(self):
         report, age, how = self.fetch()
         self.report, self.opts_w = report, winmon.options(self.dev)
+        if report.get("os"):                                 # 'Microsoft Windows Server 2022 Standard (build 20348)'
+            self.found_software(str(report["os"]).strip() + (f" (build {report['build']})" if report.get("build") else ""))
         out = []
         silent = self._silent(out, age, how)
         if silent == FAIL:
