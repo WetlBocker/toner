@@ -341,8 +341,8 @@ def _key(kind, host, port, user, folder_id):
 def save(found, passwords=None):
     """Add the sessions to Toner, folders and all. Sessions already there (same type, host, port and user name in the same
     folder) are skipped, except that one without a saved password gets it from `passwords` (importing the passwords again
-    fills in the ones an earlier import could not save). Returns {'added', 'existing', 'folders', 'passwords', 'bad': [reasons]}.
-    The vault is written once, at the end."""
+    fills in the ones an earlier import could not save). Returns {'added', 'existing', 'folders', 'passwords', 'bad': [reasons],
+    'ids': [the ids of the sessions added, for link_devices]}. The vault is written once, at the end."""
     from core import passvault
     with passvault.batch():
         return _save(found, passwords)
@@ -353,7 +353,7 @@ def _save(found, passwords):
     here = {_key(s["kind"], s["host"], s["port"], s["username"], s["folder_id"]): s for s in sessions._sessions_here()}
     known = set(here)
     names = {(s["name"].lower(), s["folder_id"]) for s in sessions._sessions_here()}
-    folder_ids, out = {}, {"added": 0, "existing": 0, "folders": 0, "passwords": 0, "bad": []}
+    folder_ids, out = {}, {"added": 0, "existing": 0, "folders": 0, "passwords": 0, "bad": [], "ids": []}
     for item in found.items:
         path = tuple(item["folder"])
         try:
@@ -388,10 +388,57 @@ def _save(found, passwords):
         known.add(k)
         names.add((name.lower(), fid))
         out["added"] += 1
+        out["ids"].append(sid)
         if pw:
             sessions.set_password(sid, pw)
             out["passwords"] += 1
     out["folders"] = len({f["id"] for f in sessions.list_folders()} - before)
+    return out
+
+
+# ---------------------------------------------------------------- the new sessions and the devices with their names
+LINKABLE_KINDS = ("ssh", "telnet", "rdp", "vnc")      # the kinds whose editor offers an inventory device
+
+
+def _count(n):
+    return {2: "two", 3: "three"}.get(n, str(n))
+
+
+def link_devices(session_ids):
+    """Point each of these sessions (just added, in the organization being written to) at the inventory device with the same
+    name, capitals aside, among the devices the session editor offers there (the organization's own plus Global's Shared ones;
+    in Global, every organization's), when the session's address is the device's. A session that already has a device keeps it.
+    Two devices with that name, two of these sessions sharing a name, or a device at another address link nothing, with the
+    reason. Returns {'linked', 'unlinked': [reasons]}."""
+    from core import db
+    out = {"linked": 0, "unlinked": []}
+    wanted = {int(i) for i in session_ids or ()}
+    if not wanted:
+        return out
+    devices = {}
+    for d in db.list_devices():
+        devices.setdefault(d["name"].strip().lower(), []).append(d)
+    mine = [s for s in sessions._sessions_here() if s["id"] in wanted and s["kind"] in LINKABLE_KINDS and not s.get("device")]
+    shared_names = Counter(s["name"].strip().lower() for s in mine)
+    said = set()
+    with db.connect() as c:
+        for s in mine:
+            key = s["name"].strip().lower()
+            found = devices.get(key)
+            if not found:
+                continue
+            if len(found) > 1 or shared_names[key] > 1:
+                if key not in said:
+                    said.add(key)
+                    out["unlinked"].append(f"{s['name']}: {_count(len(found))} inventory devices have this name." if len(found) > 1
+                                           else f"{s['name']}: {_count(shared_names[key])} imported sessions have this name.")
+                continue
+            dev = found[0]
+            if (dev.get("host") or "").strip().lower() != (s.get("host") or "").strip().lower():
+                out["unlinked"].append(f"{s['name']}: the inventory device of that name is at {dev.get('host')}, the session at {s.get('host')}.")
+                continue
+            c.execute("UPDATE sessions SET device=? WHERE id=?", (dev["name"], s["id"]))
+            out["linked"] += 1
     return out
 
 

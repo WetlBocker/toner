@@ -1895,14 +1895,14 @@ class InventoryTab(QWidget):
             if answer is None:
                 return
         r = {"added": 0, "existing": 0, "folders": 0, "passwords": 0, "bad": []}
+        new_ids = {}                                          # organization -> the ids of the sessions added there
         for org, items in by_org.items():                     # each organization gets only its own sessions
             with db.within(org):
                 part = sessionimport.save(sessionimport.Found(found.source, items), passwords)
             for k in ("added", "existing", "folders", "passwords"):
                 r[k] += part[k]
             r["bad"] += part["bad"]
-        audit.log("sessions imported", f"{found.source}: {r['added']} added, {r['passwords']} passwords")
-        self.sessions_imported.emit()
+            new_ids[org] = part["ids"]
         text = f"Imported {r['added']:,} sessions into Sessions ({r['folders']:,} folders created, {r['existing']:,} already there skipped)."
         if passwords:
             text += f" Passwords added for {r['passwords']:,} SSH sessions."
@@ -1924,6 +1924,20 @@ class InventoryTab(QWidget):
                          f"{d['no_vendor']:,} without a vendor).")
             self.refresh()
             self.changed.emit()
+        link = {"linked": 0, "unlinked": []}                   # after the devices, so one made from an entry counts too
+        for org, ids in new_ids.items():
+            with db.within(org):
+                part = sessionimport.link_devices(ids)
+            link["linked"] += part["linked"]
+            link["unlinked"] += part["unlinked"]
+        audit.log("sessions imported", f"{found.source}: {r['added']} added, {r['passwords']} passwords, {link['linked']} linked to devices")
+        self.sessions_imported.emit()
+        if r["added"]:
+            lines.append(f"Linked {link['linked']:,} sessions to inventory devices with the same name." if link["linked"]
+                         else "No new session had the same name as an inventory device, so none were linked.")
+        if link["unlinked"]:
+            lines.append(f"\nNot linked to a device ({len(link['unlinked'])}):")
+            lines += [f"  \u2022 {b}" for b in link["unlinked"][:12]] + ([f"  ...and {len(link['unlinked']) - 12} more"] if len(link["unlinked"]) > 12 else [])
         if r["bad"]:
             lines.append(f"\nSkipped, with reasons ({len(r['bad'])}):")
             lines += [f"  \u2022 {b}" for b in r["bad"][:12]] + ([f"  ...and {len(r['bad']) - 12} more"] if len(r["bad"]) > 12 else [])

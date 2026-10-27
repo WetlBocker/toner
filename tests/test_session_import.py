@@ -234,6 +234,8 @@ QMessageBox.exec = lambda self: setattr(self, "_clicked", next(b for b in self.b
 QMessageBox.clickedButton = lambda self: getattr(self, "_clicked", None)
 pwfile = write("MobaXterm Stored Passwords.txt", PASSWORDS.replace("\r\n", "\n"), encoding="cp1252")
 QFileDialog.getOpenFileName = staticmethod(lambda *a, **k: (picks.pop(0), ""))
+db.save_device(dict(name="FW1.acero.example", vendor="cisco", host="10.1.1.2", port=0, platform="cisco_ios", username="admin", site="default",
+                    verify_ssl=0, ha_expected=0, enabled=1, location="", details="", folder_id=None))          # the same name as a session, capitals aside
 w = A.Main(); inv = w.inventory
 check("More has Import... and Import PuTTY sessions on this computer...", "Import..." in inv.more_actions and "Import PuTTY sessions on this computer..." in inv.more_actions)
 picks[:] = [os.path.join(SP, "export.mobaconf"), pwfile]
@@ -242,14 +244,18 @@ check("it says what it found, in the agreed words, before importing", asked and 
       "1 browser sessions are skipped (Toner has no web sessions). They go to Sessions, in the same folders. Import them?", asked[-1:])
 check("then the result, with the passwords", told and told[-1].startswith("Imported 7 sessions into Sessions (3 folders created, 0 already there skipped). "
       "Passwords added for 3 SSH sessions.") and "Skipped" not in told[-1], told[-1:])
+check("and the session with an inventory device's name is linked to it, said in the agreed words",
+      "\nLinked 1 sessions to inventory devices with the same name." in told[-1] and "Not linked" not in told[-1]
+      and next(s for s in sessions.list_sessions() if s["name"] == "fw1.acero.example")["device"] == "FW1.acero.example", told[-1:])
 check("the Sessions list shows them straight away, in their folders", w.sessions.tree.topLevelItemCount() >= 2
       and any(w.sessions.tree.topLevelItem(i).text(0).startswith("Acero Charter") for i in range(w.sessions.tree.topLevelItemCount())),
       [w.sessions.tree.topLevelItem(i).text(0) for i in range(w.sessions.tree.topLevelItemCount())])
-check("no devices were added to the inventory", db.list_devices() == [])
+check("no devices were added to the inventory", [d["name"] for d in db.list_devices()] == ["FW1.acero.example"])
 picks[:] = [os.path.join(SP, "putty.reg")]; told.clear()
 inv.import_file()
 check("a PuTTY export says what it skipped and asks no password question", "1 raw TCP sessions are skipped (Toner has no raw TCP sessions)." in asked[-1]
       and told[-1].startswith("Imported 4 sessions into Sessions") and "Passwords" not in told[-1], (asked[-1:], told[-1:]))
+check("with no device of any new session's name it says so", "\nNo new session had the same name as an inventory device, so none were linked." in told[-1], told[-1:])
 sys.modules["winreg"] = fake; told.clear()
 inv.import_putty_here()
 sys.modules["winreg"] = real
