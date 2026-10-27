@@ -204,7 +204,8 @@ def _move_from(src, dst, devs, with_data):
             new["shared"] = 0
             new["folder_id"] = db.ensure_folder_path(folder) if folder else None
             new["profile_id"] = _profile_in(src, dst, row.get("profile_id"), profiles)
-            db.save_device(new)
+            new["id"], new["org"] = db.save_device(new), dst
+            db.copy_software(row, new)                         # the version last read from it comes along, into dst's file
         for kind in db.SECRET_KINDS:
             _move_secret(src, dst, row["name"] + db.SECRET_KINDS[kind])
         if with_data:

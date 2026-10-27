@@ -798,10 +798,11 @@ class InventoryTab(QWidget):
     run_checks = Signal(list)                    # right-click > Run Checks: these devices (their keys), now
     sessions_imported = Signal()                 # sessions from MobaXterm, PuTTY or SecureCRT were added (the Sessions list reloads)
     orgs_created = Signal()                      # an import made organizations from its folders (the switcher reloads)
-    COLS = ["Name", "Vendor", "Platform", "Location", "Host", "Site", "Details", "Tags", "Status", "Last checked", "Organization"]
-    STATUS = 8
-    CHECKED = 9
-    ORG = 10
+    COLS = ["Name", "Vendor", "Platform", "Version", "Location", "Host", "Site", "Details", "Tags", "Status", "Last checked", "Organization"]
+    VERSION = 3                                  # the software the device runs, as the checks last read it (db.software_of)
+    STATUS = 9
+    CHECKED = 10
+    ORG = 11
 
     def __init__(self):
         super().__init__()
@@ -1110,7 +1111,7 @@ class InventoryTab(QWidget):
                                                        if vendors.platform_keys(d["vendor"]) else "")
         state = self.health.get(d.get("key", d["name"])) if d["enabled"] else None
         org = db.org_name(d.get("org")) + (" (Shared)" if d.get("shared") else "")
-        return [d["name"], display.vendor_name(d["vendor"]), platform, d.get("location") or "", d["host"], site,
+        return [d["name"], display.vendor_name(d["vendor"]), platform, d.get("sw_version") or "", d.get("location") or "", d["host"], site,
                 d.get("details") or "", d.get("tags") or "", self._status_word(d), display.ago(state["at"]) if state else "", org]
 
     def _status_word(self, d):
@@ -1121,12 +1122,12 @@ class InventoryTab(QWidget):
         return state["status"] if state else "Not checked"
 
     def _empty_columns(self):
-        """Columns that say nothing for the devices shown: Platform, Site, Details and Tags that are blank everywhere."""
+        """Columns that say nothing for the devices shown: Platform, Version, Site, Details and Tags that are blank everywhere."""
         devs = [d for k, d in self.payload.items() if k.startswith("device:")]
         if not devs:
             return set()
         vals = [self._device_values(d) for d in devs]
-        return {i for i in (2, 5, 6, 7) if all(v[i] == "" for v in vals)}
+        return {i for i in (2, self.VERSION, 6, 7, 8) if all(v[i] == "" for v in vals)}
 
     def _device_item(self, d):
         it = QTreeWidgetItem(self._device_values(d))
@@ -1152,6 +1153,9 @@ class InventoryTab(QWidget):
                 it.setForeground(col, muted)
         if state and d["enabled"]:
             it.setToolTip(self.CHECKED, state["at"])
+        sw = display.software_line(db.software_of(d))        # "17.09.04a, INSTALL mode, image cat9k_iosxe.17.09.04a.SPA.bin. Read 26 Oct 2026 at 14:02."
+        if sw:
+            it.setToolTip(self.VERSION, sw)
         return it
 
     def _enter(self):

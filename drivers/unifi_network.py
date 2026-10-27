@@ -14,8 +14,9 @@ class UnifiNetworkDriver(UnifiApi):
     def run(self):
         out = []
         info = self.get("/info")
+        version = (info or {}).get("applicationVersion", "") if isinstance(info, dict) else ""
+        self.found_software(version)
         if self.enabled("reachability"):
-            version = (info or {}).get("applicationVersion", "") if isinstance(info, dict) else ""
             out.append(self.result("reachability", OK, f"Network {version}" if version else "answering", "UniFi Network API"))
         sites = self.pick_sites(self.offset_pages("/sites"))
         many = len(sites) > 1

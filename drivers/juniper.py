@@ -18,6 +18,13 @@ class JuniperDriver(CliRows, SshDriver):
                 ("bfd", self.bfd), ("storage", self.storage), ("virtual chassis", self.virtual_chassis)]
 
     # ---------------------------------------------------------------- health and redundancy
+    def software(self, c):
+        """'Junos: 21.4R3-S4.8' on `show version` (older software: 'JUNOS Base OS boot [12.3R3.4]')."""
+        out = self.cmd(c, "show version")
+        m = re.search(r"(?m)^\s*Junos:\s*(\S+)", out) or re.search(r"JUNOS Base OS boot \[([^\]]+)\]", out)
+        if m:
+            self.found_software(m.group(1))
+
     def environment(self, c):
         return self.env_row(c, "show chassis environment")
 

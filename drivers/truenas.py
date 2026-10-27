@@ -15,6 +15,7 @@ class TruenasDriver(RestApi):
     def run(self):
         out = []
         self.info = self.get("/system/info")
+        self.found_software(self.info.get("version", "") if isinstance(self.info, dict) else "")
         if self.enabled("reachability"):
             out.append(self.result("reachability", OK, str(self.info.get("version", "TrueNAS")), str(self.info.get("hostname", ""))))
         for key, fn in (("pools", self.pools), ("alerts", self.alerts), ("load", self.load), ("uptime", self.uptime)):

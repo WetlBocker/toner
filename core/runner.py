@@ -60,6 +60,18 @@ def stored_copy_note(dev):
     return [Result(dev["name"], "credentials", WARN, "stored copy", note)] if note else []
 
 
+def keep_software(dev, drv):
+    """The software version the driver read during its run goes on the device record (db.set_software), so the Inventory and the
+    Assistant know it without the Firmware Transfer wizard. Never raises: a failure here must not spoil the results."""
+    sw = (getattr(drv, "facts", None) or {}).get("software")
+    if not sw:
+        return
+    try:
+        db.set_software(dev, sw)
+    except Exception:
+        quiet.ignored()
+
+
 NO_VENDOR = "No vendor chosen. Edit the device to choose one. Until then only its ping and port checks run."
 
 
@@ -79,6 +91,7 @@ def run_one(dev, thresholds, opts=None):
             drv = DRIVERS[dev["vendor"]](dev, thresholds, opts)
             drv.custom = custom.for_device(dev, opts.get("custom"))        # user-defined checks that apply here
             res = drv.run()
+            keep_software(dev, drv)
             res += custom.run_network(dev, drv.custom)                       # web, port, certificate, ping, SNMP
             if "all:support" not in opts.get("disabled", ()):
                 res += support.rows(dev, thresholds)                         # support, warranty and licence dates kept in the device's fields

@@ -122,7 +122,7 @@ def pick(*items):
 inv.table.expandAll()
 print("   " + " | ".join(tree()[:6]))
 check("folders first, counts shown", tree()[0].startswith("Branch") or tree()[0].startswith("Chicago"), tree()[:3])
-check("device rows keep all their columns", find_dev("sw1").text(1) == "Cisco" and find_dev("sw1").text(4) == "127.0.0.1")
+check("device rows keep all their columns", find_dev("sw1").text(inv.COLS.index("Vendor")) == "Cisco" and find_dev("sw1").text(inv.COLS.index("Host")) == "127.0.0.1")
 check("top-level device is listed after the folders", tree()[-1].strip() == "loose" or "loose" in tree()[-3:], tree()[-3:])
 
 print("== folder actions in the UI")
