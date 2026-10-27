@@ -137,12 +137,17 @@ with db.within(acme):
     newest = sorted(sessionlog.list_sessions(), key=lambda s: s["id"])[-1]
 check("a device that cannot be reached: the error comes back and the session log says failed", r["error"] and r["outputs"] == [] and len(sessionlog.list_sessions()) == n_logs + 1 and newest["reason"].startswith("failed: "), r)
 
+with db.within(acme):
+    db.save_device({**sw1, "port": fake.port})
+
 print("== this PC over PowerShell")
 with db.within(acme):
-    r = json.loads(T.run("run_commands", {"device": "this-pc", "commands": ["hostname"]}))
     rw = json.loads(T.run("run_commands", {"device": "this-pc", "commands": ["Restart-Service Spooler"]}))
-check("hostname runs on this PC and the answer comes back", "error" not in r and r["outputs"][0]["command"] == "hostname" and r["outputs"][0]["output"].strip(), r)
 check("a PowerShell command that changes something is refused", rw["error"].startswith("'Restart-Service Spooler' could change this-pc"))
+if sys.platform == "win32":                     # real PowerShell on this PC
+    with db.within(acme):
+        r = json.loads(T.run("run_commands", {"device": "this-pc", "commands": ["hostname"]}))
+    check("hostname runs on this PC and the answer comes back", "error" not in r and r["outputs"][0]["command"] == "hostname" and r["outputs"][0]["output"].strip(), r)
 
 print("== the turn loop")
 class Scripted(providers.Provider):
@@ -165,10 +170,10 @@ class Scripted(providers.Provider):
 events = []
 with db.within(acme):
     cid = store.create("claude", "claude-opus-5-5")
-prov = Scripted([("tool", [("run_commands", {"device": "this-pc", "commands": ["hostname"]})]), ("text", "Done.")])
-done = agent.run_turn(cid, acme, "What is this PC called?", {}, lambda k, p: events.append((k, p)), provider=prov)
-check("the panel sees the step line and the model gets the output; run_commands was offered", [p for k, p in events if k == "tool"] == ["Running hostname on this-pc…"] and done["text"] == "Done."
-      and "run_commands" in prov.seen[0][2] and "hostname" in prov.seen[1][1][-1]["content"][0]["content"])
+prov = Scripted([("tool", [("run_commands", {"device": "sw1", "commands": ["show version"]})]), ("text", "Done.")])
+done = agent.run_turn(cid, acme, "What does sw1 run?", {}, lambda k, p: events.append((k, p)), provider=prov)
+check("the panel sees the step line and the model gets the output; run_commands was offered", [p for k, p in events if k == "tool"] == ["Running show version on sw1…"] and done["text"] == "Done."
+      and "run_commands" in prov.seen[0][2] and "15.2(7)E9" in prov.seen[1][1][-1]["content"][0]["content"], (events, prov.seen[1][1][-1] if len(prov.seen) > 1 else None))
 db.set_setting("ai_run_commands", False)
 prov = Scripted([("text", "Cannot.")])
 agent.run_turn(cid, acme, "Run hostname", {}, lambda k, p: None, provider=prov)
