@@ -31,7 +31,8 @@ class FortinetDriver(Driver):
         out = []
         try:
             status = self._get("system/status")              # a rejected token is said once, not once per check
-            self.found_software((status or {}).get("version", ""))
+            if isinstance(status, dict):
+                self.found_software(status.get("version", ""))
         except requests.HTTPError as e:
             code = getattr(e.response, "status_code", None)
             if code == 401:
