@@ -485,8 +485,8 @@ class AssistantOverviewPage(QWidget):
             self.orgs_table.resizeColumnsToContents()
         n = len(db.list_devices())
         name = "Global (every organization)" if in_global else db.org_name(db.home())
-        self.sees.setText(f"<b>What it can see:</b> {name}, {n} device{'s' if n != 1 else ''}. It reads " + "; ".join(T.WHAT_THEY_READ) +
-                          ". Passwords are masked everywhere. It only reads.")
+        self.sees.setText(f"<b>What it can see:</b> {name}, {n} device{'s' if n != 1 else ''}. It reads " + "; ".join(T.what_it_sees()) +
+                          ". Passwords are masked everywhere. " + ("It changes nothing." if AI.commands_allowed() else "It only reads."))
         self.rows = store.list_conversations()
         with filling(self.table):
             self.table.setColumnHidden(0, False)

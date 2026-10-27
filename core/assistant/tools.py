@@ -1,21 +1,26 @@
 """What the Assistant can read, defined once and translated per provider (see providers.py).
 
 Every tool reads through Toner's own code, inside the organization the question was asked in, and only reads: nothing here
-changes a device, a setting or a database. Every result goes through `mask`, which replaces every password Toner holds in its
-vault (and anything that looks like a password in a URL) with ****; configuration backups are read from the masked copy only
-and masked again on the way out. Every call writes one audit line ("assistant", "read core-sw1's history").
+changes a device, a setting or a database. The one exception is run_commands, offered only while Settings > AI allows it: it
+sends commands that only look (the Command Runner's read-only guard, with no way past it, and nothing that writes its output to a
+file) to a device through the Command Runner's own code, and records each run as a session log of kind "assistant". Every result
+goes through `mask`, which replaces every password Toner holds in its vault (and anything that looks like a password in a URL)
+with ****; configuration backups are read from the masked copy only and masked again on the way out. Every call writes one audit
+line ("assistant", "read core-sw1's history"; "ran on core-sw1: show interfaces"; "refused on core-sw1: reload (could change the device)").
 """
 import json
 import os
 import re
 from datetime import datetime
 
-from core import audit, backup, db, display, sessionlog
+from core import audit, backup, cmdrun, db, display, sessionlog
 from core import firmware as fw
 
 TEXT_LIMIT = 60_000            # characters of one backup or log handed over (the rest is said to be cut)
 ROW_LIMIT = 400                # rows of one list handed over
 SCREEN_LIMIT = 20_000          # characters of text from the screen
+COMMAND_LIMIT = 10             # commands in one run_commands call
+COMMAND_SECONDS = 60           # each command's time to answer
 
 
 class ToolError(Exception):
@@ -321,6 +326,72 @@ def read_session_log(args):
             "log": text, "note": note}
 
 
+_WRITES = re.compile(r"\|\s*(redirect|append|tee|save)\b|>", re.I)   # show ... | redirect flash:x writes, so it is not a show
+
+
+def refused(kind, command):
+    """Why the Assistant may not send this command ('' when it may): the Command Runner's read-only guard, and no output to a file."""
+    if _WRITES.search(command or ""):
+        return "writes its output to a file"
+    if not cmdrun.read_only_for(kind, command):
+        return "could change the device"
+    return ""
+
+
+CANNOT = {"reports by agent": "it reports through an agent, which only sends.",
+          "no SSH login": "no SSH login is stored for it (Edit device > Access).",
+          "not supported": "commands cannot be run on this kind of device."}
+
+
+def run_commands(args):
+    from core import assistant as AI
+    if not AI.commands_allowed():
+        raise ToolError("Running commands from the Assistant is off: Settings > AI.")
+    dev = _find(args.get("device"))
+    cmds = [str(c).strip() for c in (args.get("commands") or []) if str(c).strip()][:COMMAND_LIMIT]
+    if not cmds:
+        raise ToolError("No command was given.")
+    can, why = cmdrun.runnable(dev)
+    if not can:
+        raise ToolError(f"{dev['name']} cannot take commands: {CANNOT[why]}")
+    kind = cmdrun.kind_of(dev)
+    for c in cmds:
+        why = refused(kind, c)
+        if why:
+            audit.log("assistant", f"refused on {dev['name']}: {c} ({why})")
+            raise ToolError(f"'{c}' writes its output to a file, so nothing was sent." if why.startswith("writes") else
+                            f"'{c}' could change {dev['name']}, so nothing was sent. The Assistant may only run commands that look.")
+    audit.log("assistant", f"ran on {dev['name']}: " + "; ".join(cmds))
+    with db.within(dev.get("org") or db.target()):
+        r = cmdrun.run_on_device(dev, cmds, read_timeout=COMMAND_SECONDS)
+        _log_run(dev, kind, r)
+    budget, rows, cut = TEXT_LIMIT, [], False
+    for cmd, text in r["outputs"]:
+        text, was_cut = _cut(text, max(0, budget))
+        budget -= len(text)
+        cut = cut or was_cut
+        rows.append({"command": cmd, "output": text})
+    out = {"device": _whose(dev), "outputs": rows}
+    if r["error"]:
+        out["error"] = r["error"]
+    if cut:
+        out["note"] = f"The output was cut at {TEXT_LIMIT // 1000} KB."
+    return out
+
+
+def _log_run(dev, kind, r):
+    """One session log of kind 'assistant' per run: each command and what the device answered, listed under Tools > Session logs."""
+    port = dev.get("port") or (int(db.get_setting("default_ssh_port") or 22) if kind != "windows" else "")
+    try:
+        log = sessionlog.SessionLog(dev["name"], dev["host"], port, dev.get("username") or "", kind="assistant")
+    except OSError:
+        return
+    for cmd, text in r["outputs"]:
+        log.write(f"> {cmd}\n{text}\n".encode("utf-8"))
+    n = len(r["outputs"])
+    log.close(f"{n} command{'s' if n != 1 else ''}" if r["ok"] else f"failed: {r['error']}")
+
+
 def _screen(args, screen=None):
     if not screen:
         return {"note": "Nothing was captured from the screen for this question."}
@@ -366,12 +437,34 @@ TOOLS = [
     Tool("whats_on_screen", "What the person is looking at in Toner right now: the section and page, the organization, what is selected, "
          "and the visible content (tables, output, a configuration). Use it when the question says 'this', 'here' or 'on screen'.",
          _schema(), _screen, lambda a: "Reading what is on screen"),
+    Tool("run_commands", "Run one or more commands that only look (show, display, get, dir, ping, traceroute on network devices and firewalls; "
+         "Get-… in PowerShell on Windows) on a device over Toner's stored login, and get their output. Use it when the stored results are "
+         "too old or do not hold the answer. Commands that could change the device are refused. At most 10 commands in one call, 60 seconds each.",
+         _schema(device=DEVICE_ARG, commands=({"type": "array", "items": {"type": "string"}, "description": "The commands, in order."}, True)),
+         run_commands, lambda a: f"Running {_which(a)} on {a.get('device', '')}",
+         audit=lambda a: ""),                                                # it writes its own lines: ran on … / refused on …
 ]
 BY_NAME = {t.name: t for t in TOOLS}
 WHAT_THEY_READ = ["the device list and each device's details (with its software version as last read by the checks)",
                   "the latest check results and each device's history",
                   "configuration backups (passwords masked) and what changed between versions", "the Firmware Transfer check results",
                   "the audit log", "terminal session logs", "what is on screen"]
+CAN_RUN = "show commands on devices, when allowed under Settings > AI"
+
+
+def _which(a):
+    cmds = a.get("commands") or []
+    return cmds[0] if len(cmds) == 1 else f"{len(cmds)} commands"
+
+
+def offered():
+    """The tools the model is given: every reader, and run_commands only while Settings > AI allows it."""
+    from core import assistant as AI
+    return [t for t in TOOLS if t.name != "run_commands" or AI.commands_allowed()]
+
+
+def what_it_sees():
+    return WHAT_THEY_READ + ([CAN_RUN] if any(t.name == "run_commands" for t in offered()) else [])
 
 
 def run(name, args, screen=None, values=None):
@@ -381,7 +474,8 @@ def run(name, args, screen=None, values=None):
     if tool is None:
         return json.dumps({"error": f"There is no tool called {name}."})
     args = args if isinstance(args, dict) else {}
-    audit.log("assistant", tool.audit(args))
+    if tool.audit(args):
+        audit.log("assistant", tool.audit(args))
     try:
         result = tool.fn(args, screen) if name == "whats_on_screen" else tool.fn(args)
     except ToolError as e:

@@ -35,6 +35,11 @@ def provider_id():
     return p if p in PROVIDERS else "claude"
 
 
+def commands_allowed():
+    """Settings > AI: whether the Assistant may run show commands on devices (off unless switched on)."""
+    return bool(db.get_setting("ai_run_commands"))
+
+
 def model_for(provider=None):
     provider = provider or provider_id()
     return (db.get_setting("ai_model") or {}).get(provider) or PROVIDERS[provider]["default_model"]

@@ -1,16 +1,21 @@
-"""Settings > AI: which provider and model the Assistant uses, its API key (kept in the vault), how deeply it thinks, and the
-monthly spend limit across every organization. Test reaches the provider with the key and fills the model list."""
+"""Settings > AI: which provider and model the Assistant uses, its API key (kept in the vault), how deeply it thinks, the
+monthly spend limit across every organization, and whether it may run show commands on devices. Test reaches the provider with
+the key and fills the model list."""
 import threading
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QComboBox, QLabel, QLineEdit, QPushButton
+from PySide6.QtWidgets import QCheckBox, QComboBox, QLabel, QLineEdit, QPushButton
 
 from core import assistant as AI
 from ui.settings_base import Page, TrimSpin, compact_row, note
 
 INTRO = ("The Assistant answers questions about the organization you are looking at from Toner's own data: devices, check results, "
-         "configuration backups (passwords masked), logs and what is on screen. It only reads. One provider and key serve the whole "
-         "installation; conversations and their cost are kept per organization.")
+         "configuration backups (passwords masked), logs and what is on screen. It only reads, and runs show commands on devices only "
+         "when you allow that below. One provider and key serve the whole installation; conversations and their cost are kept per "
+         "organization.")
+RUN_NOTE = ("Off by default. When on, the Assistant may send commands that only look (show, display, get, dir, ping, traceroute; "
+            "Get-… in PowerShell) to the devices the Command Runner can command, with the Command Runner's read-only block and no way "
+            "past it. Every command is written to the audit log and to a session log under Tools > Session logs.")
 KEY_SAVED = "saved; leave blank to keep"
 TESTING = "Testing…"
 
@@ -44,6 +49,8 @@ class AiPage(Page):
         self.result = QLabel("")
         self.result.setWordWrap(True)
         self.result.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.run_cmds = QCheckBox("Let the Assistant run show commands on devices")
+        self.run_cmds.setToolTip(RUN_NOTE)
         self.form.addRow("Provider", self.provider)
         self.form.addRow("API key", self.key)
         self.form.addRow("Model", self.model)
@@ -51,6 +58,8 @@ class AiPage(Page):
         self.form.addRow("Monthly spend limit (USD)", self.limit)
         self.form.addRow("", compact_row(self.test_btn))
         self.form.addRow("", self.result)
+        self.form.addRow("", self.run_cmds)
+        self.form.addRow("", note(RUN_NOTE))
         self.provider.currentIndexChanged.connect(self._provider_changed)
         self.test_btn.clicked.connect(self.test)
         self.tested.connect(self._tested)
@@ -66,6 +75,7 @@ class AiPage(Page):
         self._fill_models(pid)
         self.depth.setCurrentIndex(max(0, self.depth.findData(AI.depth())))
         self.limit.setValue(AI.spend_limit())
+        self.run_cmds.setChecked(AI.commands_allowed())
         self.key.clear()
         self.key.setPlaceholderText(KEY_SAVED if AI.has_key(pid) else "")
         s = AI.state()
@@ -89,6 +99,7 @@ class AiPage(Page):
         AI.set_model(pid, self.chosen_model())
         db.set_setting("ai_depth", self.depth.currentData())
         db.set_setting("ai_spend_limit", float(self.limit.value()))
+        db.set_setting("ai_run_commands", self.run_cmds.isChecked())
         typed = self.key.text().strip()
         if typed:
             AI.set_key(pid, typed)

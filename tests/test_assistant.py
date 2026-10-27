@@ -187,7 +187,7 @@ with db.within(acme):
     check("read what is on screen is audited", "read what is on screen" in [e["detail"] for e in audit.recent(5)])
     check("an unknown tool is answered, not raised", "no tool called" in T.run("bogus", {}))
     check("steps read as the panel shows them", T.BY_NAME["device_history"].step({"device": "core-sw1"}) == "Reading core-sw1's history…" and T.BY_NAME["whats_on_screen"].step({}) == "Reading what is on screen…")
-    check("every tool has a name, a description, an object schema and a step", all(t.schema["type"] == "object" and t.description and t.step({}) for t in T.TOOLS) and len(T.TOOLS) == 12)
+    check("every tool has a name, a description, an object schema and a step", all(t.schema["type"] == "object" and t.description and t.step({}) for t in T.TOOLS) and len(T.TOOLS) == 13)
     with db.within(globex):
         r = json.loads(T.run("list_devices", {}))
         check("another organization sees none of these devices", r["count"] == 0)
@@ -232,7 +232,7 @@ check("the steps read as approved", [p for k, p in events if k == "tool"] == ["R
 check("done carries the text, model, tokens summed over both rounds and the cost", done["text"].strip() == "core-sw1 is failing on CPU." and done["tokens_in"] == 2000 and done["tokens_out"] == 200 and abs(done["cost"] - prices.cost("claude-opus-5-5", 2000, 200)) < 1e-9 and done["priced"] and done["note"] == "")
 sys_prompt, hist1, toolnames = prov.seen[0]
 check("the system prompt names the organization but carries no clock (Claude binds thinking to it); every tool is offered", "Acme Charter Schools" in sys_prompt and time.strftime("%Y") not in sys_prompt
-      and ":" not in sys_prompt.split("Each question")[0][-60:] and set(toolnames) == set(T.BY_NAME))
+      and ":" not in sys_prompt.split("Each question")[0][-60:] and set(toolnames) == set(T.BY_NAME) - {"run_commands"})
 check("the date and time go with each question instead", hist1[0]["content"].startswith("Asked on ") and time.strftime("%Y") in hist1[0]["content"] and hist1[0]["content"].endswith("\nWhat is wrong with core-sw1?"))
 check("asked twice, the system prompt is the same text", agent.system_prompt(acme) == sys_prompt)
 hist2 = prov.seen[1][1]

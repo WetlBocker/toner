@@ -484,14 +484,25 @@ details (with its software version as last read by the checks), the latest check
 and what changed between two versions, the Firmware Transfer check results, the audit log, terminal session logs, and what is on
 screen: the section and page, the organization, what is selected and the visible content on Inventory, Results, History, Configs,
 Tools > Command Runner and Firmware Transfer, Sessions, and Automation/AI. Every password, key and community string in Toner's
-vault is replaced by **** before anything leaves Toner, and no screenshot is ever taken. The Assistant cannot run commands on
-devices, change settings or send anything; every tool call is written to the audit log ("assistant", "read core-sw1's history").
+vault is replaced by **** before anything leaves Toner, and no screenshot is ever taken. The Assistant cannot change anything on a
+device, change settings or send anything; every tool call is written to the audit log ("assistant", "read core-sw1's history").
+
+**Show commands on devices.** Off by default. Tick **Let the Assistant run show commands on devices** under Settings > AI and the
+Assistant may also send commands that only look (show, display, get, dir, ping, traceroute on network devices and firewalls;
+Get-… and the other looking commands in PowerShell on Windows) to the devices the Command Runner can command, over the same stored
+logins, jump hosts and proxies, when the stored results are too old or do not hold the answer. The Command Runner's read-only
+block applies with no way past it, and a command that would write its output to a file (`| redirect`, `| append`, `| tee`,
+`| save`, `>`) is refused too; a refused command is never sent and the Assistant is told why. At most ten commands go in one
+login, each with 60 seconds to answer, and the output is masked like everything else. Every run is one audit line with the
+commands in full ("ran on core-sw1: show interfaces; show logging | include Gi1/0/24"; "refused on core-sw1: reload (could change
+the device)") and one session log of type ASSISTANT under Tools > Session logs with each command and what the device answered.
+While the box is unticked the Assistant is not offered the ability at all.
 
 **Set it up** under **Settings > AI**: the **Provider** (Claude, OpenAI or Gemini, through each company's official library),
 your **API key** (kept in Toner's vault, never in the settings or an exported settings file), the **Model** (the list fills from
 the provider after **Test**; a sensible default is chosen for each provider), the **Depth** (**Quick / Normal / Thorough**: how hard
-the model thinks before it answers; it maps to each provider's own setting for that) and the **Monthly spend limit (USD)**, 20 by
-default. **Test** says **Connected: Claude Opus 5.5.** or why not (**Not connected: the API key was refused.** / **Not connected: no
+the model thinks before it answers; it maps to each provider's own setting for that), the **Monthly spend limit (USD)**, 20 by
+default, and **Let the Assistant run show commands on devices** (see above). **Test** says **Connected: Claude Opus 5.5.** or why not (**Not connected: the API key was refused.** / **Not connected: no
 answer from api.openai.com.**). When Toner starts it runs the same test in the background; the line along the bottom of the window
 says **Assistant: connected** or **Assistant: not connected**, and the round button is only there while it is connected. One key
 serves the whole installation; conversations and their cost are kept per organization, in that organization's own file.

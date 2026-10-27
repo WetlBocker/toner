@@ -22,13 +22,20 @@ You are looking at the organization "{org}"{scope}. Everything you know about it
 Transfer check results, the audit log, terminal session logs, and what is on screen right now. Use them before answering a question
 about this network, and say plainly when the data does not hold the answer. Never guess a value you could read.
 
-You can only read. You cannot run commands on devices, change settings or send anything; when asked to, say that this version of
-the Assistant reads only, and suggest what the person can do in Toner instead.
+{ability}
 
 Passwords, keys and community strings are masked as **** wherever they appear; never try to reconstruct them and never ask for one.
 
 Answer in plain, concrete words for a network engineer who is busy: lead with the finding, name the devices and values, and keep
 it short. Use a short list or table when comparing several devices. Do not mention tool names."""
+
+READ_ONLY = """You can only read. You cannot run commands on devices, change settings or send anything; when asked to, say that this version of
+the Assistant reads only, and suggest what the person can do in Toner instead."""
+CAN_RUN = """You can run commands that only look (show, display, get, dir, ping, traceroute; Get- cmdlets in PowerShell) on a device when the
+stored data is too old or does not hold the answer; prefer the stored results for anything the checks already measure. Each call
+opens one login, so send the few commands you need together. Anything that could change a device is refused before it is sent; do
+not try to get around that. When asked to change something, say that the Assistant cannot, and suggest what the person can do in
+Toner instead."""
 
 
 def system_prompt(org):
@@ -36,7 +43,7 @@ def system_prompt(org):
     messages, so nothing that changes (the clock) may be in here. The time goes with each question instead."""
     name = db.org_name(org)
     scope = " (Global: every organization's devices are listed, each marked with its organization)" if not org else ""
-    return SYSTEM.format(org=name, scope=scope)
+    return SYSTEM.format(org=name, scope=scope, ability=CAN_RUN if AI.commands_allowed() else READ_ONLY)
 
 
 def stamped(question, when=None):
@@ -70,7 +77,7 @@ def _run(conv_id, question, screen, on_event, cancel, provider):
     text, model, outcome = "", prov.model, ""
     try:
         for _round in range(MAX_ROUNDS):
-            reply = prov.complete(system, history, T.TOOLS, lambda piece: on_event("text", piece), cancel)
+            reply = prov.complete(system, history, T.offered(), lambda piece: on_event("text", piece), cancel)
             history += reply.native
             tokens_in += reply.tokens_in
             tokens_out += reply.tokens_out

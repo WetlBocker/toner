@@ -289,7 +289,7 @@ claude = Fake(ClaudeHandler)
 def claude_first(q):
     b, h = q["body"], q["headers"]
     check("Claude: streaming, tools with input_schema, effort from Depth, fallbacks default with its beta, no thinking block (on by default)",
-          b.get("stream") is True and b["tools"][0]["input_schema"]["type"] == "object" and {t["name"] for t in b["tools"]} == set(T.BY_NAME)
+          b.get("stream") is True and b["tools"][0]["input_schema"]["type"] == "object" and {t["name"] for t in b["tools"]} == set(T.BY_NAME) - {"run_commands"}
           and b["output_config"] == {"effort": "medium"} and b["fallbacks"] == "default" and "server-side-fallback-2026-07-01" in h.get("anthropic-beta", "")
           and b["thinking"] == {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "drop_block"}} and "thinking-binding-controls-2026-08-01" in h.get("anthropic-beta", "")
           and b["model"] == "claude-opus-5-5" and b["max_tokens"] >= 4096 and "Acme" in (b["system"] if isinstance(b["system"], str) else json.dumps(b["system"])), (b.keys(), h.get("anthropic-beta")))
@@ -318,7 +318,7 @@ oa = Fake(OpenAIHandler)
 def oa_first(q):
     b = q["body"]
     check("OpenAI: the Responses API with function tools, streaming, reasoning effort from Depth, nothing stored on the server, the system text as instructions",
-          b.get("stream") is True and b["tools"][0]["type"] == "function" and b["tools"][0]["parameters"]["type"] == "object" and {t["name"] for t in b["tools"]} == set(T.BY_NAME)
+          b.get("stream") is True and b["tools"][0]["type"] == "function" and b["tools"][0]["parameters"]["type"] == "object" and {t["name"] for t in b["tools"]} == set(T.BY_NAME) - {"run_commands"}
           and b["reasoning"] == {"effort": "medium"} and b.get("store") is False and "Acme" in b["instructions"] and b["model"] == "gpt-6.1-sol"
           and b["input"][0]["role"] == "user" and b["input"][0]["content"].endswith("\nWhat is wrong with core-sw1?"), (b.keys(), b.get("reasoning")))
 def oa_second(q):
@@ -352,7 +352,7 @@ def gem_first(q):
     decls = b["tools"][0]["functionDeclarations"]
     schema = decls[0].get("parametersJsonSchema") or decls[0].get("parameters") or {}
     check("Gemini: generateContent streamed, function declarations with JSON schemas, thinking level from Depth, the system instruction, automatic calling off",
-          ":streamGenerateContent" in q["path"] and "alt=sse" in q["path"] and {d["name"] for d in decls} == set(T.BY_NAME) and schema.get("type") == "object"
+          ":streamGenerateContent" in q["path"] and "alt=sse" in q["path"] and {d["name"] for d in decls} == set(T.BY_NAME) - {"run_commands"} and schema.get("type") == "object"
           and cfg.get("thinkingConfig", {}).get("thinkingLevel") == "MEDIUM" and "Acme" in json.dumps(b.get("systemInstruction")) and b["contents"][0]["role"] == "user",
           (q["path"], json.dumps({k: v for k, v in b.items() if k not in ("contents", "systemInstruction")})[:900]))
 def gem_second(q):
