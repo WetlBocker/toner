@@ -3,6 +3,7 @@ import re
 
 import pyte
 from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
+from core import syntax
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QFontMetricsF, QGuiApplication, QPainter, QPen
 from PySide6.QtWidgets import QMenu, QWidget
 
@@ -12,13 +13,17 @@ SCHEMES = {
         "blue": "#2472c8", "magenta": "#bc3fbc", "cyan": "#11a8cd", "white": "#e5e5e5",
         "brightblack": "#666666", "brightred": "#f14c4c", "brightgreen": "#23d18b",
         "brightbrown": "#f5f543", "brightyellow": "#f5f543", "brightblue": "#3b8eea",
-        "brightmagenta": "#d670d6", "brightcyan": "#29b8db", "brightwhite": "#ffffff"}},
+        "brightmagenta": "#d670d6", "brightcyan": "#29b8db", "brightwhite": "#ffffff"},
+             "syntax": {"comment": "#8a8a8a", "keyword": "#4fc1ff", "no": "#f14c4c", "number": "#d670d6", "address": "#ce9178",
+                        "interface": "#23d18b", "good": "#23d18b", "bad": "#f14c4c"}},
     "Light": {"bg": "#ffffff", "fg": "#1e1e1e", "colors": {
         "black": "#000000", "red": "#b3261e", "green": "#1b7f3b", "brown": "#8a6d00", "yellow": "#8a6d00",
         "blue": "#1a56b0", "magenta": "#8e2a8e", "cyan": "#0b7a8c", "white": "#555555",
         "brightblack": "#666666", "brightred": "#d33a30", "brightgreen": "#2e9e4f",
         "brightbrown": "#a07900", "brightyellow": "#a07900", "brightblue": "#2f6fd0",
-        "brightmagenta": "#aa44aa", "brightcyan": "#1496aa", "brightwhite": "#333333"}},
+        "brightmagenta": "#aa44aa", "brightcyan": "#1496aa", "brightwhite": "#333333"},
+              "syntax": {"comment": "#767676", "keyword": "#1a56b0", "no": "#b3261e", "number": "#8e2a8e", "address": "#b35a00",
+                         "interface": "#1b7f3b", "good": "#1b7f3b", "bad": "#b3261e"}},
 }
 _HEX = re.compile(r"^[0-9a-fA-F]{6}$")
 
@@ -78,6 +83,7 @@ class TerminalView(QWidget):
 
     def __init__(self, cols=100, rows=30):
         super().__init__()
+        self.syntax, self._marks_cache = None, {}
         self.cols, self.rows = cols, rows
         self.scroll = 0               # lines scrolled back from the live view
         self.sel = None               # ((line, col), (line, col)) in absolute line numbers
@@ -103,10 +109,34 @@ class TerminalView(QWidget):
         self._metrics()
         sch = SCHEMES.get(scheme, SCHEMES["Dark"])
         self.bg, self.fg, self.pal = QColor(sch["bg"]), QColor(sch["fg"]), sch["colors"]
+        self.syntax_colors = {k: QColor(v) for k, v in sch["syntax"].items()}
         self.scrollback = max(100, int(scrollback))
         self.setMinimumSize(int(self.cw * 40), int(self.ch * 8))
         self.resizeEvent(None)               # new cell size -> new grid size
         self.update()
+
+    def set_syntax(self, family):
+        """Colour command output by this vendor family's rules (core/syntax), or None for the device's own colours only."""
+        if family != getattr(self, "syntax", None):
+            self.syntax = family
+            self._marks_cache = {}
+            self.update()
+
+    def _marks(self, text):
+        """The kind of each character of a line, remembered per line of text (a screen repaints often, its lines rarely change)."""
+        cache = self._marks_cache
+        got = cache.get(text)
+        if got is None:
+            if len(cache) > 4000:
+                cache.clear()
+            got = cache[text] = syntax.marks(self.syntax, text)
+        return got
+
+    def _fg_for(self, c, mark):
+        """The colour a cell is drawn in: the device's own when it set one, else the syntax colour for its kind, else the scheme's."""
+        if (not c.fg or c.fg == "default") and mark:
+            return self.syntax_colors.get(mark, self.fg)
+        return self._color(c.fg, self.fg)
 
     # ---------- screen state ----------
     def _make_screens(self):
@@ -204,15 +234,17 @@ class TerminalView(QWidget):
             idx = first + row
             line = self._line(idx)
             y = row * self.ch
+            marks = self._marks("".join(line[i].data or " " for i in range(self.cols))) if self.syntax else None
+            mark = lambda i: marks[i] if marks is not None and i < len(marks) else None
             col = 0
             while col < self.cols:
                 c = line[col]
-                key = (c.fg, c.bg, c.bold, c.reverse, c.underscore, c.strikethrough)
+                key = (c.fg, c.bg, c.bold, c.reverse, c.underscore, c.strikethrough, mark(col))
                 end = col + 1
                 while end < self.cols and (line[end].fg, line[end].bg, line[end].bold, line[end].reverse,
-                                           line[end].underscore, line[end].strikethrough) == key:
+                                           line[end].underscore, line[end].strikethrough, mark(end)) == key:
                     end += 1
-                fg, bg = self._color(c.fg, self.fg), self._color(c.bg, self.bg)
+                fg, bg = self._fg_for(c, mark(col)), self._color(c.bg, self.bg)
                 if c.reverse:
                     fg, bg = bg, fg
                 rect = QRectF(col * self.cw, y, (end - col) * self.cw, self.ch)

@@ -100,12 +100,16 @@ class TerminalPage(Page):
         self.scrollback = spin(100, 100_000, " lines")
         self.scheme = QComboBox()
         self.scheme.addItems(terminal.SCHEMES)
+        self.syntax = QCheckBox("Colour command output by vendor")
         self.paging = QLineEdit()
         self.rdp = QComboBox()
         self.rdp.addItem("Inside Toner, as a tab in Sessions", True)
         self.rdp.addItem("In Windows' own Remote Desktop window", False)
         self.rdp.setToolTip("Inside Toner uses the Remote Desktop control Windows ships. If this computer cannot host it, Windows' own client is used instead.")
-        for label, w in (("Font", self.family), ("Size", self.size), ("Colours", self.scheme),
+        for label, w in (("Font", self.family), ("Size", self.size), ("Colours", self.scheme), ("", self.syntax),
+                         ("", note("Comments, keywords, addresses, numbers, interface names, permit and deny, up and down are coloured "
+                                   "to fit the scheme above, by the vendor of the session's inventory device (Cisco-style when it has "
+                                   "none). Colours a device sends itself are kept.")),
                          ("Scrollback", self.scrollback), ("Paging command", self.paging), ("Remote Desktop", self.rdp)):
             self.form.addRow(label, w)
         self.lay.insertWidget(1, note("Font, size and colours apply to the console straight away. A new "
@@ -117,6 +121,7 @@ class TerminalPage(Page):
         self.family.setCurrentFont(QFont(db.get_setting("term_font")))
         self.size.setValue(int(db.get_setting("term_font_size")))
         self.scheme.setCurrentText(db.get_setting("term_scheme"))
+        self.syntax.setChecked(bool(db.get_setting("term_syntax")))
         self.scrollback.setValue(int(db.get_setting("term_scrollback")))
         self.paging.setText(db.get_setting("paging_cmd"))
         self.rdp.setCurrentIndex(0 if db.get_setting("rdp_embedded") else 1)
@@ -126,6 +131,7 @@ class TerminalPage(Page):
         db.set_setting("term_font", self.family.currentFont().family())
         db.set_setting("term_font_size", self.size.value())
         db.set_setting("term_scheme", self.scheme.currentText())
+        db.set_setting("term_syntax", self.syntax.isChecked())
         db.set_setting("term_scrollback", self.scrollback.value())
         db.set_setting("paging_cmd", self.paging.text().strip() or "terminal length 0")
 

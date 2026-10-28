@@ -85,7 +85,7 @@ DEFAULT_SETTINGS = {
     # appearance
     "theme": "System", "ui_style": "Standard", "font_size": 0, "color_preset": "Default", "status_colors": {},
     # terminal
-    "term_font": "Consolas", "rdp_embedded": True, "term_font_size": 10, "term_scrollback": 5000, "term_scheme": "Dark",
+    "term_font": "Consolas", "rdp_embedded": True, "term_font_size": 10, "term_scrollback": 5000, "term_scheme": "Dark", "term_syntax": True,
     "paging_cmd": "terminal length 0",
     # reports
     "report_title": "Toner Health Report", "report_org": "", "report_folder": "",
@@ -1106,7 +1106,7 @@ def ensure_folder_path(path):
 # These are about this computer or the whole program, so they are always read from and written to the Global file:
 GLOBAL_ONLY = {"window_geometry", "splitters", "sidebar_collapsed", "sessions_list_hidden", "onboarding_done", "org_current",
                "theme", "ui_style", "font_size", "color_preset", "status_colors",
-               "term_font", "rdp_embedded", "term_font_size", "term_scrollback", "term_scheme", "paging_cmd",
+               "term_font", "rdp_embedded", "term_font_size", "term_scrollback", "term_scheme", "term_syntax", "paging_cmd",
                "hostkey_mode", "ssh_legacy_algorithms", "run_in_background", "metrics_port", "proxy", "ssh_tunnel",
                "update_check", "update_auto_install", "update_last_check", "update_skip", "update_pending",
                "ansible_backend", "ansible_distro", "ansible_command", "ansible_playbooks", "ansible_server_device", "ansible_server",

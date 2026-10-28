@@ -445,6 +445,9 @@ class SessionPane(QWidget):
         """Pick up font, colours and scrollback from Settings > Terminal."""
         self.term.configure(db.get_setting("term_font"), int(db.get_setting("term_font_size")),
                             db.get_setting("term_scheme"), int(db.get_setting("term_scrollback")))
+        from core import syntax
+        dev = self.spec.get("dev") or {}
+        self.term.set_syntax(syntax.family_of(dev.get("vendor")) if db.get_setting("term_syntax") else None)
 
     def connected(self):
         return self.up
