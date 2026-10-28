@@ -15,6 +15,7 @@ PATHS = {
                '<path d="M9 13h6M9 17h6"/>',
     "tools": '<path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.6 2.6-2.4-.6-.6-2.4z"/>',
     "configs": '<path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/>',
+    "scanning": '<path d="M12 3l8 3v6c0 4.5-3.4 7.8-8 9-4.6-1.2-8-4.5-8-9V6z"/><path d="M8.5 12l2.5 2.5 4.5-5"/>',
     "sessions": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/>',
     "automation": '<path d="M13 3L5 14h6l-1 7 8-11h-6z"/>',
     "about": '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',

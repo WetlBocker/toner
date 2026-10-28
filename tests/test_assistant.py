@@ -187,7 +187,7 @@ with db.within(acme):
     check("read what is on screen is audited", "read what is on screen" in [e["detail"] for e in audit.recent(5)])
     check("an unknown tool is answered, not raised", "no tool called" in T.run("bogus", {}))
     check("steps read as the panel shows them", T.BY_NAME["device_history"].step({"device": "core-sw1"}) == "Reading core-sw1's history…" and T.BY_NAME["whats_on_screen"].step({}) == "Reading what is on screen…")
-    check("every tool has a name, a description, an object schema and a step", all(t.schema["type"] == "object" and t.description and t.step({}) for t in T.TOOLS) and len(T.TOOLS) == 13)
+    check("every tool has a name, a description, an object schema and a step", all(t.schema["type"] == "object" and t.description and t.step({}) for t in T.TOOLS) and len(T.TOOLS) == 14)
     with db.within(globex):
         r = json.loads(T.run("list_devices", {}))
         check("another organization sees none of these devices", r["count"] == 0)

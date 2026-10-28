@@ -182,7 +182,7 @@ move = next(x for x in captured["menu"].actions() if x.text() == "Move to folder
 check("'Move to folder' lists top level and every folder", move.actions()[0].text() == "(top level)" and "Denver DC/Chicago" in [x.text() for x in move.actions()])
 it = find_folder("Denver DC"); inv.show_menu(inv.table.visualItemRect(it).center()); a = captured["actions"]
 check("a folder has no Run Checks", "Run Checks" not in a, a)
-check("a folder: add device, subfolder, rename, move, delete", a[:3] == ["Add Device", "New subfolder...", "Rename..."] and "Move to folder" in a and a[-3] == "Delete folder..." and a[-2:] == ["Expand all", "Collapse all"], a)
+check("a folder: add device, subfolder, rename, scan, move, delete", a[:4] == ["Add Device", "New subfolder...", "Rename...", "Scan for vulnerabilities"] and "Move to folder" in a and a[-3] == "Delete folder..." and a[-2:] == ["Expand all", "Collapse all"], a)
 move = next(x for x in captured["menu"].actions() if x.text() == "Move to folder").menu()
 check("a folder cannot be moved into itself or its children", not any(x.text().startswith("Denver DC") for x in move.actions()), [x.text() for x in move.actions()])
 INV.QMenu = QMenu

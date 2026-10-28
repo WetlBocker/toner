@@ -56,7 +56,7 @@ with db.within(acme):
 
 print("== off by default")
 check("the setting is off and the installation's (Global only)", AI.commands_allowed() is False and "ai_run_commands" in db.GLOBAL_ONLY and db.DEFAULT_SETTINGS["ai_run_commands"] is False)
-check("the tool exists but is not offered", "run_commands" in T.BY_NAME and len(T.TOOLS) == 13 and "run_commands" not in [t.name for t in T.offered()] and len(T.offered()) == 12)
+check("the tool exists but is not offered", "run_commands" in T.BY_NAME and len(T.TOOLS) == 14 and "run_commands" not in [t.name for t in T.offered()] and len(T.offered()) == 13)
 check("the instructions say it only reads", "You can only read." in agent.system_prompt(acme) and "run commands that only look" not in agent.system_prompt(acme))
 check("what it can see has no show-command line", T.CAN_RUN not in T.what_it_sees())
 with db.within(acme):

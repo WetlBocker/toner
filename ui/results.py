@@ -35,6 +35,10 @@ class ResultsTab(QWidget):
     ORG = 5
     FILTERS = ["All results", "Problems only", "Warnings", "Failing", "Healthy devices"]
     FILTER_KEYS = {"all": 0, "problems": 1, "warn": 2, "fail": 3, "healthy": 4}
+    # what the Scanning section says and does differently (ui/scanning.py)
+    TITLE, RUN, RUN_TIP, COLUMNS_KEY = "Results", "Run checks", "Runs the checks of the devices shown", "results_columns"
+    HINT = ("No results yet", "Choose devices and press Run checks")
+    LATEST, FRESH = "Latest results for", "Run checks for fresh ones."
 
     def __init__(self):
         super().__init__()
@@ -52,18 +56,18 @@ class ResultsTab(QWidget):
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self.show_menu)
         self.table.setItemDelegateForColumn(2, StatusDelegate(self.table))
-        self.columns = ColumnChooser(self.table, self.table.header(), "results_columns", self.COLS, locked=(0, 2), org_col=self.ORG)      # right-click a heading
+        self.columns = ColumnChooser(self.table, self.table.header(), self.COLUMNS_KEY, self.COLS, locked=(0, 2), org_col=self.ORG)      # right-click a heading
         self.table.setIndentation(18)
         self.table.setAlternatingRowColors(False)
-        self.hint = EmptyHint(self.table, "No results yet", "Choose devices and press Run checks", actions=[("Run checks", lambda: self.start())])
+        self.hint = EmptyHint(self.table, *self.HINT, actions=[(self.RUN, lambda: self.start())])
         for key in ("Return", "Enter"):                          # Enter opens the selected device's window
             QShortcut(QKeySequence(key), self.table, activated=self._enter, context=Qt.ShortcutContext.WidgetWithChildrenShortcut)
         self.table.itemExpanded.connect(lambda it: self._remember(it, True))
         self.table.itemCollapsed.connect(lambda it: self._remember(it, False))
-        self.run_btn = QPushButton("Run checks")
+        self.run_btn = QPushButton(self.RUN)
         self.run_btn.setProperty("primary", True)
         self.run_btn.clicked.connect(self.start)
-        self.run_btn.setToolTip("Runs the checks of the devices shown")
+        self.run_btn.setToolTip(self.RUN_TIP)
         self.find = SearchBox("Search results", "Type part of a device's name, address, vendor or location, or of a check or its "
                                                 "message. Several words must all match.", page=self)
         self.funnel = FilterButton(self._sections)
@@ -76,7 +80,7 @@ class ResultsTab(QWidget):
         self.schedule_note = QLabel("")
         self.schedule_note.setToolTip("Scheduled runs happen only while Toner is open (Settings > Checks > Schedule)")
         self.worker = None
-        self.header = SectionHeader("Results")
+        self.header = SectionHeader(self.TITLE)
         self.header.lay.replaceWidget(self.header.context, self.summary)          # the context line is the run's summary
         self.header.context.hide()
         self.header.context.setParent(None)          # gone now, not when Qt gets round to it
@@ -90,7 +94,7 @@ class ResultsTab(QWidget):
             b = QPushButton(text)
             b.clicked.connect(lambda _=False, fn=fn: fn())
             folds.append(b)
-        bar = flow(self.run_btn, *folds, self.schedule_note)      # wraps in a narrow window
+        self.bar = bar = flow(self.run_btn, *folds, self.schedule_note)      # wraps in a narrow window
         row = QHBoxLayout()
         row.addLayout(bar, 1)
         row.addWidget(self.find, 1)                    # on the right, as on Inventory
@@ -107,8 +111,8 @@ class ResultsTab(QWidget):
         if self.running() or (self.results and not self.stored):
             return
         with db.including_archived(wants_archived(self.funnel)):
-            rows, at = db.latest_results()
-        self.results = [Result(r["device"], r["check_name"], r["status"], r["value"] or "", r["message"] or "", r["numeric"], org=r.get("org"))
+            rows, at = self._stored()
+        self.results = [Result(r["device"], r["check_name"], r["status"], r["value"] or "", r["message"] or "", r.get("numeric"), org=r.get("org"))
                         for r in rows]
         self.results.sort(key=lambda r: (-SEVERITY.get(r.status, 0), r.device, r.check))
         self.stored = bool(self.results)
@@ -119,7 +123,7 @@ class ResultsTab(QWidget):
         self.chips.set_counts(counts)
         if self.stored:
             n = len([g for g in self._group().values() if g])
-            self.summary.setText(f"Latest results for {n} device{'s' if n != 1 else ''}, from {at[:16]} ({display.ago(at)}). Run checks for fresh ones.")
+            self.summary.setText(f"{self.LATEST} {n} device{'s' if n != 1 else ''}, from {at[:16]} ({display.ago(at)}). {self.FRESH}")
             self.summary.setToolTip("Each device shows the newest run that included it.")
             worst_first = list(dict.fromkeys(device_of(r.device) for r in self.results if is_problem(r.status)))
             self.expanded = set(worst_first[:AUTO_OPEN])
@@ -331,8 +335,8 @@ class ResultsTab(QWidget):
             self.hint.set_text("Nothing matches this filter", "Every device is listed under All results")
             self.hint.set_actions([("Show all results", self.show_all)])
         else:
-            self.hint.set_text("No results yet", "Choose devices and press Run checks")
-            self.hint.set_actions([("Run checks", lambda: self.start())])
+            self.hint.set_text(*self.HINT)
+            self.hint.set_actions([(self.RUN, lambda: self.start())])
         self.hint.setVisible(empty)
         self.chips.restyle()
         for i in range(self.table.columnCount()):
@@ -376,9 +380,6 @@ class ResultsTab(QWidget):
             return
         self.last_ran, self.last_scheduled = [d["key"] for d in devices], scheduled   # for notifications
         self._qualify = db.everything()                  # Global: results of other organizations' devices are keyed apart
-        # Read settings here, in the GUI thread, and hand the worker plain values.
-        base, rules = db.get_thresholds(), db.get_setting("threshold_overrides")
-        per_device = {d["key"]: db.thresholds_for(d, base, rules) for d in devices}
         self.results = []
         self.stored = False
         self.summary.setToolTip("")
@@ -387,8 +388,7 @@ class ResultsTab(QWidget):
         self.run_btn.setEnabled(False)
         self.summary.setText(f"{'Scheduled run: ' if scheduled else ''}running "
                              + (f"the {len(devices)} device(s) shown..." if label == "the devices shown" else f"{len(devices)} device(s) in '{label}'..."))
-        self.worker = Worker(devices, lambda d: per_device[d["key"]], int(db.get_setting("workers")),
-                             db.runtime_options())
+        self.worker = self._worker(devices)
         self._active = True
         self.repopulate()
         self.progress.emit(0, len(self.last_ran))
@@ -411,7 +411,7 @@ class ResultsTab(QWidget):
         worst_first = list(dict.fromkeys(device_of(r.device) for r in self.results if is_problem(r.status)))
         self.expanded |= set(worst_first[:AUTO_OPEN])      # what needs a look is already open (not hundreds of rows at once)
         self.repopulate()
-        db.save_run(self.results)
+        self._save()
         self.chips.set_counts(self.visible_counts())             # what is shown: the client being looked at
         devices = len({device_of(r.device) for r in self.results})
         self.summary.setText(f"{devices} device{'s' if devices != 1 else ''}, {len(self.results)} checks")
@@ -419,6 +419,18 @@ class ResultsTab(QWidget):
         self.progress.emit(len(self.last_ran), len(self.last_ran))
         self.run_finished.emit()
 
+    # ---------- what a scan does differently (ui/scanning.py overrides these three)
+    def _stored(self):
+        return db.latest_results()
+
+    def _worker(self, devices):
+        # Read settings here, in the GUI thread, and hand the worker plain values.
+        base, rules = db.get_thresholds(), db.get_setting("threshold_overrides")
+        per_device = {d["key"]: db.thresholds_for(d, base, rules) for d in devices}
+        return Worker(devices, lambda d: per_device[d["key"]], int(db.get_setting("workers")), db.runtime_options())
+
+    def _save(self):
+        db.save_run(self.results)
 
     def screen_context(self):
         """What the Assistant is told about this page: the selected devices and their rows (every row shown when nothing is selected)."""
@@ -434,5 +446,5 @@ class ResultsTab(QWidget):
             kids = [top.child(k) for k in range(top.childCount())] or [top]
             for ch in kids:
                 rows.append({"device": name, "check": ch.text(1), "status": ch.text(2), "value": ch.text(3), "message": ch.text(4)})
-        return {"page": "Results", "selected_devices": [db.label(t.data(0, ROLE) or t.text(0)) for t in picked], "summary": self.summary.text(),
+        return {"page": self.TITLE, "selected_devices": [db.label(t.data(0, ROLE) or t.text(0)) for t in picked], "summary": self.summary.text(),
                 "filter": self.FILTERS[self.status_mode()] if 0 <= self.status_mode() < len(self.FILTERS) else "", "rows": rows[:400]}

@@ -85,7 +85,7 @@ DEFAULT_SETTINGS = {
     # appearance
     "theme": "System", "ui_style": "Standard", "font_size": 0, "color_preset": "Default", "status_colors": {},
     # terminal
-    "term_font": "Consolas", "rdp_embedded": True, "term_font_size": 10, "term_scrollback": 5000, "term_scheme": "Dark", "term_syntax": True,
+    "term_font": "Consolas", "rdp_embedded": True, "term_font_size": 10, "term_scrollback": 5000, "term_scheme": "Dark", "term_syntax": True, "scan_enabled": True,
     "paging_cmd": "terminal length 0",
     # reports
     "report_title": "Toner Health Report", "report_org": "", "report_folder": "",
@@ -99,7 +99,7 @@ DEFAULT_SETTINGS = {
     # inventory view
     "inventory_view": "Folders", "inventory_expanded": [], "window_geometry": "", "splitters": {}, "ansible_backend": "wsl", "ansible_distro": "", "ansible_command": "ansible-playbook", "ansible_playbooks": "",
     "ansible_server_device": "", "ansible_server": {"host": "", "port": 22, "user": "", "key_file": ""}, "ansible_check_default": True, "ansible_keep_runs": 200,
-    "sidebar_collapsed": False, "acks": {}, "client_scope": None, "org_current": 0, "onboarding_done": False, "inventory_columns": None, "results_columns": None,
+    "sidebar_collapsed": False, "acks": {}, "client_scope": None, "org_current": 0, "onboarding_done": False, "inventory_columns": None, "results_columns": None, "scanning_columns": None,
     # configuration backups
     "backup_enabled": False, "backup_hours": 24, "backup_groups": [], "backup_keep": 50, "backup_mask": True,
     "backup_on_start": False,
@@ -137,7 +137,7 @@ DEFAULT_SETTINGS = {
 }
 # Per-machine state that must not travel in an exported settings file (channel secrets stay in
 # the vault, so an imported channel would be broken).
-NOT_PORTABLE = {"vault_provider", "vault_config", "org_current", "window_geometry", "splitters", "ansible_distro", "ansible_playbooks", "ansible_server", "ansible_server_device", "sidebar_collapsed", "sessions_list_hidden", "acks", "client_scope", "onboarding_done", "inventory_columns", "results_columns", "notify_channels", "notify_snooze_until", "inventory_expanded", "snippets", "fileserver", "iperf_path", "openssl_path",
+NOT_PORTABLE = {"vault_provider", "vault_config", "org_current", "window_geometry", "splitters", "ansible_distro", "ansible_playbooks", "ansible_server", "ansible_server_device", "sidebar_collapsed", "sessions_list_hidden", "acks", "client_scope", "onboarding_done", "inventory_columns", "results_columns", "scanning_columns", "notify_channels", "notify_snooze_until", "inventory_expanded", "snippets", "fileserver", "iperf_path", "openssl_path",
                 "update_last_check", "update_skip", "update_pending", "sessions_expanded", "agent_enabled", "agent_enroll", "agent_bind",
                 "agent_address", "install_uid", "demarc", "assistant_button"}
 
@@ -526,6 +526,14 @@ def init():
             colour TEXT DEFAULT '', archived INTEGER DEFAULT 0, created TEXT DEFAULT '');
         CREATE INDEX IF NOT EXISTS idx_backups_dev ON config_backups(device, id);
         CREATE INDEX IF NOT EXISTS idx_results_run ON results(run_id);
+        CREATE TABLE IF NOT EXISTS scans (
+            id INTEGER PRIMARY KEY, started_at TEXT NOT NULL,
+            ok INTEGER, warn INTEGER, fail INTEGER, error INTEGER);
+        CREATE TABLE IF NOT EXISTS scan_results (
+            id INTEGER PRIMARY KEY, scan_id INTEGER NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
+            device TEXT, check_name TEXT, status TEXT, value TEXT, message TEXT);
+        CREATE INDEX IF NOT EXISTS idx_scan_results ON scan_results(scan_id);
+        CREATE TABLE IF NOT EXISTS advisory_cache (key TEXT PRIMARY KEY, fetched_at TEXT NOT NULL, body TEXT NOT NULL);
         """)
         _migrate(c)
     _invalidate_folders()
@@ -1106,7 +1114,7 @@ def ensure_folder_path(path):
 # These are about this computer or the whole program, so they are always read from and written to the Global file:
 GLOBAL_ONLY = {"window_geometry", "splitters", "sidebar_collapsed", "sessions_list_hidden", "onboarding_done", "org_current",
                "theme", "ui_style", "font_size", "color_preset", "status_colors",
-               "term_font", "rdp_embedded", "term_font_size", "term_scrollback", "term_scheme", "term_syntax", "paging_cmd",
+               "term_font", "rdp_embedded", "term_font_size", "term_scrollback", "term_scheme", "term_syntax", "scan_enabled", "paging_cmd",
                "hostkey_mode", "ssh_legacy_algorithms", "run_in_background", "metrics_port", "proxy", "ssh_tunnel",
                "update_check", "update_auto_install", "update_last_check", "update_skip", "update_pending",
                "ansible_backend", "ansible_distro", "ansible_command", "ansible_playbooks", "ansible_server_device", "ansible_server",
@@ -1385,6 +1393,52 @@ def _save_run_here(results):
     if stored is not None and after[0] == rid and after[1] == before[1] + 1 and after[2] - before[2] == len(results):
         _advance_kept(path, before, after, now, stored)
     return rid
+
+# ---------- vulnerability scans (the Scanning section): stored like runs, in their own tables, so health views do not see them
+def save_scan(results):
+    """Store a scan. Rows of devices in other organizations' files go to those files, as scans of their own (see save_run)."""
+    groups = {}
+    for r in results:
+        groups.setdefault(getattr(r, "org", None), []).append(r)
+    here = target()
+    if set(groups) <= {None, here}:
+        return _save_scan_here(results)
+    ids = {}
+    for org, rows in groups.items():
+        with within(org):
+            ids[target()] = _save_scan_here(rows)
+    return ids.get(here, next(iter(ids.values())))
+
+def _save_scan_here(results):
+    n = lambda s: sum(r.status == s for r in results)
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with connect() as c:
+        sid = c.execute("INSERT INTO scans(started_at, ok, warn, fail, error) VALUES(?,?,?,?,?)",
+                        (now, n("OK"), n("WARN"), n("FAIL"), n("ERROR"))).lastrowid
+        c.executemany("INSERT INTO scan_results(scan_id, device, check_name, status, value, message) VALUES(?,?,?,?,?,?)",
+                      [(sid, split_key(r.device)[0] if "@@" in (r.device or "") else r.device, r.check, r.status, r.value, r.message) for r in results])
+        cutoff = (datetime.now() - timedelta(days=int(get_setting("retention_days")))).strftime("%Y-%m-%d %H:%M:%S")
+        c.execute("DELETE FROM scans WHERE started_at < ?", (cutoff,))
+    return sid
+
+def latest_scan_results():
+    """([rows], time of the newest scan among them): every device's rows from the newest scan that included it, from every file of
+    the view; device labels from other organizations come back as keys (see dkey). Rows: device, check_name, status, value, message, at."""
+    rows, newest = [], ""
+    for org, only in _each_file():
+        with within(org):
+            with connect() as c:
+                latest = {r["device"]: r["sid"] for r in c.execute("SELECT device, MAX(scan_id) AS sid FROM scan_results GROUP BY device")}
+                times = {r["id"]: r["started_at"] for r in c.execute("SELECT id, started_at FROM scans")}
+                part = [dict(r) for r in c.execute("SELECT scan_id, device, check_name, status, value, message FROM scan_results")
+                        if latest.get(r["device"]) == r["scan_id"]]
+        for r in part:
+            if only is None or r["device"] in only:
+                at = times.get(r.pop("scan_id"), "")
+                r["device"], r["org"], r["at"] = dkey(r["device"], org), org, at
+                rows.append(r)
+                newest = max(newest, at)
+    return rows, newest
 
 def list_runs(limit=200):
     """Runs, newest first, each with 'org'. An organization lists its own; Global listing everything lists every file's."""

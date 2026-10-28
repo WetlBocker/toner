@@ -81,6 +81,8 @@ def said(name, message):
 
 def check_name(name):
     """'wan links' -> 'WAN Links'; 'channel util (ng)' -> 'Channel Util (NG)'; 'tx retries (2.4 GHz)' -> 'TX Retries (2.4 GHz)'; 'sd-wan' -> 'SD-WAN'."""
+    if re.match(r"^(?:cisco-sa-|CVE-\d)", name or ""):          # an advisory id (the Scanning section) is shown as published
+        return name
     base, sep, rest = (name or "").partition(" (")
     word = lambda w: "-".join(ACRONYMS.get(p, p.capitalize()) for p in w.split("-"))
     out = " ".join(word(w) for w in base.split(" "))

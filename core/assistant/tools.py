@@ -198,6 +198,20 @@ def latest_results(args):
     return {"device": _whose(d), "results": out[:ROW_LIMIT], "count": len(out)}
 
 
+def vulnerabilities(args):
+    """The Scanning section's latest stored rows: one device's, or every device's in the organization, problems first."""
+    rows, newest = db.latest_scan_results()
+    if args.get("device"):
+        d = _find(args.get("device"))
+        rows = [r for r in rows if r["device"] == d["key"]]
+    order = {"ERROR": 0, "FAIL": 1, "WARN": 2, "OK": 3, "N/A": 4}
+    rows.sort(key=lambda r: (order.get(r["status"], 5), r["device"], r["check_name"]))
+    out = [{"device": db.label(r["device"]), "check": r["check_name"], "status": r["status"], "value": r.get("value") or "",
+            "message": r.get("message") or "", "scanned_at": r.get("at") or ""} for r in rows]
+    return {"results": out[:ROW_LIMIT], "count": len(out), "newest_scan": newest,
+            "note": "" if out else "Nothing has been scanned yet: the Scanning section's Scan button looks devices up."}
+
+
 def device_history(args):
     d = _find(args.get("device"))
     limit = max(1, min(int(args.get("runs") or 30), 200))
@@ -412,6 +426,11 @@ TOOLS = [
          _schema(device=DEVICE_ARG, check={"type": "string", "description": "A check name to narrow to, e.g. 'cpu' or 'uptime' (optional)."},
                  runs={"type": "integer", "description": "How many runs to go back (default 30, at most 200)."}),
          device_history, lambda a: f"Reading {a.get('device', '')}'s history"),
+    Tool("vulnerabilities", "The Scanning section's latest results: known vulnerabilities (Cisco PSIRT and NIST NVD advisories, with CVSS, "
+         "EPSS and whether CISA lists the CVE as exploited) for each device's software version, as rows with a status. One device, "
+         "or every device in the organization.",
+         _schema(device={"type": "string", "description": "A device's name as the Inventory shows it (optional: every device)."}),
+         vulnerabilities, lambda a: f"Reading {a.get('device') or 'the organization'}'s vulnerability scan"),
     Tool("list_backups", "The stored configuration backups of a device: each version's id, time, size and how many lines changed.",
          _schema(device=DEVICE_ARG), list_backups, lambda a: f"Reading {a.get('device', '')}'s backup list"),
     Tool("read_backup", "The text of one configuration backup (passwords masked). Without a backup_id, the newest.",
@@ -446,7 +465,7 @@ TOOLS = [
 ]
 BY_NAME = {t.name: t for t in TOOLS}
 WHAT_THEY_READ = ["the device list and each device's details (with its software version as last read by the checks)",
-                  "the latest check results and each device's history",
+                  "the latest check results and each device's history", "the latest vulnerability scan results",
                   "configuration backups (passwords masked) and what changed between versions", "the Firmware Transfer check results",
                   "the audit log", "terminal session logs", "what is on screen"]
 CAN_RUN = "show commands on devices, when allowed under Settings > AI"

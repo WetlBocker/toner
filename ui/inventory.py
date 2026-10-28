@@ -796,6 +796,7 @@ class InventoryTab(QWidget):
     scan_requested = Signal()                    # the empty inventory's "Scan the network": the discovery tool
     open_details = Signal(dict)
     run_checks = Signal(list)                    # right-click > Run Checks: these devices (their keys), now
+    scan_vulns = Signal(list)                    # right-click > Scan for vulnerabilities: these devices (their keys), on the Scanning section
     sessions_imported = Signal()                 # sessions from MobaXterm, PuTTY or SecureCRT were added (the Sessions list reloads)
     orgs_created = Signal()                      # an import made organizations from its folders (the switcher reloads)
     COLS = ["Name", "Vendor", "Platform", "Version", "Location", "Host", "Site", "Details", "Tags", "Status", "Last checked", "Organization"]
@@ -1385,6 +1386,22 @@ class InventoryTab(QWidget):
         devs = self.selected_devices()
         return devs[0] if len(items) == 1 and len(devs) == 1 else None
 
+    def selected_keys(self):
+        """The keys of every device the selection covers: the devices picked, those in the picked folders (and their subfolders),
+        and every device of a picked organization's branch."""
+        out = [d.get("key") or d["name"] for d in self.selected_devices()]
+        devs = self._listed()
+        for it in self.table.selectedItems():
+            kind, ident = self.kind_of(it)
+            org = self.org_of(it)
+            if kind == "folder":
+                with db.within(org):
+                    below = db.folder_descendants(ident)
+                out += [d.get("key") or d["name"] for d in devs if d.get("org", db.GLOBAL) == org and d.get("folder_id") in below]
+            elif kind == "org":
+                out += [d.get("key") or d["name"] for d in devs if d.get("org", db.GLOBAL) == ident]
+        return list(dict.fromkeys(out))
+
     def current_folder(self):
         """Where a new folder or device should go: the selected folder, or the selected device's folder."""
         folders, devs = self.selected_folders(), self.selected_devices()
@@ -1619,6 +1636,8 @@ class InventoryTab(QWidget):
         menu = QMenu(self)
         if not devs and len(folders) <= 1 and can:          # an organization's branch, a folder, or empty space: a device goes there
             menu.addAction("Add Device", self.add)
+        if not devs and not folders and any(self.kind_of(i)[0] == "org" for i in self.table.selectedItems()):
+            menu.addAction("Scan for vulnerabilities", lambda: self.scan_vulns.emit(self.selected_keys()))     # an organization's branch
         if devs or folders:
             if len(devs) == 1 and not folders:
                 menu.addAction("Details...", self.show_details)
@@ -1636,6 +1655,7 @@ class InventoryTab(QWidget):
             if len(folders) == 1 and not devs and can:
                 menu.addAction("New subfolder...", lambda: self.new_folder(folders[0], use_selection=False))
                 menu.addAction("Rename...", self.rename_folder)
+            menu.addAction("Scan for vulnerabilities", lambda: self.scan_vulns.emit(self.selected_keys()))
             if self.folders_mode() and can:
                 move = menu.addMenu("Move to folder")
                 with db.within(org):

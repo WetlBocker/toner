@@ -36,7 +36,7 @@ def fg_for(bg_hex):
 def _row(r):
     return [r.device, display.check_name(r.check), r.status, display.value(r.value), r.message]
 
-def to_csv(results, path, scope="", when=None):
+def to_csv(results, path, scope="", when=None, title=None):
     with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(COLS)
@@ -53,7 +53,7 @@ def _table(rows):
     return f'<table width="100%" cellpadding="4" cellspacing="0" border="1">' \
            f"<tr>{head}</tr>{body}</table>"
 
-def to_html(results, when=None, scope=""):
+def to_html(results, when=None, scope="", title=None):
     when = when or datetime.now().strftime("%Y-%m-%d %H:%M")
     if scope:
         when = f"{when} — {scope}"
@@ -63,7 +63,7 @@ def to_html(results, when=None, scope=""):
         for s, n in counts.items())
     problems = sorted((r for r in results if r.status not in ("OK", "N/A")),
                       key=lambda r: (ORDER[r.status], r.device, r.check))
-    title = db.get_setting("report_title").strip() or "Toner Health Report"
+    title = title or db.get_setting("report_title").strip() or "Toner Health Report"
     org = db.get_setting("report_org").strip()
     org_line = f"<p><b>{escape(org)}</b></p>" if org else ""
     parts = [f"<h1>{escape(title)}</h1>{org_line}<p>Generated {escape(when)}</p><p>{summary}</p>"]
@@ -78,11 +78,11 @@ def to_html(results, when=None, scope=""):
     return f"<html><head><meta charset='utf-8'><title>{escape(title)}</title>" \
            f"<style>{css}</style></head><body>{''.join(parts)}</body></html>"
 
-def save_html(results, path, scope="", when=None):
+def save_html(results, path, scope="", when=None, title=None):
     with open(path, "w", encoding="utf-8") as f:
-        f.write(to_html(results, when=when, scope=scope))
+        f.write(to_html(results, when=when, scope=scope, title=title))
 
-def save_pdf(results, path, scope="", when=None):
+def save_pdf(results, path, scope="", when=None, title=None):
     """Render the HTML report to PDF with Qt (no extra dependencies)."""
     from PySide6.QtCore import QMarginsF
     from PySide6.QtGui import QPageLayout, QPageSize, QPdfWriter, QTextDocument
@@ -90,5 +90,5 @@ def save_pdf(results, path, scope="", when=None):
     w.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
     w.setPageMargins(QMarginsF(12, 12, 12, 12), QPageLayout.Unit.Millimeter)
     doc = QTextDocument()
-    doc.setHtml(to_html(results, when=when, scope=scope))
+    doc.setHtml(to_html(results, when=when, scope=scope, title=title))
     doc.print_(w)

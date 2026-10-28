@@ -23,6 +23,7 @@ from ui.notifier import Notifier
 from ui.palette import CommandPalette
 from ui.reports_tab import ReportsTab
 from ui.results import ResultsTab
+from ui.scanning import ScanningTab
 from ui.scheduler import BackupScheduler, Scheduler
 from ui.sessions import SessionsTab
 from ui.automation import AutomationTab
@@ -102,6 +103,7 @@ class Main(QMainWindow):
         self.sessions = SessionsTab()
         self.automation = AutomationTab()
         self.configs = ConfigsTab()
+        self.scanning = ScanningTab()
         self.settings = SettingsTab()
         self.settings.reset_requested.connect(self.factory_reset)
         self._wiped = False                              # a factory reset happened: nothing may be written while quitting
@@ -145,6 +147,8 @@ class Main(QMainWindow):
         self.inventory.open_rdp_tab.connect(self.open_rdp_console)
         self.inventory.open_details.connect(self.open_device_view)
         self.inventory.run_checks.connect(self.results.run_devices)        # right-click > Run Checks (progress in the status bar)
+        self.inventory.scan_vulns.connect(lambda keys: (self.go("Scanning"), self.scanning.run_devices(keys)))
+        self.scanning.open_device.connect(self.open_device_by_name)
         self.inventory.open_agent_settings.connect(self.open_agent_settings)
         self.results.open_device.connect(self.open_device_by_name)
         self.dashboard.open_device.connect(self.open_device_by_name)
@@ -173,6 +177,7 @@ class Main(QMainWindow):
         tabs = self.tabs = NavStack("Toner")
         for page, label, icon in ((self.dashboard, "Overview", "dashboard"), (self.results, "Results", "results"),
                                   (self.inventory, "Inventory", "inventory"), (self.configs, "Configs", "configs"),
+                                  (self.scanning, "Scanning", "scanning"),
                                   (self.history, "History", "history"), (self.reports, "Reports", "reports"),
                                   (self.tools, "Tools", "tools"), (self.sessions, "Sessions", "sessions"),
                                   (self.automation, "Automation/AI", "automation"),
@@ -211,6 +216,7 @@ class Main(QMainWindow):
         self.statusBar().setStyleSheet("QStatusBar { border: 0; padding: 0; } QStatusBar::item { border: 0; }")
         self.strip.navigate.connect(self._strip_go)
         self.results.progress.connect(self.strip.on_progress)
+        self.scanning.progress.connect(self.strip.on_progress)
         self.results.run_finished.connect(self.strip.refresh)
         self.palette = CommandPalette(self)
         QShortcut(QKeySequence("Ctrl+K"), self, activated=self.open_palette)
@@ -474,6 +480,7 @@ class Main(QMainWindow):
             self.headers[attr].title.setText(f"{org} - {title}")
         self.dashboard.title.setText(f"{org} - Overview")
         self.results.header.title.setText(f"{org} - Results")
+        self.scanning.header.title.setText(f"{org} - Scanning")
 
     def set_org(self, org):
         """The switcher: every section shows that organization (Global: all of them). Unsaved settings belong to the one being left."""
@@ -495,6 +502,7 @@ class Main(QMainWindow):
 
     def _redraw_lists(self):
         self.results.reset_view()
+        self.scanning.reset_view()
         self.sessions.refresh()
         self.inventory.org_switched()
         self.inventory.changed.emit()                  # everything that follows the inventory refills itself, the headers too
@@ -739,6 +747,7 @@ class Main(QMainWindow):
         if lists:
             self.inventory.refresh()
         self.results.repopulate()
+        self.scanning.repopulate()
         self.reports.show_preview()
         self.history.show_run()
         self.sessions.apply_settings()
@@ -751,6 +760,7 @@ class Main(QMainWindow):
         self.ai_button.restyle()
         if lists:
             self.results.refresh_groups()
+            self.scanning.refresh_groups()
             self.dashboard.refresh()
 
     def factory_reset(self):
