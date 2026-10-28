@@ -30,6 +30,7 @@ SECRETS = {"psirt_id": "service:psirt-id", "psirt_secret": "service:psirt-secret
 SOFTWARE, ADVISORIES, KEV = "software version", "advisories", "known exploited (CISA)"
 NO_VERSION = "No version on record. Run the health checks first; they read it."
 NO_SOURCE = "No advisory source for this vendor yet."
+OFF = "Vulnerability lookups are off under Settings > Scanning."
 NONE_FOUND = "No known advisories for this version"
 NONE_KEV = "None of the advisories are on CISA's known exploited list"
 CHECK_SETTINGS = "Check Settings > Scanning."
@@ -263,12 +264,20 @@ def lookup(dev, creds=None):
 
 
 def scan(dev):
-    """The Scanning rows of one device: its software version (and whether it could be looked up), one row per advisory found,
+    """The Scanning rows of one device: the version lookups (versions) and the configuration hardening rules (core/hardening)."""
+    from core import hardening
+    return versions(dev) + hardening.scan(dev)
+
+
+def versions(dev):
+    """The version rows of one device: its software version (and whether it could be looked up), one row per advisory found,
     an 'advisories' row when none was, and the CISA known-exploited row."""
     name, org = dev["name"], dev.get("org")
     row = lambda check, status, value="", message="": Result(name, check, status, value, message, org=org)
     version, read_at = db.software_of(dev)["version"], db.software_of(dev)["read_at"]
     vendor = dev.get("vendor") or ""
+    if not enabled():
+        return [row(SOFTWARE, NA, version, OFF)]
     if vendor != "cisco" and vendor not in NVD_CPE:
         return [row(SOFTWARE, NA, version, NO_SOURCE)]
     if not version:

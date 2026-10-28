@@ -32,7 +32,7 @@ ck = page("Checks")
 
 print("== one page, three tabs")
 check("the tabs are Checks, Schedule and Custom, in that order", [ck.tabs.tabText(i) for i in range(ck.tabs.count())] == ["Checks", "Schedule", "Custom"])
-check("the list on the left has no Automation or Custom checks page any more", "Automation" not in S.page_titles() and "Custom checks" not in S.page_titles() and S.page_titles()[:4] == ["General", "Thresholds", "Checks", "Maintenance"], S.page_titles())
+check("the list on the left has no Automation or Custom checks page any more", "Automation" not in S.page_titles() and "Custom checks" not in S.page_titles() and S.page_titles()[:5] == ["General", "Thresholds", "Checks", "Scanning", "Maintenance"], S.page_titles())
 check("Checks opens on the list of checks, as before", ck.tabs.currentIndex() == 0 and ck.tree.topLevelItemCount() > 5 and ck.collapse_all.text() == "Collapse all")
 check("the Schedule tab has when the checks run, and the certificate check", ck.schedule.enabled.text() == "Run health checks automatically" and ck.schedule.sweep.text().startswith("Also check the HTTPS certificate"))
 check("the Custom tab has the list of custom checks", ck.custom.table.columnCount() == 6 and ck.custom.table.isColumnHidden(5) and ck.custom.hint is not None)

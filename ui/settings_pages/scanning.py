@@ -3,14 +3,16 @@ key (both kept in the vault), and a Test that asks Cisco about one well-known ve
 import threading
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QCheckBox, QLabel, QLineEdit, QPushButton
+from PySide6.QtWidgets import QCheckBox, QLabel, QLineEdit, QListWidget, QListWidgetItem, QPushButton
 
-from core import advisories, db
+from core import advisories, db, hardening
 from ui.settings_base import Page, compact_row, note
 
 CISCO_NOTE = ("From apiconsole.cisco.com: register an application with the Cisco PSIRT openVuln API. Needed for Cisco devices. "
               "The other vendors use NIST's database, which needs no account.")
 NVD_NOTE = "Raises NIST's rate limit from 5 to 50 requests every 30 seconds. Free at nvd.nist.gov/developers/request-an-api-key."
+RULES_NOTE = ("Each scan also reads a Cisco device's newest configuration backup against these rules (IOS, IOS XE, NX-OS and ASA). "
+              "Untick a rule to leave it out of every scan.")
 SAVED = "saved; leave blank to keep"
 TESTING = "Testing…"
 
@@ -42,12 +44,25 @@ class ScanningPage(Page):
         self.form.addRow("", note(NVD_NOTE))
         self.form.addRow("", compact_row(self.test_btn))
         self.form.addRow("", self.result)
+        self.rules = QListWidget()
+        for key, label, sev, _test in hardening.RULES:
+            it = QListWidgetItem(f"{label}  ({sev})")
+            it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            it.setData(Qt.ItemDataRole.UserRole, key)
+            self.rules.addItem(it)
+        self.rules.setMinimumHeight(self.rules.sizeHintForRow(0) * (len(hardening.RULES) + 1) + 8)
+        self.form.addRow("Configuration hardening", self.rules)
+        self.form.addRow("", note(RULES_NOTE))
         self.test_btn.clicked.connect(self.test)
         self.tested.connect(self._tested)
         self._testing = False
 
     def load(self):
         self.enabled.setChecked(bool(db.get_setting("scan_enabled")))
+        off = hardening.rules_off()
+        for i in range(self.rules.count()):
+            it = self.rules.item(i)
+            it.setCheckState(Qt.CheckState.Unchecked if it.data(Qt.ItemDataRole.UserRole) in off else Qt.CheckState.Checked)
         for box, kind in ((self.cisco_id, "psirt_id"), (self.cisco_secret, "psirt_secret"), (self.nvd_key, "nvd_key")):
             box.clear()
             box.setPlaceholderText(SAVED if advisories.get_secret(kind) else "")
@@ -55,6 +70,8 @@ class ScanningPage(Page):
 
     def save(self):
         db.set_setting("scan_enabled", self.enabled.isChecked())
+        db.set_setting("hardening_off", [self.rules.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.rules.count())
+                                         if self.rules.item(i).checkState() != Qt.CheckState.Checked])
         for box, kind in ((self.cisco_id, "psirt_id"), (self.cisco_secret, "psirt_secret"), (self.nvd_key, "nvd_key")):
             typed = box.text().strip()
             if typed:

@@ -107,20 +107,20 @@ check("one row per advisory, worst first, with CVSS and EPSS and the fix", [r.ch
       and rows[1].status == "FAIL" and rows[1].value == "CVSS 10 · EPSS 94%" and rows[1].message == "Cisco IOS XE Software Web UI Privilege Escalation Vulnerability Fixed in 17.9.4a."
       and rows[2].status == "WARN" and rows[2].value == "CVSS 8.6" and rows[3].status == "OK" and rows[3].message == "Cisco IOS XE Information Disclosure", [(r.check, r.status, r.value, r.message) for r in rows])
 check("the CISA row fails, naming the exploited CVE", by[A.KEV].status == "FAIL" and by[A.KEV].message == "CVE-2023-20198 on CISA's known exploited list", by[A.KEV])
-check("no 'advisories' row when some were found", A.ADVISORIES not in by and len(rows) == 5)
+check("no 'advisories' row when some were found", A.ADVISORIES not in by and len(rows) == 6)
 rows = A.scan(db.find_device("old-rtr")); by = {r.check: r for r in rows}
 check("a version with nothing published: software OK (platform assumed), 'No known advisories', CISA OK", by[A.SOFTWARE].message.startswith("IOS 15.2(4)M7 (platform assumed from the version), read 20")
       and by[A.ADVISORIES].status == "OK" and by[A.ADVISORIES].message == A.NONE_FOUND and by[A.KEV].status == "OK" and by[A.KEV].message == A.NONE_KEV, [(r.check, r.status, r.message) for r in rows])
 rows = A.scan(db.find_device("edge-fw")); by = {r.check: r for r in rows}
 check("a Fortinet goes to NVD: one row per CVE, the first sentence as its title, WARN at 7.5", by["CVE-2024-1111"].status == "WARN" and by["CVE-2024-1111"].value == "CVSS 7.5 · EPSS 1%"
       and by["CVE-2024-1111"].message == "A heap-based buffer overflow in FortiOS SSL-VPN" and by[A.SOFTWARE].message.startswith("fortios 7.2.5, read 20"), [(r.check, r.status, r.value, r.message) for r in rows])
-check("no version yet: one N/A row saying to run the checks", [(r.check, r.status, r.message) for r in A.scan(db.find_device("mt"))] == [(A.SOFTWARE, "N/A", A.NO_VERSION)])
-check("a vendor with no source: one N/A row saying so", [(r.check, r.status, r.message) for r in A.scan(db.find_device("pc"))] == [(A.SOFTWARE, "N/A", A.NO_SOURCE)])
+check("no version yet: one N/A row saying to run the checks", [(r.check, r.status, r.message) for r in A.scan(db.find_device("mt"))] == [(A.SOFTWARE, "N/A", A.NO_VERSION), ("Hardening", "N/A", "No hardening rules for this vendor yet.")])
+check("a vendor with no source: one N/A row saying so", [(r.check, r.status, r.message) for r in A.scan(db.find_device("pc"))] == [(A.SOFTWARE, "N/A", A.NO_SOURCE), ("Hardening", "N/A", "No hardening rules for this vendor yet.")])
 n = len(hits); A.scan(db.find_device("c9300")); A.scan(db.find_device("edge-fw"))
 check("a second scan of the same versions asks the sources nothing (a day's cache in the Global file)", len(hits) == n, hits[n:])
 A.forget_cache(); A.set_secret("psirt_secret", "wrong")
 rows = A.scan(db.find_device("c9300"))
-check("a rejected sign-in: one ERROR row pointing at Settings", len(rows) == 1 and rows[0].status == "ERROR" and rows[0].message == f"17.09.04a: Cisco PSIRT: sign-in rejected. {A.CHECK_SETTINGS}", rows)
+check("a rejected sign-in: one ERROR row pointing at Settings", len(rows) == 2 and rows[0].status == "ERROR" and rows[0].message == f"17.09.04a: Cisco PSIRT: sign-in rejected. {A.CHECK_SETTINGS}", rows)
 A.set_secret("psirt_secret", ""); A._token.clear()
 check("no account: one ERROR row saying so", A.scan(db.find_device("c9300"))[0].message.endswith(f"Cisco PSIRT: no client id and secret. {A.CHECK_SETTINGS}"))
 A.set_secret("psirt_secret", "sec-1")
@@ -139,7 +139,7 @@ with db.within(acme):
         own = c.execute("SELECT COUNT(*) FROM scan_results").fetchone()[0]
 with db.connect() as c:
     here = c.execute("SELECT COUNT(*) FROM scan_results").fetchone()[0]
-check("the organization's rows went to its own file, Global's to Global's", own == 5 and here == len(all_rows) - 5, (own, here))
+check("the organization's rows went to its own file, Global's to Global's", own == 6 and here == len(all_rows) - 6, (own, here))
 db.save_run([Result("c9300", "cpu", "OK", "3%")])
 check("health views do not see scan rows", all(r["check_name"] == "cpu" for r in db.latest_results()[0] if r["device"] == "c9300"))
 db.set_home(acme)
@@ -156,9 +156,9 @@ tab.run_devices(["c9300", "edge-fw"])
 t0 = time.time()
 while tab.running() and time.time() - t0 < 30: app.processEvents(); time.sleep(0.02)
 app.processEvents()
-check("Scan runs just those devices and shows their rows", not tab.running() and tab.summary.text() == "2 devices, 8 checks" and tab.table.topLevelItemCount() == 2, tab.summary.text())
+check("Scan runs just those devices and shows their rows", not tab.running() and tab.summary.text() == "2 devices, 10 checks" and tab.table.topLevelItemCount() == 2, tab.summary.text())
 top = next(tab.table.topLevelItem(i) for i in range(tab.table.topLevelItemCount()) if tab.table.topLevelItem(i).text(0) == "c9300")
-check("the device row says the worst, and the advisory rows sit under it", top.text(2) == "FAIL" and top.text(1) == "5 checks" and "cisco-sa-iosxe-webui" in top.text(4)
+check("the device row says the worst, and the advisory rows sit under it", top.text(2) == "FAIL" and top.text(1) == "6 checks" and "cisco-sa-iosxe-webui" in top.text(4)
       and {top.child(k).text(1) for k in range(top.childCount())} >= {"software version", "known exploited (CISA)", "cisco-sa-dhcp-dos-abc"}, (top.text(1), top.text(2), top.text(4)))
 with db.connect() as c:
     newest = c.execute("SELECT MAX(id) FROM scans").fetchone()[0]
@@ -173,7 +173,7 @@ check("Export writes what is shown, under its own title", "<h1>Toner Vulnerabili
 out2 = os.path.join(SP, "scan.csv"); S.QFileDialog.getSaveFileName = lambda *a, **k: (out2, "")
 tab.export("CSV", "CSV (*.csv)", S.reports.to_csv, False)
 csv_text = open(out2, encoding="utf-8").read()
-check("...and CSV, one line per check with its result", csv_text.startswith("Device,Check,Status,Value,Message") and csv_text.count("\n") == 9 and "edge-fw,CVE-2024-1111,WARN,CVSS 7.5" in csv_text, csv_text)
+check("...and CSV, one line per check with its result", csv_text.startswith("Device,Check,Status,Value,Message") and csv_text.count("\n") == 11 and "edge-fw,CVE-2024-1111,WARN,CVSS 7.5" in csv_text, csv_text)
 tab.results = []; tab.last_ran = []; tab.repopulate()
 check("the empty hint says Scan", tab.hint.isVisible() and tab.hint.head.text() == "No scans yet" and tab.hint.sub.text() == "Choose devices and press Scan")
 from ui.results import ResultsTab
@@ -230,14 +230,14 @@ print("== the Assistant's tool, the README, the version")
 from core.assistant import tools as T
 tool = T.BY_NAME["vulnerabilities"]
 r = tool.fn({"device": "c9300"})
-check("vulnerabilities(device) hands over the stored rows, problems first", r["count"] == 5 and r["results"][0]["check"] == "cisco-sa-iosxe-webui-privesc-j22SaA4z" and r["results"][0]["status"] == "FAIL", r)
+check("vulnerabilities(device) hands over the stored rows, problems first", r["count"] == 6 and r["results"][0]["check"] == "cisco-sa-iosxe-webui-privesc-j22SaA4z" and r["results"][0]["status"] == "FAIL", r)
 r = tool.fn({})
 check("...and every device's without one", r["count"] >= 8 and {x["device"] for x in r["results"]} >= {"c9300", "edge-fw", "pc"}, r["count"])
 check("it is named among what the Assistant reads", any("vulnerability" in s for s in T.WHAT_THEY_READ))
 readme = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "README.md"), encoding="utf-8").read()
 check("the README has a Scanning row", "| **Scanning** |" in readme and "Scan for vulnerabilities" in readme and "Settings > Scanning" in readme)
 from core.version import VERSION
-check("version 1.11.1", VERSION == "1.11.1")
+check("version 1.11.2", VERSION == "1.11.2")
 
 web.shutdown()
 print(f"\n{ok} passed, {bad} failed")
