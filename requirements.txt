@@ -1,7 +1,7 @@
 # Toner's direct dependencies. requirements.lock pins every package (with the versions this release was tested and built with):
 #   pip install -r requirements.lock        for a repeatable install (what CI and the installer build use)
 #   pip install -r requirements.txt         to try newer compatible versions, then run  python tests/run_all.py
-PySide6>=6.11,<7
+PySide6>=6.12.0,<7
 pyqtgraph>=0.14
 netmiko>=4.8,<5
 ntc-templates>=9.3
