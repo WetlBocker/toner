@@ -361,6 +361,7 @@ def remove(org, move_to=None):
         set_current(GLOBAL)
     path = db.org_path(org)
     db._forget_settings()
+    db.release(org)
     import gc
     gc.collect()                                           # a connection still waiting to be collected keeps the file open on Windows
     for p in (path, path.with_name(path.name + "-wal"), path.with_name(path.name + "-shm")):

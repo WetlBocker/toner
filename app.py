@@ -223,7 +223,7 @@ class Main(QMainWindow):
         self.settings.orgs_changed.connect(self.refresh_orgs)
         self.refresh_orgs()
         self.assistant.set_org(db.home())
-        tabs.currentChanged.connect(lambda _i: self.update_headers())
+        tabs.currentChanged.connect(lambda _i: self.update_headers(if_changed=True))
         self.results.run_finished.connect(self.update_headers)
         self.inventory.changed.connect(self.update_headers)
         tabs.setCollapsed(bool(db.get_setting("sidebar_collapsed")))
@@ -351,16 +351,22 @@ class Main(QMainWindow):
             self.headers[attr] = h
         self.update_headers()
 
-    def update_headers(self):
-        """Refill the context lines (cheap: read when a section is shown, after a run and when the inventory changes)."""
+    def update_headers(self, if_changed=False):
+        """Refill the context lines: after a run, when the inventory changes, and when a section is shown (if_changed: then only
+        when a data file changed since the last fill, by a run from the tray, the service or the device window). In Global each
+        fill reads every organization's file several times over. Returns whether it filled."""
         if not getattr(self, "headers", None):
-            return
+            return False
+        stamp = db.data_stamp()
+        if if_changed and stamp == getattr(self, "_headers_stamp", None):
+            return False
+        self._headers_stamp = stamp
         try:
             from core import scope
             devs = scope.keep(db.list_devices())
             health = db.device_health()
         except Exception:
-            return
+            return False
         on = [d for d in devs if d["enabled"]]
         bad = {s: sum(1 for d in on if (health.get(d["key"]) or {}).get("status") == s) for s in ("FAIL", "ERROR", "WARN")}
         bits = [f"{len(devs)} device{'s' if len(devs) != 1 else ''}"]
@@ -393,6 +399,7 @@ class Main(QMainWindow):
             pass
         self.headers["automation"].set_context("Run Ansible playbooks on your devices. Write them in Tools > Playbook Editor.")
         self.headers["settings"].set_context("Checks, connections, alerts, look and data. Nothing changes until you press Save changes.")
+        return True
 
     # ---------- window size and place, remembered between runs
     def restore_layout(self):

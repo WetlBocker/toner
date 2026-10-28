@@ -144,6 +144,7 @@ def wipe():
     db._forget_settings()
     db.forget_orgs()
     db.forget_history()
+    db.release()
     gc.collect()                                   # a connection waiting to be collected keeps its file open on Windows
     renamed = f.with_name(f"{f.name}.reset-{os.getpid()}")
     try:

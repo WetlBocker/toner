@@ -371,31 +371,57 @@ def db_path() -> Path:
 
 
 _wal_set = set()
+_pool = {}                          # the main thread's open connection per file, reused block after block (see _Connection)
+_pool_lock = threading.Lock()
 
 
 class _Connection(sqlite3.Connection):
-    """`with connect() as c:` commits (or rolls back) at the end of the block, then closes the connection. Left open, each one
-    waited for Python's garbage collector, and Toner held a hundred or more at a time, each with its file handles."""
+    """`with connect() as c:` commits (or rolls back) at the end of the outermost block. On the main thread the connection then
+    stays open for the next block: opening and configuring one costs about 2 ms, and Global's lists read every organization's
+    file, two hundred of them for a large MSP. On other threads it is closed, so a worker leaves no file handle behind."""
+    pooled = False
+    depth = 0
+
+    def __enter__(self):
+        self.depth += 1
+        return self
 
     def __exit__(self, *exc):
+        self.depth -= 1
+        if self.depth:
+            return False            # shortcut: a block inside another commits (or rolls back) with the outermost one
         try:
             return super().__exit__(*exc)
+        except sqlite3.ProgrammingError:
+            return False                              # closed by hand inside the block: nothing is left to commit
         finally:
-            self.close()
+            if not self.pooled:
+                self.close()
 
 
 def connect():
-    """A connection to the database, for one `with` block (it is closed at the end). WAL mode lets the window, the scheduler and
-    the agent receiver read while one of them writes; a long busy timeout makes a competing write wait its turn instead of
-    failing with 'database is locked'."""
+    """A connection to the database, for one `with` block. WAL mode lets the window, the scheduler and the agent receiver read
+    while one of them writes; a long busy timeout makes a competing write wait its turn instead of failing with 'database is
+    locked'. The main thread keeps its connections open between blocks (release() closes them before a file is deleted)."""
     p = db_path()
+    key = str(p)
+    main = threading.current_thread() is threading.main_thread()
+    if main:
+        with _pool_lock:
+            c = _pool.get(key)
+        if c is not None:
+            try:
+                c.in_transaction                          # raises once something closed it by hand: open afresh then
+                return c
+            except sqlite3.ProgrammingError:
+                with _pool_lock:
+                    _pool.pop(key, None)
     if target() and not p.exists():
         p.parent.mkdir(parents=True, exist_ok=True)
-    c = sqlite3.connect(p, timeout=15, factory=_Connection)
+    c = sqlite3.connect(p, timeout=15, factory=_Connection, check_same_thread=not main)
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA foreign_keys = ON")
     c.execute("PRAGMA busy_timeout = 15000")
-    key = str(db_path())
     if key not in _wal_set:
         try:
             c.execute("PRAGMA journal_mode = WAL")
@@ -403,7 +429,38 @@ def connect():
             pass                                          # a read-only or network location: the default mode still works
         _wal_set.add(key)
     c.execute("PRAGMA synchronous = NORMAL")
+    if main:
+        c.pooled = True
+        with _pool_lock:
+            _pool[key] = c
     return c
+
+
+def release(org=None):
+    """Close the main thread's kept connections, to one organization's file or to all of them: before a file is deleted or renamed
+    (Windows refuses while it is open). Safe to call from any thread while nothing is reading."""
+    with _pool_lock:
+        keys = [k for k in _pool if org is None or k == str(org_path(org))]
+        for k in keys:
+            try:
+                _pool.pop(k).close()
+            except sqlite3.Error:
+                pass
+
+
+def data_stamp():
+    """What the files of the view look like on disk: a value that changes whenever any of them is written by anyone (under WAL
+    the -wal file takes the writes until a checkpoint). One stat per file, no connection, so cheap enough to ask often."""
+    out = []
+    for org, _only in _files():
+        p = org_path(org)
+        for f in (p, p.with_name(p.name + "-wal")):
+            try:
+                st = os.stat(f)
+                out.append((st.st_mtime_ns, st.st_size))
+            except OSError:
+                out.append(None)
+    return tuple(out)
 
 
 def init():

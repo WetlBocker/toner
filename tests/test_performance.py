@@ -218,14 +218,31 @@ if sys.platform == "win32":
     mb = int(out.stdout.strip() or 0)
     check(f"so starting Toner sets aside little memory ({mb} MB here, on {os.cpu_count()} cores)", 0 < mb < 400, out.stderr[-300:])
 
-print("== database connections are closed after use")
-import gc
+print("== the main thread keeps one connection per file; other threads close theirs")
+import gc, threading
 with db.connect() as c:
     c.execute("SELECT 1")
-try:
-    c.execute("SELECT 1"); check("a connection is closed at the end of its block", False)
-except sqlite3.ProgrammingError:
-    check("a connection is closed at the end of its block", True)
+with db.connect() as c2:
+    pass
+check("the next block on the main thread reuses the same connection", c2 is c and c.execute("SELECT 1").fetchone()[0] == 1)
+seen = {}
+def worker():
+    with db.connect() as wc:
+        seen["same"] = wc is c
+    try:
+        wc.execute("SELECT 1"); seen["open"] = True
+    except sqlite3.ProgrammingError:
+        seen["open"] = False
+t = threading.Thread(target=worker); t.start(); t.join()
+check("a worker thread gets its own connection, closed at the end of its block", seen == {"same": False, "open": False}, seen)
+with db.connect() as c:
+    c.execute("INSERT INTO audit(at, actor, action, detail) VALUES('x', 'test', 'nested-outer', '')")
+    with db.connect() as inner:
+        inner.execute("INSERT INTO audit(at, actor, action, detail) VALUES('x', 'test', 'nested-inner', '')")
+    other = sqlite3.connect(os.environ["NETCHECK_DB"])
+    n_mid = other.execute("SELECT COUNT(*) FROM audit WHERE action LIKE 'nested-%'").fetchone()[0]
+n_after = other.execute("SELECT COUNT(*) FROM audit WHERE action LIKE 'nested-%'").fetchone()[0]; other.close()
+check("a block inside another commits with the outer one", (n_mid, n_after) == (0, 2), (n_mid, n_after))
 def still_open():
     n = 0
     for o in gc.get_objects():
@@ -241,7 +258,16 @@ for _ in range(50):
     db.list_devices(); db.get_setting("workers"); db.device_checks(); db.last_run()
 now_open = still_open()
 gc.enable()
-check("reading again and again leaves no connections open, even without the garbage collector", now_open - was_open <= 1, (was_open, now_open))
+check("reading again and again opens no more connections than there are files, even without the garbage collector", now_open - was_open <= len(db._files()), (was_open, now_open))
+db.release()
+try:
+    c.execute("SELECT 1"); check("release() closes the kept connections, so a file can be deleted", False)
+except sqlite3.ProgrammingError:
+    check("release() closes the kept connections, so a file can be deleted", True)
+with db.connect() as c:
+    c.close()                                            # code that closes a kept connection by hand (the database backup did)
+with db.connect() as c2:
+    check("a connection closed by hand is replaced by the next block", c2 is not c and c2.execute("SELECT 1").fetchone()[0] == 1)
 try:
     with db.connect() as c:
         c.execute("INSERT INTO audit(at, actor, action, detail) VALUES('x', 'test', 'kept?', '')")
@@ -355,6 +381,10 @@ check("the Overview refreshes once", counted["availability"] == 1, counted)
 check("the organization's own settings take effect (its check schedule)", w.results.schedule_note.text().startswith("Next scheduled run"),
       w.results.schedule_note.text())
 check("the sections show the organization", w.headers["inventory"].title.text().startswith("Acme"))
+w.update_headers()
+check("showing a section refills the header line only when a data file changed since", w.update_headers(if_changed=True) is False)
+with db.connect() as c: c.execute("INSERT INTO audit(at, actor, action, detail) VALUES('x', 'test', 'stamp', '')")
+check("...and does once one did", w.update_headers(if_changed=True) is True and w.update_headers(if_changed=True) is False)
 counted["availability"] = 0
 w.set_org(db.GLOBAL); app.processEvents()
 check("switching back refreshes the Overview once too", counted["availability"] == 1, counted)

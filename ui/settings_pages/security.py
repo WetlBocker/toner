@@ -226,10 +226,8 @@ class DataPage(Page):
         if not path:
             return
         try:
-            src, dst = db.connect(), sqlite3.connect(path)
-            with dst:
+            with db.connect() as src, sqlite3.connect(path) as dst:
                 src.backup(dst)                          # consistent copy even while the app is using it
-            src.close()
             dst.close()
             QMessageBox.information(self, "Backup", f"Saved to {path}\n\nThe backup holds devices, history and "
                                     "settings. Passwords and API tokens live in Toner's vault "

@@ -142,8 +142,8 @@ from ui.sessions import SessionsTab
 ss = SessionsTab()
 ss._fill_more()
 labels = [a.text() for a in ss.more_menu.actions()]
-check("the rarely used buttons live in a More menu", labels == ["New folder", "Duplicate", "Delete", "Expand all", "Collapse all", "Session logs"], labels)
-check("and the row itself is short", ss.more_btn.text() == "More" and all(not b.isVisibleTo(ss) for b in (ss.folder_btn, ss.copy_btn, ss.expand_btn, ss.collapse_btn, ss.logs_btn)))
+check("the rarely used buttons live in a More menu", labels == ["New folder", "Duplicate", "Delete", "Expand all", "Collapse all", "Session logs", "Link sessions to devices..."], labels)
+check("and the row itself is short", ss.more_btn.text() == "More" and all(not b.isVisibleTo(ss) for b in (ss.folder_btn, ss.copy_btn, ss.expand_btn, ss.collapse_btn, ss.logs_btn, ss.link_btn)))
 check("Duplicate follows the selection like its button (off with nothing chosen)", not [a for a in ss.more_menu.actions() if a.text() == "Duplicate"][0].isEnabled())
 
 print("== Settings pages")
