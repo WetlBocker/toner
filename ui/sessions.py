@@ -270,7 +270,7 @@ class SessionDialog(QDialog):
             return
         o = s.get("options") or {}
         self.name.setText(s.get("name") or "")
-        self.device.setCurrentIndex(max(0, self.device.findData(s.get("device") or "")))
+        self.device.setCurrentIndex(max(0, self.device.findData(s.get("device") or sessions.matching_device(s, db.list_devices()))))
         self.host.setText(s.get("host") if s["kind"] != "serial" else "")
         self.port.setValue(int(s.get("port") or 0))
         self.user.setText(s.get("username") or "")
@@ -754,6 +754,7 @@ class SessionsTab(QWidget):
         self.connect_btn, self.edit_btn = QPushButton("Connect"), QPushButton("Edit")
         self.copy_btn, self.delete_btn, self.logs_btn = QPushButton("Duplicate"), QPushButton("Delete"), QPushButton("Session logs")
         self.expand_btn, self.collapse_btn = QPushButton("Expand all"), QPushButton("Collapse all")
+        self.link_btn = QPushButton("Link sessions to devices...")
         self.note = _muted("")
 
         self.tabs = QTabWidget()
@@ -878,6 +879,7 @@ class SessionsTab(QWidget):
         self.copy_btn.clicked.connect(self.duplicate_selected)
         self.delete_btn.clicked.connect(self.delete_selected)
         self.logs_btn.clicked.connect(self.open_logs)
+        self.link_btn.clicked.connect(self.link_devices)
         self.tabs.tabCloseRequested.connect(self.close_tab)
         self.refresh()
 
@@ -1116,7 +1118,7 @@ class SessionsTab(QWidget):
     def _fill_more(self):
         """The rarely used actions, each acting through its button (so they follow the same enabled state)."""
         self.more_menu.clear()
-        for b in (self.folder_btn, self.copy_btn, self.delete_btn, self.expand_btn, self.collapse_btn, self.logs_btn):
+        for b in (self.folder_btn, self.copy_btn, self.delete_btn, self.expand_btn, self.collapse_btn, self.logs_btn, self.link_btn):
             act = self.more_menu.addAction(b.text())
             act.setEnabled(b.isEnabled())
             act.triggered.connect(lambda _=False, b=b: b.click())
@@ -1132,6 +1134,26 @@ class SessionsTab(QWidget):
         self.edit_btn.setText("Rename" if len(folders) == 1 and not found else "Edit")
         self.delete_btn.setEnabled(can and bool(found or folders))
         self.folder_btn.setEnabled(can)
+        self.link_btn.setEnabled(self.editable(db.home()))
+
+    def link_devices(self):
+        """More > Link sessions to devices...: every editable session with no inventory device gets the one at its address, or
+        failing that the one with its name, after a confirmation that says how many have none."""
+        found = [s for s in sessions.list_sessions() if self.editable(s["org"])]
+        none = sum(1 for s in found if s["kind"] in sessions.LINKABLE and not s.get("device"))
+        if not none:
+            QMessageBox.information(self, "Link sessions to devices", "Every session already has a device.")
+            return
+        if QMessageBox.question(self, "Link sessions to devices",
+                                "Link each SSH, Telnet, Remote Desktop and VNC session that has no inventory device to the device "
+                                f"at its address, or failing that to the device with its name? {none:,} sessions have no device. "
+                                "Sessions already linked keep their device.") != QMessageBox.StandardButton.Yes:
+            return
+        r = sessions.link_devices(found)
+        audit.log("sessions linked", f"{r['linked']} linked, {r['unmatched']} without a match")
+        self.refresh()
+        QMessageBox.information(self, "Link sessions to devices", f"Linked {r['linked']:,} sessions to inventory devices."
+                                + (f" {r['unmatched']:,} matched no device, or more than one." if r["unmatched"] else ""))
 
     def _double_clicked(self, item, *_):
         if self.kind_of(item)[0] == "session":

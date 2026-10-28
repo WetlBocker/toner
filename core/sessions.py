@@ -66,6 +66,40 @@ def list_sessions():
     return rows
 
 
+LINKABLE = ("ssh", "telnet", "rdp", "vnc")      # the kinds whose editor offers an inventory device
+
+
+def matching_device(s, devices):
+    """For a session linked to no device: the name of the one at its address, else the one with its name (capitals aside);
+    '' when none or more than one matches."""
+    host, name = (s.get("host") or "").strip().lower(), (s.get("name") or "").strip().lower()
+    for key, want in (("host", host), ("name", name)):
+        found = [d for d in devices if want and (d.get(key) or "").strip().lower() == want]
+        if len(found) == 1:
+            return found[0]["name"]
+    return ""
+
+
+def link_devices(found):
+    """Point each of these sessions (rows of list_sessions, each with 'org') that has no device at the one matching_device
+    picks among the devices its own organization offers. Returns {'linked', 'unmatched'}."""
+    out = {"linked": 0, "unmatched": 0}
+    by_org = {}
+    for s in found:
+        if s["kind"] in LINKABLE and not s.get("device"):
+            by_org.setdefault(s.get("org"), []).append(s)
+    for org, mine in by_org.items():
+        with db.within(org):
+            devices = db.list_devices()
+            with db.connect() as c:
+                for s in mine:
+                    dev = matching_device(s, devices)
+                    if dev:
+                        c.execute("UPDATE sessions SET device=? WHERE id=?", (dev, s["id"]))
+                    out["linked" if dev else "unmatched"] += 1
+    return out
+
+
 def _options(row):
     try:
         given = json.loads(row.get("options") or "{}") if isinstance(row.get("options"), str) else (row.get("options") or {})

@@ -37,6 +37,8 @@ def screen(pane): return "\n".join(l.rstrip() for l in pane.term.screen.display)
 def flat(pane): return "".join(l.rstrip() for l in pane.term.screen.display)           # text with the line wraps removed
 warned, asked, prompts = [], [], []
 QMessageBox.warning = staticmethod(lambda *a, **k: warned.append(a[2]))
+informed = []
+QMessageBox.information = staticmethod(lambda *a, **k: informed.append(a[2]))
 QMessageBox.question = staticmethod(lambda *a, **k: (asked.append(a[2]), QMessageBox.StandardButton.Yes)[1])
 password_reply = {"v": ("pw", True)}
 folder_reply = {"v": ("", False)}
@@ -44,8 +46,6 @@ QInputDialog.getText = staticmethod(lambda *a, **k: (prompts.append(a[2]), folde
 
 ssh_srv = ShellServer()
 w = A.Main(); w.resize(1240, 760); w.show(); st = w.sessions
-db.save_device(dict(name="r1", vendor="cisco", host="127.0.0.1", port=ssh_srv.port, platform="", username="u", site="default", verify_ssl=0, ha_expected=0, enabled=1, location="", details="", folder_id=None))
-STORE[("netcheck", "r1")] = "pw"
 
 print("== where it lives")
 names = [w.tabs.tabText(i) for i in range(w.tabs.count())]
@@ -114,6 +114,27 @@ st.tree.setCurrentItem([G()["Chicago"].child(i) for i in range(2) if G()["Chicag
 check("a session is, and enables them", st.connect_btn.isEnabled() and st.edit_btn.isEnabled() and st.copy_btn.isEnabled() and st.delete_btn.isEnabled() and st.selected_id() == sid)
 ed = S.SessionDialog(sessions.get(sid), parent=st)
 check("editing shows what was saved, and says a password is kept", ed.name.text() == "Core switch" and ed.host.text() == "127.0.0.1" and ed.port.value() == ssh_srv.port and ed.user.text() == "u" and ed.folder.currentText() == "Chicago" and ed.remember.isChecked() and "saved" in ed.password.placeholderText() and ed.windowTitle() == "Edit session")
+check("editing a session at no device's address leaves the device box at none", ed.device.currentData() == "")
+twin = db.save_device(dict(name="Twin", vendor="cisco", host="10.7.7.7", port=22, platform="", username="t", site="default", verify_ssl=0, ha_expected=0, enabled=1, location="", details="", folder_id=None))
+for nm in (make("ssh", name="at its address", host="10.7.7.7"), make("ssh", name="TWIN", host="10.8.8.8")):
+    nm._done("save"); st._after_dialog(nm)
+by = lambda n: S.SessionDialog(sessions.get([s for s in sessions.list_sessions() if s["name"] == n][0]["id"]), parent=st)
+check("a session linked to no device gets the one at its address when edited", by("at its address").device.currentData() == "Twin")
+check("...or the one with its name, capitals aside, when none is at its address", by("TWIN").device.currentData() == "Twin" and by("TWIN").host.text() == "10.8.8.8")
+for nm in (make("ssh", name="Twin", host="10.9.9.1", folder="Chicago"), make("ssh", name="twin", host="10.9.9.2", folder="Denver")):      # the device's name, in two folders
+    nm._done("save"); st._after_dialog(nm)
+db.save_device(dict(name="Twin-B", vendor="cisco", host="10.7.7.7", port=22, platform="", username="t", site="default", verify_ssl=0, ha_expected=0, enabled=1, location="", details="", folder_id=None))
+st.refresh(); asked.clear(); informed.clear(); st.link_devices()
+linked = {s["name"]: s.get("device") or "" for s in sessions.list_sessions()}
+check("Link sessions to devices asks first, saying how many have none", asked and "8 sessions have no device" in asked[-1] and "keep their device" in asked[-1], asked[-1:])
+check("it links by name, capitals aside, and leaves an address two devices share and the rest", linked["TWIN"] == "Twin" and linked["Twin"] == "Twin" and linked["twin"] == "Twin" and linked["at its address"] == "" and linked["Core switch"] == "" and linked["Jump server"] == "", linked)
+check("it says what it did", informed and informed[-1] == "Linked 3 sessions to inventory devices. 5 matched no device, or more than one.", informed[-1:])
+check("the audit log has a line for it", any(a["action"] == "sessions linked" and a["detail"] == "3 linked, 5 without a match" for a in audit.recent(5)), [a["detail"] for a in audit.recent(3)])
+for n in ("Twin", "twin", "at its address", "TWIN"):
+    for s in [s for s in sessions.list_sessions() if s["name"] == n]:
+        sessions.delete(s["id"], s["org"])
+for dv in [d for d in db.list_devices() if d["name"].startswith("Twin")]:
+    db.delete_device(dv["id"])
 ed.name.setText("Core switch A"); ed._done("save"); st._after_dialog(ed)
 check("a blank password box keeps the saved password", sessions.get(sid)["name"] == "Core switch A" and sessions.password(sid) == "pw")
 ed2 = S.SessionDialog(sessions.get(sid), parent=st); ed2.remember.setChecked(False); ed2._done("save"); st._after_dialog(ed2)
@@ -249,6 +270,8 @@ check("Ctrl+B and Ctrl+K go to the device (back a character, erase to the end of
 here = w.tabs.currentIndex()
 QTest.keyClick(pane.term, Qt.Key.Key_1, Qt.KeyboardModifier.ControlModifier)
 check("Ctrl+1 still changes page", w.tabs.currentIndex() == 0 and here != 0 and sent[-1] == b"\x0b", (here, w.tabs.currentIndex()))
+db.save_device(dict(name="r1", vendor="cisco", host="127.0.0.1", port=ssh_srv.port, platform="", username="u", site="default", verify_ssl=0, ha_expected=0, enabled=1, location="", details="", folder_id=None))
+STORE[("netcheck", "r1")] = "pw"
 inv = w.inventory; w.tabs.setCurrentIndex(names.index("Inventory")); inv.refresh()
 first = inv.table.topLevelItem(0)
 while first is not None and first.childCount():
