@@ -8,8 +8,8 @@ from PySide6.QtWidgets import QCheckBox, QLabel, QLineEdit, QListWidget, QListWi
 from core import advisories, db, hardening
 from ui.settings_base import Page, compact_row, note
 
-CISCO_NOTE = ("From apiconsole.cisco.com: register an application with the Cisco PSIRT openVuln API. Needed for Cisco devices. "
-              "The other vendors use NIST's database, which needs no account.")
+CISCO_NOTE = ("From apiconsole.cisco.com: register an application of type Service with the Client Credentials grant and the Cisco PSIRT "
+              "openVuln API ticked; no redirect URL is needed. Needed for Cisco devices. The other vendors use NIST's database, which needs no account.")
 NVD_NOTE = "Raises NIST's rate limit from 5 to 50 requests every 30 seconds. Free at nvd.nist.gov/developers/request-an-api-key."
 RULES_NOTE = ("Each scan also reads a Cisco device's newest configuration backup against these rules (IOS, IOS XE, NX-OS and ASA). "
               "Untick a rule to leave it out of every scan.")

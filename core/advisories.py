@@ -34,6 +34,18 @@ OFF = "Vulnerability lookups are off under Settings > Scanning."
 NONE_FOUND = "No known advisories for this version"
 NONE_KEV = "None of the advisories are on CISA's known exploited list"
 CHECK_SETTINGS = "Check Settings > Scanning."
+APP_TYPE = "The app at apiconsole.cisco.com must be of type Service with the Client Credentials grant; check the id and secret under Settings > Scanning."
+
+
+def _said(r):
+    """What an OAuth or Okta error answer says, in a few words: 'invalid_client: Invalid value for client_id'."""
+    try:
+        body = r.json()
+    except ValueError:
+        return f"HTTP {r.status_code}"
+    code = body.get("error") or body.get("errorCode") or f"HTTP {r.status_code}"
+    text = body.get("error_description") or body.get("errorSummary") or ""
+    return f"{code}: {text}".rstrip(": ")
 
 
 class LookupError_(Exception):
@@ -133,7 +145,7 @@ def cisco_token(cid, secret):
     except requests.RequestException as e:
         raise LookupError_(f"Cisco PSIRT: {type(e).__name__} reaching id.cisco.com") from None
     if r.status_code in (400, 401, 403):
-        raise LookupError_(f"Cisco PSIRT: sign-in rejected. {CHECK_SETTINGS}")
+        raise LookupError_(f"Cisco PSIRT: sign-in rejected ({_said(r)}). {APP_TYPE}")
     if r.status_code != 200:
         raise LookupError_(f"Cisco PSIRT: HTTP {r.status_code} from id.cisco.com")
     tok = r.json().get("access_token") or ""
