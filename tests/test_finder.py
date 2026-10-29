@@ -134,7 +134,7 @@ run.find.setText("core"); check("its device list follows them", [d["name"] for d
 pb = PlaybooksPage()
 pb.find.setText("acme"); check("Playbooks the same", not hasattr(pb, "group") and [d["name"] for d in pb.candidates()] == ["acme-sw"])
 topo = TopologyTab()
-check("Topology: search and funnel, and Discover asks the devices shown", not hasattr(topo, "group") and topo.go.toolTip() == "Asks the devices shown that have SNMP settings")
+check("Topology: search and funnel, and Discover asks the devices shown", not hasattr(topo, "group") and topo.go.toolTip() == "Asks the devices shown that can report neighbours: SNMP, an SSH login, or a firewall's API")
 lt = ListenersTab()
 msgs = [{"time": "1", "type": "syslog", "source": "10.0.0.1", "device": "core-sw1", "severity": "error", "severity_no": 3, "text": "link down Gi0/1"},
         {"time": "2", "type": "syslog", "source": "10.0.0.2", "device": "fw1", "severity": "info", "severity_no": 6, "text": "admin login"},
