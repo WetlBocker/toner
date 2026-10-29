@@ -308,7 +308,7 @@ check("it is named among what the Assistant reads", any("vulnerability" in s for
 readme = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "README.md"), encoding="utf-8").read()
 check("the README has a Scanning row", "| **Scanning** |" in readme and "Scan for vulnerabilities" in readme and "Settings > Scanning" in readme)
 from core.version import VERSION
-check("version 1.11.5", VERSION == "1.11.5")
+check("version 1.11.6", VERSION == "1.11.6")
 
 web.shutdown()
 print(f"\n{ok} passed, {bad} failed")

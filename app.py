@@ -167,6 +167,7 @@ class Main(QMainWindow):
         topo.run_checks.connect(self.results.run_devices)
         topo.ping.connect(lambda key: self.open_tool("ping", db.find_device(key)) if db.find_device(key) else None)
         topo.add_device.connect(lambda info: (self.go("Inventory"), self.inventory.add(info)))
+        topo.inventory_action.connect(self.inventory.act_on)       # Edit..., Scan for vulnerabilities, Edit tags..., Delete... as on the Inventory tab
         self.settings.changed.connect(self.settings_applied)
         self.settings.look_preview.connect(self.preview_look)
         self.settings.look_reset.connect(self.reset_look)

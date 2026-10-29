@@ -1503,6 +1503,18 @@ class InventoryTab(QWidget):
         if d:
             self.open_details.emit(d)
 
+    def act_on(self, action, key):
+        """A device action asked for elsewhere (the topology map's tile menu), run as the right-click here runs it: the device is
+        selected first, so the same code works on it."""
+        d = db.find_device(key)
+        if not d:
+            return
+        self.select_device(d["id"], d.get("org"))
+        if self.selected() is None or (self.selected().get("key") or self.selected()["name"]) != (d.get("key") or d["name"]):
+            return                                           # not shown here now (another organization's view): nothing to act on
+        {"edit": self.edit, "scan": lambda: self.scan_vulns.emit(self.selected_keys()), "tags": self.bulk_edit, "delete": self.delete,
+         "details": self.show_details}.get(action, lambda: None)()
+
     def delete(self):
         """Delete the selected devices, or the selected folder (its contents move up, nothing else is lost)."""
         devs = self.selected_devices()

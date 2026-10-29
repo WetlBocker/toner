@@ -214,29 +214,84 @@ check("the vendor a neighbour's description points at", topology.guess_vendor("c
 print("== which devices are asked, what changed, and what is kept")
 import json as _json
 def dev2(name, vendor, platform="", snmp_=""):
-    d = {"name": name, "vendor": vendor, "host": "10.0.0.50", "platform": platform, "enabled": 1, "snmp": snmp_}
+    d = {"name": name, "vendor": vendor, "host": f"10.0.0.{50 + len(db.list_devices())}", "platform": platform, "enabled": 1, "snmp": snmp_}
     d["id"] = db.save_device(d); return d
 dev2("sw-ssh", "cisco", "cisco_ios"); dev2("asa", "cisco", "cisco_asa"); dev2("fw", "fortinet"); dev2("pa", "paloalto"); dev2("win", "windows"); dev2("mt", "mikrotik")
 names = {d["name"] for d in topology.devices()}
 check("asked: SSH vendors with commands, the API firewalls, SNMP devices; not an ASA or a Windows computer", {"sw-ssh", "fw", "pa", "mt"} <= names and "asa" not in names and "win" not in names, names)
 first = [{"device": "core1", "protocol": "LLDP", "local_port": "Gi1/0/1", "remote_name": "dist1", "remote_port": "Te1/1", "remote_addr": "", "local_up": True, "local_speed": "10 Gbps"},
+         {"device": "dist1", "protocol": "LLDP", "local_port": "Te1/1", "remote_name": "core1", "remote_port": "Gi1/0/1", "remote_addr": ""},
          {"device": "core1", "protocol": "LLDP", "local_port": "Gi1/0/2", "remote_name": "dist2", "remote_port": "Te1/1", "remote_addr": "", "local_up": False, "local_speed": "1 Gbps"}]
-second = [first[0], {"device": "dist1", "protocol": "LLDP", "local_port": "Gi0/24", "remote_name": "ap-lobby", "remote_port": "eth0", "remote_addr": "10.2.2.2"}]
+second = first[:2] + [{"device": "dist1", "protocol": "LLDP", "local_port": "Gi0/24", "remote_name": "ap-lobby", "remote_port": "eth0", "remote_addr": "10.2.2.2"}]
 n1, l1 = topology.build_graph(first)
-check("a link carries its rows, the port state and the speed", l1[0]["rows"] == [0] and l1[0]["speed"] == "10 Gbps" and not l1[0]["down"] and l1[1]["down"] and l1[1]["speed"] == "1 Gbps")
+check("a link carries its rows, the port state, the speed and whether both ends reported it", l1[0]["rows"] == [0, 1] and l1[0]["both"] and l1[0]["speed"] == "10 Gbps" and not l1[0]["down"]
+      and l1[1]["down"] and l1[1]["speed"] == "1 Gbps" and not l1[1]["both"], l1)
 n2, l2 = topology.build_graph(second)
 n2, l2 = topology.mark_changes(n2, l2, l1)
 by_change = {(l["a"], l["b"]): l["change"] for l in l2}
 check("against the discovery before: the kept link is plain, the added one new, the missing one gone (and drawn from the old rows)",
       by_change == {("core1", "dist1"): "", ("dist1", "ap-lobby"): "new", ("core1", "dist2"): "gone"} and "dist2" in n2 and next(l for l in l2 if l["change"] == "gone")["rows"] == [], by_change)
-check("nothing kept yet", topology.last() == ([], "", []))
-topology.remember(first); topology.remember(second)
-rows_, at, prev = topology.last()
-check("the latest discovery is kept with its time, and the one before it", rows_ == second and at[:2] == "20" and prev == first)
+check("nothing kept yet", topology.last()["rows"] == [] and topology.last()["at"] == "")
+sw_host = next(d["host"] for d in db.list_devices() if d["name"] == "sw-ssh")
+l3a = [{"device": "core1", "protocol": "OSPF", "neighbor": sw_host, "state": "FULL", "up": True, "interface": "Vlan10", "as": "", "router_id": sw_host},
+       {"device": "core1", "protocol": "BGP", "neighbor": "198.51.100.1", "state": "Established", "up": True, "interface": "", "as": "64500", "router_id": ""}]
+topology.remember(first); topology.remember(second, l3a)
+k = topology.last()
+check("the latest discovery is kept with its time and both layers, and the one before it", k["rows"] == second and k["l3"] == l3a and k["at"][:2] == "20" and k["prev_rows"] == first and k["prev_l3"] == [])
 check("...per organization, not portable", "topology_last" in db.NOT_PORTABLE and "topology_last" not in db.export_settings())
-topology.save_positions({"core1": (10.26, 20.0), "dist1": (30.0, 40.44)})
-check("dragged positions are kept, rounded", topology.positions() == {"core1": (10.3, 20.0), "dist1": (30.0, 40.4)})
-topology.save_positions(None); check("...and forgotten by Tidy up", topology.positions() == {})
+topology.save_positions({"core1": (10.26, 20.0), "dist1": (30.0, 40.44)}, "l2"); topology.save_positions({"core1": (1, 2)}, "l3")
+check("dragged positions are kept per layer, rounded", topology.positions("l2") == {"core1": (10.3, 20.0), "dist1": (30.0, 40.4)} and topology.positions("l3") == {"core1": (1.0, 2.0)})
+topology.save_positions(None, "l2"); check("...and forgotten by Re-run layout, one layer at a time", topology.positions("l2") == {} and topology.positions("l3") == {"core1": (1.0, 2.0)})
+topology.pin_top({"core1"}, "l2"); check("a tile pinned to the top tier is kept", topology.top_tier("l2") == {"core1"} and topology.top_tier("l3") == set())
+
+print("== Layer 3: the routing parsers and graph")
+rows = topology.parse_l3("BGP", "BGP router identifier 10.0.0.1, local AS number 65000\nNeighbor        V           AS MsgRcvd MsgSent   TblVer  InQ OutQ Up/Down  State/PfxRcd\n10.0.0.2        4        65001    1234    1234       12    0    0 1d02h          12\n10.0.0.3        4        65002       0       0        1    0    0 never    Active\n")
+check("IOS BGP summary: an established peer by its prefix count, a down one by its state, with the AS", [(r["neighbor"], r["up"], r["state"], r["as"]) for r in rows] == [("10.0.0.2", True, "Established", "65001"), ("10.0.0.3", False, "Active", "65002")], rows)
+rows = topology.parse_l3("OSPF", "Neighbor ID     Pri   State           Dead Time   Address         Interface\n10.0.0.2          1   FULL/DR         00:00:35    10.1.1.2        GigabitEthernet0/1\n10.0.0.3          1   FULL/  -        00:00:31    10.1.2.2        GigabitEthernet0/2\n10.0.0.4          1   INIT/DROTHER    00:00:38    10.1.3.2        Vlan10\n")
+check("IOS OSPF neighbours: address, interface, router id; FULL is up, INIT is not, with or without a DR role", [(r["neighbor"], r["interface"], r["router_id"], r["up"]) for r in rows]
+      == [("10.1.1.2", "GigabitEthernet0/1", "10.0.0.2", True), ("10.1.2.2", "GigabitEthernet0/2", "10.0.0.3", True), ("10.1.3.2", "Vlan10", "10.0.0.4", False)], rows)
+rows = topology.parse_l3("BGP", "Groups: 2 Peers: 2 Down peers: 1\nPeer                     AS      InPkt     OutPkt    OutQ   Flaps Last Up/Dwn State|#Active/Received/Accepted/Damped...\n10.0.0.2              65001      12345      12340       0       0     1d 2:03:04 5/5/5/0\n10.0.0.9              65009          0          0       0       3        1:00:00 Active\n")
+check("Junos BGP summary: an established peer by its prefix counts, a down one by its state", [(r["neighbor"], r["up"], r["as"]) for r in rows] == [("10.0.0.2", True, "65001"), ("10.0.0.9", False, "65009")], rows)
+rows = topology.parse_l3("OSPF", "Address          Interface              State     ID               Pri  Dead\n10.1.1.2         ge-0/0/0.0             Full      10.0.0.2         128    37\n")
+check("Junos OSPF neighbours", [(r["neighbor"], r["interface"], r["router_id"], r["up"]) for r in rows] == [("10.1.1.2", "ge-0/0/0.0", "10.0.0.2", True)], rows)
+rows = topology.parse_l3("EIGRP", "EIGRP-IPv4 Neighbors for AS(100)\nH   Address                 Interface              Hold Uptime   SRTT   RTO  Q  Seq\n0   10.1.1.2                Gi0/1                    13 01:02:03   10   100  0  12\n")
+check("EIGRP neighbours, through the checks' own parser", [(r["neighbor"], r["interface"], r["up"]) for r in rows] == [("10.1.1.2", "Gi0/1", True)], rows)
+rows = topology.parse_fortinet_l3("BGP", {"results": [{"neighbor_ip": "10.9.9.1", "remote_as": 65010, "state": "Established"}, {"neighbor_ip": "10.9.9.2", "remote_as": 65011, "state": "Active"}]})
+check("FortiOS BGP neighbours over the API", [(r["neighbor"], r["up"], r["as"]) for r in rows] == [("10.9.9.1", True, "65010"), ("10.9.9.2", False, "65011")], rows)
+rows = topology.parse_panos_l3("OSPF", '<response status="success"><result><entry><neighbor-address>10.8.8.1</neighbor-address><status>full</status><neighbor-router-id>10.0.0.8</neighbor-router-id></entry></result></response>')
+check("PAN-OS OSPF neighbours over the API", [(r["neighbor"], r["up"], r["router_id"]) for r in rows] == [("10.8.8.1", True, "10.0.0.8")], rows)
+n3, l3 = topology.build_l3(l3a + [{"device": "sw-ssh", "protocol": "OSPF", "neighbor": "10.0.0.77", "state": "FULL", "up": True, "interface": "Vlan10", "as": "", "router_id": ""}],
+                           {"core1": {"inventory": True, "addr": "10.0.0.77"}})
+check("Layer 3 graph: a neighbour address becomes the inventory device at that address, or the one Layer 2 learned it for, else an outside node; an adjacency seen from both ends is one link",
+      set(n3) == {"core1", "sw-ssh", "198.51.100.1"} and n3["198.51.100.1"]["inventory"] is False and len(l3) == 2
+      and next(l for l in l3 if l["protocol"] == "OSPF")["both"] and not next(l for l in l3 if l["protocol"] == "BGP")["both"], (n3, l3))
+g3 = topology.mark_l3_changes(*topology.build_l3(l3a[:1], {}), l3)
+check("Layer 3 changes are marked like Layer 2's", {l["protocol"]: l["change"] for l in g3[1]} == {"OSPF": "", "BGP": "gone"})
+
+print("== roles, grouping, merging and the tiers layout")
+check("roles from the neighbour's platform and capabilities, the inventory vendor, or the name",
+      topology.role_of("CORE1", "cisco C9500-24Y4C", "Router Switch IGMP") == "l3switch" and topology.role_of("SEP00A0B1C2D301", "Cisco IP Phone 8845", "Host Phone") == "phone"
+      and topology.role_of("AP-FL1-01", "cisco AIR-AP2802I-B-K9", "Trans-Bridge") == "ap" and topology.role_of("RTR-WAN1", "cisco ISR4451", "Router") == "router"
+      and topology.role_of("fw", dev={"vendor": "fortinet"}) == "firewall" and topology.role_of("esx01", "VMware ESXi 7") == "server" and topology.role_of("x", dev={"vendor": "cisco", "platform": "cisco_asa"}) == "firewall"
+      and topology.role_of("wlc-1", "cisco C9800-40") == "wlc" and topology.role_of("sw-acc-3", dev={"vendor": "cisco", "platform": "cisco_ios"}) == "switch" and topology.role_of("thing") == "unknown")
+nodes = {"core1": {"inventory": True, "addr": ""}, "ap-1": {"inventory": False, "addr": ""}, "ph1": {"inventory": False, "addr": ""}, "ph2": {"inventory": False, "addr": ""}}
+links = [{"a": "core1", "b": n, "a_port": p, "b_port": "", "protocols": {"CDP"}, "rows": [], "down": False, "speed": "", "change": "", "both": False} for n, p in (("ap-1", "Gi1"), ("ph1", "Gi2"), ("ph2", "Gi3"))]
+roles = {"core1": "switch", "ap-1": "ap", "ph1": "phone", "ph2": "phone"}
+gn, gl = topology.group_endpoints(nodes, links, roles, "group")
+check("Group: the two phones fold into one tile with its count; the single access point stays itself", [(n, i.get("count")) for n, i in gn.items() if i.get("group")] == [("core1 » 2 IP phones", 2)] and "ap-1" in gn and len(gl) == 2, list(gn))
+check("Hide leaves endpoints out; Each keeps everything", set(topology.group_endpoints(nodes, links, roles, "hide")[0]) == {"core1"} and topology.group_endpoints(nodes, links, roles, "each") == (nodes, links))
+par = [{"a": "core1", "b": "core2", "a_port": "Hu1/0/25", "b_port": "Hu1/0/25", "protocols": {"LLDP"}, "rows": [], "down": False, "speed": "", "change": "", "both": True},
+       {"a": "core2", "b": "core1", "a_port": "Hu1/0/26", "b_port": "Hu1/0/26", "protocols": {"LLDP"}, "rows": [], "down": True, "speed": "", "change": "", "both": True}]
+m = topology.merge_parallel(par)
+check("Merge parallel links: one link listing both ports, counted, down if either is", len(m) == 1 and m[0]["count"] == 2 and "Hu1/0/26" in m[0]["a_port"] and m[0]["down"])
+tn = {"rtr": {"inventory": True, "addr": ""}, "core": {"inventory": True, "addr": ""}, "acc1": {"inventory": True, "addr": ""}, "acc2": {"inventory": True, "addr": ""}, "ap": {"inventory": False, "addr": ""}}
+tl = [{"a": "rtr", "b": "core", "a_port": "", "b_port": ""}, {"a": "core", "b": "acc1", "a_port": "", "b_port": ""}, {"a": "core", "b": "acc2", "a_port": "", "b_port": ""}, {"a": "acc1", "b": "ap", "a_port": "", "b_port": ""}]
+tr = {"rtr": "router", "core": "l3switch", "acc1": "switch", "acc2": "switch", "ap": "ap"}
+pos = topology.tiers_layout(tn, tl, tr)
+check("Tiers: the router on top, the core under it, the access switches on one row, the endpoint on the bottom row", pos["rtr"][1] < pos["core"][1] < pos["acc1"][1] == pos["acc2"][1] < pos["ap"][1], pos)
+pos2 = topology.tiers_layout(tn, tl, tr, pinned={"acc2"})
+check("...a pinned tile takes the top row instead", pos2["acc2"][1] < pos2["core"][1] and pos2["acc2"][1] < pos2["rtr"][1], pos2)
+check("short names drop the domain when asked", topology.short_name("sw1.corp.local") == "sw1" and topology.short_name("sw1.corp.local", False) == "sw1.corp.local" and topology.short_name("10.0.0.1") == "10.0.0.1")
 
 print("== command runner")
 check("read-only guard", cmdrun.read_only("show version") and cmdrun.read_only("display current-configuration") and cmdrun.read_only("  SHOW ip route") and cmdrun.read_only("/system resource print") and not cmdrun.read_only("reload") and not cmdrun.read_only("configure terminal") and not cmdrun.read_only("no shutdown") and not cmdrun.read_only("clear counters") and not cmdrun.read_only("write erase") and not cmdrun.read_only("copy run start") and not cmdrun.read_only("conf t"))

@@ -13,7 +13,7 @@ import keyring
 STORE = {}
 keyring.set_password = lambda s, u, p: STORE.__setitem__((s, u), p)
 keyring.get_password = lambda s, u: STORE.get((s, u))
-from PySide6.QtWidgets import QApplication, QMessageBox, QInputDialog
+from PySide6.QtWidgets import QLabel, QApplication, QMessageBox, QInputDialog
 from PySide6.QtCore import QCoreApplication, Qt
 app = QApplication([])
 import app as A
@@ -79,43 +79,70 @@ D.stop.click()
 print("== Topology")
 P = tools.topology
 dev("core1"); dev("dist1")
-ROWS = [{"device": "core1", "protocol": "LLDP", "local_port": "Gi1/0/1", "remote_name": "dist1", "remote_port": "Te1/1", "remote_addr": "", "remote_desc": ""},
-        {"device": "dist1", "protocol": "LLDP", "local_port": "Te1/1", "remote_name": "core1", "remote_port": "Gi1/0/1", "remote_addr": "", "remote_desc": ""},
-        {"device": "dist1", "protocol": "LLDP", "local_port": "Gi0/5", "remote_name": "ap-1", "remote_port": "eth0", "remote_addr": "10.5.5.5", "remote_desc": ""}]
-topology.collect = lambda devs, workers=6, on_done=None: ([on_done(d["name"]) for d in devs] and None) or (ROWS, {"bad-one": "timeout"})
+ROWS = [{"device": "core1", "via": "SSH", "protocol": "LLDP", "local_port": "Gi1/0/1", "remote_name": "dist1", "remote_port": "Te1/1", "remote_addr": "", "remote_desc": "", "local_up": True, "local_speed": "10 Gbps"},
+        {"device": "dist1", "via": "SNMP", "protocol": "LLDP", "local_port": "Te1/1", "remote_name": "core1", "remote_port": "Gi1/0/1", "remote_addr": "", "remote_desc": ""},
+        {"device": "dist1", "via": "SNMP", "protocol": "LLDP", "local_port": "Gi0/5", "remote_name": "ap-1", "remote_port": "eth0", "remote_addr": "10.5.5.5", "remote_desc": "cisco AIR-AP2802I-B-K9"},
+        {"device": "dist1", "via": "SNMP", "protocol": "CDP", "local_port": "Gi0/6", "remote_name": "SEP0011223344AA", "remote_port": "Port 1", "remote_addr": "", "remote_desc": "Cisco IP Phone 8845"},
+        {"device": "dist1", "via": "SNMP", "protocol": "CDP", "local_port": "Gi0/7", "remote_name": "SEP0011223344BB", "remote_port": "Port 1", "remote_addr": "", "remote_desc": "Cisco IP Phone 8845"}]
+L3 = [{"device": "core1", "protocol": "OSPF", "neighbor": "10.0.0.2", "state": "FULL", "up": True, "interface": "Gi1/0/1", "as": "", "router_id": "10.0.0.2"},
+      {"device": "core1", "protocol": "BGP", "neighbor": "198.51.100.1", "state": "Established", "up": True, "interface": "", "as": "64500", "router_id": ""}]
+topology.collect = lambda devs, workers=6, on_done=None: ([on_done(d["name"]) for d in devs] and None) or (ROWS, L3, {"bad-one": "timeout"})
 topology.devices = lambda: [d for d in db.list_devices() if d["name"] in ("core1", "dist1")]
 P.go.click(); pump(lambda: P.go.isEnabled())
-check("neighbours listed, with Link and Change columns", P.table.rowCount() == 3 and P.table.columnCount() == 8 and "link(s)" in P.status.text() and "failed" in P.status.text()
-      and all(P.table.item(i, 7).text() == "" for i in range(3)), P.status.text())
-check("the graph joined the two ends of one cable", len(P.links) == 2 and len(P.nodes) == 3, (len(P.links), len(P.nodes)))
-P.view_btn.setChecked(True); QCoreApplication.processEvents()
-items = P.map.scene().items()
-check("the map draws a box per device and a line per link", sum(1 for i in items if isinstance(i, T2.NodeItem)) == 3 and sum(1 for i in items if isinstance(i, T2.EdgeItem)) == 2)
-node = next(i for i in items if isinstance(i, T2.NodeItem) and i.name == "core1"); before = [e.line().p1() for e in node.edges]
-node.setPos(node.pos().x() + 50, node.pos().y()); check("dragging a box moves its links with it", [e.line().p1() for e in node.edges] != before or True)
-T2.QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (SP + (r"\topo.png").replace("\\", os.sep), "")); P.save_picture(); check("the picture can be saved", os.path.exists(SP + (r"\topo.png").replace("\\", os.sep)) and os.path.getsize(SP + (r"\topo.png").replace("\\", os.sep)) > 1000)
-tools.tabs.setCurrentWidget(P); P.grab().save(SP + (r"\tools_topology.png").replace("\\", os.sep))
-P.map.on_moved()
-check("where the boxes were dragged is kept", topology.positions().get("core1") == (round(node.pos().x(), 1), round(node.pos().y(), 1)), topology.positions())
+check("the rail's checks count devices over both layers, links and one-way links; the status names the failure", P.stat_devices[1].text() == "6" and P.stat_links[1].text() == "3 + 2" and P.stat_oneway[1].text() == "1"
+      and "failed" in P.status.text() and "1 link(s)" not in P.status.text(), (P.stat_devices[1].text(), P.stat_links[1].text(), P.status.text()))
+nodes, links = P.drawn["l2"]
+check("Layer 2 groups the two phones into one tile per switch and keeps the access point as its own", any(i.get("group") and i["count"] == 2 for i in nodes.values()) and "ap-1" in nodes and "SEP0011223344AA" not in nodes, list(nodes))
+check("tiles carry roles: the core switch by its name, the access point, the phones", P.roles["core1"] == "l3switch" and P.roles["ap-1"] == "ap" and P.roles["SEP0011223344AA"] == "phone", P.roles)
+check("the map draws a tile per node and a line per link, the group tile with its count", len(P.l2.boxes) == len(nodes) and len(P.l2.lines) == len(links)
+      and next(b for b in P.l2.boxes.values() if b.group).group == 2, (len(P.l2.boxes), len(nodes), len(P.l2.lines), len(links)))
+check("the legend names the roles in use and the line kinds", len(P.l2.legend.findChildren(QLabel)) >= 8)
+nodes3, links3 = P.drawn["l3"]
+check("Layer 3 draws the OSPF adjacency to dist1 (its address learned on Layer 2 is not known, so by address) and the BGP peer outside", {l["protocol"] for l in links3} == {"OSPF", "BGP"} and "198.51.100.1" in nodes3 and len(P.l3.boxes) == 3, (list(nodes3), links3))
+P.endpoints.set("each"); QCoreApplication.processEvents()
+check("Endpoints: Each shows every phone", "SEP0011223344AA" in P.drawn["l2"][0] and not any(i.get("group") for i in P.drawn["l2"][0].values()))
+P.endpoints.set("hide"); QCoreApplication.processEvents()
+check("...Hide leaves them out", not any(P.roles.get(n) == "phone" for n in P.drawn["l2"][0]))
+P.endpoints.set("group"); QCoreApplication.processEvents()
+P.select("core1", "l2"); QCoreApplication.processEvents()
+card = P.l2.card
+check("clicking a tile opens the card: name, role, facts, its links and buttons", not card.isHidden() and card.title.text() == "core1" and "switch" in card.role.text().lower() and "dist1" in card.links.text()
+      and [b.text() for b in card._buttons] == ["Details", "SSH", "Run checks", "Ping", "Put on the top tier"], [b.text() for b in card._buttons])
 got = []
 for sig in (P.open_device, P.open_ssh, P.run_checks, P.ping, P.add_device):
     sig.connect(lambda v, s=sig: got.append(v))
+P.inventory_action.connect(lambda a, k: got.append((a, k)))
 acts = dict(P.node_actions("core1"))
-check("a device's box offers its actions, each reaching the app", list(acts) == ["Open device", "Open SSH session", "Run checks", "Ping"] and (acts["Open device"](), acts["Run checks"](), got)[2] == ["core1", ["core1"]], got)
+check("a device's right-click offers the inventory's actions and the map's own", list(acts) == ["Details...", "Edit...", "Open SSH session", "Run Checks", "Scan for vulnerabilities", "Edit tags, folder, profile...", "Ping", "Put on the top tier", "Delete..."], list(acts))
+acts["Details..."](); acts["Edit..."](); acts["Run Checks"](); acts["Delete..."]()
+check("...each reaching the app: the device key, or the inventory action with it", got == ["core1", ("edit", "core1"), ["core1"], ("delete", "core1")], got)
 acts = dict(P.node_actions("ap-1")); acts["Add to inventory..."]()
-check("an outside neighbour offers Add to inventory, with its address", got[-1] == {"name": "ap-1", "host": "10.5.5.5", "vendor": ""}, got[-1])
+check("an outside neighbour offers Add to inventory, with its address and the vendor its platform points at", got[-1] == {"name": "ap-1", "host": "10.5.5.5", "vendor": "cisco"}, got[-1])
+P.toggle_top("dist1", "l2"); QCoreApplication.processEvents()
+check("Put on the top tier pins the tile at the top row of the tiers layout", topology.top_tier("l2") == {"dist1"} and P.l2.boxes["dist1"].pos().y() < P.l2.boxes["core1"].pos().y())
+node = P.l2.boxes["core1"]; node.setPos(node.pos().x() + 50, node.pos().y()); P._moved("l2")
+check("where the boxes were dragged is kept, per layer", topology.positions("l2").get("core1") == (round(node.pos().x(), 1), round(node.pos().y(), 1)) and topology.positions("l3") == {})
 P.find.setText("ap-1"); QCoreApplication.processEvents()
-boxes = P.map.boxes
-check("the search keeps the matching box and its neighbour bright and fades the rest", boxes["ap-1"].opacity() == 1.0 and boxes["dist1"].opacity() == 1.0 and boxes["core1"].opacity() < 0.5)
+check("the search keeps the matching tile and its neighbour bright and fades the rest", P.l2.boxes["ap-1"].opacity() == 1.0 and P.l2.boxes["dist1"].opacity() == 1.0 and P.l2.boxes["core1"].opacity() < 0.5)
 P.find.setText(""); QCoreApplication.processEvents()
-check("...and everything is back without a search", all(b.opacity() == 1.0 for b in boxes.values()))
-topology.collect = lambda devs, workers=6, on_done=None: ([on_done(d["name"]) for d in devs] and None) or (ROWS[:2], {})
+P.tab_links.setChecked(True); QCoreApplication.processEvents()
+check("the Links tab lists both layers with Seen from, ports, protocol and state", P.table.columnCount() == 9 and P.table.rowCount() == 4 and {P.table.item(i, 0).text() for i in range(4)} == {"Layer 2", "Layer 3"}
+      and any(P.table.item(i, 1).text() == "both ends" for i in range(4)) and any("AS 64500" in P.table.item(i, 7).text() for i in range(4)), [[P.table.item(i, j).text() for j in range(9)] for i in range(P.table.rowCount())])
+P.links_filter.set("both"); QCoreApplication.processEvents()
+check("...filtered to links seen from both ends", P.table.rowCount() == 1 and P.table.item(0, 2).text() == "core1")
+P.links_filter.set("all"); P.tab_l2.setChecked(True); QCoreApplication.processEvents()
+T2.QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (SP + (r"\topo.svg").replace("\\", os.sep), ""))
+P.save_picture("svg"); check("the picture can be saved as SVG", os.path.exists(SP + (r"\topo.svg").replace("\\", os.sep)) and b"<svg" in open(SP + (r"\topo.svg").replace("\\", os.sep), "rb").read(200))
+T2.QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (SP + (r"\links.csv").replace("\\", os.sep), ""))
+P.download_csv(); check("...and the links as CSV", open(SP + (r"\links.csv").replace("\\", os.sep), encoding="utf-8").read().startswith("Layer,Seen from,Device A"))
+tools.tabs.setCurrentWidget(P); P.grab().save(SP + (r"\tools_topology.png").replace("\\", os.sep))
+topology.collect = lambda devs, workers=6, on_done=None: ([on_done(d["name"]) for d in devs] and None) or (ROWS[:3], L3[:1], {})
 P.go.click(); pump(lambda: P.go.isEnabled())
-check("the next discovery marks what is gone since the one before, in the status, the table and the map", "1 gone" in P.status.text() and P.table.rowCount() == 3 and P.table.item(2, 7).text() == "gone"
-      and any(e.pen().style() == Qt.PenStyle.DotLine for e in P.map.lines), (P.status.text(), [P.table.item(i, 7).text() for i in range(3)]))
-P.tidy_btn.click(); check("Tidy up forgets the dragged positions", topology.positions() == {})
+check("the next discovery marks what is gone since the one before, in the status, the table and both maps", "3 gone" in P.changes_line.text() and any(l["change"] == "gone" for l in P.drawn["l2"][1])
+      and any(l["change"] == "gone" for l in P.drawn["l3"][1]), P.changes_line.text())
+P.relayout_btn.click(); check("Re-run layout forgets the dragged positions", topology.positions("l2") == {})
 again = T2.TopologyTab()
-check("a new visit shows the last discovery, with its time", again.table.rowCount() == 3 and again.status.text()[:2] == "20" and again.nodes, again.status.text())
+check("a new visit shows the last discovery, with its time", again.table.rowCount() >= 3 and again.status.text()[:2] == "20" and again.nodes, again.status.text())
 topology.devices = lambda: []
 P.go.click(); check("no devices that can report neighbours -> explained, not a crash", P.go.isEnabled())
 

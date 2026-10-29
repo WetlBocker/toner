@@ -100,7 +100,7 @@ DEFAULT_SETTINGS = {
     "inventory_view": "Folders", "inventory_expanded": [], "window_geometry": "", "splitters": {}, "ansible_backend": "wsl", "ansible_distro": "", "ansible_command": "ansible-playbook", "ansible_playbooks": "",
     "ansible_server_device": "", "ansible_server": {"host": "", "port": 22, "user": "", "key_file": ""}, "ansible_check_default": True, "ansible_keep_runs": 200,
     "sidebar_collapsed": False, "acks": {}, "client_scope": None, "org_current": 0, "onboarding_done": False, "inventory_columns": None, "results_columns": None, "scanning_columns": None,
-    "topology_last": None, "topology_prev": None, "topology_positions": None,
+    "topology_last": None, "topology_prev": None, "topology_positions": None, "topology_top": None,
     # configuration backups
     "backup_enabled": False, "backup_hours": 24, "backup_groups": [], "backup_keep": 50, "backup_mask": True,
     "backup_on_start": False,
@@ -138,7 +138,7 @@ DEFAULT_SETTINGS = {
 }
 # Per-machine state that must not travel in an exported settings file (channel secrets stay in
 # the vault, so an imported channel would be broken).
-NOT_PORTABLE = {"vault_provider", "vault_config", "org_current", "window_geometry", "splitters", "ansible_distro", "ansible_playbooks", "ansible_server", "ansible_server_device", "sidebar_collapsed", "sessions_list_hidden", "acks", "client_scope", "onboarding_done", "inventory_columns", "results_columns", "scanning_columns", "topology_last", "topology_prev", "topology_positions", "notify_channels", "notify_snooze_until", "inventory_expanded", "snippets", "fileserver", "iperf_path", "openssl_path",
+NOT_PORTABLE = {"vault_provider", "vault_config", "org_current", "window_geometry", "splitters", "ansible_distro", "ansible_playbooks", "ansible_server", "ansible_server_device", "sidebar_collapsed", "sessions_list_hidden", "acks", "client_scope", "onboarding_done", "inventory_columns", "results_columns", "scanning_columns", "topology_last", "topology_prev", "topology_positions", "topology_top", "notify_channels", "notify_snooze_until", "inventory_expanded", "snippets", "fileserver", "iperf_path", "openssl_path",
                 "update_last_check", "update_skip", "update_pending", "sessions_expanded", "agent_enabled", "agent_enroll", "agent_bind",
                 "agent_address", "install_uid", "demarc", "assistant_button"}
 

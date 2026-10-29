@@ -102,6 +102,8 @@ QPushButton[primary="true"] { font-weight: 600; }
 QPushButton[primary="true"]:hover, QPushButton:default:hover { background: %(accent_hover)s; border-color: %(accent_hover)s; }
 QPushButton[primary="true"]:disabled, QPushButton:default:disabled { background: %(surface2)s; color: %(muted)s; border-color: %(border)s; }
 QPushButton:checked { background: %(accent_soft)s; border-color: %(accent)s; }
+QPushButton[segment="true"] { padding: 3px 9px; border-radius: 0; background: %(surface2)s; color: %(muted)s; border: 1px solid %(border)s; margin-left: -1px; }
+QPushButton[segment="true"]:checked { background: %(surface)s; color: %(text)s; border-bottom: 2px solid %(accent)s; }
 QPushButton[flat="true"], QPushButton[ghost="true"] { background: transparent; border-color: transparent; color: %(muted)s; }
 QPushButton[ghost="true"]:hover { background: %(hover)s; color: %(text)s; }
 QToolButton[popupMode="2"] { padding-right: 26px; }
