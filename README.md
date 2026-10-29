@@ -171,7 +171,7 @@ are recorded and count in the numbers. Each one is in the audit log.
 | Cloud status page | public Statuspage JSON | overall status, components, open incidents, planned maintenance |
 | This PC's Wi-Fi | `netsh wlan` | connection, signal strength, link speed |
 
-**Configuration backup** works for Cisco, Juniper, Arista, HPE, MikroTik (SSH), Fortinet and Palo Alto (API).
+**Configuration backup** works for Cisco, Juniper, Arista, HPE, MikroTik (SSH), Fortinet and Palo Alto (API, or SSH when an SSH login is stored on the device).
 
 **N/A.** A chosen check that does not apply to a device still gets a grey **N/A** row, so it never just goes missing: BGP, OSPF or
 EIGRP that is not configured, fans and sensors on a virtual appliance, ASA failover that is off. N/A is never a problem and never

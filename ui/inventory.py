@@ -348,8 +348,9 @@ class DeviceDialog(QDialog):
         self.access.setRowVisible(self.username, info["username"] or cli)
         self.access.setRowVisible(self.ssh_pw, cli)
         self.access.labelForField(self.username).setText("SSH user name" if cli else "Username")
-        self.username.setPlaceholderText("optional, for the Command Runner (the checks use the API key)" if cli else "")
-        tip = "Only the Command Runner uses this SSH login, to run commands on the firewall's command line. The checks and backups use the API key." if cli else ""
+        self.username.setPlaceholderText("optional, for the Command Runner and config backups (the checks use the API key)" if cli else "")
+        tip = ("The Command Runner runs commands over this SSH login, and config backups use it when there is no API token or the API fails. "
+               "The checks use the API key.") if cli else ""
         self.username.setToolTip(tip)
         self.ssh_pw.setToolTip(tip)
         self.access.setRowVisible(self.site, bool(info["site"]))

@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 from core import db
+from core.netconn import connect as ConnectHandler      # netmiko's, with Toner's fixes for some devices
 from drivers.base import Result, OK, WARN, ERROR
 from core import quiet
 
@@ -26,6 +27,9 @@ SSH_COMMANDS = {
     "aruba_osswitch": "show running-config", "mikrotik_routeros": "/export",
 }
 API_VENDORS = ("fortinet", "paloalto")
+# the same two over SSH, with the Command Runner's login: FortiOS prints every value; PAN-OS is asked for XML, like its API export
+SSH_FIREWALL = {"fortinet": ["show full-configuration"], "paloalto": ["set cli config-output-format xml", "show config running"]}
+NO_LOGIN = "no API token and no SSH login stored: Edit device > Access"
 
 # lines that change on every read without the configuration changing
 VOLATILE = [re.compile(p, re.I) for p in (
@@ -110,24 +114,8 @@ def fetch(dev, opts=None):
     vendor = dev["vendor"]
     if not supported(dev):
         raise BackupError(why_unsupported(dev))
-    if vendor == "fortinet":
-        import requests, urllib3
-        if not dev.get("verify_ssl"):
-            urllib3.disable_warnings()
-        r = requests.get(f"https://{dev['host']}:{dev.get('port') or 443}/api/v2/monitor/system/config/backup",
-                         params={"scope": "global"}, headers={"Authorization": f"Bearer {profiles.secret(dev) or ''}"},
-                         verify=bool(dev.get("verify_ssl")), timeout=max(opts["http_timeout"], 60), **proxy.requests_kwargs(dev))
-        r.raise_for_status()
-        return r.text
-    if vendor == "paloalto":
-        import requests, urllib3
-        if not dev.get("verify_ssl"):
-            urllib3.disable_warnings()
-        r = requests.get(f"https://{dev['host']}:{dev.get('port') or 443}/api/", params={"type": "export", "category": "configuration"},
-                         headers={"X-PAN-KEY": profiles.secret(dev) or ""}, verify=bool(dev.get("verify_ssl")),
-                         timeout=max(opts["http_timeout"], 60), **proxy.requests_kwargs(dev))
-        r.raise_for_status()
-        return r.text
+    if vendor in API_VENDORS:
+        return _fetch_firewall(dev, opts)
     from drivers import DRIVERS
     drv = DRIVERS[vendor](dev, {}, opts)
     drv.plat = dev.get("platform") or drv.DEFAULT_PLATFORM
@@ -145,6 +133,73 @@ def fetch(dev, opts=None):
         if path:
             raise BackupError(f"{type(e).__name__}: {str(e)[:200]}. The session was written to {path}") from None
         raise
+
+
+def _fetch_firewall(dev, opts):
+    """A FortiGate or Palo Alto: its API when a token is stored, SSH (the Command Runner's login) when there is no token or
+    the API fails. With both failing the error names each."""
+    from core import profiles
+    token, ssh_pw = profiles.secret(dev) or "", profiles.secret(dev, "ssh") or ""
+    user = (dev.get("username") or "").strip()
+    if not token and not (user and ssh_pw):
+        raise BackupError(NO_LOGIN)
+    errors = []
+    if token:
+        try:
+            return _api_config(dev, token, opts)
+        except Exception as e:
+            if not (user and ssh_pw):
+                raise
+            errors.append(f"API: {type(e).__name__}: {str(e)[:200]}")
+    try:
+        return _ssh_config(dev, user, ssh_pw, opts)
+    except Exception as e:
+        errors.append(f"SSH: {type(e).__name__}: {str(e)[:200]}")
+        raise BackupError("; ".join(errors)) from None
+
+
+def _api_config(dev, token, opts):
+    import requests, urllib3
+    if not dev.get("verify_ssl"):
+        urllib3.disable_warnings()
+    kw = dict(verify=bool(dev.get("verify_ssl")), timeout=max(opts["http_timeout"], 60), **proxy.requests_kwargs(dev))
+    base = f"https://{dev['host']}:{dev.get('port') or 443}"
+    if dev["vendor"] == "fortinet":
+        url, headers = f"{base}/api/v2/monitor/system/config/backup", {"Authorization": f"Bearer {token}"}
+        r = requests.post(url, json={"scope": "global"}, headers=headers, **kw)            # FortiOS 7.x
+        if r.status_code in (404, 405):                                                   # older FortiOS: GET with a query
+            r = requests.get(url, params={"scope": "global"}, headers=headers, **kw)
+    else:
+        r = requests.get(f"{base}/api/", params={"type": "export", "category": "configuration"}, headers={"X-PAN-KEY": token}, **kw)
+    r.raise_for_status()
+    return r.text
+
+
+def _ssh_config(dev, user, pw, opts):
+    from core import jump, vendors
+    t = int(opts.get("ssh_timeout", 20))
+    port = int(db.get_setting("default_ssh_port") or 22)                 # the device's own port is its API's
+    args = dict(device_type=vendors.CLI_TYPES[dev["vendor"]], host=dev["host"], username=user, password=pw, port=port, timeout=t, conn_timeout=t)
+    sock, closers = jump.open_channel({**dev, "port": port}, t)          # through the proxy or SSH tunnel, as the checks go
+    if sock is not None:
+        args["sock"] = sock
+    out = ""
+    try:
+        with ConnectHandler(**args) as c:
+            for cmd in SSH_FIREWALL[dev["vendor"]]:
+                out = c.send_command(cmd, read_timeout=max(120, t * 4))
+    finally:
+        for x in closers:
+            try:
+                x.close()
+            except Exception:
+                quiet.ignored()
+    if dev["vendor"] == "paloalto":
+        m = re.search(r"<config\b.*</config>", out or "", re.S)
+        if not m:
+            raise BackupError("the firewall did not answer with its configuration as XML: " + " ".join((out or "").split())[:100])
+        out = m.group(0)
+    return out
 
 
 def session_file(dev):

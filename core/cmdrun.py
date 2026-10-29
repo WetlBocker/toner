@@ -34,7 +34,7 @@ def kind_of(dev):
 
 # why a device cannot take commands: the short reason (shown beside its name) and what to do about it (its tooltip)
 HELP = {"reports by agent": "This computer reports through an agent, which only sends and takes no commands. Monitor it with WinRM (Edit device) to run commands on it.",
-        "no SSH login": "Add an SSH user name and SSH password for this firewall: Edit device > Access. Its checks use the API key; only the Command Runner uses the SSH login.",
+        "no SSH login": "Add an SSH user name and SSH password for this firewall: Edit device > Access. Its checks use the API key; the Command Runner and config backups use the SSH login.",
         "not supported": "Commands cannot be run on this kind of device."}
 
 

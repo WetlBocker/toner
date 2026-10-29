@@ -133,18 +133,68 @@ class R:
     def __init__(self, text): self.text = text
     def raise_for_status(self): pass
 seen = {}
+R.status_code = 200
+keyring.delete_password = lambda s, u: STORE.pop((s, u), None)
+class Old(R):                                               # older FortiOS: the backup call is a GET
+    status_code = 405
+    def raise_for_status(self): raise requests.HTTPError("405 Client Error: Method Not Allowed")
 def fake_get(url, params=None, headers=None, **k):
-    seen["url"], seen["params"], seen["headers"] = url, params, headers
+    seen["get"] = (url, params, headers)
     return R(FG if "config/backup" in url else PA)
-requests.get = fake_get
+def fake_post(url, json=None, headers=None, **k):
+    seen["post"] = (url, json, headers)
+    return Old("") if seen.get("old") else R(FG)
+requests.get, requests.post = fake_get, fake_post
 dev("fg", vendor="fortinet", platform="")
 db.set_secret("fg", "TOKEN123")
-r = backup.backup_device([x for x in db.list_devices() if x["name"] == "fg"][0])
-check("FortiGate config backup via API with the token in a header", r.status == "OK" and "config/backup" in seen["url"] and seen["headers"]["Authorization"] == "Bearer TOKEN123" and "TOKEN123" not in str(seen["params"]), (r, seen))
+fgd = lambda: [x for x in db.list_devices() if x["name"] == "fg"][0]
+r = backup.backup_device(fgd())
+check("FortiGate config backup via API: a POST with the scope in the body and the token in a header", r.status == "OK" and "config/backup" in seen["post"][0]
+      and seen["post"][1] == {"scope": "global"} and seen["post"][2]["Authorization"] == "Bearer TOKEN123" and "get" not in seen, (r, seen))
 check("...and it is masked when stored", "SH2abcdef" not in backup.get_text(backup.latest("fg")["id"]))
+seen.clear(); seen["old"] = True
+r = backup.backup_device(fgd())
+check("an older FortiOS answers 405 to the POST: the GET with a query follows", r.status == "OK" and seen["get"][0] == seen["post"][0] and seen["get"][1] == {"scope": "global"}, (r, seen))
 dev("pa1", vendor="paloalto", platform=""); db.set_secret("pa1", "PANKEY")
 r = backup.backup_device([x for x in db.list_devices() if x["name"] == "pa1"][0])
-check("PAN-OS export with the key in a header", r.status == "OK" and seen["params"]["type"] == "export" and seen["headers"]["X-PAN-KEY"] == "PANKEY")
+check("PAN-OS export with the key in a header", r.status == "OK" and seen["get"][1]["type"] == "export" and seen["get"][2]["X-PAN-KEY"] == "PANKEY")
+
+print("== the firewalls over SSH")
+class Bad(R):
+    status_code = 500
+    def raise_for_status(self): raise requests.HTTPError("500 Server Error")
+requests.post = lambda url, **k: Bad("")
+ssh = {}
+class FakeSSH:
+    text = "#config-version=FGT60F-7.2.5-FW-build1517-230208:opmode=0:vdom=0:user=admin\nconfig system global\n    set hostname fg\nend\n"
+    def __init__(self, **args): ssh["args"] = args; ssh["cmds"] = []
+    def __enter__(self): return self
+    def __exit__(self, *a): pass
+    def send_command(self, cmd, **k): ssh["cmds"].append(cmd); return self.text
+backup.ConnectHandler = FakeSSH
+r = backup.backup_device(fgd())
+check("the API failing with no SSH login: the API's error, as before", r.status == "ERROR" and r.message.startswith("HTTPError: 500"), r)
+db.set_secret("fg:ssh", "sshpw")
+r = backup.backup_device(fgd())
+check("...with an SSH login: SSH takes over (a changed copy), with the device's user name and the Command Runner's device type", r.status == "WARN" and ssh["args"]["username"] == "u" and ssh["args"]["password"] == "sshpw"
+      and ssh["args"]["device_type"] == "fortinet" and ssh["cmds"] == ["show full-configuration"], (r, ssh))
+check("...and the backup is the SSH text", "set hostname fg" in backup.get_text(backup.latest("fg")["id"]))
+db.delete_secret("fg")
+r = backup.backup_device(fgd()); check("no token at all: straight to SSH", r.status == "OK" and "cmds" in ssh)
+db.delete_secret("fg:ssh")
+r = backup.backup_device(fgd()); check("neither stored: the log says where to add one", r.status == "ERROR" and r.message == backup.NO_LOGIN, r)
+db.set_secret("fg", "TOKEN123"); db.set_secret("fg:ssh", "sshpw")
+FakeSSH.__init__ = lambda self, **a: (_ for _ in ()).throw(TimeoutError("timed out"))
+r = backup.backup_device(fgd()); check("both failing: the message names each", r.status == "ERROR" and r.message == "API: HTTPError: 500 Server Error; SSH: TimeoutError: timed out", r)
+FakeSSH.__init__ = lambda self, **args: (ssh.__setitem__("args", args), ssh.__setitem__("cmds", []))[0]
+FakeSSH.text = "<response status=\"success\"><result><config version=\"10.1.0\"><mgt-config/></config></result></response>"
+dev("pa2", vendor="paloalto", platform="", username="ops"); db.set_secret("pa2:ssh", "pw2")
+r = backup.backup_device([x for x in db.list_devices() if x["name"] == "pa2"][0])
+check("PAN-OS over SSH: asks for XML, keeps the config element only", r.status == "OK" and ssh["cmds"] == ["set cli config-output-format xml", "show config running"]
+      and backup.get_text(backup.latest("pa2")["id"]).strip() == "<config version=\"10.1.0\"><mgt-config/></config>", (r, ssh))
+FakeSSH.text = "Unknown command"
+r = backup.backup_device([x for x in db.list_devices() if x["name"] == "pa2"][0])
+check("...and says so when the answer is not XML", r.status == "ERROR" and "SSH: BackupError: the firewall did not answer with its configuration as XML" in r.message, r)
 
 print("== many devices and summaries")
 conn.text = CISCO; DRIVERS["cisco"].connect = lambda self: conn
