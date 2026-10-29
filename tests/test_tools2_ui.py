@@ -83,9 +83,10 @@ ROWS = [{"device": "core1", "protocol": "LLDP", "local_port": "Gi1/0/1", "remote
         {"device": "dist1", "protocol": "LLDP", "local_port": "Te1/1", "remote_name": "core1", "remote_port": "Gi1/0/1", "remote_addr": "", "remote_desc": ""},
         {"device": "dist1", "protocol": "LLDP", "local_port": "Gi0/5", "remote_name": "ap-1", "remote_port": "eth0", "remote_addr": "10.5.5.5", "remote_desc": ""}]
 topology.collect = lambda devs, workers=6, on_done=None: ([on_done(d["name"]) for d in devs] and None) or (ROWS, {"bad-one": "timeout"})
-topology.snmp_devices = lambda: [d for d in db.list_devices() if d["name"] in ("core1", "dist1")]
+topology.devices = lambda: [d for d in db.list_devices() if d["name"] in ("core1", "dist1")]
 P.go.click(); pump(lambda: P.go.isEnabled())
-check("neighbours listed", P.table.rowCount() == 3 and "link(s)" in P.status.text() and "failed" in P.status.text(), P.status.text())
+check("neighbours listed, with Link and Change columns", P.table.rowCount() == 3 and P.table.columnCount() == 8 and "link(s)" in P.status.text() and "failed" in P.status.text()
+      and all(P.table.item(i, 7).text() == "" for i in range(3)), P.status.text())
 check("the graph joined the two ends of one cable", len(P.links) == 2 and len(P.nodes) == 3, (len(P.links), len(P.nodes)))
 P.view_btn.setChecked(True); QCoreApplication.processEvents()
 items = P.map.scene().items()
@@ -94,8 +95,29 @@ node = next(i for i in items if isinstance(i, T2.NodeItem) and i.name == "core1"
 node.setPos(node.pos().x() + 50, node.pos().y()); check("dragging a box moves its links with it", [e.line().p1() for e in node.edges] != before or True)
 T2.QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (SP + (r"\topo.png").replace("\\", os.sep), "")); P.save_picture(); check("the picture can be saved", os.path.exists(SP + (r"\topo.png").replace("\\", os.sep)) and os.path.getsize(SP + (r"\topo.png").replace("\\", os.sep)) > 1000)
 tools.tabs.setCurrentWidget(P); P.grab().save(SP + (r"\tools_topology.png").replace("\\", os.sep))
-topology.snmp_devices = lambda: []
-P.go.click(); check("no SNMP devices -> explained, not a crash", P.go.isEnabled())
+P.map.on_moved()
+check("where the boxes were dragged is kept", topology.positions().get("core1") == (round(node.pos().x(), 1), round(node.pos().y(), 1)), topology.positions())
+got = []
+for sig in (P.open_device, P.open_ssh, P.run_checks, P.ping, P.add_device):
+    sig.connect(lambda v, s=sig: got.append(v))
+acts = dict(P.node_actions("core1"))
+check("a device's box offers its actions, each reaching the app", list(acts) == ["Open device", "Open SSH session", "Run checks", "Ping"] and (acts["Open device"](), acts["Run checks"](), got)[2] == ["core1", ["core1"]], got)
+acts = dict(P.node_actions("ap-1")); acts["Add to inventory..."]()
+check("an outside neighbour offers Add to inventory, with its address", got[-1] == {"name": "ap-1", "host": "10.5.5.5", "vendor": ""}, got[-1])
+P.find.setText("ap-1"); QCoreApplication.processEvents()
+boxes = P.map.boxes
+check("the search keeps the matching box and its neighbour bright and fades the rest", boxes["ap-1"].opacity() == 1.0 and boxes["dist1"].opacity() == 1.0 and boxes["core1"].opacity() < 0.5)
+P.find.setText(""); QCoreApplication.processEvents()
+check("...and everything is back without a search", all(b.opacity() == 1.0 for b in boxes.values()))
+topology.collect = lambda devs, workers=6, on_done=None: ([on_done(d["name"]) for d in devs] and None) or (ROWS[:2], {})
+P.go.click(); pump(lambda: P.go.isEnabled())
+check("the next discovery marks what is gone since the one before, in the status, the table and the map", "1 gone" in P.status.text() and P.table.rowCount() == 3 and P.table.item(2, 7).text() == "gone"
+      and any(e.pen().style() == Qt.PenStyle.DotLine for e in P.map.lines), (P.status.text(), [P.table.item(i, 7).text() for i in range(3)]))
+P.tidy_btn.click(); check("Tidy up forgets the dragged positions", topology.positions() == {})
+again = T2.TopologyTab()
+check("a new visit shows the last discovery, with its time", again.table.rowCount() == 3 and again.status.text()[:2] == "20" and again.nodes, again.status.text())
+topology.devices = lambda: []
+P.go.click(); check("no devices that can report neighbours -> explained, not a crash", P.go.isEnabled())
 
 print("== Live ping")
 L = tools.liveping

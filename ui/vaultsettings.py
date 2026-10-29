@@ -184,8 +184,6 @@ class VaultSection(QWidget):
         self.use_btn.clicked.connect(self.use)
         self.status = QLabel("")
         self.status.setWordWrap(True)
-        self.direct = _quiet(QCheckBox("Connect directly to the password manager (ignore the proxy settings)"))
-        self.direct.toggled.connect(self._direct)
         self.copies = _quiet(QCheckBox("Keep a copy of each password in Toner's vault"))
         self.copies.toggled.connect(self._copies)
         self.copies_note = QLabel("Checks keep working when the password manager can't be reached. Without copies, Toner reads "
@@ -208,7 +206,6 @@ class VaultSection(QWidget):
         lay.addWidget(self.table)
         lay.addWidget(self.copies)
         lay.addWidget(self.copies_note)
-        lay.addWidget(self.direct)
         lay.addLayout(buttons)
         lay.addWidget(self.status)
         self.tester = None
@@ -221,9 +218,6 @@ class VaultSection(QWidget):
     def load(self):
         for f in self.fields.values():
             f.load()
-        self.direct.blockSignals(True)
-        self.direct.setChecked(bool(db.get_setting("vault_direct")))
-        self.direct.blockSignals(False)
         self.kind.blockSignals(True)
         self.kind.setCurrentIndex(max(0, self.kind.findData(extstore.active())))
         self.kind.blockSignals(False)
@@ -237,7 +231,7 @@ class VaultSection(QWidget):
         manager = kind in extvault.CONNECTORS
         self.stack.setCurrentIndex(0 if not manager else 1 + list(extvault.CONNECTORS).index(kind))
         self.stack.setVisible(manager)
-        for w in (self.where, self.table, self.test_btn, self.direct):
+        for w in (self.where, self.table, self.test_btn):
             w.setVisible(manager)
         for w in (self.copies, self.copies_note):                    # (it is about the manager in use)
             w.setVisible(manager and kind == extstore.active())
@@ -302,9 +296,6 @@ class VaultSection(QWidget):
             self.copies.blockSignals(False)
         self.show_status()
 
-    def _direct(self, on):
-        db.set_setting("vault_direct", on)
-        audit.log("password manager " + ("connects directly" if on else "follows the proxy settings"))
         extstore.kick()
 
     # ---------- buttons

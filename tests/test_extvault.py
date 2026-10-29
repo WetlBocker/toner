@@ -368,22 +368,15 @@ print("== ignoring the proxy: updates and the password manager")
 from core import proxy, updates
 db.set_setting("proxy", {"mode": "manual", "kind": "http", "host": "px.corp", "port": 3128, "username": "", "bypass": "*.internal"})
 env = proxy.child_env({"PATH": "x", "HTTPS_PROXY": "http://old:1", "no_proxy": "y"}, "vault.bitwarden.com")
-check("bw and op get Toner's proxy in the variables they read (replacing any set before Toner started)",
-      env["HTTPS_PROXY"] == "http://px.corp:3128" and env["HTTP_PROXY"] == "http://px.corp:3128" and "no_proxy" not in env and env["PATH"] == "x", env)
-env = proxy.child_env({"HTTPS_PROXY": "http://old:1"}, "vault.bitwarden.com", direct=True)
-check("connecting directly gives them no proxy at all", "HTTPS_PROXY" not in env and env["NO_PROXY"] == "*", env)
-env = proxy.child_env({}, "pw.internal")
-check("an address on the bypass list is reached directly", "HTTPS_PROXY" not in env and env["NO_PROXY"] == "*")
+check("bw and op get no proxy at all, as every web connection, with any set before Toner started taken out",
+      "HTTPS_PROXY" not in env and "no_proxy" not in env and env["NO_PROXY"] == "*" and env["PATH"] == "x", env)
 import core.extvault as EV
 seen_env = []
 real_run = EV.subprocess.run
 EV.subprocess.run = lambda args, **k: (seen_env.append(k["env"]), type("P", (), {"returncode": 0, "stdout": "{}", "stderr": ""})())[1]
 tool = extvault.Bitwarden({"cli": sys.executable}, {})
 tool.run("status")
-check("the password manager follows Settings > Proxy by default", seen_env[-1].get("HTTPS_PROXY") == "http://px.corp:3128")
-db.set_setting("vault_direct", True)
-tool.run("status")
-check("...and connects directly once its tick box is on", "HTTPS_PROXY" not in seen_env[-1] and seen_env[-1]["NO_PROXY"] == "*")
+check("the password manager connects directly, past Settings > Proxy", "HTTPS_PROXY" not in seen_env[-1] and seen_env[-1]["NO_PROXY"] == "*")
 EV.subprocess.run = real_run
 posted = []
 import requests as _rq
@@ -394,27 +387,12 @@ sm = SM(); extvault._route(sm)
 class TK: publicKeyId = 10; encryptedKey = b"k"
 class PL: encrypted_payload = b"p"; signature = b"s"
 sm.post_function("https://keepersecurity.com/api/rest/sm/v1/get_secret", TK(), PL())
-check("Keeper connects directly with the tick box on", posted[-1] == {"http": "", "https": ""}, posted)
-db.set_setting("vault_direct", False)
-sm.post_function("https://keepersecurity.com/api/rest/sm/v1/get_secret", TK(), PL())
-check("...and through Toner's proxy with it off", posted[-1] == {"http": "http://px.corp:3128", "https": "http://px.corp:3128"}, posted)
+check("Keeper connects directly", posted[-1] == {"http": "", "https": ""}, posted)
 _rq.post = real_post
-check("updates follow Settings > Proxy by default", updates._proxies("https://api.github.com/repos/x") == {"proxies": {"http": "http://px.corp:3128", "https": "http://px.corp:3128"}})
-db.set_setting("update_direct", True)
-check("...and connect directly with About's tick box on", updates._proxies("https://api.github.com/repos/x") == {"proxies": {"http": "", "https": ""}})
-db.set_setting("update_direct", False)
+check("updates connect directly", updates._proxies("https://api.github.com/repos/x") == {"proxies": {"http": "", "https": ""}})
 import ui.about as AB
 ab = AB.AboutTab()
-check("About has the tick box, in the agreed words", ab.direct_box.text() == "Connect directly for updates (ignore the proxy settings)" and not ab.direct_box.isChecked())
-ab.direct_box.setChecked(True)
-check("ticking it is kept", db.get_setting("update_direct") is True)
-v.kind.setCurrentIndex(v.kind.findData("bitwarden")); app.processEvents()
-check("Settings > Security has the password manager's tick box, in the agreed words",
-      v.direct.text() == "Connect directly to the password manager (ignore the proxy settings)" and v.direct.isVisibleTo(sec))
-v.direct.setChecked(True)
-check("ticking it is kept right away, and is not an unsaved setting", db.get_setting("vault_direct") is True and (S.check_dirty(True), S.dirty_pages())[1] == [])
-v.kind.setCurrentIndex(v.kind.findData("toner")); app.processEvents()
-check("it is not offered for Toner's vault (nothing to connect to)", not v.direct.isVisibleTo(sec))
+check("About has no 'connect directly' tick any more; nor has Settings > Security", not hasattr(ab, "direct_box") and not hasattr(v, "direct"))
 print("== which bw.exe / op.exe, and the indicator at the bottom")
 fake_bw = os.path.join(SP, "bw.exe"); open(fake_bw, "w").close()
 from core import platforms

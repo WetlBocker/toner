@@ -1459,10 +1459,16 @@ class InventoryTab(QWidget):
         self.changed.emit()
         return True
 
-    def add(self):
+    def add(self, prefill=None):
+        """Add device; `prefill` ({'name', 'host', 'vendor'}, from the topology map) fills the boxes in first."""
         org = self.selected_org() if db.everything() and self.table.selectedItems() else None
         pre = None if org is None else (GLOBAL_ONLY_CHOICE if org == db.GLOBAL else org)
         dlg = DeviceDialog(parent=self, folder_id=self.current_folder() if self.folders_mode() else None, org=pre)
+        if prefill:
+            dlg.name.setText(prefill.get("name") or "")
+            dlg.host.setText(prefill.get("host") or "")
+            if dlg.vendor.findData(prefill.get("vendor") or "") >= 0:
+                dlg.vendor.setCurrentIndex(dlg.vendor.findData(prefill["vendor"]))
         if dlg.exec():
             self._save(dlg.values(), dlg.secret.text(), extra_secrets={**dlg.snmp_secrets(), **dlg.proxy_secrets(), **dlg.ssh_secrets()},
                        link=dlg.link_row)

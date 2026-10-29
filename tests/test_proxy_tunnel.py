@@ -306,8 +306,8 @@ tunnel.close_all(); answers[:] = ["482913"]; asked.clear()
 good, msg = reach(c_sock)
 check("a connection through SOCKS5 127.0.0.1:port signs in to the tunnel first", good and len(asked) == 1 and tunnel.is_open(), (msg, asked))
 check("its probe says it answers", proxy.probe(c_sock)[0] is True)
-url = proxy.requests_kwargs({"name": "x", "host": "10.9.9.9"})["proxies"]["https"]
-check("web requests use it as SOCKS5", url == f"socks5h://127.0.0.1:{LP}", url)
+url = proxy.for_device({"name": "x", "host": "10.9.9.9"}).url()
+check("SSH and TCP connections use it as SOCKS5; web requests never use a proxy", url == f"socks5h://127.0.0.1:{LP}" and proxy.requests_kwargs({"name": "x", "host": "10.9.9.9"}) == {"proxies": {"http": "", "https": ""}}, url)
 dev_own = {"name": "branch", "host": "127.0.0.1", "proxy": json.dumps({"mode": "custom", "kind": "socks5", "host": "127.0.0.1", "port": LP, "username": ""})}
 good, msg = reach(proxy.for_device(dev_own))
 check("a device whose own proxy points at it goes through it", good)

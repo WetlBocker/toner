@@ -1,19 +1,18 @@
-"""Proxy support: one global setting for every connection, and an optional override per device.
+"""Proxy support: one global setting for SSH, Telnet and TCP connections, and an optional override per device.
 
 Modes (global, Settings > Proxy)
     none     connect directly, ignoring any Windows proxy
-    system   use the Windows proxy settings for web connections (what a browser does). SSH and raw TCP stay direct,
-             because a system web proxy is not normally meant for them and its exceptions list is for web addresses.
-    manual   use the proxy given in Settings for everything that can be proxied, except the addresses in the bypass list
+    manual   use the proxy given in Settings for SSH, Telnet and TCP, except the addresses in the bypass list
 
 Per device (Inventory > the device > Access)
     default  follow the global setting
     none     always connect directly
     custom   always use this proxy (type, host, port, optional user name and password)
 
-What can go through a proxy: SSH (checks, backups, the console), the web APIs of Fortinet, Palo Alto, Meraki and UniFi,
-status pages, web / TCP / certificate checks, and notifications. SNMP, ping, traceroute and the listeners use UDP or
-ICMP, which ordinary proxies do not carry, so they always connect directly.
+What goes through a proxy: SSH (checks, backups, sessions, the Command Runner) and TCP port and reachability checks. Web
+connections never do (since 1.11.5): the vendor APIs, the Scanning lookups, the AI providers, notifications, web and
+certificate checks and Demarc connect directly, ignoring the Windows proxy too. SNMP, ping, traceroute and the listeners
+use UDP or ICMP, which ordinary proxies do not carry, so they always connect directly.
 """
 import base64
 import hashlib
@@ -39,9 +38,8 @@ DEFAULT_PORTS = {"http": 8080, "socks5": 1080, "socks4": 1080}
 # by 1.5.2 to 1.5.5 with the kind "tunnel" still works: it is sent through that tunnel.
 OTP_MODES = [("", "None"), ("ask", "Ask me for it when connecting"), ("totp", "Make it from a secret key")]
 MODES = [("none", "No proxy (connect directly)"),
-         ("system", "Use the Windows proxy settings (web connections only)"),
          ("manual", "Use the proxy below")]
-DEFAULTS = {"mode": "system", "kind": "http", "host": "", "port": 8080, "username": "", "bypass": "localhost, 127.0.0.1",
+DEFAULTS = {"mode": "none", "kind": "http", "host": "", "port": 8080, "username": "", "bypass": "localhost, 127.0.0.1",
             "otp": "", "key_file": ""}
 DIRECT = {"http": "", "https": ""}          # an empty address tells `requests` to ignore any proxy, even the Windows one
 
@@ -84,7 +82,10 @@ class Config:
 # ---------------------------------------------------------------- settings
 def settings():
     s = db.get_setting("proxy")
-    return {**DEFAULTS, **(s if isinstance(s, dict) else {})}
+    out = {**DEFAULTS, **(s if isinstance(s, dict) else {})}
+    if out.get("mode") == "system":                   # the Windows-settings mode of 1.5 to 1.11.4 covered web connections only
+        out["mode"] = "none"
+    return out
 
 
 def _secret(name):
@@ -144,8 +145,10 @@ def bypassed(host, patterns):
 
 
 def resolve(dev=None, host=None, purpose="socket"):
-    """How to reach `host` for `dev`: ('direct', None), ('system', None) or ('proxy', Config).
-    purpose is 'web' for HTTP(S) requests and 'socket' for SSH and raw TCP."""
+    """How to reach `host` for `dev`: ('direct', None) or ('proxy', Config).
+    purpose is 'web' for HTTP(S) requests, which always go direct, and 'socket' for SSH and raw TCP."""
+    if purpose == "web":
+        return "direct", None
     host = host or (dev or {}).get("host") or ""
     own = device_settings(dev)
     mode = own.get("mode", "default")
@@ -161,8 +164,6 @@ def resolve(dev=None, host=None, purpose="socket"):
     if s["mode"] == "manual":
         cfg = _config(s, _secret(GLOBAL_SECRET), _secret(GLOBAL_OTP) if s.get("otp") == "totp" else "")
         return ("proxy", cfg) if cfg and not bypassed(host, s.get("bypass")) else ("direct", None)
-    if s["mode"] == "system" and purpose == "web":
-        return "system", None
     return "direct", None
 
 
@@ -173,42 +174,23 @@ def for_device(dev=None, host=None):
 
 
 def requests_kwargs(dev=None, host=None):
-    """Extra arguments for requests.get/post: the proxies to use. Pass dev=None for app-wide connections."""
-    how, cfg = resolve(dev, host, "web")
-    if how == "proxy":
-        url = effective(cfg).url()
-        return {"proxies": {"http": url, "https": url}}
-    return {"proxies": dict(DIRECT)} if how == "direct" else {}
+    """Extra arguments for requests.get/post: web connections go direct, ignoring Toner's proxy and the Windows one."""
+    return {"proxies": dict(DIRECT)}
 
 
-def web_kwargs(host, direct=False):
-    """requests' proxies for an app-wide web connection; direct=True ignores every proxy setting (Toner's and Windows')."""
-    return {"proxies": dict(DIRECT)} if direct else requests_kwargs(None, host)
+def web_kwargs(host, direct=True):
+    """requests' proxies for an app-wide web connection: direct, like every web connection."""
+    return {"proxies": dict(DIRECT)}
 
 
 PROXY_ENV = ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "all_proxy", "no_proxy")
 
 
 def child_env(env, host, direct=False):
-    """The environment for a command-line tool that reaches `host` (bw.exe, op.exe): Toner's proxy in the variables such tools
-    read (HTTPS_PROXY, HTTP_PROXY), the Windows proxy when Settings says so, or none at all (NO_PROXY=*) when connecting
-    directly. Proxies set in the environment before Toner started are replaced, so Settings decides."""
+    """The environment for a command-line tool that reaches `host` (bw.exe, op.exe): no proxy at all (NO_PROXY=*), as for every
+    web connection. Proxies set in the environment before Toner started are taken out."""
     env = {k: v for k, v in env.items() if k not in PROXY_ENV}
-    how, cfg = ("direct", None) if direct else resolve(None, host, "web")
-    url = None
-    if how == "proxy":
-        url = effective(cfg).url()
-    elif how == "system":
-        try:
-            import urllib.request
-            found = urllib.request.getproxies_registry() if hasattr(urllib.request, "getproxies_registry") else {}
-            url = found.get("https") or found.get("http")
-        except Exception:
-            url = None
-    if url:
-        env.update(HTTPS_PROXY=url, HTTP_PROXY=url)
-    else:
-        env["NO_PROXY"] = "*"
+    env["NO_PROXY"] = "*"
     return env
 
 
@@ -559,13 +541,12 @@ def test_tunnel(cfg, host, port, timeout=8):
     return True, f"Connected to {host}:{port} through {cfg.label()} in {(time.time() - t0) * 1000:.0f} ms."
 
 
-def test_web(host, port, direct, timeout=8):
-    """(ok, message) for a web request that follows the system proxy (direct=False) or ignores it (direct=True)."""
+def test_web(host, port, direct=True, timeout=8):
+    """(ok, message) for a direct web request, as every web connection is made."""
     import requests
     t0 = time.time()
     try:
-        r = requests.get(f"https://{host}:{port}/", timeout=timeout, **({"proxies": dict(DIRECT)} if direct else {}))
+        r = requests.get(f"https://{host}:{port}/", timeout=timeout, proxies=dict(DIRECT))
     except requests.RequestException as e:
         return False, f"{type(e).__name__}: {str(e)[:150]}"
-    return True, f"Reached {host}:{port} ({'directly' if direct else 'using the Windows settings'}), HTTP {r.status_code}, " \
-                 f"{(time.time() - t0) * 1000:.0f} ms."
+    return True, f"Reached {host}:{port} directly, HTTP {r.status_code}, {(time.time() - t0) * 1000:.0f} ms."

@@ -1,5 +1,5 @@
 """Is a device up? A TCP connection to its management port (SSH, or the API's HTTPS port), through its proxy or SSH tunnel
-when it has one. ICMP cannot go through a proxy, so this is how a device behind one is checked; it also tells "the device is
+when it has one (the API vendors connect directly, as their API does). ICMP cannot go through a proxy, so this is how a device behind one is checked; it also tells "the device is
 down" apart from "the login failed". A connection the device refuses still proves it is up."""
 import socket
 import time
@@ -40,7 +40,7 @@ def probe(dev, host=None, port=None, timeout=5):
     dev = dev or {}
     host = host or dev.get("host") or ""
     port = int(port or management_port(dev))
-    cfg = proxy.for_device(dev if dev.get("name") else None, host)
+    cfg = None if dev.get("vendor") in API_PORTS else proxy.for_device(dev if dev.get("name") else None, host)      # the API connects directly
     t0 = time.time()
     ms = lambda: (time.time() - t0) * 1000
     try:

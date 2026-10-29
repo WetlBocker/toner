@@ -248,9 +248,9 @@ class DiscoveryTab(QWidget):
 
 # =============================================================================== Topology
 class NodeItem(QGraphicsRectItem):
-    def __init__(self, name, status, inventory, w=120, h=34):
+    def __init__(self, name, status, inventory, addr="", w=120, h=34):
         super().__init__(-w / 2, -h / 2, w, h)
-        self.name, self.edges = name, []
+        self.name, self.addr, self.inventory, self.edges = name, addr, inventory, []
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
         self.setZValue(2)
@@ -274,13 +274,27 @@ class NodeItem(QGraphicsRectItem):
                 e.update_line()
         return super().itemChange(change, value)
 
+    def mouseDoubleClickEvent(self, e):
+        views = self.scene().views() if self.scene() else []
+        if views and views[0].on_open:
+            views[0].on_open(self.name)
+        super().mouseDoubleClickEvent(e)
+
 
 class EdgeItem(QGraphicsLineItem):
-    def __init__(self, a, b, a_port, b_port, tip):
+    def __init__(self, a, b, a_port, b_port, tip, change="", down=False):
         super().__init__()
         self.a, self.b = a, b
         tk = theme.current() or {}
-        self.setPen(QPen(QColor(tk.get("muted", "#888888")), 1.6))
+        if change == "gone":                                      # not seen this time: dotted red
+            pen = QPen(QColor("#d32f2f"), 1.6, Qt.PenStyle.DotLine)
+        elif down:                                                # a port at one end is down: red
+            pen = QPen(QColor("#d32f2f"), 2.0)
+        elif change == "new":                                     # not seen the time before: thick, in the accent
+            pen = QPen(QColor(tk.get("accent", "#0e7490")), 2.6)
+        else:
+            pen = QPen(QColor(tk.get("muted", "#888888")), 1.6)
+        self.setPen(pen)
         self.setZValue(1)
         self.setToolTip(tip)
         self.la, self.lb = QGraphicsSimpleTextItem(a_port, self), QGraphicsSimpleTextItem(b_port, self)
@@ -302,6 +316,20 @@ class EdgeItem(QGraphicsLineItem):
             lab.setPos(p.x() + d.x() / n * 92 - lab.boundingRect().width() / 2, p.y() + d.y() / n * 48 - lab.boundingRect().height() / 2)
 
 
+def link_tip(l):
+    """The hover text of a link: both ends, the protocols, the speed, a port down, and whether it is new or gone."""
+    lines = [f"{db.label(l['a'])} {l['a_port']}  <->  {db.label(l['b'])} {l['b_port']}", ", ".join(sorted(l["protocols"])) or ""]
+    if l.get("speed"):
+        lines.append(l["speed"])
+    if l.get("down"):
+        lines.append("a port is down")
+    if l.get("change") == "new":
+        lines.append("new since the discovery before")
+    elif l.get("change") == "gone":
+        lines.append("gone since the discovery before")
+    return "\n".join(x for x in lines if x)
+
+
 class TopologyView(QGraphicsView):
     def __init__(self):
         super().__init__()
@@ -309,29 +337,63 @@ class TopologyView(QGraphicsView):
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+        self.on_open = self.on_menu = self.on_moved = None       # set by the tab: double-click, right-click, a box dragged
+        self.boxes, self.lines = {}, []
 
     def wheelEvent(self, e):
         f = 1.15 if e.angleDelta().y() > 0 else 1 / 1.15
         self.scale(f, f)
 
+    def mouseReleaseEvent(self, e):
+        super().mouseReleaseEvent(e)
+        if self.on_moved and self.boxes:
+            self.on_moved()
+
+    def contextMenuEvent(self, e):
+        it = self.itemAt(e.pos())
+        while it is not None and not isinstance(it, NodeItem):
+            it = it.parentItem()
+        if it is not None and self.on_menu:
+            self.on_menu(it, e.globalPos())
+        else:
+            super().contextMenuEvent(e)
+
     def draw(self, nodes, links, positions, status):
         sc = self.scene()
         sc.clear()
-        items = {}
+        self.boxes, self.lines = {}, []
         for name, info in nodes.items():
             x, y = positions.get(name, (0, 0))
-            n = NodeItem(name, status.get(name, ""), info["inventory"])
+            n = NodeItem(name, status.get(name, ""), info["inventory"], info.get("addr", ""))
             n.setPos(x, y)
-            n.setToolTip(name + (f"\n{info['addr']}" if info["addr"] else "") + ("" if info["inventory"] else "\n(not in the inventory)"))
+            n.setToolTip(db.label(name) + (f"\n{info['addr']}" if info["addr"] else "") + ("" if info["inventory"] else "\n(not in the inventory)")
+                         + ("\nDouble-click to open the device" if info["inventory"] else "\nRight-click to add it to the inventory"))
             sc.addItem(n)
-            items[name] = n
+            self.boxes[name] = n
         for l in links:
-            e = EdgeItem(items[l["a"]], items[l["b"]], l["a_port"], l["b_port"],
-                         f"{l['a']} {l['a_port']}  <->  {l['b']} {l['b_port']}\n{', '.join(sorted(l['protocols']))}")
+            e = EdgeItem(self.boxes[l["a"]], self.boxes[l["b"]], l["a_port"], l["b_port"], link_tip(l), l.get("change", ""), l.get("down", False))
             sc.addItem(e)
+            self.lines.append(e)
         sc.setSceneRect(sc.itemsBoundingRect().adjusted(-60, -60, 60, 60))
         self.resetTransform()
         self.fitInView(sc.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+
+    def current_positions(self):
+        return {name: (it.pos().x(), it.pos().y()) for name, it in self.boxes.items()}
+
+    def highlight(self, words):
+        """Search: the boxes whose name or address has every word stay bright, with their neighbours; the rest fade."""
+        if not words:
+            keep = set(self.boxes)
+        else:
+            keep = {name for name, it in self.boxes.items() if all(w in f"{db.label(name)} {it.addr}".lower() for w in words)}
+            for e in self.lines:
+                if e.a.name in keep or e.b.name in keep:
+                    keep |= {e.a.name, e.b.name}
+        for name, it in self.boxes.items():
+            it.setOpacity(1.0 if name in keep else 0.2)
+        for e in self.lines:
+            e.setOpacity(1.0 if e.a.name in keep and e.b.name in keep else 0.15)
 
 
 class TopologyWorker(QThread):
@@ -348,43 +410,71 @@ class TopologyWorker(QThread):
 
 
 class TopologyTab(QWidget):
+    open_device = Signal(str)                # a box's device key: open its details
+    open_ssh = Signal(str)                   # ... an SSH session to it
+    run_checks = Signal(list)                # ... run its checks
+    ping = Signal(str)                       # ... ping it
+    add_device = Signal(dict)                # a neighbour not in the inventory: {'name', 'host', 'vendor'} for Add device
+    COLS = ["Device", "Local port", "Neighbour", "Neighbour port", "Protocol", "Address", "Link", "Change"]
+
     def __init__(self):
         super().__init__()
         self.worker = None
-        self.rows, self.nodes, self.links = [], {}, []
-        self.find = SearchBox("Search devices", "Type part of a name, address, vendor, location, tag or detail. Several words must all match.",
-                              page=self)
-        self.funnel = FilterButton(lambda: device_sections(topology.snmp_devices()))
+        self.rows, self.nodes, self.links, self.at, self.prev_rows = [], {}, [], "", []
+        self.find = SearchBox("Search devices", "Type part of a name, address, vendor, location, tag or detail. Several words must all match. "
+                              "On the map, the boxes that match stay bright with their neighbours.", page=self)
+        self.funnel = FilterButton(lambda: device_sections(topology.devices()))
         self.go = _primary("Discover neighbours")
-        self.go.setToolTip("Asks the devices shown that have SNMP settings")
+        self.go.setToolTip("Asks the devices shown that can report neighbours: SNMP, an SSH login, or a firewall's API")
         self.view_btn = QPushButton("Show map")
         self.view_btn.setCheckable(True)
+        self.tidy_btn = QPushButton("Tidy up")
+        self.tidy_btn.setToolTip("Lays the boxes out afresh and forgets where you dragged them")
         self.save_btn = QPushButton("Save picture...")
         self.status = _muted("")
-        self.table = _table(["Device", "Local port", "Neighbour", "Neighbour port", "Protocol", "Address"])
+        self.table = _table(self.COLS)
         self.map = TopologyView()
+        self.map.on_open, self.map.on_menu, self.map.on_moved = self._open, self.node_menu, self._moved
         self.stack = QStackedWidget()
         self.stack.addWidget(self.table)
         self.stack.addWidget(self.map)
         top = QHBoxLayout()
-        for w in (self.go, self.view_btn, self.save_btn):
+        for w in (self.go, self.view_btn, self.tidy_btn, self.save_btn):
             top.addWidget(w)
         top.addWidget(self.status, 1)
-        top.addWidget(self.find, 1)                       # on the right, as on Inventory
+        top.addWidget(self.find, 0)                       # on the right, as on Inventory; the status line gets the room
         top.addWidget(self.funnel)
         lay = QVBoxLayout(self)
         lay.addLayout(top)
-        lay.addWidget(_muted("Asks every device that has SNMP settings for its LLDP and CDP neighbours, then joins the answers "
-                             "into one picture. Devices turn up as boxes coloured by their last health result; neighbours "
-                             "that are not in the inventory are dashed. Drag boxes to tidy up, scroll to zoom."))
+        lay.addWidget(_muted("Asks every device that can report neighbours (SNMP, an SSH login, or a firewall's API) for its LLDP and CDP "
+                             "neighbours, then joins the answers into one picture, kept until the next discovery. Devices turn up as boxes "
+                             "coloured by their last health result; neighbours that are not in the inventory are dashed. A link that is new "
+                             "since the discovery before is thick, one that is gone is dotted red, one with a port down is red. Drag boxes to "
+                             "tidy up (Toner remembers where), scroll to zoom, double-click a box to open the device, right-click it for more."))
         lay.addWidget(self.stack, 1)
         self.go.clicked.connect(self.start)
         self.view_btn.toggled.connect(self._toggle)
+        self.tidy_btn.clicked.connect(self.tidy)
         self.save_btn.clicked.connect(self.save_picture)
+        self.find.textChanged.connect(lambda _t: self.map.highlight(self.find.words()))
         self.refresh()
+        rows, at, prev = topology.last()
+        if rows:
+            self._apply(rows, {}, at, prev)
 
     def refresh(self):
         pass                                              # the funnel reads the inventory each time it opens
+
+    def reset_view(self):
+        """Another organization was picked: its own last discovery, or nothing."""
+        self.rows, self.nodes, self.links, self.at, self.prev_rows = [], {}, [], "", []
+        self.table.setRowCount(0)
+        self.map.scene().clear()
+        self.map.boxes, self.map.lines = {}, []
+        self.status.setText("")
+        rows, at, prev = topology.last()
+        if rows:
+            self._apply(rows, {}, at, prev)
 
     def _toggle(self, on):
         self.stack.setCurrentIndex(1 if on else 0)
@@ -398,10 +488,9 @@ class TopologyTab(QWidget):
     def start(self):
         if self.running():
             return
-        devs = shown_devices(topology.snmp_devices(), self.find, self.funnel)
+        devs = shown_devices(topology.devices(), self.find, self.funnel)
         if not devs:
-            QMessageBox.information(self, "Topology", "No devices with SNMP settings. Set SNMP on a device (its SNMP tab) "
-                                    "or use a credential profile that includes SNMP.")
+            QMessageBox.information(self, "Topology", topology.NOTHING)
             return
         self.go.setEnabled(False)
         self.total, self.n = len(devs), 0
@@ -417,23 +506,74 @@ class TopologyTab(QWidget):
 
     def _done(self, rows, errors):
         self.go.setEnabled(True)
-        self.rows = rows
-        self.nodes, self.links = topology.build_graph(rows)
-        self.table.setRowCount(len(rows))
-        for i, r in enumerate(sorted(rows, key=lambda r: (r["device"].lower(), r["local_port"]))):
-            for j, v in enumerate([r["device"], r["local_port"], r["remote_name"], r["remote_port"], r["protocol"], r["remote_addr"]]):
-                self.table.setItem(i, j, QTableWidgetItem(v))
+        prev = topology.last()[0]
+        topology.remember(rows)
+        self._apply(rows, errors, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), prev)
+
+    def _apply(self, rows, errors, at, prev_rows):
+        """Show a discovery: the table (with each row's link state and change), the status line, and the map when it is on."""
+        self.rows, self.at, self.prev_rows = rows, at, prev_rows
+        nodes, links = topology.build_graph(rows)
+        if prev_rows:
+            nodes, links = topology.mark_changes(nodes, links, topology.build_graph(prev_rows)[1])
+        self.nodes, self.links = nodes, links
+        change_of = {i: l["change"] for l in links for i in l["rows"]}
+        order = sorted(range(len(rows)), key=lambda i: (rows[i]["device"].lower(), rows[i]["local_port"]))
+        gone = [l for l in links if l["change"] == "gone"]
+        self.table.setRowCount(len(order) + len(gone))
+        for n, i in enumerate(order):
+            r = rows[i]
+            link = "down" if r.get("local_up") is False else (r.get("local_speed") or "")
+            for j, v in enumerate([db.label(r["device"]), r["local_port"], r["remote_name"], r["remote_port"], r["protocol"], r["remote_addr"], link, change_of.get(i, "")]):
+                self.table.setItem(n, j, QTableWidgetItem(v))
+        for n, l in enumerate(gone, start=len(order)):
+            for j, v in enumerate([db.label(l["a"]), l["a_port"], db.label(l["b"]), l["b_port"], "", "", "", "gone"]):
+                self.table.setItem(n, j, QTableWidgetItem(v))
         self.table.resizeColumnsToContents()
-        msg = f"{len(self.links)} link(s) between {len(self.nodes)} device(s)."
+        live = [l for l in links if l["change"] != "gone"]
+        msg = (f"{at[:16]}: " if at else "") + f"{len(live)} link(s) between {len(nodes)} device(s)."
+        new = sum(1 for l in links if l["change"] == "new")
+        if new or gone:
+            msg += f"  Since the discovery before: {new} new, {len(gone)} gone."
         if errors:
-            msg += f"  {len(errors)} device(s) failed: " + "; ".join(f"{k}: {v[:60]}" for k, v in list(errors.items())[:3])
+            msg += f"  {len(errors)} device(s) failed: " + "; ".join(f"{db.label(k)}: {v[:60]}" for k, v in list(errors.items())[:3])
         self.status.setText(msg)
         if self.view_btn.isChecked():
             self.draw_map()
 
     def draw_map(self):
-        pos = topology.layout(self.nodes, self.links, 900, 600)
+        pos = topology.layout(self.nodes, self.links, 900, 600, fixed=topology.positions())
         self.map.draw(self.nodes, self.links, pos, topology.latest_status())
+        self.map.highlight(self.find.words())
+
+    def tidy(self):
+        topology.save_positions(None)
+        if self.nodes:
+            self.view_btn.setChecked(True)
+            self.draw_map()
+
+    def _moved(self):
+        topology.save_positions(self.map.current_positions())
+
+    def _open(self, name):
+        if self.nodes.get(name, {}).get("inventory"):
+            self.open_device.emit(name)
+
+    def node_actions(self, name):
+        """[(label, what it does)] for a box: the device's own actions, or Add to inventory for an outside neighbour."""
+        info = self.nodes.get(name, {})
+        if info.get("inventory"):
+            return [("Open device", lambda: self.open_device.emit(name)), ("Open SSH session", lambda: self.open_ssh.emit(name)),
+                    ("Run checks", lambda: self.run_checks.emit([name])), ("Ping", lambda: self.ping.emit(name))]
+        desc = next((r.get("remote_desc", "") for r in self.rows if topology._key(r["remote_name"]) == topology._key(name)), "")
+        return [("Add to inventory...", lambda: self.add_device.emit({"name": name, "host": info.get("addr", ""), "vendor": topology.guess_vendor(desc)}))]
+
+    def node_menu(self, item, pos):
+        from PySide6.QtWidgets import QMenu
+        menu = QMenu(self)
+        for label, fn in self.node_actions(item.name):
+            menu.addAction(label, fn)
+        menu.exec(pos)
 
     def save_picture(self):
         if not self.nodes:

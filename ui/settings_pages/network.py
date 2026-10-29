@@ -48,7 +48,6 @@ class ProxyPage(Page):
         self.otp.setToolTip("For a proxy with two-step sign-in: the current code from an authenticator app is added to the end of the password.")
         self.otp_key.setEchoMode(QLineEdit.EchoMode.Password)
         self.otp_note = note("")
-        self.system = note("")
         self.test_to = QLineEdit("www.githubstatus.com:443")
         self.test_btn = QPushButton("Test")
         self.test_out = QLabel("")
@@ -57,7 +56,6 @@ class ProxyPage(Page):
         self._have_key = False
         self.manual = [self.kind, self.host, self.port, self.user, self.password, self.forget, self.bypass, self.otp, self.otp_key]
         self.form.addRow("Connections Go", self.mode)
-        self.form.addRow("", self.system)
         self.form.addRow("Proxy Type", self.kind)
         self.form.addRow("Address", self.host)
         self.form.addRow("Port", self.port)
@@ -141,12 +139,10 @@ class ProxyPage(Page):
         self.lay.insertWidget(0, self.proxy_box)
         self.lay.insertWidget(1, self.tunnel_box)
         self.lay.insertWidget(0, note(
-            "Send Toner's connections through a proxy. This is the setting for every connection; a device can override it "
-            "in its own Access tab. It covers SSH (checks, backups, the console), the web APIs of Fortinet, Palo Alto, "
-            "Meraki and UniFi, status pages, web, port and certificate checks, and notifications. SNMP, ping, "
-            "traceroute and the listeners use UDP or ICMP, which a proxy does not carry, so they always connect directly. "
-            "'Windows proxy settings' covers web connections only, as a browser would; choose 'Use the proxy below' to "
-            "send SSH and port checks through a proxy as well."))
+            "Send Toner's SSH, Telnet and TCP connections through a proxy: the checks, backups, sessions, the Command Runner, "
+            "port and reachability checks. This is the setting for every device; a device can override it in its own Access "
+            "tab. Web connections never use it: the vendor APIs, the Scanning lookups, the AI providers, notifications, web "
+            "and certificate checks and Demarc connect directly, as do SNMP, ping, traceroute and the listeners."))
 
         self.mode.currentIndexChanged.connect(self.adapt)
         self.otp.currentIndexChanged.connect(self.adapt)
@@ -168,7 +164,6 @@ class ProxyPage(Page):
         manual = self.mode.currentData() == "manual"
         for w in self.manual:
             w.setEnabled(manual)
-        self.form.setRowVisible(self.system, self.mode.currentData() == "system")
         code = self.otp.currentData()
         self.form.setRowVisible(self.otp_key, code == "totp")
         self.form.setRowVisible(self.otp_note, bool(code))
@@ -288,9 +283,6 @@ class ProxyPage(Page):
         self.otp.setCurrentIndex(max(0, self.otp.findData(s.get("otp") or "")))
         self.otp_key.clear()
         self._have_key = bool(keyring.get_password(db.SERVICE, proxy.GLOBAL_OTP))
-        sys_text = proxy.system_text()
-        self.system.setText(f"Windows is set to use: {sys_text}" if sys_text else
-                            "Windows has no proxy configured, so connections go directly.")
         self.test_out.setText("")
         t = tunnel.settings()
         self.t_enabled.setChecked(bool(t["enabled"]))
@@ -388,7 +380,7 @@ class ProxyPage(Page):
                                     proxy.clean_key(self.otp_key.text()) or keyring.get_password(db.SERVICE, proxy.GLOBAL_OTP) or "")
                 ok, msg = (False, "Enter the proxy's address first.") if cfg is None else proxy.test_tunnel(cfg, host, int(port))
             else:
-                ok, msg = proxy.test_web(host, int(port), direct=(mode == "none"))
+                ok, msg = proxy.test_web(host, int(port))
         finally:
             QApplication.restoreOverrideCursor()
         self.test_out.setText(("OK: " if ok else "Failed: ") + msg)

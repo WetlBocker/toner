@@ -169,7 +169,6 @@ class AboutTab(QWidget):
             b.hide()
         self.auto_check_box = QCheckBox("Check for updates automatically (once a day)")
         self.auto_install_box = QCheckBox("Install updates automatically")
-        self.direct_box = QCheckBox("Connect directly for updates (ignore the proxy settings)")
         self.auto_note = _muted("With this on, a new version is downloaded and checked as soon as it is found, and installed "
                                 "when you close Toner. You can still install it straight away from here.")
         self.last = _muted("")
@@ -188,7 +187,6 @@ class AboutTab(QWidget):
         ul.addWidget(self.auto_check_box)
         ul.addWidget(self.auto_install_box)
         ul.addWidget(self.auto_note)
-        ul.addWidget(self.direct_box)
         ul.addWidget(self.last)
 
         # ---- earlier versions (the installers kept in the updates folder)
@@ -257,7 +255,6 @@ class AboutTab(QWidget):
         self.web_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(URL)))
         self.auto_check_box.toggled.connect(self._save_options)
         self.auto_install_box.toggled.connect(self._save_options)
-        self.direct_box.toggled.connect(self._save_options)
         self.load()
 
     # ---------------------------------------------------------------- what is shown
@@ -298,8 +295,7 @@ class AboutTab(QWidget):
             self.form.addRow(k, _selectable(str(v)))
         for n, v, why in self.libraries():
             self.parts.addRow(n, _selectable(f"{v}   -   {why}" if v else why))
-        for box, key in ((self.auto_check_box, "update_check"), (self.auto_install_box, "update_auto_install"),
-                         (self.direct_box, "update_direct")):
+        for box, key in ((self.auto_check_box, "update_check"), (self.auto_install_box, "update_auto_install")):
             box.blockSignals(True)
             box.setChecked(bool(db.get_setting(key)))
             box.blockSignals(False)
@@ -327,7 +323,6 @@ class AboutTab(QWidget):
     def _save_options(self, *_):
         db.set_setting("update_check", self.auto_check_box.isChecked())
         db.set_setting("update_auto_install", self.auto_install_box.isChecked() and self._can_update)
-        db.set_setting("update_direct", self.direct_box.isChecked())
         audit.log("update options changed", f"check={self.auto_check_box.isChecked()}, "
                                             f"install={self.auto_install_box.isChecked() and self._can_update}")
         self.start_background_checks()

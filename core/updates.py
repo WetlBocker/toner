@@ -113,8 +113,8 @@ def _pick_hex(text, name=""):
 
 
 def _proxies(url):
-    """Settings > Proxy, unless About > Connect directly for updates is ticked."""
-    return proxy.web_kwargs(urlparse(url).hostname, bool(db.get_setting("update_direct")))
+    """Direct, as every web connection."""
+    return proxy.web_kwargs(urlparse(url).hostname)
 
 
 def _ssl_reason(e):

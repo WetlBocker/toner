@@ -184,7 +184,7 @@ class _Cli(Provider):
 
     def run(self, *args, stdin=None, extra=None):
         from core import proxy
-        env = proxy.child_env({**self.env(), **(extra or {})}, self.host(), direct())
+        env = proxy.child_env({**self.env(), **(extra or {})}, self.host())
         try:
             p = subprocess.run([self.exe(), *args], input=stdin, capture_output=True, text=True, encoding="utf-8", errors="replace",
                                env=env, timeout=180, creationflags=CREATE_NO_WINDOW if os.name == "nt" else 0)
@@ -534,11 +534,6 @@ class Keeper(Provider):
         return found[0].password
 
 
-def direct():
-    """Settings > Security > Connect directly to the password manager (ignore the proxy settings)."""
-    return bool(db.get_setting("vault_direct"))
-
-
 def _route(sm):
     """Keeper's requests go the way Settings > Proxy says (or directly), like the rest of Toner's web connections."""
     from urllib.parse import urlparse
@@ -551,7 +546,7 @@ def _route(sm):
                    "PublicKeyId": str(transmission_key.publicKeyId), "TransmissionKey": K.bytes_to_base64(transmission_key.encryptedKey),
                    "Authorization": "Signature %s" % K.bytes_to_base64(payload.signature)}
         rs = requests.post(url, headers=headers, data=payload.encrypted_payload, verify=verify_ssl_certs, timeout=60,
-                           **proxy.web_kwargs(urlparse(url).hostname, direct()))
+                           **proxy.web_kwargs(urlparse(url).hostname))
         return K.KSMHttpResponse(rs.status_code, rs.content, rs)
     sm.post_function = post
 

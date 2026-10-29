@@ -155,14 +155,15 @@ check("an empty list bypasses nothing", not proxy.bypassed("localhost", "") and 
 
 print("== which way a connection goes")
 d = dev()
-check("the default is the Windows settings for web, direct for everything else", proxy.settings()["mode"] == "system" and proxy.resolve(d, purpose="web")[0] == "system" and proxy.resolve(d, purpose="socket")[0] == "direct" and proxy.for_device(d) is None and proxy.requests_kwargs(d) == {})
+check("the default is no proxy; web requests ignore even a Windows proxy", proxy.settings()["mode"] == "none" and proxy.resolve(d, purpose="web")[0] == "direct" and proxy.resolve(d, purpose="socket")[0] == "direct" and proxy.for_device(d) is None and proxy.requests_kwargs(d) == {"proxies": {"http": "", "https": ""}})
+check("the Windows-settings mode of older versions reads as no proxy, and is not offered", (db.set_setting("proxy", {**proxy.DEFAULTS, "mode": "system"}), proxy.settings()["mode"])[1] == "none" and [k for k, _l in proxy.MODES] == ["none", "manual"])
 global_mode(mode="none")
 check("'no proxy' ignores even a Windows proxy for web requests", proxy.requests_kwargs(d) == {"proxies": {"http": "", "https": ""}} and proxy.for_device(d) is None)
 global_mode(mode="manual", kind="http", host="proxy.corp", port=3128, username="svc", bypass="localhost, *.lab")
 STORE[("netcheck", proxy.GLOBAL_SECRET)] = "p@ss:w/rd"
 cfg = proxy.for_device(dev(host="10.1.1.1"))
-check("manual: used for sockets and web", cfg and (cfg.kind, cfg.host, cfg.port, cfg.username, cfg.password) == ("http", "proxy.corp", 3128, "svc", "p@ss:w/rd") and proxy.resolve(dev(host="10.1.1.1"), purpose="web")[0] == "proxy")
-check("manual: the proxy URL escapes special characters in the password", cfg.url() == "http://svc:p%40ss%3Aw%2Frd@proxy.corp:3128" and proxy.requests_kwargs(dev(host="10.1.1.1"))["proxies"]["https"] == cfg.url())
+check("manual: used for sockets, never for web", cfg and (cfg.kind, cfg.host, cfg.port, cfg.username, cfg.password) == ("http", "proxy.corp", 3128, "svc", "p@ss:w/rd") and proxy.resolve(dev(host="10.1.1.1"), purpose="web")[0] == "direct")
+check("manual: the proxy URL escapes special characters in the password; web requests still go direct", cfg.url() == "http://svc:p%40ss%3Aw%2Frd@proxy.corp:3128" and proxy.requests_kwargs(dev(host="10.1.1.1")) == {"proxies": {"http": "", "https": ""}} and proxy.web_kwargs("x") == {"proxies": {"http": "", "https": ""}})
 check("manual: a bypassed address goes direct", proxy.for_device(dev(host="x.lab")) is None and proxy.requests_kwargs(dev(host="x.lab")) == {"proxies": {"http": "", "https": ""}})
 check("SOCKS URLs ask the proxy to resolve names", proxy.Config("socks5", "h", 1080).url() == "socks5h://h:1080" and proxy.Config("socks4", "h", 1080).url() == "socks4a://h:1080")
 check("a manual setting with no address means direct", (global_mode(mode="manual", host=""), proxy.for_device(d))[1] is None)
@@ -176,7 +177,7 @@ check("...even for an address the global bypass list names", proxy.for_device({*
 check("a password typed but not yet saved is used for a test", proxy.for_device({**own, "_proxy_secret": "typed"}).password == "typed")
 check("a device proxy without an address means direct", proxy.for_device(dev(proxy=json.dumps({"mode": "custom", "host": ""}))) is None)
 check("a damaged value is ignored", proxy.device_settings({"proxy": "{oops"}) == {} and proxy.device_settings({"proxy": ""}) == {} and proxy.device_settings({}) == {})
-global_mode(mode="system")
+global_mode(mode="none")
 
 # ================================================================ making connections
 print("== HTTP proxy (CONNECT)")
@@ -224,12 +225,12 @@ del os.environ["HTTP_PROXY"]
 global_mode(mode="manual", host="127.0.0.1", port=hp.port, bypass=""); hp.log.clear()
 chk = {"name": "page", "kind": "http", "target": WEB, "expect": "2xx", "mode": "number", "scope": [], "higher_worse": 1}
 res = custom.run_http(chk, dev(host="127.0.0.1"))
-check("a web check follows the global manual proxy", res.status == "OK" and hp.log and hp.log[0][0].startswith("GET http://127.0.0.1"), (res, hp.log))
+check("a web check goes direct, past the global manual proxy", res.status == "OK" and not hp.log and hits, (res, hp.log))
 hp.log.clear(); hits.clear(); res = custom.run_http(chk, dev(host="127.0.0.1", proxy=json.dumps({"mode": "none"})))
-check("...and goes straight to a device that is set to connect directly", res.status == "OK" and not hp.log and hits, (res, hp.log))
-global_mode(mode="system")
-hp.log.clear(); res = custom.run_http(chk, dev(host="127.0.0.1", proxy=custom_for(hp)))
-check("a device's own proxy is used for its web check", res.status == "OK" and hp.log, hp.log)
+check("...and to a device that is set to connect directly", res.status == "OK" and not hp.log and hits, (res, hp.log))
+global_mode(mode="none")
+hp.log.clear(); hits.clear(); res = custom.run_http(chk, dev(host="127.0.0.1", proxy=custom_for(hp)))
+check("a device's own proxy is not used for its web check either", res.status == "OK" and not hp.log and hits, hp.log)
 
 print("== TCP and certificate checks")
 chk = {"name": "port", "kind": "tcp", "port": echo.port, "warn": None, "fail": None, "higher_worse": 1}
@@ -263,7 +264,7 @@ global_mode(mode="manual", host="127.0.0.1", port=hp.port, bypass=""); hp.log.cl
 check("the global setting carries a device that has no setting of its own", names == ["f.txt"] and hp.log, hp.log)
 hp.log.clear(); sock, names = ssh_over({**sshdev, "proxy": json.dumps({"mode": "none"})})
 check("...but not one set to connect directly", names == ["f.txt"] and not hp.log and sock is None, hp.log)
-global_mode(mode="system"); hp.log.clear(); sock, names = ssh_over(sshdev)
+global_mode(mode="none"); hp.log.clear(); sock, names = ssh_over(sshdev)
 check("the Windows proxy setting is for web connections only, so SSH stays direct", sock is None and not hp.log)
 try: ssh_over({**sshdev, "proxy": custom_for(HttpProxy(auth="a:b"))}); check("a proxy login failure stops the SSH connection with its reason", False)
 except proxy.ProxyError as e: check("a proxy login failure stops the SSH connection with its reason", "needs a user name and password" in str(e), str(e))
@@ -283,12 +284,12 @@ check("email goes through the global proxy", code == 250 and hp.log and hp.log[0
 hp.log.clear()
 try: notify._post(WEB, {}, json_body={"a": 1})
 except Exception as e: pass
-check("a webhook goes through the global proxy", hp.log and hp.log[0][0].startswith("POST http://127.0.0.1"), hp.log)
+check("a webhook goes direct, past the global proxy", not hp.log, hp.log)
 global_mode(mode="manual", host="127.0.0.1", port=hp.port, bypass="127.0.0.1"); hp.log.clear(); hits.clear()
 mail = notify._SMTP("127.0.0.1", sm.port, timeout=5); mail.noop(); mail.quit()
 notify._post(WEB, {}, json_body={"a": 1})
 check("an address on the bypass list is contacted directly", not hp.log and hits == ["/hello"], (hp.log, hits))
-global_mode(mode="system")
+global_mode(mode="none")
 
 # ================================================================ storage
 print("== saving")
@@ -305,7 +306,7 @@ check("the global proxy setting is a portable setting, its password is not", "pr
 print("== UI: Settings > Proxy")
 import ui.settings as S
 pg = S.ProxyPage(); pg.load()
-check("defaults: Windows settings, manual fields greyed out", pg.mode.currentData() == "system" and not pg.host.isEnabled() and "Windows" in pg.system.text())
+check("defaults: no proxy, manual fields greyed out, no Windows-settings choice", pg.mode.currentData() == "none" and not pg.host.isEnabled() and pg.mode.findData("system") == -1 and not hasattr(pg, "system"))
 pg.mode.setCurrentIndex(pg.mode.findData("manual"))
 check("choosing manual enables the fields", pg.host.isEnabled() and pg.port.isEnabled() and pg.password.isEnabled())
 check("a manual proxy needs an address", pg.validate() and "address" in pg.validate()[0])

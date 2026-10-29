@@ -161,6 +161,12 @@ class Main(QMainWindow):
         self.dashboard.run_requested.connect(lambda: (self.go("Results"), self.results.start()))
         self.dashboard.backup_requested.connect(lambda: (self.go("Configs"), self.configs.start()))
         self.tools.inventory_changed.connect(self.inventory_reloaded)
+        topo = self.tools.topology                               # a box on the map: open the device, a session, checks, a ping, or add it
+        topo.open_device.connect(self.open_device_by_name)
+        topo.open_ssh.connect(lambda key: self.open_ssh_console(db.find_device(key)) if db.find_device(key) else None)
+        topo.run_checks.connect(self.results.run_devices)
+        topo.ping.connect(lambda key: self.open_tool("ping", db.find_device(key)) if db.find_device(key) else None)
+        topo.add_device.connect(lambda info: (self.go("Inventory"), self.inventory.add(info)))
         self.settings.changed.connect(self.settings_applied)
         self.settings.look_preview.connect(self.preview_look)
         self.settings.look_reset.connect(self.reset_look)
@@ -503,6 +509,7 @@ class Main(QMainWindow):
     def _redraw_lists(self):
         self.results.reset_view()
         self.scanning.reset_view()
+        self.tools.topology.reset_view()
         self.sessions.refresh()
         self.inventory.org_switched()
         self.inventory.changed.emit()                  # everything that follows the inventory refills itself, the headers too
