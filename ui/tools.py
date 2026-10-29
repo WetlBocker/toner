@@ -693,7 +693,7 @@ class ToolsTab(QWidget):
         from ui import apitool
         self.apitest = apitool.ApiTesterTab()
         self.discovery.inventory_changed = self.inventory_changed.emit
-        self.tabs = PageStack(width=228)          # wide enough for 'Ping / Traceroute / DNS' without cutting it short
+        self.tabs = PageStack(width=228, key="tools_list_hidden")          # wide enough for 'Ping / Traceroute / DNS' without cutting it short
         for title, pages in (("Connect", ((self.runner, "Command Runner"), (self.apitest, "API Tester"))),
                              ("Diagnose", ((self.diag, "Ping / Traceroute / DNS"), (self.liveping, "Live Ping"),
                                            (self.mtr, "Path Monitor (MTR)"), (self.scan, "Port Scanner"),

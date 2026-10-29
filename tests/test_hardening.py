@@ -436,7 +436,7 @@ db.set_setting("hardening_off", [])
 readme = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "README.md"), encoding="utf-8").read()
 check("the README says so", "**Configuration hardening:**" in readme and "FortiGate:" in readme and "Palo Alto:" in readme and "Untick rules under Settings > Scanning" in readme)
 from core.version import VERSION
-check("version 1.11.6", VERSION == "1.11.6")
+check("version 1.11.7", VERSION == "1.11.7")
 
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

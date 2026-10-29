@@ -430,7 +430,7 @@ class AutomationTab(QWidget):
     def __init__(self):
         super().__init__()
         self.playbooks, self.history = PlaybooksPage(), HistoryPage()
-        self.pages = PageStack(width=200)
+        self.pages = PageStack(width=200, key="automation_list_hidden")
         self.pages.addSection("Ansible")
         self.pages.addTab(self.playbooks, "Playbooks")
         self.pages.addTab(self.history, "Run history")

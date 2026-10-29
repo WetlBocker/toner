@@ -289,17 +289,60 @@ class NavStack(QWidget):
         self.list.setCurrentRow(i)
 
 
+FOLD_WIDTH = 36                                 # what a folded page list leaves: its button
+HIDE_LIST, SHOW_LIST = "Hide the page list", "Show the page list"
+
+
+def fold_button():
+    """The small button that hides and shows a page list, as the Sessions list has."""
+    b = QPushButton()
+    b.setProperty("ghost", True)
+    b.setFixedWidth(FOLD_WIDTH)
+    b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+    return b
+
+
+def show_fold(button, on):
+    """The button's tooltip and icon for a list that is shown (on) or hidden."""
+    button.setToolTip(HIDE_LIST if on else SHOW_LIST)
+    t = theme.current()
+    if t:
+        button.setIcon(icons.icon("panel", t.get("icon", t["muted"]), t["text"]))
+        button.setText("")
+    else:
+        button.setText("List")
+
+
+def db_setting(key):
+    from core import db
+    return bool(db.get_setting(key))
+
+
 class PageStack(QWidget):
-    """A list of pages on the left (with optional section headings) and the chosen page on the right.
+    """A list of pages on the left (with optional section headings) and the chosen page on the right, with a button above
+    the list that folds it away to give the page the width. `key`: the setting that remembers the list folded.
     Offers addTab, setCurrentWidget, currentWidget, indexOf, count and tabText like QTabWidget."""
     currentChanged = Signal(int)
 
-    def __init__(self, width=190):
+    def __init__(self, width=190, key=None):
         super().__init__()
+        self.key, self.width_open = key, width
         self.list = QListWidget()
         self.list.setObjectName("settingsNav")
         self.list.setFixedWidth(width)
         self.list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.fold = fold_button()
+        self.side = QWidget()
+        side = QVBoxLayout(self.side)
+        side.setContentsMargins(0, 0, 0, 0)
+        side.setSpacing(4)
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addStretch(1)
+        row.addWidget(self.fold)
+        side.addLayout(row)
+        side.addWidget(self.list, 1)
+        side.addStretch(0)                      # folded, the button stays at the top
         self.stack = QStackedWidget()
         self._rows = []                         # page index -> list row
         self._pages = []                        # the pages themselves (each is inside a scroll area in the stack)
@@ -307,9 +350,23 @@ class PageStack(QWidget):
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(10)
-        lay.addWidget(self.list)
+        lay.addWidget(self.side)
         lay.addWidget(self.stack, 1)
         self.list.currentRowChanged.connect(self._row_changed)
+        self.fold.clicked.connect(lambda: self.show_list(not self.list_shown()))
+        self.show_list(not (key and db_setting(key)), remember=False)
+
+    def list_shown(self):
+        return not self.list.isHidden()
+
+    def show_list(self, on, remember=True):
+        """Show the page list, or fold it to its button so the page gets the width."""
+        self.list.setVisible(on)
+        self.side.setFixedWidth(self.width_open if on else FOLD_WIDTH)
+        show_fold(self.fold, on)
+        if remember and self.key:
+            from core import db
+            db.set_setting(self.key, not on)
 
     def addSection(self, title):
         item = QListWidgetItem(title.upper())

@@ -188,12 +188,22 @@ class SettingsTab(QWidget):
         self.scope_note.setStyleSheet("font-weight:600; padding:2px 0 6px 0;")
         self.scope_note.hide()
         self._fill_nav()
-        left = QWidget()
+        from ui.nav import fold_button
+        left = self.left = QWidget()
         left.setFixedWidth(200)
         ll = QVBoxLayout(left)
         ll.setContentsMargins(0, 0, 0, 0)
-        ll.addWidget(self.search)
+        self.fold = fold_button()
+        top = QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
+        top.setSpacing(4)
+        top.addWidget(self.search, 1)
+        top.addWidget(self.fold)
+        ll.addLayout(top)
         ll.addWidget(self.nav, 1)
+        ll.addStretch(0)                                     # folded, the button stays at the top
+        self.fold.clicked.connect(lambda: self.show_list(not self.list_shown()))
+        self.show_list(not db.get_setting("settings_list_hidden"), remember=False)
         self.nav.currentRowChanged.connect(self._nav_changed)
         self.search.textChanged.connect(self.filter_pages)
         self.search.returnPressed.connect(self._first_match)
@@ -320,10 +330,29 @@ class SettingsTab(QWidget):
 
     # ---------- search
     def _focus_search(self):
-        """Ctrl+F: the open page's own search box (the audit log has one), else the one above the page list."""
+        """Ctrl+F: the open page's own search box (the audit log has one), else the one above the page list (shown again
+        when it was folded away)."""
         page = self.pages[self.stack.currentIndex()] if 0 <= self.stack.currentIndex() < len(self.pages) else None
         box = getattr(page, "search", None)
-        (box if box is not None and box.isVisible() else self.search).focus_here()
+        if box is not None and box.isVisible():
+            box.focus_here()
+            return
+        if not self.list_shown():
+            self.show_list(True)
+        self.search.focus_here()
+
+    # ---------- the page list, folded away for room
+    def list_shown(self):
+        return not self.nav.isHidden()
+
+    def show_list(self, on, remember=True):
+        from ui.nav import FOLD_WIDTH, show_fold
+        self.search.setVisible(on)
+        self.nav.setVisible(on)
+        self.left.setFixedWidth(200 if on else FOLD_WIDTH)
+        show_fold(self.fold, on)
+        if remember:
+            db.set_setting("settings_list_hidden", not on)
 
     def _page_text(self, i):
         """Everything a person could look for on a page: its title, labels, buttons, tick boxes and tooltips."""
