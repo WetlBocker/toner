@@ -11,8 +11,7 @@ from ui.settings_base import Page, compact_row, note
 CISCO_NOTE = ("From apiconsole.cisco.com: register an application of type Service with the Client Credentials grant and the Cisco PSIRT "
               "openVuln API ticked; no redirect URL is needed. Needed for Cisco devices. The other vendors use NIST's database, which needs no account.")
 NVD_NOTE = "Raises NIST's rate limit from 5 to 50 requests every 30 seconds. Free at nvd.nist.gov/developers/request-an-api-key."
-RULES_NOTE = ("Each scan also reads a Cisco device's newest configuration backup against these rules (IOS, IOS XE, NX-OS and ASA). "
-              "Untick a rule to leave it out of every scan.")
+RULES_NOTE = "Each scan also reads a device's newest configuration backup against these rules. Untick a rule to leave it out of every scan."
 SAVED = "saved; leave blank to keep"
 TESTING = "Testing…"
 
@@ -45,12 +44,16 @@ class ScanningPage(Page):
         self.form.addRow("", compact_row(self.test_btn))
         self.form.addRow("", self.result)
         self.rules = QListWidget()
-        for key, label, sev, _test in hardening.RULES:
-            it = QListWidgetItem(f"{label}  ({sev})")
-            it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            it.setData(Qt.ItemDataRole.UserRole, key)
-            self.rules.addItem(it)
-        self.rules.setMinimumHeight(self.rules.sizeHintForRow(0) * (len(hardening.RULES) + 1) + 8)
+        for _vendor, heading, _fmt, _parse, rules in hardening.GROUPS:
+            head = QListWidgetItem(heading)
+            head.setFlags(Qt.ItemFlag.NoItemFlags)                  # a heading: not tickable, not selectable
+            self.rules.addItem(head)
+            for key, label, sev, _test in rules:
+                it = QListWidgetItem(f"{label}  ({sev})")
+                it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                it.setData(Qt.ItemDataRole.UserRole, key)
+                self.rules.addItem(it)
+        self.rules.setMinimumHeight(self.rules.sizeHintForRow(0) * 12 + 8)
         self.form.addRow("Configuration hardening", self.rules)
         self.form.addRow("", note(RULES_NOTE))
         self.test_btn.clicked.connect(self.test)
@@ -60,8 +63,7 @@ class ScanningPage(Page):
     def load(self):
         self.enabled.setChecked(bool(db.get_setting("scan_enabled")))
         off = hardening.rules_off()
-        for i in range(self.rules.count()):
-            it = self.rules.item(i)
+        for it in self._rule_items():
             it.setCheckState(Qt.CheckState.Unchecked if it.data(Qt.ItemDataRole.UserRole) in off else Qt.CheckState.Checked)
         for box, kind in ((self.cisco_id, "psirt_id"), (self.cisco_secret, "psirt_secret"), (self.nvd_key, "nvd_key")):
             box.clear()
@@ -70,14 +72,16 @@ class ScanningPage(Page):
 
     def save(self):
         db.set_setting("scan_enabled", self.enabled.isChecked())
-        db.set_setting("hardening_off", [self.rules.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.rules.count())
-                                         if self.rules.item(i).checkState() != Qt.CheckState.Checked])
+        db.set_setting("hardening_off", [it.data(Qt.ItemDataRole.UserRole) for it in self._rule_items() if it.checkState() != Qt.CheckState.Checked])
         for box, kind in ((self.cisco_id, "psirt_id"), (self.cisco_secret, "psirt_secret"), (self.nvd_key, "nvd_key")):
             typed = box.text().strip()
             if typed:
                 advisories.set_secret(kind, typed)
                 box.clear()
                 box.setPlaceholderText(SAVED)
+
+    def _rule_items(self):
+        return [it for it in (self.rules.item(i) for i in range(self.rules.count())) if it.data(Qt.ItemDataRole.UserRole)]
 
     def test(self):
         if self._testing:
