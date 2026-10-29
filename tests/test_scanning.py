@@ -10,7 +10,7 @@ import os, sys, time, json, threading
 import http.server as _hs
 from urllib.parse import parse_qs, urlparse
 SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\scan%d.db").replace("\\", os.sep) % int(time.time()); os.environ["APPDATA"] = SP
-from core import db, orgs
+from core import db, display, orgs
 db.init()
 import keyring
 STORE = {}
@@ -40,6 +40,15 @@ PSIRT = {"advisories": [
 NVD = {"resultsPerPage": 1, "totalResults": 1, "vulnerabilities": [{"cve": {"id": "CVE-2024-1111", "descriptions": [
     {"lang": "en", "value": "A heap-based buffer overflow in FortiOS SSL-VPN. An attacker may run code."}],
     "metrics": {"cvssMetricV31": [{"cvssData": {"baseScore": 7.5}}]}}}]}
+NVD_PA = {"resultsPerPage": 3, "totalResults": 3, "vulnerabilities": [
+    {"cve": {"id": "CVE-2025-0108", "descriptions": [{"lang": "en", "value": "An authentication bypass in the Palo Alto Networks PAN-OS software enables an unauthenticated attacker with network access to the management web interface to bypass the authentication. The rest."}],
+             "metrics": {"cvssMetricV40": [{"cvssData": {"baseScore": 9.1}}]}}},
+    {"cve": {"id": "CVE-2024-3400", "descriptions": [{"lang": "en", "value": "A command injection as a result of arbitrary file creation vulnerability in the GlobalProtect feature of Palo Alto Networks PAN-OS software for specific PAN-OS versions and distinct feature configurations may enable an unauthenticated attacker to execute arbitrary code with root privileges on the firewall."}],
+             "metrics": {"cvssMetricV31": [{"cvssData": {"baseScore": 10.0}}]}}},
+    {"cve": {"id": "CVE-2025-0111", "descriptions": [{"lang": "en", "value": "An authenticated file read vulnerability in the Palo Alto Networks PAN-OS software enables an authenticated attacker with network access to the management web interface to read files on the PAN-OS filesystem that are readable by the nobody user. This is a long one."}],
+             "metrics": {"cvssMetricV31": [{"cvssData": {"baseScore": 7.1}}]}}}]}
+NVD_BY = {"cpe:2.3:o:fortinet:fortios:7.2.5:*": NVD, "cpe:2.3:o:paloaltonetworks:pan-os:11.1.4:*": NVD_PA}
+CSAF = {"CVE-2025-0108": {"document": {"notes": [{"category": "summary", "title": "PAN-OS: Authentication Bypass in the Management Web Interface.", "text": "..."}]}}}
 class Sources(_hs.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
     def _send(self, code, body):
@@ -61,9 +70,13 @@ class Sources(_hs.BaseHTTPRequestHandler):
             return self._send(200, PSIRT) if (os_, version) == ("iosxe", "17.9.4a") else self._send(406, {"errorCode": "NOT_FOUND", "errorMessage": "No data found"})
         if u.path == "/nvd":
             self.server.nvd_keys.append(self.headers.get("apiKey"))
-            return self._send(200, NVD if q.get("virtualMatchString") == ["cpe:2.3:o:fortinet:fortios:7.2.5:*"] else {"resultsPerPage": 0, "totalResults": 0, "vulnerabilities": []})
+            return self._send(200, NVD_BY.get(q.get("virtualMatchString", [""])[0], {"resultsPerPage": 0, "totalResults": 0, "vulnerabilities": []}))
         if u.path == "/kev":
-            return self._send(200, {"vulnerabilities": [{"cveID": "CVE-2023-20198"}, {"cveID": "CVE-2021-44228"}]})
+            return self._send(200, {"vulnerabilities": [{"cveID": "CVE-2023-20198", "vulnerabilityName": "Cisco IOS XE Web UI Privilege Escalation Vulnerability"}, {"cveID": "CVE-2021-44228"},
+                                                        {"cveID": "CVE-2024-3400", "vulnerabilityName": "Palo Alto Networks PAN-OS Command Injection Vulnerability"}]})
+        if u.path.startswith("/csaf/"):
+            cve = u.path.split("/")[2]
+            return self._send(200, CSAF[cve]) if cve in CSAF else self._send(404, {})
         if u.path == "/epss":
             asked = q.get("cve", [""])[0].split(",")
             return self._send(200, {"data": [{"cve": c, "epss": "0.9432"} for c in asked if c == "CVE-2023-20198"] + [{"cve": c, "epss": "0.0071"} for c in asked if c == "CVE-2024-1111"]})
@@ -71,6 +84,7 @@ class Sources(_hs.BaseHTTPRequestHandler):
 web = _hs.ThreadingHTTPServer(("127.0.0.1", 0), Sources); web.nvd_keys = []; threading.Thread(target=web.serve_forever, daemon=True).start()
 base = f"http://127.0.0.1:{web.server_address[1]}"
 A.TOKEN_URL, A.PSIRT_URL, A.NVD_URL, A.KEV_URL, A.EPSS_URL = base + "/token", base + "/psirt/{os}?version={version}", base + "/nvd", base + "/kev", base + "/epss"
+A.PAN_CSAF = base + "/csaf/{cve}"
 
 # ---------------------------------------------------------------- devices: Global's and one organization's
 def dev(name, vendor, version="", platform="", org=None, folder=None):
@@ -102,7 +116,9 @@ check("statuses: KEV or 9+ fails, 7 to 8.9 warns, below is OK", A.status_of({"cv
 print("== one device's rows")
 rows = A.scan(db.find_device("c9300"))
 by = {r.check: r for r in rows}
-check("software version row OK, naming the OS, version and read date", by[A.SOFTWARE].status == "OK" and by[A.SOFTWARE].value == "17.09.04a" and by[A.SOFTWARE].message.startswith("IOS XE 17.9.4a, read 20"), by[A.SOFTWARE])
+check("software version row FAIL (its worst advisory), naming the OS, version, read date and the advisory counts", by[A.SOFTWARE].status == "FAIL" and by[A.SOFTWARE].value == "17.09.04a"
+      and by[A.SOFTWARE].message.startswith("IOS XE 17.9.4a, read 20") and by[A.SOFTWARE].message.endswith(", 3 advisories: 1 FAIL, 1 WARN"), by[A.SOFTWARE])
+check("the row names are worded, not title-cased, in exports too", A.SOFTWARE == "Software version" and A.KEV == "Known exploited (CISA)" and display.check_name(A.SOFTWARE) == A.SOFTWARE and display.check_name(A.KEV) == A.KEV)
 check("one row per advisory, worst first, with CVSS and EPSS and the fix", [r.check for r in rows[1:4]] == ["cisco-sa-iosxe-webui-privesc-j22SaA4z", "cisco-sa-dhcp-dos-abc", "cisco-sa-low-thing"]
       and rows[1].status == "FAIL" and rows[1].value == "CVSS 10 · EPSS 94%" and rows[1].message == "Cisco IOS XE Software Web UI Privilege Escalation Vulnerability Fixed in 17.9.4a."
       and rows[2].status == "WARN" and rows[2].value == "CVSS 8.6" and rows[3].status == "OK" and rows[3].message == "Cisco IOS XE Information Disclosure", [(r.check, r.status, r.value, r.message) for r in rows])
@@ -113,15 +129,28 @@ check("a version with nothing published: software OK (platform assumed), 'No kno
       and by[A.ADVISORIES].status == "OK" and by[A.ADVISORIES].message == A.NONE_FOUND and by[A.KEV].status == "OK" and by[A.KEV].message == A.NONE_KEV, [(r.check, r.status, r.message) for r in rows])
 rows = A.scan(db.find_device("edge-fw")); by = {r.check: r for r in rows}
 check("a Fortinet goes to NVD: one row per CVE, the first sentence as its title, WARN at 7.5", by["CVE-2024-1111"].status == "WARN" and by["CVE-2024-1111"].value == "CVSS 7.5 · EPSS 1%"
-      and by["CVE-2024-1111"].message == "A heap-based buffer overflow in FortiOS SSL-VPN" and by[A.SOFTWARE].message.startswith("fortios 7.2.5, read 20"), [(r.check, r.status, r.value, r.message) for r in rows])
+      and by["CVE-2024-1111"].message == "A heap-based buffer overflow in FortiOS SSL-VPN" and by[A.SOFTWARE].message.startswith("FortiOS 7.2.5, read 20")
+      and by[A.SOFTWARE].status == "WARN" and by[A.SOFTWARE].message.endswith(", 1 advisory: 1 WARN"), [(r.check, r.status, r.value, r.message) for r in rows])
+pa = dev("pa", "paloalto", "11.1.4")
+rows = A.scan(db.find_device("pa")); by = {r.check: r for r in rows}
+check("a Palo Alto CVE's message is the advisory's title from Palo Alto's CSAF document, without its full stop", by["CVE-2025-0108"].message == "PAN-OS: Authentication Bypass in the Management Web Interface"
+      and by["CVE-2025-0108"].status == "FAIL", by["CVE-2025-0108"])
+check("...CISA's name when there is no title and the CVE is on its list", by["CVE-2024-3400"].message == "Palo Alto Networks PAN-OS Command Injection Vulnerability", by["CVE-2024-3400"])
+check("...else NIST's first sentence, cut to 120 characters", by["CVE-2025-0111"].message.endswith("…") and len(by["CVE-2025-0111"].message) == 120 and by["CVE-2025-0111"].message.startswith("An authenticated file read vulnerability"), by["CVE-2025-0111"])
+check("the version row says PAN-OS and fails", by[A.SOFTWARE].message.startswith("PAN-OS 11.1.4, read 20") and by[A.SOFTWARE].message.endswith(", 3 advisories: 2 FAIL, 1 WARN") and by[A.SOFTWARE].status == "FAIL", by[A.SOFTWARE])
+check("advisory ids open their pages: Cisco's, Palo Alto's own, NIST's for the rest; other rows open nothing",
+      A.advisory_url("cisco-sa-iosxe-webui-privesc-j22SaA4z", "cisco") == "https://sec.cloudapps.cisco.com/security/center/content/CiscoSecurityAdvisory/cisco-sa-iosxe-webui-privesc-j22SaA4z"
+      and A.advisory_url("CVE-2025-0108", "paloalto") == "https://security.paloaltonetworks.com/CVE-2025-0108" and A.advisory_url("CVE-2024-1111", "fortinet") == "https://nvd.nist.gov/vuln/detail/CVE-2024-1111"
+      and A.advisory_url(A.SOFTWARE, "cisco") == "" and A.advisory_url("Hardening: No NTP server", "cisco") == "")
+db.delete_device(pa["id"])
 from core import backup
 fg2 = dev("fg2", "fortinet"); pa2 = dev("pa2", "paloalto"); jn = dev("jn", "juniper")
 backup.store("fg2", "#config-version=FGVM64-8.0.0-FW-build0167-260420:opmode=0:vdom=0:user=api-admin\n#conf_file_ver=2\nconfig system global\n    set alias \"FortiG8\"\nend\n", mask=False)
 backup.store("pa2", '<config version="11.1.0" urldb="paloaltonetworks" detail-version="11.1.4"><mgt-config/></config>', mask=False)
 backup.store("jn", "## Last commit: 2026-10-28 by admin\nversion 22.4R3-S2.1;\nsystem {\n    host-name jn;\n}\n", mask=False)
-for d, want, what in ((fg2, "8.0.0", "fortios 8.0.0"), (pa2, "11.1.4", "pan-os 11.1.4"), (jn, "22.4R3-S2.1", "junos 22.4 r3-s2")):
+for d, want, what in ((fg2, "8.0.0", "FortiOS 8.0.0"), (pa2, "11.1.4", "PAN-OS 11.1.4"), (jn, "22.4R3-S2.1", "Junos 22.4 r3-s2")):
     r = A.scan(db.find_device(d["name"]))[0]
-    check(f"no version from the checks: {d['vendor']} takes it from the newest backup", r.check == A.SOFTWARE and r.status == "OK" and r.value == want
+    check(f"no version from the checks: {d['vendor']} takes it from the newest backup", r.check == A.SOFTWARE and r.status != "N/A" and r.value == want
           and r.message.startswith(f"{what}, from the configuration backup of 20"), (r.value, r.message))
 backup.store("pa2", '<config version="11.1.0"><mgt-config/></config>', mask=False)
 check("PAN-OS without a detail-version: the version attribute", A.version_from_backup(db.find_device("pa2"))[0] == "11.1.0")
@@ -172,8 +201,17 @@ while tab.running() and time.time() - t0 < 30: app.processEvents(); time.sleep(0
 app.processEvents()
 check("Scan runs just those devices and shows their rows", not tab.running() and tab.summary.text() == "2 devices, 10 checks" and tab.table.topLevelItemCount() == 2, tab.summary.text())
 top = next(tab.table.topLevelItem(i) for i in range(tab.table.topLevelItemCount()) if tab.table.topLevelItem(i).text(0) == "c9300")
-check("the device row says the worst, and the advisory rows sit under it", top.text(2) == "FAIL" and top.text(1) == "6 checks" and "cisco-sa-iosxe-webui" in top.text(4)
-      and {top.child(k).text(1) for k in range(top.childCount())} >= {"software version", "known exploited (CISA)", "cisco-sa-dhcp-dos-abc"}, (top.text(1), top.text(2), top.text(4)))
+check("the device row says the worst, and the advisory rows sit under it", top.text(2) == "FAIL" and top.text(1) == "6 checks" and ("cisco-sa-iosxe-webui" in top.text(4) or "CVE-2023-20198" in top.text(4))
+      and {top.child(k).text(1) for k in range(top.childCount())} >= {"Software version", "Known exploited (CISA)", "cisco-sa-dhcp-dos-abc"}, (top.text(1), top.text(2), top.text(4)))
+from ui.results import URL_ROLE, OPEN_TIP
+kids = {top.child(k).text(1): top.child(k) for k in range(top.childCount())}
+check("an advisory row carries its page and says double-click opens it; the version row has none", kids["cisco-sa-dhcp-dos-abc"].data(1, URL_ROLE) == A.advisory_url("cisco-sa-dhcp-dos-abc")
+      and kids["cisco-sa-dhcp-dos-abc"].toolTip(1) == OPEN_TIP and not kids[A.SOFTWARE].data(1, URL_ROLE) and not kids[A.SOFTWARE].toolTip(1))
+opened = []
+import ui.results as RS
+RS.QDesktopServices = type("D", (), {"openUrl": staticmethod(lambda u: opened.append(u.toString()))})
+tab.table.setCurrentItem(kids["cisco-sa-dhcp-dos-abc"]); tab._enter()
+check("Enter (and a double-click) on it opens the page", opened == [A.advisory_url("cisco-sa-dhcp-dos-abc")], opened)
 with db.connect() as c:
     newest = c.execute("SELECT MAX(id) FROM scans").fetchone()[0]
     just = {r[0] for r in c.execute("SELECT device FROM scan_results WHERE scan_id=?", (newest,))}
@@ -188,6 +226,8 @@ check("the first page lists every device as a link to its section, then a page b
       and '<a name="dev-c9300"' in html and 'page-break-before: always">Needs attention' in html and html.index("#dev-c9300") < html.index("Needs attention") < html.index('name="dev-c9300"'))
 check("each device's section starts with its version, advisories and CISA line", "<p>Version 17.09.04a · 3 advisories (1 FAIL, 1 WARN) · on CISA&#x27;s known exploited list</p>" in html
       and "<p>Version v7.2.5 · 1 advisory (1 WARN)</p>" in html, [l[:80] for l in html.split("<p>") if l.startswith("Version")])
+check("the report links each advisory id to its page", '<a href="https://nvd.nist.gov/vuln/detail/CVE-2024-1111">CVE-2024-1111</a>' in html
+      and '<a href="https://sec.cloudapps.cisco.com/security/center/content/CiscoSecurityAdvisory/cisco-sa-dhcp-dos-abc">cisco-sa-dhcp-dos-abc</a>' in html, [l for l in html.split("<td>") if "CVE-2024-1111" in l][:2])
 check("...and the hardening part once rules ran", S.reports._scan_line([Result("x", "Hardening: Telnet allowed on VTY lines", "FAIL", "", "m"), Result("x", "Hardening: No NTP server", "OK", "", "not found")]) == "Version unknown · hardening: 1 of 2 rules flagged")
 check("only the Status cell is coloured, and Message gets the widest column", html.count('bgcolor="#ffcdd2"') == html.count("<b>FAIL</b>") and '<th width="42%"' in html and '<td bgcolor' not in html.replace('<td bgcolor="#ffcdd2"><font', "").replace('<td bgcolor="#fff3b0"><font', "").replace('<td bgcolor="#c8e6c9"><font', "").replace('<td bgcolor="#e0e0e0"><font', ""))
 pdf = os.path.join(SP, "scan.pdf")
@@ -254,7 +294,7 @@ print("== the Assistant's tool, the README, the version")
 from core.assistant import tools as T
 tool = T.BY_NAME["vulnerabilities"]
 r = tool.fn({"device": "c9300"})
-check("vulnerabilities(device) hands over the stored rows, problems first", r["count"] == 6 and r["results"][0]["check"] == "cisco-sa-iosxe-webui-privesc-j22SaA4z" and r["results"][0]["status"] == "FAIL", r)
+check("vulnerabilities(device) hands over the stored rows, problems first", r["count"] == 6 and all(x["status"] == "FAIL" for x in r["results"][:3]) and "cisco-sa-iosxe-webui-privesc-j22SaA4z" in {x["check"] for x in r["results"][:3]} and r["results"][-1]["status"] == "N/A", r)
 r = tool.fn({})
 check("...and every device's without one", r["count"] >= 8 and {x["device"] for x in r["results"]} >= {"c9300", "edge-fw", "pc"}, r["count"])
 check("it is named among what the Assistant reads", any("vulnerability" in s for s in T.WHAT_THEY_READ))

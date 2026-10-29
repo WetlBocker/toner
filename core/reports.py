@@ -19,7 +19,7 @@ ORDER = {"ERROR": 0, "FAIL": 1, "WARN": 2, "OK": 3, "N/A": 4}
 COLS = ["Device", "Check", "Status", "Value", "Message"]
 WIDTHS = (14, 24, 8, 12, 42)         # per cent of the page: the message carries the finding, so it gets the most
 SCAN = "scan"                        # kind: the Scanning tab's vulnerability report (landscape, a line per device, every device listed)
-SOFTWARE, KEV, HARDENING = "software version", "known exploited (CISA)", "Hardening: "       # as core/advisories and core/hardening name them
+SOFTWARE, KEV, HARDENING = "Software version", "Known exploited (CISA)", "Hardening: "       # as core/advisories and core/hardening name them
 ADVISORY = re.compile(r"^(cisco-sa-|CVE-\d)")
 
 def apply_colors(preset="Default", custom=None):
@@ -56,6 +56,8 @@ def _table(rows):
         for i, v in enumerate(_row(r)):
             if i == 2:                                            # only the Status cell is coloured; the rest stays readable
                 cells += f'<td bgcolor="{bg}"><font color="{fg_for(bg)}"><b>{escape(str(v))}</b></font></td>'
+            elif i == 1 and getattr(r, "url", ""):                 # an advisory id links to its page
+                cells += f'<td><a href="{escape(r.url)}">{escape(str(v))}</a></td>'
             else:
                 cells += f"<td>{escape(str(v))}</td>"
         body += f"<tr>{cells}</tr>"

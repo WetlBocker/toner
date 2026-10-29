@@ -368,6 +368,9 @@ def backup_device(dev, opts=None, mask=None):
         if "invalid input" in low or "% " in low[:3] or "unknown command" in low:
             raise BackupError("the device rejected the configuration command: " + " ".join(text.split())[:100])
         state, row, added, removed = store(name, text, mask)
+        if not db.software_of(dev)["version"]:               # the checks have not read a version: the backup may state it
+            from core import advisories
+            db.set_software(dev, {"version": advisories.version_in(dev.get("vendor"), text)})
     except BackupError as e:
         log(name, "error", str(e))
         return Result(name, CHECK_NAME, ERROR, "", str(e))

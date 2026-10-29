@@ -26,8 +26,39 @@ CISCO_OS = {"cisco_ios": "ios", "cisco_xe": "iosxe", "cisco_nxos": "nxos", "cisc
 CISCO_NAMES = {"ios": "IOS", "iosxe": "IOS XE", "nxos": "NX-OS", "asa": "ASA"}
 NVD_CPE = {"fortinet": "fortinet:fortios", "juniper": "juniper:junos", "paloalto": "paloaltonetworks:pan-os",
            "mikrotik": "mikrotik:routeros", "arista": "arista:eos", "hpe": "arubanetworks:arubaos"}
+OS_NAMES = {"fortinet": "FortiOS", "juniper": "Junos", "paloalto": "PAN-OS", "mikrotik": "RouterOS", "arista": "EOS", "hpe": "ArubaOS"}
+PAN_CSAF = "https://security.paloaltonetworks.com/csaf/{cve}"          # Palo Alto's advisory per CVE, with its title (NIST has none)
+CISCO_ADVISORY = "https://sec.cloudapps.cisco.com/security/center/content/CiscoSecurityAdvisory/{id}"
+PAN_ADVISORY = "https://security.paloaltonetworks.com/{cve}"
+NVD_PAGE = "https://nvd.nist.gov/vuln/detail/{cve}"
+TITLE_MAX = 120                                                          # a NIST description's first sentence, cut to this
+
+
+def advisory_url(check, vendor=""):
+    """The page of an advisory row's id: Cisco's advisory, Palo Alto's own page for a CVE, else NIST's. '' for other rows."""
+    if check.startswith("cisco-sa-"):
+        return CISCO_ADVISORY.format(id=check)
+    if re.match(r"^CVE-\d{4}-\d+$", check):
+        return (PAN_ADVISORY if vendor == "paloalto" else NVD_PAGE).format(cve=check)
+    return ""
+
+
+def pan_title(cve):
+    """The advisory's title from Palo Alto's CSAF document for the CVE ('PAN-OS: Authentication Bypass in the Management Web
+    Interface'), or '' when there is none or it cannot be read."""
+    try:
+        r = _get(PAN_CSAF.format(cve=cve), "security.paloaltonetworks.com")
+        if r.status_code != 200:
+            return ""
+        notes = (r.json().get("document") or {}).get("notes") or []
+        title = next((n.get("title") for n in notes if n.get("category") == "summary" and n.get("title")), "") or (notes[0].get("title") if notes else "")
+        return (title or "").strip().rstrip(".")
+    except (LookupError_, ValueError):
+        return ""
+
+
 SECRETS = {"psirt_id": "service:psirt-id", "psirt_secret": "service:psirt-secret", "nvd_key": "service:nvd-key"}
-SOFTWARE, ADVISORIES, KEV = "software version", "advisories", "known exploited (CISA)"
+SOFTWARE, ADVISORIES, KEV = "Software version", "Advisories", "Known exploited (CISA)"
 NO_VERSION = "No version on record. Run the health checks first; they read it."
 NO_SOURCE = "No advisory source for this vendor yet."
 OFF = "Vulnerability lookups are off under Settings > Scanning."
@@ -211,9 +242,10 @@ def nvd(vendor, version, key=None):
                     if metrics.get(k):
                         score = float(metrics[k][0].get("cvssData", {}).get("baseScore") or 0)
                         break
-                title = next((d["value"] for d in cve.get("descriptions") or [] if d.get("lang") == "en"), "")
-                out.append({"id": cve.get("id") or "", "title": title.split(". ")[0][:160], "cves": [cve.get("id") or ""], "cvss": score, "sir": "",
-                            "fixed": [], "url": f"https://nvd.nist.gov/vuln/detail/{cve.get('id') or ''}"})
+                desc = next((d["value"] for d in cve.get("descriptions") or [] if d.get("lang") == "en"), "").split(". ")[0]
+                summary = desc if len(desc) <= TITLE_MAX else desc[:TITLE_MAX - 1].rstrip() + "…"
+                out.append({"id": cve.get("id") or "", "title": pan_title(cve.get("id") or "") if vendor == "paloalto" else "", "summary": summary,
+                            "cves": [cve.get("id") or ""], "cvss": score, "sir": "", "fixed": [], "url": NVD_PAGE.format(cve=cve.get("id") or "")})
             start += body.get("resultsPerPage") or len(out) or 1
             if start >= (body.get("totalResults") or 0) or not body.get("vulnerabilities"):
                 return out
@@ -221,13 +253,14 @@ def nvd(vendor, version, key=None):
 
 
 def kev():
-    """The CVE ids on CISA's known exploited vulnerabilities list (a set)."""
+    """{CVE id: CISA's name for it} for CISA's known exploited vulnerabilities list."""
     def fetch():
         r = _get(KEV_URL, "www.cisa.gov")
         if r.status_code != 200:
             raise LookupError_(f"CISA KEV: HTTP {r.status_code}")
-        return sorted(v.get("cveID") for v in r.json().get("vulnerabilities") or [] if v.get("cveID"))
-    return set(_cached("kev", fetch))
+        return {v["cveID"]: v.get("vulnerabilityName") or "" for v in r.json().get("vulnerabilities") or [] if v.get("cveID")}
+    got = _cached("kev", fetch)
+    return got if isinstance(got, dict) else {c: "" for c in got}          # a list: cached by 1.11.1 to 1.11.3
 
 
 def epss(cves):
@@ -271,7 +304,7 @@ def lookup(dev, creds=None):
         what = f"{CISCO_NAMES[os_]} {v}" + (" (platform assumed from the version)" if guessed else "")
         return what, psirt(os_, v, creds.get("psirt_id"), creds.get("psirt_secret"))
     ver, upd = cpe_version(vendor, version)
-    what = f"{NVD_CPE[vendor].split(':')[1]} {ver}" + (f" {upd}" if upd != "*" else "")
+    what = f"{OS_NAMES[vendor]} {ver}" + (f" {upd}" if upd != "*" else "")
     return what, nvd(vendor, version, creds.get("nvd_key"))
 
 
@@ -281,19 +314,23 @@ BACKUP_VERSION = {"fortinet": [r"^#config-version=\S+?-(\d+\.\d+\.\d+)-FW-build"
                   "juniper": [r"^version (\S+);"]}
 
 
+def version_in(vendor, text):
+    """The software version a configuration backup's text states, or ''."""
+    for rx in BACKUP_VERSION.get(vendor or "", []):
+        m = re.search(rx, text or "", re.M)
+        if m:
+            return m.group(1)
+    return ""
+
+
 def version_from_backup(dev):
     """(version, when the backup was taken) read from the device's newest configuration backup, or ('', '')."""
     from core import backup
-    patterns = BACKUP_VERSION.get(dev.get("vendor") or "")
-    latest = backup.latest(dev.get("key") or dev["name"]) if patterns else None
+    latest = backup.latest(dev.get("key") or dev["name"]) if dev.get("vendor") in BACKUP_VERSION else None
     if not latest:
         return "", ""
-    text = backup.get_text(latest["id"], latest.get("org")) or ""
-    for rx in patterns:
-        m = re.search(rx, text, re.M)
-        if m:
-            return m.group(1), latest.get("taken_at") or ""
-    return "", ""
+    version = version_in(dev.get("vendor"), backup.get_text(latest["id"], latest.get("org")))
+    return (version, latest.get("taken_at") or "") if version else ("", "")
 
 
 def scan(dev):
@@ -323,18 +360,25 @@ def versions(dev):
         return [row(SOFTWARE, NA, "", NO_VERSION)]
     try:
         what, found = lookup(dev)
-        exploited = kev() if found else set()
+        exploited = kev() if found else {}
     except LookupError_ as e:
         return [row(SOFTWARE, ERROR, version, f"{version}: {e}")]
     scores = epss([c for a in found for c in a["cves"]])
-    rows = [row(SOFTWARE, OK, version, what + source)]
+    found = sorted(found, key=lambda a: (-a["cvss"], a["id"]))
+    statuses = [status_of(a, exploited) for a in found]
+    worst = FAIL if FAIL in statuses else WARN if WARN in statuses else OK            # the version is as bad as its worst advisory
+    bad = ", ".join(f"{statuses.count(s)} {s}" for s in (FAIL, WARN) if s in statuses)
+    tail = (f", {len(found)} advisor{'y' if len(found) == 1 else 'ies'}" + (f": {bad}" if bad else "")) if found else ""
+    rows = [row(SOFTWARE, worst, version, what + source + tail)]
     if not found:
         rows.append(row(ADVISORIES, OK, "", NONE_FOUND))
-    for a in sorted(found, key=lambda a: (-a["cvss"], a["id"])):
+    for a, status in zip(found, statuses):
         best = max((scores.get(c, 0) for c in a["cves"]), default=0)
         value = f"CVSS {a['cvss']:g}" + (f" · EPSS {best:.0%}" if best else "")
-        message = a["title"] + (f" Fixed in {', '.join(a['fixed'][:3])}." if a["fixed"] else "")
-        rows.append(row(a["id"], status_of(a, exploited), value, message.strip()))
+        # the vendor's title (Cisco, Palo Alto), else CISA's name when exploited, else the first sentence NIST gives
+        title = a.get("title") or next((exploited[c] for c in a["cves"] if exploited.get(c)), "") or a.get("summary", "")
+        message = title + (f" Fixed in {', '.join(a['fixed'][:3])}." if a["fixed"] else "")
+        rows.append(row(a["id"], status, value, message.strip()))
     hot = sorted({c for a in found for c in a["cves"] if c in exploited})
     rows.append(row(KEV, FAIL if hot else OK, "", f"{', '.join(hot)} on CISA's known exploited list" if hot else NONE_KEV) if found else row(KEV, OK, "", NONE_KEV))
     return rows

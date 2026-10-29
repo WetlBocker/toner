@@ -181,6 +181,7 @@ r = backup.backup_device(fgd())
 check("...with an SSH login: SSH takes over (a changed copy), with the device's user name and the Command Runner's device type", r.status == "WARN" and ssh["args"]["username"] == "u" and ssh["args"]["password"] == "sshpw"
       and ssh["args"]["device_type"] == "fortinet" and ssh["cmds"] == ["show full-configuration"], (r, ssh))
 check("...and the backup is the SSH text", "set hostname fg" in backup.get_text(backup.latest("fg")["id"]))
+check("...and, the checks having read no version, the backup's #config-version line gives Inventory one", db.software_of(fgd())["version"] == "7.2.5" and db.software_of(fgd())["read_at"], db.software_of(fgd()))
 db.delete_secret("fg")
 r = backup.backup_device(fgd()); check("no token at all: straight to SSH", r.status == "OK" and "cmds" in ssh)
 db.delete_secret("fg:ssh")

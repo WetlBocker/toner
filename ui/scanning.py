@@ -40,6 +40,21 @@ class ScanningTab(ResultsTab):
             menu.addAction(text, lambda _=False, t=text, p=pattern, f=fn, o=open_after: self.export(t, p, f, o))
         self.export_btn.setMenu(menu)
         self.bar.addWidget(self.export_btn)
+        self.table.itemDoubleClicked.connect(lambda item, _col: self.open_link(item))
+        self._vendors = {}
+
+    def link_for(self, r):
+        if r.device not in self._vendors:
+            self._vendors[r.device] = (db.find_device(r.device) or {}).get("vendor") or ""
+        return advisories.advisory_url(r.check, self._vendors[r.device])
+
+    def repopulate(self):
+        self._vendors = {}
+        super().repopulate()
+
+    def _enter(self):
+        if not self.open_link(self.table.currentItem()):
+            super()._enter()
 
     def _stored(self):
         return db.latest_scan_results()
@@ -54,7 +69,10 @@ class ScanningTab(ResultsTab):
         """The rows on screen, device by device, worst first: what an export holds."""
         out = []
         for rows in self._searched(self._group()).values():
-            out += [type(r)(**{**r.__dict__, "device": db.label_org(r.device)}) for r in self._rows_for(rows)[1]]
+            for r in self._rows_for(rows)[1]:
+                copy = type(r)(**{**r.__dict__, "device": db.label_org(r.device)})
+                copy.url = self.link_for(r)                        # the report links an advisory id to its page
+                out.append(copy)
         return out
 
     def export(self, title, pattern, fn, open_after):

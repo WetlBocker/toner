@@ -1,5 +1,5 @@
-from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QColor, QFont, QKeySequence, QShortcut
+from PySide6.QtCore import Qt, QThread, QUrl, Signal
+from PySide6.QtGui import QColor, QDesktopServices, QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QLabel, QMessageBox,
                                QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 from core import db, display, reports, scope
@@ -13,6 +13,8 @@ from ui.toast import toast
 
 
 ROLE = Qt.ItemDataRole.UserRole
+URL_ROLE = Qt.ItemDataRole.UserRole + 1          # on an advisory row's Check cell: the page its id opens
+OPEN_TIP = "Double-click to open the advisory page"
 AUTO_OPEN = 12                       # failing devices opened by themselves when a run ends
 
 
@@ -146,6 +148,23 @@ class ResultsTab(QWidget):
         if item is not None:
             self.open_device.emit((item.parent() or item).data(0, ROLE))
 
+    def link_for(self, r):
+        """The page a row's check opens, or '' (the Scanning tab's advisory rows have one)."""
+        return ""
+
+    def _link(self, item, r):
+        url = self.link_for(r)
+        if url:
+            item.setData(1, URL_ROLE, url)
+            item.setToolTip(1, OPEN_TIP)
+
+    def open_link(self, item):
+        """Open the row's advisory page; True when it had one."""
+        url = item.data(1, URL_ROLE) if item is not None else ""
+        if url:
+            QDesktopServices.openUrl(QUrl(url))
+        return bool(url)
+
     def refresh_groups(self):
         """The inventory changed: the funnel's choices are read when it opens, so only the list needs drawing again."""
         self.repopulate()
@@ -219,6 +238,8 @@ class ResultsTab(QWidget):
         menu.addAction("Copy row", lambda: QApplication.clipboard().setText(
             "\t".join(item.text(i) for i in range(self.table.columnCount()))))
         menu.addAction("Open device details", lambda: self.open_device.emit(device))
+        if item.data(1, URL_ROLE):
+            menu.addAction("Open advisory page", lambda: self.open_link(item))
         diag = db.get_diagnostics(device, check or None, 1)
         if diag:
             menu.addSeparator()
@@ -318,11 +339,13 @@ class ResultsTab(QWidget):
                 top.setData(1, ROLE, "check")                  # the right-click menu treats this row as the check it carries
                 top.setText(3, only.value)
                 top.setText(4, only.message if only.message else ("" if only.status in ("OK", "N/A") else only.value))
+                self._link(top, only)
                 listed = []
             for r in listed:
                 label = r.check if device_of(r.device) == r.device else \
                     f"{r.device.split(' / ', 1)[1]}: {r.check}"
                 child = QTreeWidgetItem(["", label, r.status, r.value, r.message, ""])
+                self._link(child, r)
                 top.addChild(child)
             top.setExpanded(name in self.expanded)
         if not self._active:
