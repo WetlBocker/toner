@@ -184,6 +184,16 @@ S.QDesktopServices.openUrl = lambda *a: None
 tab.export("HTML report", "HTML (*.html)", S.reports.save_html, True)
 html = open(out, encoding="utf-8").read()
 check("Export writes what is shown, under its own title", "<h1>Toner Vulnerability Report</h1>" in html and "cisco-sa-iosxe-webui-privesc-j22SaA4z" in html and "CVE-2024-1111" in html and "Global" in html)
+check("the first page lists every device as a link to its section, then a page break before Needs attention", '<a href="#dev-c9300">c9300</a>' in html and '<a href="#dev-edge-fw">edge-fw</a>' in html
+      and '<a name="dev-c9300"' in html and 'page-break-before: always">Needs attention' in html and html.index("#dev-c9300") < html.index("Needs attention") < html.index('name="dev-c9300"'))
+check("each device's section starts with its version, advisories and CISA line", "<p>Version 17.09.04a · 3 advisories (1 FAIL, 1 WARN) · on CISA&#x27;s known exploited list</p>" in html
+      and "<p>Version v7.2.5 · 1 advisory (1 WARN)</p>" in html, [l[:80] for l in html.split("<p>") if l.startswith("Version")])
+check("...and the hardening part once rules ran", S.reports._scan_line([Result("x", "Hardening: Telnet allowed on VTY lines", "FAIL", "", "m"), Result("x", "Hardening: No NTP server", "OK", "", "not found")]) == "Version unknown · hardening: 1 of 2 rules flagged")
+check("only the Status cell is coloured, and Message gets the widest column", html.count('bgcolor="#ffcdd2"') == html.count("<b>FAIL</b>") and '<th width="42%"' in html and '<td bgcolor' not in html.replace('<td bgcolor="#ffcdd2"><font', "").replace('<td bgcolor="#fff3b0"><font', "").replace('<td bgcolor="#c8e6c9"><font', "").replace('<td bgcolor="#e0e0e0"><font', ""))
+pdf = os.path.join(SP, "scan.pdf")
+S.reports.save_pdf(tab.shown_rows(), pdf, scope="Global", title="Toner Vulnerability Report", kind=S.reports.SCAN)
+raw = open(pdf, "rb").read()
+check("the PDF is landscape with clickable links to named destinations", b"/MediaBox [0 0 842" in raw and raw.count(b"/Subtype /Link") >= 2 and b"/Dests" in raw, (len(raw), raw.count(b"/Subtype /Link")))
 out2 = os.path.join(SP, "scan.csv"); S.QFileDialog.getSaveFileName = lambda *a, **k: (out2, "")
 tab.export("CSV", "CSV (*.csv)", S.reports.to_csv, False)
 csv_text = open(out2, encoding="utf-8").read()

@@ -67,6 +67,6 @@ class ScanningTab(ResultsTab):
         start = os.path.join(folder, f"Toner-scan-{datetime.now():%Y-%m-%d_%H%M}{ext}") if folder and os.path.isdir(folder) else ""
         path, _ = QFileDialog.getSaveFileName(self, title, start, pattern)
         if path:
-            fn(rows, path, scope=db.org_name(db.home()), title=REPORT_TITLE)
+            fn(rows, path, scope=db.org_name(db.home()), title=REPORT_TITLE, kind=reports.SCAN)
             if open_after:
                 QDesktopServices.openUrl(QUrl.fromLocalFile(path))
