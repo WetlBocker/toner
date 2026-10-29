@@ -61,6 +61,8 @@ FG = "config system admin\n    edit \"admin\"\n        set password ENC SH2abcde
 f = backup.clean(FG); check("FortiOS set password masked", "SH2abcdef" not in f and "set password <masked>" in f and "trusthost1" in f, f)
 PA = "<config><mgt-config><users><entry name='a'><phash>$1$xyz</phash></entry></users></mgt-config></config>"
 check("PAN-OS XML secrets masked", "$1$xyz" not in backup.clean(PA) and "<phash><masked></phash>" in backup.clean(PA))
+check("...and the one-line export is stored one element per line, indented", backup.clean(PA).split("\n")[:3] == ["<config>", "  <mgt-config>", "    <users>"] and backup.clean(PA).count("\n") == 9, backup.clean(PA))
+check("a backup that only looks like XML is kept as it is", backup.clean("<config broken").startswith("<config broken"))
 MT = "# 2026-01-01 10:00:00 by RouterOS 7.11\n/user add name=admin password=hunter2 group=full\n/snmp community add name=x addresses=0.0.0.0/0\n"
 m = backup.clean(MT); check("RouterOS header dropped, password masked", "by RouterOS" not in m and "hunter2" not in m and "password=<masked>" in m, m)
 
@@ -191,7 +193,7 @@ FakeSSH.text = "<response status=\"success\"><result><config version=\"10.1.0\">
 dev("pa2", vendor="paloalto", platform="", username="ops"); db.set_secret("pa2:ssh", "pw2")
 r = backup.backup_device([x for x in db.list_devices() if x["name"] == "pa2"][0])
 check("PAN-OS over SSH: asks for XML, keeps the config element only", r.status == "OK" and ssh["cmds"] == ["set cli config-output-format xml", "show config running"]
-      and backup.get_text(backup.latest("pa2")["id"]).strip() == "<config version=\"10.1.0\"><mgt-config/></config>", (r, ssh))
+      and backup.get_text(backup.latest("pa2")["id"]).startswith("<config version=\"10.1.0\">\n  <mgt-config"), (r, ssh))
 FakeSSH.text = "Unknown command"
 r = backup.backup_device([x for x in db.list_devices() if x["name"] == "pa2"][0])
 check("...and says so when the answer is not XML", r.status == "ERROR" and "SSH: BackupError: the firewall did not answer with its configuration as XML" in r.message, r)

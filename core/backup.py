@@ -87,7 +87,21 @@ def why_unsupported(dev):
 
 
 # ---------------------------------------------------------------- cleaning
+def pretty_xml(text):
+    """A PAN-OS export comes as one line: indented, one element per line, so versions diff and search by line. Anything
+    that is not XML is returned as it is."""
+    import xml.etree.ElementTree as ET
+    try:
+        root = ET.fromstring(text)
+    except ET.ParseError:
+        return text
+    ET.indent(root, space="  ")
+    return ET.tostring(root, encoding="unicode")
+
+
 def clean(text, mask=True):
+    if (text or "").lstrip().startswith("<config"):
+        text = pretty_xml(text.strip())
     out = []
     for line in (text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
         line = line.rstrip()
