@@ -41,15 +41,17 @@ class ScanningTab(ResultsTab):
         self.export_btn.setMenu(menu)
         self.bar.addWidget(self.export_btn)
         self.table.itemDoubleClicked.connect(lambda item, _col: self.open_link(item))
-        self._vendors = {}
+
+    _vendors = {}                                   # device key -> vendor, read once per repopulate (a lookup per row loads every device)
 
     def link_for(self, r):
-        if r.device not in self._vendors:
-            self._vendors[r.device] = (db.find_device(r.device) or {}).get("vendor") or ""
-        return advisories.advisory_url(r.check, self._vendors[r.device])
+        return advisories.advisory_url(r.check, self._vendors.get(r.device) or self._vendors.get(r.device.split("@@")[0], ""))
 
     def repopulate(self):
-        self._vendors = {}
+        with db.including_archived():
+            devs = db.list_devices()
+        self._vendors = {d["key"]: d.get("vendor") or "" for d in devs}
+        self._vendors.update({d["name"]: d.get("vendor") or "" for d in devs if d["name"] not in self._vendors})
         super().repopulate()
 
     def _enter(self):

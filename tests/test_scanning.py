@@ -207,11 +207,18 @@ from ui.results import URL_ROLE, OPEN_TIP
 kids = {top.child(k).text(1): top.child(k) for k in range(top.childCount())}
 check("an advisory row carries its page and says double-click opens it; the version row has none", kids["cisco-sa-dhcp-dos-abc"].data(1, URL_ROLE) == A.advisory_url("cisco-sa-dhcp-dos-abc")
       and kids["cisco-sa-dhcp-dos-abc"].toolTip(1) == OPEN_TIP and not kids[A.SOFTWARE].data(1, URL_ROLE) and not kids[A.SOFTWARE].toolTip(1))
+from PySide6.QtGui import QPalette
+check("...and looks like a link: underlined, in the link colour; the version row is plain", kids["cisco-sa-dhcp-dos-abc"].font(1).underline() and not kids[A.SOFTWARE].font(1).underline()
+      and kids["cisco-sa-dhcp-dos-abc"].foreground(1).color() == tab.table.palette().color(QPalette.ColorRole.Link))
 opened = []
 import ui.results as RS
 RS.QDesktopServices = type("D", (), {"openUrl": staticmethod(lambda u: opened.append(u.toString()))})
 tab.table.setCurrentItem(kids["cisco-sa-dhcp-dos-abc"]); tab._enter()
 check("Enter (and a double-click) on it opens the page", opened == [A.advisory_url("cisco-sa-dhcp-dos-abc")], opened)
+import core.db as DB
+calls = []; orig_find = DB.find_device; DB.find_device = lambda key: (calls.append(key), orig_find(key))[1]
+tab.repopulate(); DB.find_device = orig_find
+check("drawing the tab reads the device list once, not once per row", calls == [])
 with db.connect() as c:
     newest = c.execute("SELECT MAX(id) FROM scans").fetchone()[0]
     just = {r[0] for r in c.execute("SELECT device FROM scan_results WHERE scan_id=?", (newest,))}

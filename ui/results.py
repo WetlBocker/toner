@@ -1,5 +1,5 @@
 from PySide6.QtCore import Qt, QThread, QUrl, Signal
-from PySide6.QtGui import QColor, QDesktopServices, QFont, QKeySequence, QShortcut
+from PySide6.QtGui import QColor, QDesktopServices, QFont, QKeySequence, QPalette, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QLabel, QMessageBox,
                                QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 from core import db, display, reports, scope
@@ -157,6 +157,10 @@ class ResultsTab(QWidget):
         if url:
             item.setData(1, URL_ROLE, url)
             item.setToolTip(1, OPEN_TIP)
+            item.setForeground(1, self.table.palette().color(QPalette.ColorRole.Link))      # looks like the link it is
+            font = item.font(1)
+            font.setUnderline(True)
+            item.setFont(1, font)
 
     def open_link(self, item):
         """Open the row's advisory page; True when it had one."""
