@@ -275,6 +275,27 @@ def lookup(dev, creds=None):
     return what, nvd(vendor, version, creds.get("nvd_key"))
 
 
+# where a stored configuration backup states the software version, for a device whose checks have not recorded one
+BACKUP_VERSION = {"fortinet": [r"^#config-version=\S+?-(\d+\.\d+\.\d+)-FW-build"],
+                  "paloalto": [r'<config\b[^>]*\bdetail-version="([^"]+)"', r'<config\b[^>]*\bversion="([^"]+)"'],
+                  "juniper": [r"^version (\S+);"]}
+
+
+def version_from_backup(dev):
+    """(version, when the backup was taken) read from the device's newest configuration backup, or ('', '')."""
+    from core import backup
+    patterns = BACKUP_VERSION.get(dev.get("vendor") or "")
+    latest = backup.latest(dev.get("key") or dev["name"]) if patterns else None
+    if not latest:
+        return "", ""
+    text = backup.get_text(latest["id"], latest.get("org")) or ""
+    for rx in patterns:
+        m = re.search(rx, text, re.M)
+        if m:
+            return m.group(1), latest.get("taken_at") or ""
+    return "", ""
+
+
 def scan(dev):
     """The Scanning rows of one device: the version lookups (versions) and the configuration hardening rules (core/hardening)."""
     from core import hardening
@@ -287,6 +308,12 @@ def versions(dev):
     name, org = dev["name"], dev.get("org")
     row = lambda check, status, value="", message="": Result(name, check, status, value, message, org=org)
     version, read_at = db.software_of(dev)["version"], db.software_of(dev)["read_at"]
+    source = f", read {read_at[:10]}" if read_at else ""
+    if not version:                                    # the checks have not read one: the newest backup may state it
+        version, taken = version_from_backup(dev)
+        if version:
+            dev = {**dev, "sw_version": version}
+            source = f", from the configuration backup of {taken[:10]}"
     vendor = dev.get("vendor") or ""
     if not enabled():
         return [row(SOFTWARE, NA, version, OFF)]
@@ -300,7 +327,7 @@ def versions(dev):
     except LookupError_ as e:
         return [row(SOFTWARE, ERROR, version, f"{version}: {e}")]
     scores = epss([c for a in found for c in a["cves"]])
-    rows = [row(SOFTWARE, OK, version, f"{what}" + (f", read {read_at[:10]}" if read_at else ""))]
+    rows = [row(SOFTWARE, OK, version, what + source)]
     if not found:
         rows.append(row(ADVISORIES, OK, "", NONE_FOUND))
     for a in sorted(found, key=lambda a: (-a["cvss"], a["id"])):

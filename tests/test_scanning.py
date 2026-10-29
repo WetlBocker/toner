@@ -114,6 +114,20 @@ check("a version with nothing published: software OK (platform assumed), 'No kno
 rows = A.scan(db.find_device("edge-fw")); by = {r.check: r for r in rows}
 check("a Fortinet goes to NVD: one row per CVE, the first sentence as its title, WARN at 7.5", by["CVE-2024-1111"].status == "WARN" and by["CVE-2024-1111"].value == "CVSS 7.5 · EPSS 1%"
       and by["CVE-2024-1111"].message == "A heap-based buffer overflow in FortiOS SSL-VPN" and by[A.SOFTWARE].message.startswith("fortios 7.2.5, read 20"), [(r.check, r.status, r.value, r.message) for r in rows])
+from core import backup
+fg2 = dev("fg2", "fortinet"); pa2 = dev("pa2", "paloalto"); jn = dev("jn", "juniper")
+backup.store("fg2", "#config-version=FGVM64-8.0.0-FW-build0167-260420:opmode=0:vdom=0:user=api-admin\n#conf_file_ver=2\nconfig system global\n    set alias \"FortiG8\"\nend\n", mask=False)
+backup.store("pa2", '<config version="11.1.0" urldb="paloaltonetworks" detail-version="11.1.4"><mgt-config/></config>', mask=False)
+backup.store("jn", "## Last commit: 2026-10-28 by admin\nversion 22.4R3-S2.1;\nsystem {\n    host-name jn;\n}\n", mask=False)
+for d, want, what in ((fg2, "8.0.0", "fortios 8.0.0"), (pa2, "11.1.4", "pan-os 11.1.4"), (jn, "22.4R3-S2.1", "junos 22.4 r3-s2")):
+    r = A.scan(db.find_device(d["name"]))[0]
+    check(f"no version from the checks: {d['vendor']} takes it from the newest backup", r.check == A.SOFTWARE and r.status == "OK" and r.value == want
+          and r.message.startswith(f"{what}, from the configuration backup of 20"), (r.value, r.message))
+backup.store("pa2", '<config version="11.1.0"><mgt-config/></config>', mask=False)
+check("PAN-OS without a detail-version: the version attribute", A.version_from_backup(db.find_device("pa2"))[0] == "11.1.0")
+check("a backup with no version line, or none at all: nothing", A.version_from_backup({"name": "c9300", "vendor": "cisco"}) == ("", "") and A.version_from_backup(db.find_device("mt")) == ("", ""))
+for d in (fg2, pa2, jn):
+    db.delete_device(d["id"])                             # the later counts are of the six devices above
 check("no version yet: one N/A row saying to run the checks", [(r.check, r.status, r.message) for r in A.scan(db.find_device("mt"))] == [(A.SOFTWARE, "N/A", A.NO_VERSION), ("Hardening", "N/A", "No hardening rules for this vendor yet.")])
 check("a vendor with no source: one N/A row saying so", [(r.check, r.status, r.message) for r in A.scan(db.find_device("pc"))] == [(A.SOFTWARE, "N/A", A.NO_SOURCE), ("Hardening", "N/A", "No hardening rules for this vendor yet.")])
 n = len(hits); A.scan(db.find_device("c9300")); A.scan(db.find_device("edge-fw"))
