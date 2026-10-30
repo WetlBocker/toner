@@ -1131,6 +1131,8 @@ def transfer(dev, r, choice, src, vrf="management", on_step=None, cancel=None, p
                 audit.log("firmware stack copy", f"{dev['name']}: {name} to switch {n}, MD5 verified")
             if then is not None:
                 result = then(c, prompt, lambda step, detail="": say(step, None, detail))
+                if isinstance(result, dict):
+                    return staged(dev, result, say, secrets)
                 if result is not True:
                     return fail(result)
             say("Done", None, "")
@@ -1147,6 +1149,83 @@ def transfer(dev, r, choice, src, vrf="management", on_step=None, cancel=None, p
 INSTALL_TIMEOUT = 1800             # install add unpacks and checks the image on every member
 INSTALL_NOTE = ("IOS XE INSTALL mode: the image is added, not activated; run install activate and install commit in the maintenance "
                 "window (that reloads). Other devices boot the new image at their next reload.")
+
+
+UNSAVED = re.compile(r"System configuration has been modified", re.I)
+VERIFY = "Verify"
+STAGING_FAILED = "Staging failed"
+UNSAVED_DETAIL = "Unsaved configuration changes stopped install add. The image is on flash (MD5 verified)."
+STAGING_DETAIL = "The image is on flash (MD5 verified), but install add failed: {words}"
+
+
+def staged(dev, result, say, secrets=()):
+    """transfer()'s answer when the image is verified on flash but install add did not take: Verify (unsaved configuration, with
+    the pending lines) or Staging failed."""
+    from core import audit
+    detail = mask(result["detail"], secrets)
+    audit.log("firmware failed", f"{dev['name']}: {detail}")
+    say(result["step"], None, detail)
+    return {"ok": False, "stopped": False, "staged": True, "detail": detail, "pending": result.get("pending")}
+
+
+def pending_changes(c, prompt, secrets=()):
+    """What a save would write: the unified diff from the startup to the running configuration, passwords masked and the
+    lines that only carry a time (or the startup's 'Using n out of m bytes') left out."""
+    from core import backup
+
+    def read(cmd):
+        text = c.send_command(cmd, expect_string=prompt, read_timeout=300)
+        text = "\n".join(l for l in text.splitlines() if not re.match(r"^\s*Using \d+ out of \d+ bytes", l))
+        return mask(backup.clean(text, mask=True), secrets)
+    try:
+        start, run = read("show startup-config"), read("show running-config")
+    except Exception:                                       # noqa: BLE001  shortcut: an unreadable config shows as no lines
+        return []
+    return backup.diff_lines(start, run, "startup-config", "running-config")[0]
+
+
+def _install_add(dev, c, prompt, report, fs, name, secrets):
+    """install add on IOS XE in INSTALL mode. True, or a staging result: Verify when unsaved changes stop it, else Staging failed."""
+    from core import audit
+    report("Running install add (this can take several minutes)")
+    out = c.send_command(f"install add file {fs}{name}", expect_string=prompt, read_timeout=INSTALL_TIMEOUT)
+    if "SUCCESS" in out and "FAILED" not in out:
+        audit.log("firmware install add", f"{dev['name']}: {fs}{name}")
+        return True
+    if UNSAVED.search(out):
+        return {"step": VERIFY, "detail": UNSAVED_DETAIL, "pending": pending_changes(c, prompt, secrets)}
+    return {"step": STAGING_FAILED, "detail": STAGING_DETAIL.format(words=mask(_words(out), secrets))}
+
+
+def save_and_install(dev, r, name, secrets=(), on_step=None, opts=None):
+    """After Verify was approved: sign in again, save the configuration (write memory, checked for [OK]) and run install add once
+    more. Returns transfer()'s shape: {'ok', 'stopped', 'staged', 'detail', 'pending'}. Nothing here reloads or activates."""
+    from core import audit
+    say = on_step or (lambda *_a: None)
+    fs = r["flashes"][0]["fs"]
+    log = io.BytesIO()
+    report = lambda step, detail="": say(step, None, detail)
+    try:
+        with connect(dev, log, opts) as c:
+            try:
+                c.enable()
+            except Exception:                               # noqa: BLE001
+                pass
+            prompt = _prompt_re(c)
+            report("Saving configuration")
+            out = c.send_command("write memory", expect_string=prompt, read_timeout=600)
+            if not re.search(r"\[OK\]|Copy complete", out):
+                return staged(dev, {"step": STAGING_FAILED, "detail": f"The configuration was not saved: {mask(_words(out), secrets)}"}, say, secrets)
+            audit.log("firmware config saved", f"{dev['name']}: write memory before install add")
+            result = _install_add(dev, c, prompt, report, fs, name, secrets)
+            if result is True:
+                say("Done", None, "")
+                return {"ok": True, "stopped": False, "detail": ""}
+            return staged(dev, result, say, secrets)
+    except Exception as e:                                  # noqa: BLE001
+        return staged(dev, {"step": STAGING_FAILED, "detail": f"Could not sign in: {plain_error(e, secrets)}"}, say, secrets)
+    finally:
+        save_log(dev, log, secrets)
 
 
 def _words(out, pattern=r"FAILED|%|rror"):
@@ -1172,19 +1251,15 @@ def boot_lines(r, name, current_paths=()):
 
 def after_copy(dev, r, name, secrets=()):
     """The step after a verified copy, for transfer(then=...): install add on IOS XE in INSTALL mode, else set the boot statement
-    or variable and save the configuration, checked by reading it back. Returns True, or the line saying what went wrong.
+    or variable and save the configuration, checked by reading it back. Returns True, the line saying what went wrong, or for
+    install add a staging result (see _install_add).
     Every change has its audit line. Nothing here reloads, activates or commits."""
     from core import audit
     plat, fs = r["platform"], r["flashes"][0]["fs"]
 
     def then(c, prompt, report):
         if plat == "cisco_xe" and r.get("mode") == "INSTALL":
-            report("Running install add (this can take several minutes)")
-            out = c.send_command(f"install add file {fs}{name}", expect_string=prompt, read_timeout=INSTALL_TIMEOUT)
-            if "SUCCESS" in out and "FAILED" not in out:
-                audit.log("firmware install add", f"{dev['name']}: {fs}{name}")
-                return True
-            return f"install add failed: {mask(_words(out), secrets)}"
+            return _install_add(dev, c, prompt, report, fs, name, secrets)
         current = []
         if plat == "cisco_asa":
             current = re.findall(r"^\s*boot system\s+(\S+)", c.send_command("show running-config boot", expect_string=prompt, read_timeout=60), re.M)

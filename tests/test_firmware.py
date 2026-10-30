@@ -967,18 +967,65 @@ check("ASA boot lines: with only the running image's line, just the new one; add
       and FW.boot_lines(R["asa1"], ASA, [f"disk0:/{ASA}", "disk0:/asa9-16-4-smp-k8.bin"]) == [f"no boot system disk0:/{ASA}", "no boot system disk0:/asa9-16-4-smp-k8.bin", f"boot system disk0:/{ASA}"])
 check("a BUNDLE stack: the image on both members, then boot system switch all", steps["bstack"][0] == "Done" and fakes["bstack"].fs["flash-2:"].files[XE][1] == MD5[XE]
       and config_lines(since["bstack"]) == ["no boot system", f"boot system switch all flash:{XE}"] and "write memory" in since["bstack"])
-check("install add failing says so with the device's words", steps["stack1"] == ("Failed", "install add failed: FAILED: install_add : Super package already added. Add operation not allowed."), steps["stack1"])
+check("install add failing: the image is there, staging failed, in the device's words", steps["stack1"] == ("Staging failed", "The image is on flash (MD5 verified), but install add failed: FAILED: install_add : Super package already added. Add operation not allowed."), steps["stack1"])
 check("a boot statement that did not take says what show boot says", steps["ios1"] == ("Failed", "The boot statement did not take: show boot says c2960x-old.bin."), steps["ios1"])
 rows = audit.recent()
 check("audit: the ASA's boot change, and the two failures", any(a["action"] == "firmware boot" and a["detail"] == f"asa1: boot system disk0:/{ASA}, saved" for a in rows)
       and any(a["action"] == "firmware boot" and a["detail"] == f"bstack: boot system switch all flash:{XE}, saved" for a in rows)
-      and any(a["action"] == "firmware failed" and a["detail"].startswith("stack1: install add failed") for a in rows)
+      and any(a["action"] == "firmware failed" and a["detail"].startswith("stack1: The image is on flash (MD5 verified), but install add failed") for a in rows)
       and any(a["action"] == "firmware failed" and a["detail"].startswith("ios1: The boot statement did not take") for a in rows))
-check("the line under the table", tr.status.text() == "Done: 2 of 4 devices have the new image, 2 failed. Nothing was reloaded.", tr.status.text())
+check("the line under the table counts the staging failure apart", tr.status.text() == "Done: 3 of 4 devices have the new image, 1 failed staging, 1 failed. Nothing was reloaded.", tr.status.text())
 check("still nothing reloaded, activated or committed, on any device", not [l for f in fakes.values() for l in f.commands if re.match(r"^(reload|install activate|install commit)", l)])
 everything = " ".join(tr.table.item(i, j).text() for i in range(tr.table.rowCount()) for j in (1, 3)) + " ".join(a["detail"] for a in audit.recent(2000))
 logs = "".join(FW.log_path(labdevs[n]).read_text(encoding="utf-8") for n in ("ios1", "asa1", "stack1", "nx1"))
 check("over everything: the server's and the devices' passwords appear nowhere", "Own-ftp-pass1" not in everything + logs and PW not in everything + logs)
+print("== install add stopped by unsaved configuration: Verify, save, run it again")
+from PySide6.QtWidgets import QPushButton
+st1 = fakes["stack1"]
+def run_stack1():
+    for fs in st1.fs.values(): fs.files.pop(XE, None)
+    page.restart.click(); page.refresh(); page.devices.untick_all.click(); tick("stack1")
+    page.next.click(); sv.own_btn.click(); sv.own.setCurrentIndex(sv.own.findData("ftp")); sv.address.setEditText("127.0.0.1"); sv.test.click(); pump(lambda: sv.ready())
+    page.next.click(); pump(lambda: not ck.running(), 1500)
+    page.next.click(); page.next.click()
+    global row
+    row = {im.table.item(i, 0).text(): i for i in range(im.table.rowCount())}
+    pick("stack1").setCurrentIndex(pick("stack1").findData(XE)); md5box("stack1").setText(MD5[XE])
+    page.next.click(); pump(lambda: not tr.running(), 3000)
+    return tr.table.item(0, 1).text(), tr.table.item(0, 3).text(), tr.table.cellWidget(0, 1)
+st1.install_fail, st1.unsaved = "", ["interface Vlan20", " description new-uplink", "username bob privilege 15 secret 9 $9$NotShownAnywhere"]
+step, detail, button = run_stack1()
+check("the switch's refusal turns the Step into a Verify button, and says the image is there", step == "Verify" and isinstance(button, QPushButton) and button.text() == "Verify"
+      and detail == "Unsaved configuration changes stopped install add. The image is on flash (MD5 verified).", (step, detail, button))
+check("...which counts as having the image, staging failed", tr.status.text() == "Done: 1 of 1 device has the new image, 1 failed staging. Nothing was reloaded.", tr.status.text())
+check("...and nothing was saved yet", "write memory" not in st1.commands[-12:] and st1.unsaved)
+seen = []
+tr.ask_save = lambda device, lines: (seen.append((device, lines)), False)[1]
+button.click(); app.processEvents()
+dev_shown, lines = seen[-1]
+check("Verify shows the device and what a save would write, startup against running", dev_shown == tr.table.item(0, 0).text() and lines[:2] == ["--- startup-config", "+++ running-config"]
+      and "+interface Vlan20" in lines and "+ description new-uplink" in lines, lines)
+check("...the secret masked, the timestamp and size lines left out", not any("NotShownAnywhere" in l for l in lines) and not any("Last configuration change" in l or "bytes" in l for l in lines), lines)
+check("Cancel saves nothing and keeps the button", not tr.running() and isinstance(tr.table.cellWidget(0, 1), QPushButton) and "write memory" not in st1.commands[-12:])
+tr.ask_save = lambda device, lines: True
+before = len(st1.commands)
+tr.table.cellWidget(0, 1).click(); pump(lambda: not tr.running(), 3000)
+check("approving saves, then runs install add again, and it goes through", tr.table.item(0, 1).text() == "Done" and tr.table.cellWidget(0, 1) is None
+      and [l for l in st1.commands[before:] if l in ("write memory", f"install add file flash:{XE}")] == ["write memory", f"install add file flash:{XE}"] and XE in st1.added, st1.commands[before:])
+check("...the line under the table follows", tr.status.text() == "Done: 1 of 1 device has the new image, 0 failed. Nothing was reloaded." and tr.note.isVisible(), tr.status.text())
+check("...and the save is audited", any(a["action"] == "firmware config saved" and a["detail"] == "stack1: write memory before install add" for a in audit.recent()))
+st1.added.clear(); st1.unsaved = ["interface Vlan30"]
+step, detail, button = run_stack1()
+def approve_but_fail(device, lines):
+    st1.install_fail = "Super package already added. Add operation not allowed."
+    return True
+tr.ask_save = approve_but_fail
+button.click(); pump(lambda: not tr.running(), 3000)
+check("still failing after the save: Staging failed, the image is there", (tr.table.item(0, 1).text(), tr.table.item(0, 3).text()) == ("Staging failed",
+      "The image is on flash (MD5 verified), but install add failed: FAILED: install_add : Super package already added. Add operation not allowed."), tr.table.item(0, 3).text())
+check("...and the line under the table says so", tr.status.text() == "Done: 1 of 1 device has the new image, 1 failed staging. Nothing was reloaded." and not tr.note.isVisible(), tr.status.text())
+check("still nothing reloaded, activated or committed", not [l for l in st1.commands if re.match(r"^(reload|install activate|install commit)", l)])
+st1.install_fail = ""
 page.shutdown()
 for f in fakes.values(): f.stop()
 for s in (ftp, sftp_srv, own_ftp, own_tftp): s.stop()

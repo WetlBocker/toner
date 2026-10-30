@@ -425,7 +425,10 @@ or stacked), NX-OS and ASA devices, inside one organization (pick it in the side
    flash), checks the MD5 against the one you typed (a mismatch stops that device; the others go on), and copies it to every
    stack member and checks it there. Then IOS XE in INSTALL mode runs `install add` only; IOS XE in BUNDLE mode and IOS get a new
    boot statement and `write memory`; NX-OS gets `boot nxos` and `copy running-config startup-config`; ASA has its old
-   `boot system` line replaced and `write memory`. Each change is read back.
+   `boot system` line replaced and `write memory`. Each change is read back. If install add is refused because the configuration
+   has unsaved changes, the Step shows a Verify button: it lists what a save would write, and on your approval saves the
+   configuration and runs install add again. A device whose image is verified but whose install add fails counts as
+   "failed staging".
 
 **Toner never reloads, activates or commits anything**: do that in your maintenance window (`install activate` and
 `install commit` on IOS XE in INSTALL mode; a reload elsewhere). Stop lets devices that are copying finish their copy and changes

@@ -15,6 +15,11 @@ from ui.tools2 import _muted, _primary, _table
 
 STEPS = ("Devices", "Image server", "Check devices", "Clean up", "Images", "Transfer")
 PICK_ORG = "Pick an organization in the sidebar first."
+SAVE_TITLE = "Save configuration on {device}?"
+SAVE_ASK = ("install add needs the running configuration saved first. These lines are in the running configuration but not the "
+            "startup configuration (red: only in startup, green: only in running):")
+SAVE_NO_DIFF = "The two configurations differ only in timestamps or masked passwords, but the switch still asks for a save."
+SAVE_BUTTON = "Save and run install add"
 
 
 class Job(QThread):
@@ -812,6 +817,18 @@ class TransferJob(QThread):
             list(pool.map(one, self.work))
 
 
+class RetryJob(QThread):
+    """After Verify: saves one device's configuration and runs install add again (fw.save_and_install)."""
+    step = Signal(str, str, object, str)
+
+    def __init__(self, key, fn):
+        super().__init__()
+        self.key, self.fn, self.result = key, fn, None
+
+    def run(self):
+        self.result = self.fn(lambda s, p, d: self.step.emit(self.key, s, p, d))
+
+
 class TransferStep(QWidget):
     changed = Signal()
     COLS = ["Device", "Step", "Progress", "Detail"]
@@ -819,6 +836,7 @@ class TransferStep(QWidget):
     def __init__(self):
         super().__init__()
         self.job, self.rows, self.bars, self.work = None, {}, {}, []
+        self.src, self.extra, self.retries = {}, {}, {}           # extra: outcomes of the reruns after Verify
         self.table = _table(self.COLS)
         self.stop = QPushButton("Stop")
         self.copy = QPushButton("Copy summary")
@@ -841,6 +859,7 @@ class TransferStep(QWidget):
     def start(self, work, src, vrf, then=None):
         """work: [(result, {'name', 'size', 'md5'})]. then(result, choice): the step after a verified copy on that device, or None."""
         self.work, self.rows, self.bars = list(work), {}, {}
+        self.src, self.extra, self.retries = src, {}, {}
         self.table.setRowCount(0)
         self.status.setText("")
         self.note.setText("")
@@ -871,7 +890,13 @@ class TransferStep(QWidget):
         if row is None:
             return
         self.table.item(row, 1).setText(step)
-        if detail or step in ("Done", "Failed", "Stopped", "Not started (stopped)"):
+        if step == fw.VERIFY:
+            b = QPushButton(fw.VERIFY)
+            b.clicked.connect(lambda _=False, k=key: self.verify(k))
+            self.table.setCellWidget(row, 1, b)
+        elif self.table.cellWidget(row, 1) is not None:
+            self.table.removeCellWidget(row, 1)
+        if detail or step in ("Done", "Failed", "Stopped", "Not started (stopped)", fw.VERIFY, fw.STAGING_FAILED):
             self.table.item(row, 3).setText(detail)
             self.table.item(row, 3).setToolTip(detail)
         if progress is not None:
@@ -881,24 +906,85 @@ class TransferStep(QWidget):
             pct = int(done * 100 / total) if total else 0
             bar.setFormat(f"{pct} %  ({fw.human_size(done)} of {fw.human_size(total)})" if total is not None else fw.human_size(done))
 
+    # ---- Verify: unsaved changes stopped install add
+    def verify(self, key):
+        """Show what a save would write; on approval save the configuration and run install add again, off the window's thread."""
+        o, job = self.outcomes().get(key), self.retries.get(key)
+        if not o or (job is not None and job.isRunning()):
+            return
+        r, choice = next((r, c) for r, c in self.work if r["key"] == key)
+        if not self.ask_save(self.table.item(self.rows[key], 0).text(), o.get("pending") or []):
+            return
+        self.table.removeCellWidget(self.rows[key], 1)
+        job = RetryJob(key, lambda say, r=r, name=choice["name"]: self._retry(r, name, say))
+        job.step.connect(self._step)
+        job.finished.connect(lambda k=key, j=job: self._retried(k, j))
+        self.retries[key] = job
+        job.start()
+        self._sync()
+
+    def _retry(self, r, name, say):
+        from core import profiles
+        with db.within(r["dev"].get("org")):
+            secrets = [self.src.get("password") or "", profiles.secret(r["dev"], "main") or ""]
+            return fw.save_and_install(r["dev"], r, name, secrets, on_step=say)
+
+    def _retried(self, key, job):
+        self.extra[key] = job.result
+        if not (self.job is not None and self.job.isRunning()):
+            self._done()
+        self._sync()
+
+    def ask_save(self, device, lines):
+        """The pending changes and the question before saving (the tests answer it)."""
+        from PySide6.QtGui import QFontDatabase
+        from PySide6.QtWidgets import QDialog, QDialogButtonBox
+        from ui.configs import DiffHighlighter
+        d = QDialog(self)
+        d.setWindowTitle(SAVE_TITLE.format(device=device))
+        text = QLabel(SAVE_ASK if lines else SAVE_NO_DIFF)
+        text.setWordWrap(True)
+        view = QPlainTextEdit("\n".join(lines))
+        view.setReadOnly(True)
+        view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        view.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
+        view.setVisible(bool(lines))
+        d._colours = DiffHighlighter(view.document())
+        box = QDialogButtonBox()
+        box.addButton(SAVE_BUTTON, QDialogButtonBox.ButtonRole.AcceptRole)
+        cancel = box.addButton(QDialogButtonBox.StandardButton.Cancel)
+        cancel.setDefault(True)
+        box.accepted.connect(d.accept)
+        box.rejected.connect(d.reject)
+        lay = QVBoxLayout(d)
+        lay.addWidget(text)
+        lay.addWidget(view, 1)
+        lay.addWidget(box)
+        d.resize(820, 520 if lines else 160)
+        cancel.setFocus()                                 # saving is never the Enter key's choice
+        return d.exec() == QDialog.DialogCode.Accepted
+
     def halt(self):
-        if self.running():
+        if self.job is not None and self.job.isRunning():
             self.job.cancel.set()
             self.status.setText("Stopping: devices that are copying finish their copy; nothing else is changed on them.")
             self._sync()
 
     def outcomes(self):
-        return dict(self.job.outcomes) if self.job is not None else {}
+        return {**(self.job.outcomes if self.job is not None else {}), **self.extra}
 
     def _done(self):
         got = self.outcomes()
-        ok = sum(1 for o in got.values() if o["ok"])
-        failed = sum(1 for o in got.values() if not o["ok"] and not o["stopped"])
-        n = len(self.work)
-        line = f"Done: {ok} of {n} device{'s' if n != 1 else ''} {'has' if ok == 1 and n == 1 else 'have'} the new image, {failed} failed. Nothing was reloaded."
+        full = sum(1 for o in got.values() if o["ok"])
+        staged = sum(1 for o in got.values() if not o["ok"] and o.get("staged"))      # the image is there; install add did not take
+        failed = sum(1 for o in got.values() if not o["ok"] and not o["stopped"] and not o.get("staged"))
+        ok, n = full + staged, len(self.work)
+        line = (f"Done: {ok} of {n} device{'s' if n != 1 else ''} {'has' if ok == 1 and n == 1 else 'have'} the new image"
+                + (f", {staged} failed staging" if staged else "") + (f", {failed} failed" if failed or not staged else "")
+                + ". Nothing was reloaded.")
         self.status.setText(line)
-        self.note.setText(fw.INSTALL_NOTE if ok else "")
-        self.note.setVisible(bool(ok))
+        self.note.setText(fw.INSTALL_NOTE if full else "")
+        self.note.setVisible(bool(full))
         self.copy.setEnabled(True)
         self._sync()
 
@@ -913,19 +999,21 @@ class TransferStep(QWidget):
         QApplication.clipboard().setText(self.summary())
 
     def running(self):
-        return self.job is not None and self.job.isRunning()
+        return (self.job is not None and self.job.isRunning()) or any(j.isRunning() for j in self.retries.values())
 
     def _sync(self):
-        self.stop.setEnabled(self.running() and not self.job.cancel.is_set())
+        self.stop.setEnabled(self.job is not None and self.job.isRunning() and not self.job.cancel.is_set())     # (a rerun cannot be stopped)
         self.changed.emit()
 
     def ready(self):
         return False
 
     def shutdown(self):
-        if self.running():
+        if self.job is not None and self.job.isRunning():
             self.job.cancel.set()
             self.job.wait(3600 * 1000)
+        for j in self.retries.values():
+            j.wait(3600 * 1000)
 
 
 # =============================================================================== the page

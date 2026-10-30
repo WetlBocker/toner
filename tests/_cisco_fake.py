@@ -148,6 +148,7 @@ class CiscoFake(ShellServer):
         self.corrupt = set()                                                      # copies of these files arrive damaged
         self.protect = set()                                                      # deleting these is refused
         self.install_fail = ""                                                    # install add answers FAILED with this
+        self.unsaved = []                                                         # running-config lines not saved yet: install add refuses
         self.ignore_boot = False                                                  # boot lines are accepted but change nothing
         self.config_saved = True
         self.added = []                                                           # install add file ... that succeeded
@@ -257,6 +258,12 @@ class CiscoFake(ShellServer):
             return self.dir(cmd[4:].strip()), False
         if low in ("show boot", "show bootvar", "show running-config boot", "show running-config | include ^boot"):
             return self.show_boot(), False
+        if low in ("show running-config", "show startup-config"):
+            base = "hostname " + self.hostname + "\n!\ninterface Vlan1\n ip address 10.0.0.2 255.255.255.0\n!\nend\n"
+            if low == "show startup-config":
+                return "Using 1234 out of 2097152 bytes\n!\n! Last configuration change at 08:00:00 UTC Fri Oct 30 2026\n" + base, False
+            return ("Building configuration...\n\nCurrent configuration : 4321 bytes\n!\n! Last configuration change at 08:47:00 UTC Fri Oct 30 2026\n"
+                    + base.replace("!\nend", "!\n" + "".join(l + "\n" for l in self.unsaved) + "end")), False
         if low.startswith("ping "):
             return self.ping(cmd), False
         if low.startswith("telnet "):
@@ -277,7 +284,7 @@ class CiscoFake(ShellServer):
         if low.startswith("show file ") and low.endswith(" md5sum"):
             return self.md5sum(cmd.split()[2]), False
         if low in ("write memory", "wr mem", "write"):
-            self.saved_boot, self.config_saved = list(self.boot), True
+            self.saved_boot, self.config_saved, self.unsaved = list(self.boot), True, []
             return "Building configuration...\n[OK]\n", False
         if "reload" in low or low.startswith("install activate") or low.startswith("install commit"):
             return "THE FAKE DEVICE WAS ASKED TO RELOAD OR ACTIVATE\n", False
@@ -445,6 +452,10 @@ class CiscoFake(ShellServer):
         fs, name = self.split(path)
         if fs is None or name not in fs.files:
             return f"FAILED: install_add : {path} not found\n"
+        if self.unsaved:                                                          # as a Catalyst 9300 on 17.x says it
+            return ("install_add: START Fri Oct 30 08:48:12 UTC 2026\ninstall_add: Adding PACKAGE\n"
+                    "Error: System configuration has been modified. Please save configuration and resubmit command.\n"
+                    f"FAILED: install_add /mnt/sd3/user/{name} Fri Oct 30 08:48:15 UTC 2026\n")
         if self.install_fail:
             return f"install_add: START\ninstall_add: Adding PACKAGE\nFAILED: install_add : {self.install_fail}\n"
         self.added.append(name)
