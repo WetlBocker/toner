@@ -411,7 +411,16 @@ def mask(text, secrets):
 
 
 # ================================================================ reading the devices (step 3: Check devices)
-CHECK_WORKERS, TRANSFER_WORKERS = 8, 4                 # all selected devices at once, up to these (transfers: bandwidth)
+CHECK_WORKERS, TRANSFER_WORKERS = 8, 4                 # all selected devices at once, up to these (transfers: bandwidth; the default)
+TRANSFER_MAX = 16                                       # the most Simultaneous Transfers can be set to
+
+
+def transfers_at_once():
+    """Simultaneous Transfers: how many devices copy at the same time (1 to TRANSFER_MAX)."""
+    try:
+        return max(1, min(TRANSFER_MAX, int(db.get_setting("firmware_transfers"))))
+    except (TypeError, ValueError):
+        return TRANSFER_WORKERS
 MAIN_FS = {"cisco_ios": "flash:", "cisco_xe": "flash:", "cisco_nxos": "bootflash:", "cisco_asa": "disk0:"}
 NO_LOGIN = "No user name or password: set one on the device or its profile."
 NO_CLIENT = "{platform} has no SFTP client: use FTP, SCP or TFTP."
@@ -950,7 +959,7 @@ TRANSFER_STEPS = ("For each device Toner copies the image, checks its MD5, puts 
                   "• IOS XE in BUNDLE mode and IOS: sets the boot statement and saves the configuration.\n"
                   "• NX-OS: sets the boot variable and saves the configuration.\n"
                   "• ASA: replaces the boot system line and saves the configuration.\n"
-                  "Nothing is reloaded. Up to 4 devices copy at once.")
+                  "Nothing is reloaded.")
 
 
 def source_shown(src):
@@ -965,7 +974,9 @@ def transfer_text(chosen, src):
     """(title, body) of the confirmation before copying. `chosen`: [(result, file dict)]."""
     n = len(chosen)
     lines = [f"{r['name']} ({r['host']}): {f['name']}, {human_size(f['size'])}, from {source_shown(src)}" for r, f in chosen]
-    return f"Transfer images to {n} device{'s' if n != 1 else ''}?", "\n".join(lines) + "\n\n" + TRANSFER_STEPS
+    k = transfers_at_once()
+    at_once = f" Up to {k} devices copy at once." if k != 1 else " Up to 1 device copies at once."
+    return f"Transfer images to {n} device{'s' if n != 1 else ''}?", "\n".join(lines) + "\n\n" + TRANSFER_STEPS + at_once
 
 
 # ================================================================ step 6: Transfer

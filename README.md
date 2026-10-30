@@ -421,7 +421,7 @@ or stacked), NX-OS and ASA devices, inside one organization (pick it in the side
    on every device before anything is deleted.
 5. **Images**: choose the image for each device and paste its MD5 from Cisco's download page. Toner does not go on without a
    hash, and warns when an image will not fit on some member.
-6. **Transfer**: up to 4 devices at once. Each copies its image with a progress bar (a second session watches the file grow on
+6. **Transfer**: 4 devices at once unless you change **Simultaneous Transfers** under the list (1 to 16), which you can do while devices copy. Each copies its image with a progress bar (a second session watches the file grow on
    flash), checks the MD5 against the one you typed (a mismatch stops that device; the others go on), and copies it to every
    stack member and checks it there. Then IOS XE in INSTALL mode runs `install add` only; IOS XE in BUNDLE mode and IOS get a new
    boot statement and `write memory`; NX-OS gets `boot nxos` and `copy running-config startup-config`; ASA has its old

@@ -129,7 +129,7 @@ DEFAULT_SETTINGS = {
     # Tools > API Tester (see core/apitool.py): how many sent requests History keeps
     "api_history_keep": 100,
     # Tools > Firmware Transfer (see core/firmware.py): the image server remembered for the organization (its password is in the vault)
-    "firmware_source": {},
+    "firmware_source": {}, "firmware_transfers": 4,
     # the Assistant (see core/assistant): one provider, model and depth per installation; the API key is in the vault; the spend
     # limit is the installation's total over every organization, in US dollars per month
     "ai_provider": "claude", "ai_model": {}, "ai_depth": "normal", "ai_spend_limit": 20, "ai_run_commands": False, "ai_search": True,

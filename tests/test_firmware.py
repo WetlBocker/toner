@@ -434,7 +434,8 @@ check("ping, IOS and NX-OS forms", FW.ping_ok("Success rate is 100 percent (5/5)
       and FW.ping_ok("5 packets transmitted, 4 packets received") and not FW.ping_ok("5 packets transmitted, 0 packets received, 100.00% packet loss"))
 check("stack members' flash: flash-2: on IOS XE, flash2: on classic IOS", FW.member_fs("cisco_xe", 2) == "flash-2:" and FW.member_fs("cisco_ios", 3) == "flash3:"
       and FW.member_fs("cisco_xe", 1) == "flash:" and FW.member_fs("cisco_nxos", 1) == "bootflash:")
-check("all selected devices at once, up to 8 for checking and 4 for copying", FW.CHECK_WORKERS == 8 and FW.TRANSFER_WORKERS == 4)
+check("all selected devices at once, up to 8 for checking and 4 for copying (Simultaneous Transfers: 1 to 16)", FW.CHECK_WORKERS == 8 and FW.TRANSFER_WORKERS == 4
+      and FW.TRANSFER_MAX == 16 and FW.transfers_at_once() == 4)
 
 print("== the fake device's own fetch (what a device's copy does)")
 import _cisco_fake, paramiko
@@ -1026,6 +1027,49 @@ check("still failing after the save: Staging failed, the image is there", (tr.ta
 check("...and the line under the table says so", tr.status.text() == "Done: 1 of 1 device has the new image, 1 failed staging. Nothing was reloaded." and not tr.note.isVisible(), tr.status.text())
 check("still nothing reloaded, activated or committed", not [l for l in st1.commands if re.match(r"^(reload|install activate|install commit)", l)])
 st1.install_fail = ""
+
+print("== Simultaneous Transfers")
+import time as _time
+check("the box under the list: its label, 1 to 16, 4 by default, and what it does", tr.at_once.value() == 4 and (tr.at_once.minimum(), tr.at_once.maximum()) == (1, 16)
+      and tr.at_once.accessibleName() == "Simultaneous Transfers" and tr.at_once.toolTip() == UF.AT_ONCE_TIP and UF.AT_ONCE_TIP ==
+      "How many devices copy their image at the same time. Each one pulls the whole image from the image server, so more at once "
+      "can slow every copy on a slow link. A change applies to devices that are still waiting.")
+tr.at_once.setValue(1)
+fresh_tr = UF.TransferStep()
+check("a change is remembered, and the question before copying follows it", db.get_setting("firmware_transfers") == 1 and fresh_tr.at_once.value() == 1
+      and FW.transfer_text([(R["ios1"], {"name": IOS, "size": 1})], osrc)[1].endswith("Nothing is reloaded. Up to 1 device copies at once."))
+gate, live, started = threading.Lock(), [0], []
+real_transfer = FW.transfer
+def counted(dev, r, choice, src, vrf="management", cancel=None, then=None, on_step=None, **_kw):
+    with gate:
+        live[0] += 1; started.append((r["key"], live[0]))
+    _time.sleep(0.4)
+    with gate:
+        live[0] -= 1
+    return {"ok": True, "stopped": False, "detail": ""}
+FW.transfer = counted
+work_ = [({"key": f"k{i}", "dev": {"org": lab}}, {}) for i in range(6)]
+job = UF.TransferJob(work_, {}, "management", limit=2)
+tr.job = job
+job.start(); pump(lambda: len(started) >= 2, 300)
+_time.sleep(0.1)
+held = len(started)
+tr.at_once.setValue(4)
+t0 = _time.monotonic(); pump(lambda: len(started) >= 4, 300)
+check("raised while copying: the waiting devices start right away", held == 2 and job.limit == 4 and [n for _k, n in started[:4]] == [1, 2, 3, 4]
+      and _time.monotonic() - t0 < 0.3, (held, started))
+job.wait(5000)
+check("...every device copied once, in list order, never more than the limit", [k for k, _n in started] == [f"k{i}" for i in range(6)] and max(n for _k, n in started) == 4, started)
+started.clear()
+job = UF.TransferJob(work_[:5], {}, "management", limit=3)
+tr.job = job
+job.start(); pump(lambda: len(started) >= 3, 300)
+tr.at_once.setValue(1)
+job.wait(5000)
+check("lowered while copying: the running copies finish, then one at a time", [n for _k, n in started] == [1, 2, 3, 1, 1], started)
+FW.transfer = real_transfer
+tr.at_once.setValue(4)
+check("set back to 4", db.get_setting("firmware_transfers") == 4)
 page.shutdown()
 for f in fakes.values(): f.stop()
 for s in (ftp, sftp_srv, own_ftp, own_tftp): s.stop()

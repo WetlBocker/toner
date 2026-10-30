@@ -20,6 +20,9 @@ SAVE_ASK = ("install add needs the running configuration saved first. These line
             "startup configuration (red: only in startup, green: only in running):")
 SAVE_NO_DIFF = "The two configurations differ only in timestamps or masked passwords, but the switch still asks for a save."
 SAVE_BUTTON = "Save and run install add"
+AT_ONCE = "Simultaneous Transfers"
+AT_ONCE_TIP = ("How many devices copy their image at the same time. Each one pulls the whole image from the image server, so more at once "
+               "can slow every copy on a slow link. A change applies to devices that are still waiting.")
 
 
 class Job(QThread):
@@ -795,26 +798,46 @@ class ImagesStep(QWidget):
 
 # =============================================================================== step 6: Transfer
 class TransferJob(QThread):
-    """Copies to every chosen device, up to 4 at once (bandwidth), reporting each step as it goes."""
+    """Copies to every chosen device, `limit` at once (Simultaneous Transfers, which may change while it runs), in list order,
+    reporting each step as it goes."""
     step = Signal(str, str, object, str)                     # device key, step, (done, total) or None, detail
 
-    def __init__(self, work, src, vrf, then=None):
+    def __init__(self, work, src, vrf, then=None, limit=fw.TRANSFER_WORKERS):
         super().__init__()
         self.work, self.src, self.vrf, self.then = work, src, vrf, then
         self.cancel = threading.Event()
         self.outcomes = {}
+        self.limit, self.copying, self.turn = limit, 0, 0
+        self.room = threading.Condition()
+
+    def set_limit(self, n):
+        """A raised limit starts waiting devices now; a lowered one lets running copies finish and holds the next."""
+        with self.room:
+            self.limit = n
+            self.room.notify_all()
 
     def run(self):
         from concurrent.futures import ThreadPoolExecutor
 
-        def one(job):
+        def one(i, job):
             r, choice = job
-            with db.within(r["dev"].get("org")):
-                then = self.then(r, choice) if self.then else None
-                self.outcomes[r["key"]] = fw.transfer(r["dev"], r, choice, self.src, self.vrf, cancel=self.cancel, then=then,
-                                                      on_step=lambda s, p, d, key=r["key"]: self.step.emit(key, s, p, d))
-        with ThreadPoolExecutor(max_workers=max(1, min(fw.TRANSFER_WORKERS, len(self.work)))) as pool:
-            list(pool.map(one, self.work))
+            with self.room:
+                while not (self.cancel.is_set() or (self.turn == i and self.copying < self.limit)):
+                    self.room.wait(0.25)                     # (Stop sets cancel without a notify; fw.transfer then reports Not started)
+                self.turn += 1
+                self.copying += 1
+            try:
+                with db.within(r["dev"].get("org")):
+                    then = self.then(r, choice) if self.then else None
+                    self.outcomes[r["key"]] = fw.transfer(r["dev"], r, choice, self.src, self.vrf, cancel=self.cancel, then=then,
+                                                          on_step=lambda s, p, d, key=r["key"]: self.step.emit(key, s, p, d))
+            finally:
+                with self.room:
+                    self.copying -= 1
+                    self.room.notify_all()
+        # a thread per device up to the most the limit can be raised to; the pool hands them out in list order, so turns never stall
+        with ThreadPoolExecutor(max_workers=max(1, min(fw.TRANSFER_MAX, len(self.work)))) as pool:
+            list(pool.map(one, range(len(self.work)), self.work))
 
 
 class RetryJob(QThread):
@@ -844,17 +867,33 @@ class TransferStep(QWidget):
         self.status = _muted("")
         self.note = _muted("")
         self.note.setVisible(False)
+        self.at_once = QSpinBox()
+        self.at_once.setRange(1, fw.TRANSFER_MAX)
+        self.at_once.setValue(fw.transfers_at_once())
+        self.at_once.setToolTip(AT_ONCE_TIP)
+        self.at_once.setAccessibleName(AT_ONCE)
+        at_once_label = QLabel(AT_ONCE)
+        at_once_label.setBuddy(self.at_once)
+        at_once_label.setToolTip(AT_ONCE_TIP)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self.table, 1)
         bar = QHBoxLayout()
         bar.addWidget(self.status, 1)
+        bar.addWidget(at_once_label)
+        bar.addWidget(self.at_once)
         bar.addWidget(self.copy)
         bar.addWidget(self.stop)
         lay.addLayout(bar)
         lay.addWidget(self.note)
         self.stop.clicked.connect(self.halt)
         self.copy.clicked.connect(self.copy_summary)
+        self.at_once.valueChanged.connect(self._at_once)
+
+    def _at_once(self, n):
+        db.set_setting("firmware_transfers", n)
+        if self.job is not None and self.job.isRunning():
+            self.job.set_limit(n)
 
     def start(self, work, src, vrf, then=None):
         """work: [(result, {'name', 'size', 'md5'})]. then(result, choice): the step after a verified copy on that device, or None."""
@@ -879,7 +918,10 @@ class TransferStep(QWidget):
             self.rows[r["key"]], self.bars[r["key"]] = row, bar
         self.table.resizeColumnToContents(0)
         self.table.setColumnWidth(2, self.table.fontMetrics().horizontalAdvance("100 %  (999.9 MB of 999.9 MB)") + 24)
-        self.job = TransferJob(self.work, src, vrf, then)
+        self.at_once.blockSignals(True)
+        self.at_once.setValue(fw.transfers_at_once())      # (the stored value, which another organization's run may have changed)
+        self.at_once.blockSignals(False)
+        self.job = TransferJob(self.work, src, vrf, then, limit=self.at_once.value())
         self.job.step.connect(self._step)
         self.job.finished.connect(self._done)
         self.job.start()
