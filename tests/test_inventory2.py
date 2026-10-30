@@ -148,5 +148,28 @@ check("...the other way round for a firewall", not api.access.isRowVisible(api.j
 w3._save({**v, "id": None, "name": "sw9-renamed"}, "")
 check("a duplicate name is refused", len([x for x in db.list_devices() if x["name"] == "sw9-renamed"]) == 1)
 
+print("== after a run: the version and state it read show without redrawing the list")
+from drivers.base import Result
+vr = dev("verrow"); main = A.Main(); inv = main.inventory; inv.refresh()
+def find(name):
+    from PySide6.QtWidgets import QTreeWidgetItemIterator
+    it = QTreeWidgetItemIterator(inv.table)
+    while it.value():
+        if it.value().text(0) == name and str(it.value().data(0, I.ROLE)).startswith("device:"): return it.value()
+        it += 1
+cell = lambda name, col: find(name).text(col)
+item_a = find("verrow")
+inv.table.setCurrentItem(item_a); item_a.setSelected(True)
+was = (cell("verrow", inv.VERSION), cell("verrow", inv.STATUS))
+db.set_software(vr, {"version": "15.2(7)E13", "image": "c2960l-universalk9-mz.152-7.E13.bin"})
+db.save_run([Result("verrow", "CPU", "FAIL", message="95 %")])
+main.results.run_finished.emit()
+check("the Version, Status and Last checked cells follow the run", was == ("", "Not checked") and cell("verrow", inv.VERSION) == "15.2(7)E13"
+      and cell("verrow", inv.STATUS) == "FAIL" and cell("verrow", inv.CHECKED) != "" and "c2960l-universalk9" in item_a.toolTip(inv.VERSION), (was, cell("verrow", inv.VERSION), cell("verrow", inv.STATUS)))
+check("...the same row, still selected, and the Version column shown", inv.table.currentItem() is item_a and item_a.isSelected()
+      and not inv.table.isColumnHidden(inv.VERSION) and inv.payload[item_a.data(0, I.ROLE)]["sw_version"] == "15.2(7)E13")
+main.on_backup_finished([], [], False)
+check("a finished backup updates them too, without a redraw", inv.table.currentItem() is item_a and cell("verrow", inv.VERSION) == "15.2(7)E13")
+
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

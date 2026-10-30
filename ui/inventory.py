@@ -1131,6 +1131,30 @@ class InventoryTab(QWidget):
         vals = [self._device_values(d) for d in devs]
         return {i for i in (2, self.VERSION, 6, 7, 8) if all(v[i] == "" for v in vals)}
 
+    def update_values(self):
+        """After a check run or a backup: the Version, Status and Last checked cells and the status dot of the rows on screen, from
+        the stored devices. The list is not redrawn, which would drop the selection."""
+        from PySide6.QtWidgets import QTreeWidgetItemIterator
+        try:
+            self.health = db.device_health()
+        except Exception:
+            self.health = {}
+        fresh = {self._key("device", d.get("org", db.target()), d["id"]): d for d in self._listed()}
+        found = QTreeWidgetItemIterator(self.table)
+        while found.value():
+            item = found.value()
+            d = fresh.get(item.data(0, ROLE))
+            if d is not None:
+                new = self._device_item(d)                  # a throwaway row drawn as refresh() would (it also renews the payload)
+                for col in (0, self.VERSION, self.STATUS, self.CHECKED):
+                    item.setText(col, new.text(col))
+                    item.setToolTip(col, new.toolTip(col))
+                item.setIcon(0, new.icon(0))
+            found += 1
+        self.columns.apply()                                # a Version column hidden while blank everywhere shows once one is read
+        if hasattr(self, "fleet") and self.stack.currentWidget() is self.fleet:
+            self.fleet.refresh()
+
     def _device_item(self, d):
         it = QTreeWidgetItem(self._device_values(d))
         key = self._key("device", d.get("org", db.target()), d["id"])

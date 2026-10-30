@@ -130,6 +130,7 @@ class Main(QMainWindow):
             if hasattr(page, "desktop_cb"):
                 page.desktop_cb = self.show_desktop
         self.results.run_finished.connect(self.on_run_finished)
+        self.results.run_finished.connect(self.inventory.update_values)    # the versions and states the run just read
         self.results.run_finished.connect(self.dashboard.refresh)
         self.inventory.changed.connect(self.tools.refresh)
         self.inventory.changed.connect(self.configs.refresh)
@@ -694,6 +695,7 @@ class Main(QMainWindow):
             self.notifier.handle_run(results, ran, True)
         if db.everything():
             self.results.load_stored() if self.results.stored else None
+            self.inventory.update_values()
             self.dashboard.refresh()
             self.history.refresh()
             self.update_headers()
@@ -701,6 +703,7 @@ class Main(QMainWindow):
     def on_backup_finished(self, results, ran, scheduled):
         """Backups are recorded in history and run through the same alerting as health checks."""
         db.save_run(results)
+        self.inventory.update_values()                 # a backup may have read a version
         self.history.refresh()
         self.dashboard.refresh()
         self.notifier.handle_run(results, ran, scheduled)
