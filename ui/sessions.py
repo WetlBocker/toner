@@ -372,6 +372,7 @@ class SessionPane(QWidget):
         self.up = False                                   # true from the moment we start connecting until the session reports it ended
         self._override = None
         self._used = False
+        self._gone = False                                # set on closing: a connect still under way may end after the page is deleted
         self.owner = None                                 # the SessionsTab, which routes typing while Type in all sessions is on
         self.term = TerminalView()
         self.apply_settings()
@@ -549,6 +550,8 @@ class SessionPane(QWidget):
             self.session.stop()
 
     def _on_data(self, data, session, log):
+        if self._gone:
+            return
         if not log.write(data) and session is self.session and not self._override:
             self._override = "Disconnected: the session log could not be written."
             self._say("\n[Logging failed, so the session is being closed.]\n")
@@ -562,6 +565,8 @@ class SessionPane(QWidget):
         if session is self.session and self._override:
             reason = self._override
         log.close(reason)
+        if self._gone:                                    # its page was closed and may be deleted; shutdown() saw to the log
+            return
         if session is self.session:
             self._say(f"\n[{reason}]\n")
             self._set_connected(False)
@@ -569,6 +574,7 @@ class SessionPane(QWidget):
         self.logs_changed.emit()
 
     def shutdown(self):
+        self._gone = True
         if self.browser is not None:
             self.browser.shutdown()
         if self.session is not None and self.session.isRunning():

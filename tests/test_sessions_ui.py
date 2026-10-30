@@ -377,6 +377,23 @@ check("changing the terminal colours in Settings recolours open sessions", pp.te
 db.set_setting("term_scheme", "Dark"); w.settings_applied()
 st.open_logs(); lg = st.logs_dialog.logs
 check("the session logs window lists every kind, with its type", {lg.table.item(i, 3).text() for i in range(lg.table.rowCount())} >= {"SSH", "TELNET", "SERIAL"} and "Type" in [lg.table.horizontalHeaderItem(i).text() for i in range(lg.table.columnCount())], [lg.table.item(i, 3).text() for i in range(lg.table.rowCount())])
+print("== closing a tab while it is still connecting")
+from PySide6.QtCore import QThread, Signal, QEvent
+class SlowSsh(QThread):                                  # an SSH connect stuck in a proxy: stop() cannot cut it short
+    data, closed = Signal(bytes), Signal(str)
+    def __init__(self, *a, **k): super().__init__()
+    def stop(self): pass
+    def run(self): time.sleep(4.5); self.closed.emit("Connection failed: timed out")
+real_ssh, S.nettools.SshSession = S.nettools.SshSession, SlowSsh
+late = []
+real_hook, sys.excepthook = sys.excepthook, lambda t, v, tb: late.append(f"{t.__name__}: {v}")
+slow = S.SessionPane({"name": "via proxy", "host": "10.0.0.1", "port": 22, "username": "u", "password": "p", "kind": "ssh", "options": {}})
+slow.connect_now(); thread = slow.session
+slow.shutdown(); slow.deleteLater(); QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+pump(lambda: thread.isFinished())
+for _ in range(10): QCoreApplication.processEvents(); time.sleep(0.02)
+check("a connection that gives up after its tab was closed ends quietly", thread.isFinished() and not late, late)
+sys.excepthook, S.nettools.SshSession = real_hook, real_ssh
 before = len([x for x in sessionlog.list_sessions() if not x["ended_at"]]); w.sessions.shutdown()
 check("closing the app finishes every open log", len([x for x in sessionlog.list_sessions() if not x["ended_at"]]) == 0 or before >= 1)
 ssh_srv.stop()
