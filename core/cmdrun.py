@@ -53,17 +53,27 @@ def runnable(dev):
 # ---------------------------------------------------------------- the read-only guard
 # first words of commands that only read; everything else needs the operator's explicit say-so
 READ_ONLY = ("show", "display", "get", "ping", "traceroute", "tracert", "dir", "more", "list", "monitor", "diagnose",
-             "diag", "/system resource print", "/interface print", "/ip address print", "/export", "/ping", "/tool")
+             "diag", "/system resource print", "/interface print", "/ip address print", "/export", "/ping", "/tool traceroute",
+             "/tool torch")
 DANGEROUS = ("reload", "reboot", "restart", "erase", "format", "delete", "write erase", "factory", "reset", "shutdown",
              "no ", "clear", "configure", "conf t", "commit", "copy ", "request ", "/system reset", "/system reboot",
              "/system shutdown", "execute", "set ", "unset", "config ")
+# words that change something even after a looking first word (diagnose sys session clear, diagnose sys kill ...); a filter after | is only text
+CHANGE_WORDS = {"clear", "kill", "reset", "reboot", "restart", "delete", "erase", "format", "flush", "shutdown", "stop", "upgrade"}
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 
 
 def read_only(command):
+    if _CONTROL.search((command or "").strip()):           # a line break inside would reach the device as a second command
+        return False
     c = (command or "").strip().lower()
     if not c:
         return True
-    return c.startswith(READ_ONLY) and not any(c.startswith(d) for d in DANGEROUS)
+    if not c.startswith(READ_ONLY) or any(c.startswith(d) for d in DANGEROUS):
+        return False
+    if c.startswith("/") and re.search(r"[;\[\]{}]|\bfile=", c):   # RouterOS: ; runs another command, [ ] one inside, file= writes
+        return False
+    return not set(c.split("|", 1)[0].split()) & CHANGE_WORDS
 
 
 # PowerShell. A command is read-only when it is a chain of cmdlets that only look (Get-, Test-, Measure-, Select-, Sort-, Where-, Format-,
@@ -81,16 +91,45 @@ _PS_NATIVE = {"hostname", "ipconfig", "whoami", "systeminfo", "netstat", "taskli
 _PS_NATIVE_FORMS = {
     "w32tm": re.compile(r"^w32tm\s+/(query|monitor|tz|stripchart)\b", re.I),
     "sc": re.compile(r"^sc(\.exe)?\s+(\\\\\S+\s+)?(query|queryex|qc|qdescription|qfailure|qtriggerinfo|enumdepend|getdisplayname|getkeyname)\b", re.I),
-    "netsh": re.compile(r"^netsh\b.*\bshow\b", re.I),
+    "netsh": lambda p: _netsh_reads(p),
     "route": re.compile(r"^route\s+print\b", re.I),
-    "net": re.compile(r"^net(\.exe)?\s+(statistics|share|user|view|accounts|config|localgroup|group|time|session|use|file)\b(?!.*\b(add|delete|/add|/delete|/del)\b)", re.I),
-    "wevtutil": re.compile(r"^wevtutil\s+(qe|gl|el|gli|epl)\b", re.I),
+    "net": lambda p: _net_reads(p),
+    "wevtutil": re.compile(r"^wevtutil\s+(qe|gl|el|gli)\b", re.I),
+    "gpresult": re.compile(r"^gpresult(\.exe)?(?!.*\s/[hxf](\s|$))", re.I),       # /h and /x write a report file
     "nltest": re.compile(r"^nltest\s+/(dsgetdc|dclist|sc_query|domain_trusts|parentdomain|whowill|server)\b", re.I),
     "fsutil": re.compile(r"^fsutil\s+(volume\s+diskfree|fsinfo|behavior\s+query|dirty\s+query)\b", re.I),
     "query": re.compile(r"^query\s+(user|session|process|termserver)\b", re.I),
     "arp": re.compile(r"^arp\s+-a\b", re.I),
     "dsregcmd": re.compile(r"^dsregcmd\s+/status\b", re.I),
 }
+# net: each form that looks, and how many names it may be given (`net user bob` shows bob; `net user bob secret` sets his password)
+_NET_READS = {"statistics": 1, "share": 1, "user": 1, "localgroup": 1, "group": 1, "view": 1, "accounts": 0, "config": 1, "time": 1,
+              "session": 1, "file": 1, "use": 0}
+_NET_OPTIONS = {"/domain", "/all"}                                           # the only switches that change nothing
+_NETSH_VERBS = {"add", "set", "delete", "del", "reset", "dump", "exec", "install", "uninstall", "start", "stop", "import", "export",
+                "connect", "disconnect", "flush", "renew", "release", "commit", "apply", "load", "save"}
+# PowerShell takes these as quotes too, so they could end a string this check still thinks is open
+_PS_QUOTES = "‘’‚‛“”„"
+
+
+def _net_reads(p):
+    words = re.findall(r'"[^"]*"|\'[^\']*\'|\S+', p)[1:]
+    if not words or words[0].lower() not in _NET_READS:
+        return False
+    rest = words[1:]
+    names = [w for w in rest if not w.startswith("/")]
+    return (len(names) <= _NET_READS[words[0].lower()] and not any("=" in w for w in rest)
+            and all(w.lower() in _NET_OPTIONS for w in rest if w.startswith("/")))
+
+
+def _netsh_reads(p):
+    """`netsh <context> show ...`: only plain context words before `show` (a rule *named* show is still an add)."""
+    words = [w.lower() for w in p.split()[1:]]
+    if "show" not in words:
+        return False
+    return all(re.fullmatch(r"[a-z0-9]+", w) and w not in _NETSH_VERBS for w in words[:words.index("show")])
+
+
 _SAFE_BLOCK = re.compile(r"^[\w\s$_.'\"\-*?,@\[\]!:%/\\+~#]*$")           # inside { }: names, values and comparisons, never calls or assignments
 _BLOCK_OWNERS = {"where-object", "where", "?", "select-object", "select", "sort-object", "sort", "group-object", "group", "measure-object"}
 
@@ -129,7 +168,7 @@ def _ps_segments(text):
             return None
         elif ch == "$" and text[i + 1:i + 2] == "(":
             return None
-        elif ch in "&<>":
+        elif ch in "&<>()":                                  # ( ) would run the command inside as an argument
             return None
         elif ch == "{":
             depth, j = 1, i + 1
@@ -164,6 +203,8 @@ def read_only_ps(command):
     c = (command or "").strip()
     if not c:
         return True
+    if any(q in c for q in _PS_QUOTES):
+        return False
     parts = _ps_segments(c)
     if not parts or any(not p for p in parts):
         return False
@@ -174,7 +215,7 @@ def read_only_ps(command):
             continue
         if name in _PS_NATIVE:
             form = _PS_NATIVE_FORMS.get(name)
-            if form is not None and not form.match(p):
+            if form is not None and not (form(p) if callable(form) else form.match(p)):
                 return False
             continue
         return False

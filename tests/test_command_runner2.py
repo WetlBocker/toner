@@ -51,6 +51,26 @@ blocked = [r"Restart-Service Spooler", r"Stop-Service x", r"Get-Service | Stop-S
            r"Get-Content x | ForEach-Object { $_ }", 'Get-Service "$(calc)"', r"Get-Process | Select-Object { Stop-Process }"]
 for c in blocked: check(f"asks first: {c}", not C.read_only_ps(c))
 check("the network-device guard is unchanged, and now also stops 'request ...' (PAN-OS)", C.read_only("show version") and not C.read_only("request restart system") and not C.read_only("configure terminal"))
+
+print("== the guard has no way past it")
+good = [r"net user", r"net user bob", r"net user bob /domain", r"net localgroup administrators", r'net group "Domain Admins" /domain', r"net view \\pc1 /all",
+        r"net accounts", r"net time \\dc1", r"netsh wlan show interfaces", r"netsh advfirewall firewall show rule name=all", r"gpresult /r",
+        r"wevtutil gli System", r"Get-Service | Where-Object { $_.Status -eq 'Running' }", r"Get-Content 'notes (old).txt'"]
+for c in good: check(f"still looks only: {c}", C.read_only_ps(c))
+blocked = [r"net user bob secret", r"net user bob *", r"net user bob /active:no", r"net accounts /minpwlen:0", r"net share pub=C:\ /grant:everyone,full",
+           r"net use Z: \\srv\share", r"net time /set /y", r"net file 12 /close", r"net config server /hidden:yes",
+           r"netsh advfirewall firewall add rule name=show dir=in action=allow", r"netsh advfirewall set allprofiles state off show", r"netsh -r pc1 interface show interface",
+           r"gpresult /h report.html", r"wevtutil epl System c.evtx", r"Get-Date (Restart-Service Spooler)", r"Get-Item @(Stop-Service x)",
+           "Get-Date 'a\u2019; Restart-Service x; \u2018b'", "Get-Date \u201cx\u201d"]
+for c in blocked: check(f"asks first: {c}", not C.read_only_ps(c))
+good = ["show version", "show reload", "show logging | include reset", "show running-config | include shutdown", "display reboot-info",
+        "diagnose sys session list", "/interface print", "/tool traceroute 10.0.0.1", "/export"]
+for c in good: check(f"still looks only: {c}", C.read_only(c))
+blocked = ["show version\nreload", "show version\r\nconfigure terminal","show version\tx", "diagnose sys session clear", "diagnose sys kill 9 1",
+           "diag debug reset", "/interface print; /system reboot", "/interface print where [/system reboot]", "/export file=x", "/tool fetch url=http://x",
+           "/tool netwatch add host=1.1.1.1"]
+for c in blocked: check(f"asks first: {c!r}", not C.read_only(c))
+check("a trailing line break is only trimmed", C.read_only("show version\n") and C.read_only("  show version  "))
 check("each kind of device is judged by its own rules", C.risky_commands([sw], ["hostname", "show version"]) == ["hostname"] and C.risky_commands([lo], ["hostname", "show version"]) == ["show version"]
       and C.risky_commands([sw, lo], ["hostname", "show version"]) == ["hostname", "show version"] and C.risky_commands([lo], ["hostname"]) == [])
 

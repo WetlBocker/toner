@@ -80,6 +80,9 @@ for c in ("reload", "configure terminal", "conf t", "copy running-config startup
     check(f"refused, could change: {c}", T.refused("ssh", c) == "could change the device")
 for c in ("show running-config | redirect flash:x", "show tech | append bootflash:t", "show version | tee flash:v", "show configuration | save /var/tmp/c", "show version > flash:v", "show version |redirect x"):
     check(f"refused, writes a file: {c}", T.refused("ssh", c) == "writes its output to a file")
+check("a second line inside one command is refused", T.refused("ssh", "show version\nreload") == "could change the device"
+      and T.refused("ssh", "show version\r\nconfigure terminal") == "could change the device")
+check("a command inside ( ) in PowerShell is refused", T.refused("windows", "Get-Date (Restart-Service Spooler)") == "could change the device")
 check("PowerShell is judged by its own rules", T.refused("windows", "Get-Service") == "" and T.refused("windows", "Restart-Service Spooler") == "could change the device" and T.refused("windows", "Get-Service > a.txt") == "writes its output to a file")
 
 print("== a real run on a fake switch")
