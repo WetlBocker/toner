@@ -64,7 +64,7 @@ for name, make, attr, key, width in (("Tools", ToolsTab, "tabs", "tools_list_hid
 readme = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "README.md"), encoding="utf-8").read()
 check("the README says so", "the page list can be folded away" in readme)
 from core.version import VERSION
-check("version 1.11.7", VERSION == "1.11.7")
+check("version 1.11.8", VERSION == "1.11.8")
 
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)
