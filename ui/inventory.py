@@ -749,6 +749,9 @@ class BulkEditDialog(QDialog):
 ROLE = Qt.ItemDataRole.UserRole
 
 
+EMPTY_STRIP = 18            # the empty space the device list keeps under its last row (drop a device there to move it to the top level)
+
+
 class DeviceTree(QTreeWidget):
     """The inventory tree. Dropping on a folder moves the dragged devices and folders into it."""
     moved = Signal(list, object)          # [("device"|"folder", id), ...], target folder id (None = top level)
@@ -1514,9 +1517,9 @@ class InventoryTab(QWidget):
             if r.isValid() and r.height():
                 bottom = max(bottom, r.bottom())
             it += 1
-        if bottom:
-            extra = self.table.horizontalScrollBar().height() if self.table.horizontalScrollBar().isVisible() else 0
-            self.table.setMaximumHeight(bottom + self.table.header().height() + 2 * self.table.frameWidth() + extra + 4)
+        if bottom:                                                     # a strip under the last row stays: a drop there means "to the top level",
+            extra = self.table.horizontalScrollBar().height() if self.table.horizontalScrollBar().isVisible() else 0   # a click there deselects
+            self.table.setMaximumHeight(bottom + self.table.header().height() + 2 * self.table.frameWidth() + extra + EMPTY_STRIP)
         else:
             self.table.setMaximumHeight(16777215)
 

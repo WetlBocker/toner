@@ -101,7 +101,8 @@ typed = {"text": None}
 QInputDialog.getText = staticmethod(lambda *a, **k: (typed["text"] or "", typed["text"] is not None))
 import ui.inventory as INV
 import app as A
-w = A.Main(); w.show(); inv = w.inventory
+w = A.Main(); w.resize(1240, 900); w.show(); inv = w.inventory
+w.go("Inventory"); app.processEvents()                     # the list is laid out only once its section shows (its empty strip is dropped on below)
 def tree():
     out = []
     def walk(it, depth):
@@ -144,7 +145,7 @@ ds = {d["name"]: d for d in db.list_devices()}; check("move devices via the menu
 check("target folder is opened and counted", find("folder", pf).isExpanded() and "(2)" in find("folder", pf).text(0) or "(2" in find("folder", pf).text(0), find("folder", pf).text(0))
 # real drag-and-drop event onto a folder row
 def drop_on(item, selected):
-    pick(*selected); vp = inv.table.viewport(); rect = inv.table.visualItemRect(item) if item is not None else None
+    pick(*selected); app.processEvents(); vp = inv.table.viewport(); rect = inv.table.visualItemRect(item) if item is not None else None   # (the list resizes to its rows after a refill)
     pos = QPointF(rect.center()) if rect else QPointF(vp.width() - 5, vp.height() - 5)
     ev = QDropEvent(pos, Qt.DropAction.MoveAction, QMimeData(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
     inv.table.dropEvent(ev); return ev
@@ -167,7 +168,7 @@ class FakeMenu(QMenu):
         captured.update(actions=[x.text() for x in self.actions() if x.text()], menu=self); return None
 INV.QMenu = FakeMenu
 vp = inv.table.viewport()
-pick(); inv.show_menu(QPoint(vp.width() - 5, vp.height() - 5)); check("empty space: Add Device / New folder / Expand / Collapse", captured["actions"] == ["Add Device", "New folder...", "Expand all", "Collapse all"], captured["actions"])
+pick(); app.processEvents(); inv.show_menu(QPoint(vp.width() - 5, vp.height() - 5)); check("empty space: Add Device / New folder / Expand / Collapse", captured["actions"] == ["Add Device", "New folder...", "Expand all", "Collapse all"], captured["actions"])
 it = find_dev("loose"); inv.show_menu(inv.table.visualItemRect(it).center()); a = captured["actions"]
 check("a device: Edit, SSH, Move, Delete", a[:3] == ["Details...", "Edit...", "Open SSH session"] and "Move to folder" in a and a[-3] == "Delete..." and a[-2:] == ["Expand all", "Collapse all"], a)
 ran = []; inv.run_checks.connect(ran.append)
