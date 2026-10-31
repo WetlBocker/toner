@@ -28,6 +28,7 @@ from ui.scheduler import BackupScheduler, Scheduler
 from ui.sessions import SessionsTab
 from ui.automation import AutomationTab
 from ui.assistant import AssistantPanel, SideButton, PANEL_WIDTH
+HEADER_CLEAR = 72                                   # the Assistant button stays below a section's title row (Run checks lives there)
 from core import assistant as AI
 from ui.settings import SettingsTab
 from ui.tools import ToolsTab
@@ -138,6 +139,7 @@ class Main(QMainWindow):
         self.results.run_finished.connect(self.on_run_finished)
         self.results.run_finished.connect(self.inventory.update_values)    # the versions and states the run just read
         self.results.run_finished.connect(self.dashboard.refresh)
+        self.dashboard.attention_count.connect(lambda n: self.tabs.setBadge(self.results, n))   # the count on the Results row
         self.inventory.changed.connect(self.tools.refresh)
         self.inventory.changed.connect(self.configs.refresh)
         self.inventory.changed.connect(self.dashboard.refresh)
@@ -331,6 +333,7 @@ class Main(QMainWindow):
         else:
             x = (self.assistant.x() - b.width() // 2) if self.assistant.isVisible() else (self.body.width() - b.width() - 8)
         y = int(round(frac * self.body.height() - b.height() / 2))
+        y = max(HEADER_CLEAR, y)                                                # never over a section's title row and its buttons
         from PySide6.QtCore import QPoint
         b.move(self.body.mapTo(self, QPoint(max(0, x), min(max(0, y), max(0, self.body.height() - b.height())))))
         b.raise_()

@@ -125,6 +125,7 @@ QPushButton[segment="true"] { padding: 3px 9px; border-radius: 0; background: %(
 QPushButton[segment="true"]:checked { background: %(surface)s; color: %(text)s; border-bottom: 2px solid %(accent)s; }
 QPushButton[flat="true"], QPushButton[ghost="true"] { background: transparent; border-color: transparent; color: %(muted)s; }
 QPushButton[ghost="true"]:hover { background: %(hover)s; color: %(text)s; }
+QPushButton[outline="true"] { background: transparent; }
 QToolButton[popupMode="2"] { padding-right: 26px; }
 QToolButton::menu-indicator { image: url(%(chev_down)s); subcontrol-origin: padding; subcontrol-position: center right; right: 8px; width: 12px; height: 12px; }
 

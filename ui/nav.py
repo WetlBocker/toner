@@ -4,10 +4,11 @@ Offers the small part of QTabWidget's API that the rest of the app uses (addTab,
 currentWidget, indexOf, count, tabText), so sections can be switched from code.
 """
 from PySide6.QtCore import QEvent, QSize, Qt, Signal
-from PySide6.QtGui import QFont, QIcon
+from PySide6.QtGui import QColor, QFont, QIcon
 from PySide6.QtWidgets import (QApplication, QComboBox, QHBoxLayout, QLabel, QListView, QListWidget, QListWidgetItem, QPushButton, QScrollArea,
-                               QStackedWidget, QVBoxLayout, QWidget)
+                               QStackedWidget, QStyledItemDelegate, QVBoxLayout, QWidget)
 from ui import icons, theme
+from ui import status as st
 
 
 ITEM_HEIGHT = 36            # a row in a page list; Qt does not take the style sheet's padding into account by itself
@@ -23,6 +24,54 @@ WIDE_SECTIONS = ("Sessions",)   # sections that use the whole window width (a te
 NAV_ICON = 18               # the icon before each section's name
 NAV_SCALE = 1.0             # the section names, the size of the page text
 LOGO = 32                   # the mark at the top of the sidebar
+BADGE = 18                  # a count on a section's row (the Results row: devices needing attention)
+
+
+def see_through(widget):
+    """A section's scroll areas let the page behind them show (the theme's wash or glow): a scroll area paints itself opaque otherwise."""
+    areas = [widget] if isinstance(widget, QScrollArea) else []
+    areas += widget.findChildren(QScrollArea)
+    for area in areas:
+        area.setStyleSheet("QScrollArea { background: transparent; }")
+        area.viewport().setAutoFillBackground(False)
+        if area.widget() is not None:
+            area.widget().setAutoFillBackground(False)
+
+
+class NavDelegate(QStyledItemDelegate):
+    """Draws the sidebar's rows, and a count after a section's name (on its icon's corner when only icons show)."""
+
+    def __init__(self, nav):
+        super().__init__(nav.list)
+        self.nav = nav
+
+    def paint(self, p, opt, index):
+        super().paint(p, opt, index)
+        n = self.nav.count_for_row(index.row())
+        if not n:
+            return
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QFont, QFontMetrics, QPainter
+        bg, fg = st.chip("FAIL")
+        f = QFont(opt.font)
+        f.setBold(True)
+        f.setPointSizeF(max(7.0, f.pointSizeF() - 1.5))
+        text = str(n)
+        w = max(BADGE, QFontMetrics(f).horizontalAdvance(text) + 10)
+        r = opt.rect
+        if self.nav._icons_only():                                     # a small pill on the icon's top-right corner
+            rect = QRectF(r.center().x() + 2, r.top() + 1, w, BADGE - 2)
+        else:
+            rect = QRectF(r.right() - w - 10, r.center().y() - BADGE / 2, w, BADGE)
+        p.save()
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(bg.red(), bg.green(), bg.blue(), min(255, bg.alpha() * 2)))
+        p.drawRoundedRect(rect, rect.height() / 2, rect.height() / 2)
+        p.setPen(fg)
+        p.setFont(f)
+        p.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
+        p.restore()
 
 
 class Beat(QWidget):
@@ -89,6 +138,7 @@ class NavStack(QWidget):
         self._auto = False                         # folded because the window is narrow (not stored)
         self._collapsed = False
         self._badges = set()
+        self._counts = {}                          # section index -> a number shown after its name (0 shows nothing)
         from ui.backdrop import Backdrop
         self.side = QWidget()                      # the sidebar
         self.side.setObjectName("sidebar")
@@ -123,6 +173,7 @@ class NavStack(QWidget):
         self.list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.list.setFrameShape(QListWidget.Shape.NoFrame)
+        self.list.setItemDelegate(NavDelegate(self))
         head = QHBoxLayout()
         head.setContentsMargins(0, 0, 0, 0)
         head.setSpacing(8)
@@ -306,6 +357,7 @@ class NavStack(QWidget):
         if widget.layout() is not None:
             widget.layout().setContentsMargins(*self.PAGE_MARGINS)
             widget.layout().setSpacing(12)
+        see_through(widget)
         key = group or ""
         if key not in self._groups:
             self._groups[key] = self._start_group(group) if group else -1
@@ -333,12 +385,22 @@ class NavStack(QWidget):
         return self.list.item(self._rows[i]) if i >= 0 else None
 
     def setBadge(self, widget, on):
-        """Mark a section that has something new (a dot after its name, or on its icon when only icons show)."""
+        """Mark a section that has something new: True puts a dot after its name (on its icon when only icons show); a number is
+        drawn as a count after the name, and 0 or False clears it."""
         i = self.stack.indexOf(widget)
-        if i >= 0:
+        if i < 0:
+            return
+        if isinstance(on, bool) or on is None:
             (self._badges.add if on else self._badges.discard)(i)
-            self._label(i)
-            self.restyle()
+        else:
+            self._counts[i] = int(on)
+        self._label(i)
+        self.restyle()
+        self.list.viewport().update()
+
+    def count_for_row(self, row):
+        """The number drawn on this list row, if it is a section with one."""
+        return self._counts.get(self._rows.index(row), 0) if row in self._rows else 0
 
     def restyle(self):
         """Re-tint the icons and re-measure the names after the theme, accent or text size changed."""
@@ -484,6 +546,7 @@ class PageStack(QWidget):
         area.setWidgetResizable(True)
         area.setFrameShape(QScrollArea.Shape.NoFrame)
         area.setWidget(widget)
+        see_through(area)
         self.stack.addWidget(area)
         self._pages.append(widget)
         item = QListWidgetItem(label)

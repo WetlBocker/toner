@@ -857,6 +857,7 @@ class DetailsPane(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(8, 0, 0, 0)
         lay.addWidget(frame)
+        lay.addStretch(1)                                              # the card ends under its content, like the list beside it
         self.set_device(None)
 
     def restyle(self):
@@ -1389,6 +1390,7 @@ class InventoryTab(QWidget):
         self.table.blockSignals(False)
         self.update_buttons()
         self._empty_hint().setVisible(self.table.topLevelItemCount() == 0)
+        self._fit_tree()
         n = sum(1 for d in self._listed() if not d.get("vendor"))
         self.no_vendor.setText(f"{n} devices have no vendor yet, so the checks skip them. Choose a vendor to start checking them: "
                                "Bulk edit, or More > Detect vendors." if n else "")
@@ -1497,6 +1499,26 @@ class InventoryTab(QWidget):
         if not self._building:
             for i in range(len(self.COLS) - 1):
                 self.table.resizeColumnToContents(i)
+            self._fit_tree()
+
+    def _fit_tree(self):
+        """The list ends under its last row, as the Overview's panels do; with more rows than the page has room for it scrolls as before.
+        An empty list keeps its height for the hint."""
+        if self._building:
+            return
+        from PySide6.QtWidgets import QTreeWidgetItemIterator
+        bottom = 0
+        it = QTreeWidgetItemIterator(self.table, QTreeWidgetItemIterator.IteratorFlag.NotHidden)
+        while it.value():
+            r = self.table.visualItemRect(it.value())                  # empty for a row inside a closed folder
+            if r.isValid() and r.height():
+                bottom = max(bottom, r.bottom())
+            it += 1
+        if bottom:
+            extra = self.table.horizontalScrollBar().height() if self.table.horizontalScrollBar().isVisible() else 0
+            self.table.setMaximumHeight(bottom + self.table.header().height() + 2 * self.table.frameWidth() + extra + 4)
+        else:
+            self.table.setMaximumHeight(16777215)
 
     def remember(self, item, open_):
         """Keep which folders are open, across restarts."""

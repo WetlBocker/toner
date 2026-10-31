@@ -81,14 +81,14 @@ class Backdrop(QWidget):
         s = box_w / 640
         dx = -36 * (1 - abs(self.phase * 2 - 1)) if motion.lively() else 0
         ox, oy = self.width() - box_w + dx, 40 + 22 * (1 - abs(self.phase * 2 - 1)) * (1 if motion.lively() else 0)
-        pen = QPen(_rgba(t["accent"], 0.14))
+        pen = QPen(_rgba(t["accent"], 0.09))
         pen.setWidthF(1.0)
         p.setPen(pen)
         pts = [QPointF(ox + x * s, oy + y * s) for x, y in _DOTS]
         for a, b in _LINKS:
             p.drawLine(pts[a], pts[b])
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(_rgba(t["accent"], 0.28))
+        p.setBrush(_rgba(t["accent"], 0.20))
         for i, pt in enumerate(pts):
             rad = (3, 5, 6, 4, 5, 4, 5, 6, 4, 5, 3)[i % 11] * s
             p.drawEllipse(QRectF(pt.x() - rad, pt.y() - rad, rad * 2, rad * 2))
