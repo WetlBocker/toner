@@ -112,7 +112,7 @@ db.save_run([Result("sw-a", "bgp", "FAIL", "", "peer down"), Result("sw-b", "cpu
 dash = DashboardTab(); dash.resize(1100, 720); dash.show(); settle()
 hh = dash.attention.horizontalHeader()
 check("the 'what is wrong' column is the one that stretches", hh.sectionResizeMode(2) == QHeaderView.ResizeMode.Stretch and hh.sectionResizeMode(0) == QHeaderView.ResizeMode.ResizeToContents)
-total = sum(hh.sectionSize(i) for i in range(4))
+total = sum(hh.sectionSize(i) for i in range(5))
 check("so the table fills its panel (no empty strip on the right)", abs(total - dash.attention.viewport().width()) <= 2, (total, dash.attention.viewport().width()))
 check("cells show the full text on hover", dash.attention.item(0, 2).toolTip() == dash.attention.item(0, 2).text() and dash.attention.item(0, 2).text())
 check("with only runs to show there is no second 'Recent runs' heading under 'Recent activity'", "Recent runs" not in dash.recent.text() and "OK" in dash.recent.text(), dash.recent.text())

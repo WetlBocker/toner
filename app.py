@@ -231,6 +231,9 @@ class Main(QMainWindow):
         self.statusBar().setStyleSheet("QStatusBar { border: 0; padding: 0; } QStatusBar::item { border: 0; }")
         self.strip.navigate.connect(self._strip_go)
         self.results.progress.connect(self.strip.on_progress)
+        self.results.progress.connect(self.dashboard.set_progress)       # the Overview's Run checks says Checking... and fills a line
+        self.results.run_started.connect(self.dashboard.run_started)      # the map rings the devices being checked
+        self.results.device_done.connect(self.dashboard.device_done)
         self.scanning.progress.connect(self.strip.on_progress)
         self.results.run_finished.connect(self.strip.refresh)
         self.palette = CommandPalette(self)
@@ -782,6 +785,7 @@ class Main(QMainWindow):
         self.strip.restyle()
         self.ai_button.restyle()
         self.inventory.refresh()
+        self.dashboard.restyle()
         for page in self.settings.pages:                   # the theme cards' name strips follow the window's colours
             if hasattr(page, "restyle"):
                 page.restyle()
@@ -791,6 +795,7 @@ class Main(QMainWindow):
         that follow the inventory: switching organization refills those once itself."""
         apply_look(QApplication.instance())
         self.tabs.restyle()
+        self.dashboard.restyle()
         self.update_tray()
         if lists:
             self.inventory.refresh()

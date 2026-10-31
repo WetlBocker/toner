@@ -32,7 +32,9 @@ class Worker(QThread):
 
 class ResultsTab(QWidget):
     run_finished = Signal()
-    progress = Signal(int, int)                  # devices done, devices in the run (for the status strip)
+    progress = Signal(int, int)
+    run_started = Signal(list)                 # the devices a run has just started on
+    device_done = Signal(str)                  # a device's results are all in                  # devices done, devices in the run (for the status strip)
     open_device = Signal(str)
     COLS = ["Device", "Check", "Status", "Value", "Message", "Organization"]
     ORG = 5
@@ -420,7 +422,9 @@ class ResultsTab(QWidget):
         self.worker = self._worker(devices)
         self._active = True
         self.repopulate()
+        self._done_devices = set()
         self.progress.emit(0, len(self.last_ran))
+        self.run_started.emit(list(self.last_ran))
         self.worker.batch.connect(self.add)
         self.worker.finished.connect(self.done)
         self.worker.start()
@@ -431,6 +435,10 @@ class ResultsTab(QWidget):
                 r.device = db.qualified(r.device, r.org)
         self.results.extend(batch)
         self.repopulate()
+        for name in {device_of(r.device) for r in batch} & set(self.last_ran):
+            if name not in getattr(self, "_done_devices", set()):
+                self._done_devices = getattr(self, "_done_devices", set()) | {name}
+                self.device_done.emit(name)
         done = len({device_of(r.device) for r in self.results} & set(self.last_ran))
         self.progress.emit(min(done, len(self.last_ran) - 1), len(self.last_ran))     # the end is announced by done()
 

@@ -2,25 +2,31 @@
 from datetime import datetime
 
 from PySide6.QtCore import QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPen
+from PySide6.QtGui import QColor, QFont, QPainter, QPalette, QPen
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QBoxLayout, QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu,
                                QPushButton, QScrollArea, QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout, QWidget)
 import html
 
 from core import acks, audit, backup, db, display, fleet, maintenance, notify, reports, scope, vendors
 from ui import icons, theme
-from ui.widgets import EmptyHint, StatusDelegate, filling
+from ui.widgets import EmptyHint, FlowLayout, StatusDelegate, filling
 from ui import status as st
+from ui import motion
+from ui.glance import GlanceMap
+from ui.panels import Panel, ProgressLine
+from PySide6.QtWidgets import QGraphicsOpacityEffect, QSizePolicy, QToolButton, QWidget
 
 
-class Card(QFrame):
+class Card(Panel):
     clicked = Signal()
+    ICONS = {"OK": "check", "WARN": "warn-fill", "FAIL": "fail-fill", "devices": "inventory", "changes": "configs"}
 
     def __init__(self, title, color_key=None):
         super().__init__()
-        self.setProperty("card", True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.color_key = color_key
+        self._pop = None
+        self._lifted = False
         self.value = QLabel("0")
         f = self.value.font()
         f.setPointSizeF(f.pointSizeF() * 2.8)
@@ -39,7 +45,7 @@ class Card(QFrame):
         self.sub.setProperty("muted", True)
         self.sub.setWordWrap(True)                      # a long caption wraps instead of making the card wider
         self.title.setWordWrap(True)
-        lay = QVBoxLayout(self)
+        self.lay = lay = QVBoxLayout(self.card)
         lay.setContentsMargins(18, 12, 18, 12)
         lay.setSpacing(2)
         top = QHBoxLayout()
@@ -50,20 +56,51 @@ class Card(QFrame):
         lay.addWidget(self.value)
         lay.addWidget(self.sub)
 
+    def _base_size(self):
+        return QApplication.font().pointSizeF() * (2.2 if theme.is_terminal() else 2.8)
+
     def set(self, value, sub="", active=True):
+        changed = self.value.text() != str(value) and self.value.text() != "0" or (self.value.text() == "0" and str(value) != "0")
         self.value.setText(str(value))
         f = self.value.font()                              # big numbers in the standard look, a step smaller in the console look
-        f.setPointSizeF(QApplication.font().pointSizeF() * (2.2 if theme.is_terminal() else 2.8))
+        f.setPointSizeF(self._base_size())
         self.value.setFont(f)
+        if changed and self.isVisible():
+            self._pop_value()
         self.sub.setText(sub)
         self.sub.setVisible(False)                          # Demarc's tiles have no caption line: it is kept in the tooltip
         self._tip = self._tip if hasattr(self, "_tip") else self.toolTip()
         self.setToolTip(self._tip + (f"\n{sub}" if sub else ""))
         self.value.setStyleSheet("")                       # the number in the text colour, as on Demarc: the icon carries the status colour
-        icon = {"OK": "check", "WARN": "warn-fill", "FAIL": "fail-fill"}.get(self.color_key)
+        icon = self.ICONS.get(self.color_key)
         self.mark.setVisible(bool(icon))
         if icon:
-            self.mark.setPixmap(icons.icon(icon, st.ink(self.color_key)).pixmap(16, 16))
+            colour = st.ink(self.color_key) if self.color_key in ("OK", "WARN", "FAIL") else (theme.current() or {}).get("muted", "#888888")
+            self.mark.setPixmap(icons.icon(icon, colour).pixmap(16, 16))
+
+    def _pop_value(self):
+        """The number swells and settles when it changes (nothing when motion is off)."""
+        import math
+        base = self._base_size()
+        if self._pop is not None:
+            self._pop.stop()
+        def step(v):
+            f = self.value.font()
+            f.setPointSizeF(base * (1 + 0.14 * math.sin(math.pi * float(v))))
+            self.value.setFont(f)
+        self._pop = motion.animate(self, 380, step, curve=motion.QEasingCurve.Type.OutQuad)
+
+    def enterEvent(self, e):
+        super().enterEvent(e)
+        if motion.lively() and not self._lifted:
+            self._lifted = True
+            self.lay.setContentsMargins(18, 10, 18, 14)
+
+    def leaveEvent(self, e):
+        super().leaveEvent(e)
+        if self._lifted:
+            self._lifted = False
+            self.lay.setContentsMargins(18, 12, 18, 12)
 
     def mousePressEvent(self, e):
         self.clicked.emit()
@@ -75,11 +112,23 @@ class BarList(QWidget):
     def __init__(self):
         super().__init__()
         self.rows = []                         # [(label, percent or None, detail)]
+        self.grown = 1.0                       # 0..1: how much of each bar is drawn (they grow in when the rows change)
+        self._grow = None
         self.setMinimumHeight(40)
 
     def set_rows(self, rows):
+        changed = rows != self.rows
         self.rows = rows
         self.setMinimumHeight(max(40, 30 * len(rows) + 8))
+        if changed and rows:
+            if self._grow is not None:
+                self._grow.stop()
+            self.grown = 0.0
+            self._grow = motion.animate(self, 900, self._on_grow)
+        self.update()
+
+    def _on_grow(self, v):
+        self.grown = float(v)
         self.update()
 
     def paintEvent(self, _):
@@ -106,7 +155,7 @@ class BarList(QWidget):
             if pct is not None:
                 key = "OK" if pct >= 99.5 else "WARN" if pct >= 95 else "FAIL"
                 p.setBrush(QColor(st.ink(key)))
-                p.drawRoundedRect(QRectF(bar.left(), bar.top(), max(8.0, bar.width() * pct / 100), bar.height()), rad, rad)
+                p.drawRoundedRect(QRectF(bar.left(), bar.top(), max(8.0, bar.width() * pct / 100 * self.grown), bar.height()), rad, rad)
             p.setPen(muted)
             p.drawText(QRectF(self.width() - 56, y, 56, 22), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
                        f"{pct:.1f}%" if pct is not None else "-")
@@ -140,6 +189,8 @@ class DashboardTab(QWidget):
         head.addWidget(self.when, 1)
         head.addWidget(self.backup_btn)
         head.addWidget(self.run_btn)
+        self.progress = ProgressLine()                                  # fills under the header while checks run
+        self.checking = set()
 
         self.moved = QLabel("")                                         # what changed since the previous run
         self.moved.setWordWrap(True)
@@ -147,22 +198,22 @@ class DashboardTab(QWidget):
         self.overlap = QLabel("")                                       # why the cards can add up to more than the devices
         self.overlap.setProperty("muted", True)
         self.overlap.setWordWrap(True)
-        self.cards = {"devices": Card("Devices"), "ok": Card("Healthy", "OK"), "warn": Card("Warnings", "WARN"),
-                      "fail": Card("Failing", "FAIL"), "changes": Card("Config changes")}
-        grid = QHBoxLayout()
-        grid.setSpacing(12)
+        self.cards = {"devices": Card("Devices", "devices"), "ok": Card("Healthy", "OK"), "warn": Card("Warnings", "WARN"),
+                      "fail": Card("Failing", "FAIL"), "changes": Card("Config changes", "changes")}
+        grid = FlowLayout(12, 12)                                       # five tiles sharing the width; a narrow window wraps them
         for c in self.cards.values():
-            grid.addWidget(c, 1)
+            c.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+            grid.addWidget(c)
         self.cards["devices"].clicked.connect(lambda: self.goto.emit("Inventory"))
         for k, what in (("ok", "healthy"), ("warn", "warn"), ("fail", "fail")):
             self.cards[k].clicked.connect(lambda _=False, w=what: self.show_results.emit(w))
         self.cards["changes"].clicked.connect(lambda: self.goto.emit("Configs"))
-        for k, tip in (("devices", "Open the Inventory"), ("ok", "Show the healthy devices in Results"), ("warn", "Show the warnings in Results"),
-                       ("fail", "Show what is failing in Results"), ("changes", "Open Configs")):
+        for k, tip in (("devices", "Open the Inventory"), ("ok", "Show OK results"), ("warn", "Show warnings"),
+                       ("fail", "Show FAIL and ERROR"), ("changes", "Open Configs")):
             self.cards[k].setToolTip(tip)
 
-        self.attention = QTableWidget(0, 4)
-        self.attention.setHorizontalHeaderLabels(["Device", "Status", "What is wrong", "Checked"])
+        self.attention = QTableWidget(0, 5)
+        self.attention.setHorizontalHeaderLabels(["Device", "Status", "What is wrong", "Checked", "Actions"])
         self.attention.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.attention.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.attention.verticalHeader().setVisible(False)
@@ -170,10 +221,11 @@ class DashboardTab(QWidget):
         hh = self.attention.horizontalHeader()                      # the explanation takes what the others leave
         hh.setStretchLastSection(False)
         for col, mode in ((0, hh.ResizeMode.ResizeToContents), (1, hh.ResizeMode.ResizeToContents), (2, hh.ResizeMode.Stretch),
-                          (3, hh.ResizeMode.ResizeToContents)):
+                          (3, hh.ResizeMode.ResizeToContents), (4, hh.ResizeMode.Fixed)):
             hh.setSectionResizeMode(col, mode)
         self.attention.setTextElideMode(Qt.TextElideMode.ElideRight)
         self.attention.setItemDelegateForColumn(1, StatusDelegate(self.attention))
+        self.attention.verticalHeader().setDefaultSectionSize(34)       # room for the row's buttons
         self.attention.setMinimumHeight(230)
         self.attention.doubleClicked.connect(self._open)
         self.attention.setMinimumWidth(330)                            # "What is wrong" is the point of this table: never squeeze it away
@@ -183,8 +235,7 @@ class DashboardTab(QWidget):
         self.attention.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.attention.customContextMenuRequested.connect(self._attention_menu)
         self.attention.itemSelectionChanged.connect(self._attention_buttons)
-        # what can be done about the selected problem, right under the list
-        self.act_open, self.act_run, self.act_connect = QPushButton("Open"), QPushButton("Run checks"), QPushButton("Connect")
+        # Acknowledge and Snooze act on the selected problem, under the list (Open, Run checks and Connect sit on each row)
         self.act_ack = QPushButton("Acknowledge")
         self.act_ack.setToolTip("Put this device's problems aside until they change: they leave this list and are not announced.\n"
                                 "A new problem, or one that gets worse, brings the device back.")
@@ -199,15 +250,11 @@ class DashboardTab(QWidget):
         self.show_aside = QCheckBox("Show put aside")
         self.show_aside.setToolTip("List acknowledged and snoozed devices too (marked)")
         self.show_aside.toggled.connect(self.refresh)
-        for b in (self.act_open, self.act_run, self.act_connect, self.act_ack):
-            b.setAutoDefault(False)
-        self.act_open.clicked.connect(lambda: self._device_act("open"))
-        self.act_run.clicked.connect(lambda: self._device_act("run"))
-        self.act_connect.clicked.connect(lambda: self._device_act("connect"))
+        self.act_ack.setAutoDefault(False)
         self.act_ack.clicked.connect(self._ack_clicked)
         self.attention_bar = QHBoxLayout()
         self.attention_bar.setSpacing(6)
-        for w in (self.act_open, self.act_run, self.act_connect, self.act_ack, self.act_snooze):
+        for w in (self.act_ack, self.act_snooze):
             self.attention_bar.addWidget(w)
         self.attention_bar.addStretch()
         self.attention_bar.addWidget(self.show_aside)
@@ -223,10 +270,14 @@ class DashboardTab(QWidget):
         self.recent.setWordWrap(True)
         self.recent.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
 
+        self.map = GlanceMap()                                          # the devices as a small map, links from Tools > Topology
+        self.map.open_device.connect(self.open_device)
+        self.map_summary = QLabel("")
+        self.map_summary.setProperty("muted", True)
+
         def panel(title, widget, extra=None):
-            f = QFrame()
-            f.setProperty("card", True)
-            lay = QVBoxLayout(f)
+            f = Panel()
+            lay = QVBoxLayout(f.card)
             lay.setContentsMargins(16, 12, 16, 12)
             row = QHBoxLayout()
             lab = QLabel(title)
@@ -244,9 +295,10 @@ class DashboardTab(QWidget):
         self.fleet_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         self.fleet_panel = panel("Windows computers and certificates", self.fleet_label)
         left = panel("Needs attention", self.attention)
-        left.layout().addLayout(self.attention_bar)
+        left.card.layout().addLayout(self.attention_bar)
         right = QVBoxLayout()
         right.setSpacing(12)
+        right.addWidget(panel("Network at a glance", self.map, self.map_summary))
         right.addWidget(panel("Availability", self.bars, self.period))
         right.addWidget(self.fleet_panel)
         right.addWidget(panel("Recent activity", self.recent), 1)
@@ -271,42 +323,85 @@ class DashboardTab(QWidget):
         scroll.setWidget(body)
         lay = QVBoxLayout(self)
         lay.addLayout(head)
+        lay.addWidget(self.progress)
         lay.addWidget(scroll, 1)
         self.refresh()
 
+    def restyle(self):
+        """The look changed (the Panels knob, the theme): the panels and the map follow."""
+        for p in self.findChildren(Panel):
+            p.restyle()
+        self.map.update()
+
+    # ---------- a run going now
+    def run_started(self, names):
+        """Results started a run on these devices: the map rings each of them until its results are in."""
+        self.checking = set(names)
+        self.map.set_checking(self.checking)
+
+    def device_done(self, name):
+        self.checking.discard(name)
+        self.map.set_checking(self.checking)
+
+    def set_progress(self, done, total):
+        running = 0 <= done < total
+        self.run_btn.setText("Checking\u2026" if running else "Run checks")
+        self.progress.set_progress(done, total)
+        if not running:
+            self.checking = set()
+            self.map.set_checking(self.checking)
+
+    def row_actions(self, row):
+        """The buttons on one row of Needs attention: {"open", "run", "connect"} (connect is None for a device with nothing to connect to)."""
+        cell = self.attention.cellWidget(row, 4)
+        return cell.buttons if cell else {}
+
+    def _fade_in(self, table):
+        """The list fades in after a refill (one effect on the whole table, taken off when done), unless motion is off."""
+        if not motion.enabled() or not table.isVisible():
+            return
+        eff = QGraphicsOpacityEffect(table)
+        table.setGraphicsEffect(eff)
+        def finish():
+            if table.graphicsEffect() is eff:
+                table.setGraphicsEffect(None)
+        motion.animate(table, 260, eff.setOpacity, start=0.25, end=1.0, on_done=finish)
+
     def _build_start(self):
         """A short list for a new installation: add devices, run the checks, set up alerts. Each step ticks itself off."""
-        f = QFrame()
-        f.setProperty("card", True)
-        lay = QVBoxLayout(f)
-        lay.setContentsMargins(16, 12, 16, 12)
-        top = QHBoxLayout()
-        head = QLabel("Getting started")
-        head.setStyleSheet("font-weight: 600;")
-        top.addWidget(head)
-        top.addStretch()
-        hide = QPushButton("Hide")
-        hide.setProperty("ghost", True)
-        hide.setToolTip("Do not show this again")
-        hide.clicked.connect(self._hide_start)
-        top.addWidget(hide)
-        lay.addLayout(top)
-        self.steps = {}
+        f = Panel()
+        row = FlowLayout(8, 6)
+        row.setContentsMargins(16, 8, 10, 8)
+        f.card.setLayout(row)
+        self.start_dots = QLabel("")                                    # one dash per step, filled as they are done
+        self.start_dots.setTextFormat(Qt.TextFormat.RichText)
+        self.start_title = QLabel("Getting started")
+        self.start_title.setStyleSheet("font-weight: 600;")
+        self.start_next = QLabel("")                                    # the next step to take
+        self.start_next.setProperty("muted", True)
+        row.addWidget(self.start_dots)
+        row.addWidget(self.start_title)
+        self.start_next.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        row.addWidget(self.start_next)
+        self.steps, self.step_buttons = {}, {}
         for key, text, buttons in (("devices", "Add the devices to watch", (("Add a device", "add"), ("Scan the network", "scan"))),
                                    ("run", "Run the checks once to see how they are doing", (("Run checks", "run"),)),
                                    ("alerts", "Choose how to be told when something breaks", (("Set up notifications", "notify"),))):
-            row = QHBoxLayout()
-            mark = QLabel("")
-            mark.setFixedWidth(22)
-            label = QLabel(text)
-            row.addWidget(mark)
-            row.addWidget(label, 1)
+            mark, label = QLabel(""), QLabel(text)                      # the step's state (its mark) and its wording, kept for the line above
+            mark.hide()
+            label.hide()
+            self.step_buttons[key] = []
             for caption, action in buttons:
                 b = QPushButton(caption)
                 b.clicked.connect(lambda _=False, a=action: self.run_requested.emit() if a == "run" else self.action.emit(a))
                 row.addWidget(b)
-            lay.addLayout(row)
+                self.step_buttons[key].append(b)
             self.steps[key] = (mark, label)
+        hide = QPushButton("Hide")
+        hide.setProperty("ghost", True)
+        hide.setToolTip("Do not show this again")
+        hide.clicked.connect(self._hide_start)
+        row.addWidget(hide)
         return f
 
     def _hide_start(self):
@@ -315,14 +410,17 @@ class DashboardTab(QWidget):
 
     def _update_start(self, devices, ran):
         done = {"devices": bool(devices), "run": bool(ran), "alerts": any(c.get("enabled", True) for c in notify.channels())}
+        t = theme.current() or {}
+        dots = []
         for key, (mark, label) in self.steps.items():
             mark.setText("✓" if done[key] else "•")
-            f = label.font()
-            f.setStrikeOut(done[key])
-            label.setFont(f)
-            label.setProperty("muted", done[key])
-            label.style().unpolish(label)
-            label.style().polish(label)
+            for b in self.step_buttons[key]:
+                b.setVisible(not done[key])
+            dots.append(f"<span style='color:{t.get('accent' if done[key] else 'border', '#888888')}'>&#9644;</span>")
+        self.start_dots.setText(" ".join(dots))
+        left = [k for k, d in done.items() if not d]
+        self.start_title.setText(f"Getting started: {len(left)} step{'s' if len(left) != 1 else ''} left" if left else "Getting started")
+        self.start_next.setText(self.steps[left[0]][1].text() + "." if left else "")
         self.start.setVisible(not db.get_setting("onboarding_done") and not all(done.values()))
 
     STACK_BELOW = 880                    # a window narrower than this puts the panels one under the other, so none is squeezed
@@ -388,14 +486,56 @@ class DashboardTab(QWidget):
     def _device(self, name):
         return db.find_device(name)
 
+    @staticmethod
+    def _connect_kind(dev):
+        """'rdp', 'ssh' or '' for a device: what Connect opens."""
+        return ("rdp" if dev["vendor"] == "windows" else "ssh" if vendors.uses_ssh_login(dev["vendor"]) else "") if dev else ""
+
+    def _row_buttons(self, name):
+        """Open, Run checks and SSH or Remote Desktop for one row, as small buttons in its Actions cell."""
+        cell = QWidget()
+        cell.setObjectName("rowActions")
+        cell.setAutoFillBackground(True)                              # opaque: the table under it is see-through, and a see-through cell
+        self._paint_cell(cell, False)                                 # would keep every earlier paint of its buttons
+        lay = QHBoxLayout(cell)
+        lay.setContentsMargins(4, 2, 4, 2)
+        lay.setSpacing(4)
+        cell.buttons = {}
+        kind = self._connect_kind(self._device(name))
+        for key, caption, what in (("open", "Open", "open"), ("run", "Run checks", "run"),
+                                   ("connect", {"rdp": "Remote Desktop", "ssh": "SSH"}.get(kind, ""), kind)):
+            if not caption:
+                cell.buttons[key] = None
+                continue
+            b = QPushButton(caption)
+            b.setProperty("ghost", True)
+            b.setAutoDefault(False)
+            b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setFixedHeight(26)
+            b.setStyleSheet("padding: 0 8px; min-height: 0;")
+            b.clicked.connect(lambda _=False, w=what, n=name: self.device_action.emit(w, n))
+            lay.addWidget(b)
+            cell.buttons[key] = b
+        lay.addStretch(1)                                              # two buttons sit together on the left, not spread apart
+        return cell
+
+    @staticmethod
+    def _paint_cell(cell, selected):
+        t = theme.current() or {}
+        pal = cell.palette()
+        pal.setColor(QPalette.ColorRole.Window, QColor(t.get("select" if selected else "surface", "#ffffff")))
+        cell.setPalette(pal)
+
     def _attention_buttons(self):
         cur = self._current()
-        dev = self._device(cur[0]) if cur else None
-        for b in (self.act_open, self.act_run, self.act_ack, self.act_snooze):
+        sel = self.attention.selectionModel()
+        for i in range(self.attention.rowCount()):                     # the Actions cell follows its row's selection colour
+            cell = self.attention.cellWidget(i, 4)
+            if cell is not None:
+                self._paint_cell(cell, sel.isRowSelected(i))
+        for b in (self.act_ack, self.act_snooze):
             b.setEnabled(cur is not None)
-        kind = ("rdp" if dev["vendor"] == "windows" else "ssh" if vendors.uses_ssh_login(dev["vendor"]) else "") if dev else ""
-        self.act_connect.setEnabled(bool(kind))
-        self.act_connect.setText({"rdp": "Remote Desktop", "ssh": "SSH"}.get(kind, "Connect"))
         self.act_ack.setText("Undo" if cur and cur[2] else "Acknowledge")
         self.act_ack.setToolTip("Bring this device back to the list" if cur and cur[2] else self.act_ack.toolTip())
 
@@ -444,8 +584,9 @@ class DashboardTab(QWidget):
         m = QMenu(self)
         m.addAction("Open device", lambda: self._device_act("open"))
         m.addAction("Run checks on this device", lambda: self._device_act("run"))
-        if self.act_connect.isEnabled():
-            m.addAction(f"Open {self.act_connect.text()}", lambda: self._device_act("connect"))
+        kind = self._connect_kind(self._device(cur[0]))
+        if kind:
+            m.addAction(f"Open {'Remote Desktop' if kind == 'rdp' else 'SSH'}", lambda: self._device_act("connect"))
         m.addSeparator()
         if cur[2]:
             m.addAction("Undo (bring it back)", self._ack_clicked)
@@ -487,8 +628,12 @@ class DashboardTab(QWidget):
         problems = sorted(((n, v) for n, v in health.items() if v["status"] != "OK" and (n not in aside or self.show_aside.isChecked())),
                           key=lambda kv: (kv[0] in aside, -{"OK": 0, "WARN": 1, "FAIL": 2, "ERROR": 3}[kv[1]["status"]], kv[0].lower()))
         keep = self._current()[0] if self._current() else None
+        was = self.names
         self.names = [n for n, _ in problems]
         self.rows = [(n, v, aside.get(n, (None,))[0]) for n, v in problems]
+        cells = [self._row_buttons(name) for name, _v in problems]
+        if cells:                                                      # the buttons decide the column's width, set before they are placed
+            self.attention.setColumnWidth(4, max(c.sizeHint().width() for c in cells) + 24)      # plus the row's own padding
         with filling(self.attention):
             self.attention.setRowCount(len(problems))
             muted = QColor((theme.current() or {}).get("muted", "#888888"))
@@ -508,12 +653,18 @@ class DashboardTab(QWidget):
                     if name in aside and j != 1:
                         item.setForeground(muted)
                     self.attention.setItem(i, j, item)
+                self.attention.setCellWidget(i, 4, cells[i])
                 if name == keep:
                     self.attention.selectRow(i)
+        self.attention.viewport().update()
+        if self.names != was:
+            self._fade_in(self.attention)
         hidden = sum(1 for n in aside if n in health and health[n]["status"] != "OK")
         self.show_aside.setText(f"Show put aside ({hidden})" if hidden else "Show put aside")
         self.show_aside.setVisible(bool(hidden) or self.show_aside.isChecked())
         self._attention_buttons()
+        self.map.refresh(db.device_health())
+        self.map_summary.setText(f"\u00b7 {self.map.summary}" if self.map.summary else "")
         self.hint.setVisible(not problems)
         self.hint.set_text("Nothing needs attention" if health else "No results yet",
                            (f"Every other device's latest checks are OK ({hidden} put aside)" if hidden else "Every device's latest checks are OK")

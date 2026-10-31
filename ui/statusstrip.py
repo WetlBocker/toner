@@ -7,11 +7,13 @@ import time
 from datetime import datetime
 
 from PySide6.QtCore import QTimer, Qt, Signal
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QProgressBar, QWidget
 
 from core import agents, db, display, notify, proxy, tunnel
 from core import assistant as AI
 from ui import status as st
+from ui import theme
 from ui import theme
 
 
@@ -47,7 +49,11 @@ class StatusStrip(QWidget):
         self.run, self.schedule, self.backups, self.receiver, self.notify = Part(), Part(), Part(), Part(), Part()
         self.ai, self.ai_dot = Part(), QLabel("·")                       # the Assistant's connection (Settings > AI); hidden while there is no key
         self.ai_dot.setProperty("muted", True)
-        self.progress = QProgressBar()
+        from ui.panels import ShimmerBar
+        self.live = QLabel("●")                                # a dot that blinks while checks run
+        self.live.setProperty("muted", True)
+        self.live.hide()
+        self.progress = ShimmerBar()
         self.progress.setMaximumWidth(160)
         self.progress.setMaximumHeight(12)
         self.progress.setTextVisible(False)
@@ -55,6 +61,7 @@ class StatusStrip(QWidget):
         lay = QHBoxLayout(self)
         lay.setContentsMargins(14, 3, 14, 4)
         lay.setSpacing(8)
+        lay.addWidget(self.live)
         lay.addWidget(self.run)
         lay.addWidget(self.progress)
         lay.addStretch()
@@ -227,10 +234,29 @@ class StatusStrip(QWidget):
     def on_progress(self, done, total):
         self.running = (done, total) if done < total else None
         self.progress.setVisible(self.running is not None)
+        self.live.setVisible(self.running is not None)
+        self._blink()
         if self.running:
             self.progress.setMaximum(max(1, total))
             self.progress.setValue(done)
         self.refresh()
+
+    def _blink(self):
+        """The dot before "Checking devices" fades in and out while a run is going (still when motion is off)."""
+        from ui import motion
+        anim = getattr(self, "_blink_anim", None)
+        if self.running and anim is None and motion.enabled():
+            self._blink_anim = motion.animate(self, 1100, self._on_blink, loop=True, curve=motion.QEasingCurve.Type.InOutSine)
+        elif not self.running and anim is not None:
+            anim.stop()
+            self._blink_anim = None
+            self.live.setStyleSheet("")
+
+    def _on_blink(self, v):
+        t = theme.current() or {}
+        c = QColor(t.get("accent", "#2563eb"))
+        c.setAlphaF(0.35 + 0.65 * (1 - abs(2 * v - 1)))
+        self.live.setStyleSheet(f"color: rgba({c.red()},{c.green()},{c.blue()},{c.alpha()});")
 
     # ---------------------------------------------------------------- everything else
     @staticmethod
