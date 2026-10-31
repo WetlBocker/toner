@@ -737,7 +737,10 @@ class ImagesStep(QWidget):
             self.table.setCellWidget(row, 5, pick)
             self.table.setCellWidget(row, 6, md5)
             self.table.setItem(row, 7, QTableWidgetItem(""))
-            self.table.setRowHeight(row, pick.sizeHint().height() + 6)        # the editors are taller than a text row
+            h = max(pick.sizeHint().height(), md5.sizeHint().height())
+            for w in (pick, md5):
+                w.setFixedHeight(h)                         # (in Ops console an editor otherwise stretches to the row and touches the next)
+            self.table.setRowHeight(row, h + 6)             # the editors are taller than a text row
             pick.currentIndexChanged.connect(lambda *_: self._sync())
             md5.textChanged.connect(lambda *_: self._sync())
         for col in range(5):                                # one by one: resizeColumnsToContents() undoes the stretched last column

@@ -788,6 +788,9 @@ check("the rows are as tall as their editors; Image and MD5 fit; Fits stretches 
       and im.table.columnWidth(5) >= pick("ios1").sizeHint().width() and im.table.columnWidth(6) >= im.table.fontMetrics().horizontalAdvance("0" * 32)
       and im.table.horizontalHeader().stretchLastSection() and sum(im.table.columnWidth(i) for i in range(8)) >= im.table.viewport().width(),
       (im.table.rowHeight(0), pick("ios1").sizeHint().height(), [im.table.columnWidth(i) for i in range(8)], im.table.viewport().width()))
+check("the Image and MD5 boxes are one fixed height, a few pixels short of the row, so each row's boxes stand apart from the next",
+      pick("ios1").maximumHeight() == md5box("ios1").maximumHeight() == pick("ios1").minimumHeight() == im.table.rowHeight(row["ios1"]) - 6,
+      (pick("ios1").maximumHeight(), md5box("ios1").maximumHeight(), im.table.rowHeight(row["ios1"])))
 check("each starts skipped; the drop-down holds the server's files", pick("ios1").currentText() == "(skip this device)" and
       [pick("ios1").itemText(i) for i in range(1, pick("ios1").count())] == WANT)
 check("the stack's free space per member, and the freed space after Clean up", im.table.item(row["stack1"], 3).text().startswith("switch 1: ")

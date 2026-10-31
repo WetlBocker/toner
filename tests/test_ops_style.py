@@ -33,7 +33,13 @@ check("the console look has its own dark and light palettes", ops_d["bg"] == "#0
       and ops_l["surface"] == "#ffffff" and ops_d["bg"] != std_d["bg"] and ops_d["ops"] and ops_l["ops"])
 check("and the Toner theme's accent, the same as Standard", ops_d["accent"] == std_d["accent"] == theme.ACCENT[1] and ops_l["accent"] == theme.ACCENT[0])
 check("rows are tinted with a solid colour in both", ops_d["select"].startswith("#") and ops_l["select"].startswith("#") and ops_d["select"] != ops_d["surface"])
+from PySide6.QtGui import QColor as _QC
+far = lambda a, b: sum(abs(x - y) for x, y in zip(_QC(a).getRgb()[:3], _QC(b).getRgb()[:3]))
+check("a row under the mouse is tinted, but nearer the background than a selected row, so it never looks selected", all(
+      0 < far(t["row_hover"], t["surface"]) < far(t["row_hover"], t["select"]) for t in (std_l, std_d, ops_l, ops_d)),
+      [(t["row_hover"], t["select"]) for t in (std_l, std_d, ops_l, ops_d)])
 ss_std, ss_ops = theme.stylesheet(std_d), theme.stylesheet(ops_d)
+check("...and that is the colour rows get under the mouse", f"QListView::item:hover {{ background: {std_d['row_hover']}; }}" in ss_std)
 check("only the console look has the compact rules", "Cascadia Mono" not in ss_std and "Cascadia Mono" in ss_ops and "padding: 1px 6px" in ss_ops)
 
 print("== the setting")

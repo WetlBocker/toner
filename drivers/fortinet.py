@@ -7,7 +7,7 @@ from . import apichecks
 from .base import AuthRejected, Driver, OK, WARN, FAIL, grade, grade_low
 
 class FortinetDriver(Driver):
-    def _get(self, path):
+    def _get(self, path, whole=False):
         d = self.dev
         if not d.get("verify_ssl"):
             urllib3.disable_warnings()
@@ -16,7 +16,14 @@ class FortinetDriver(Driver):
                          headers={"Authorization": f"Bearer {self.password}"},
                          verify=bool(d.get("verify_ssl")), timeout=self.opts["http_timeout"], **proxy.requests_kwargs(d))
         r.raise_for_status()
-        return r.json()["results"]
+        return r.json() if whole else r.json()["results"]
+
+    def _version(self):
+        """FortiOS puts version, build and serial in the reply itself, beside results (not in it)."""
+        reply = self._get("system/status", whole=True)
+        if not isinstance(reply, dict):
+            return ""
+        return reply.get("version") or (reply.get("results") or {}).get("version") or ""
 
     def _optional(self, path):
         """Some of these exist only when the feature is licensed or switched on; the firewall answers 400, 404 or 424 when it is not."""
@@ -30,9 +37,7 @@ class FortinetDriver(Driver):
     def run(self):
         out = []
         try:
-            status = self._get("system/status")              # a rejected token is said once, not once per check
-            if isinstance(status, dict):
-                self.found_software(status.get("version", ""))
+            self.found_software(self._version())             # a rejected token is said once, not once per check
         except requests.HTTPError as e:
             code = getattr(e.response, "status_code", None)
             if code == 401:
@@ -57,7 +62,7 @@ class FortinetDriver(Driver):
                 self.level_check("memory", res["mem"][0]["current"])]
 
     def firmware(self):
-        return self.result("firmware", OK, self._get("system/status").get("version", "?"))
+        return self.result("firmware", OK, self._version() or "?")
 
     def wan(self):
         ifs = self._get("system/interface?scope=global")

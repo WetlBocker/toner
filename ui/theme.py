@@ -50,9 +50,10 @@ def tokens(dark, style="Standard"):
     # the selected row of a list or table: the accent mixed into the surface as one opaque colour (a see-through one is painted twice on a
     # table row and comes out too strong)
     surf = QColor(t["surface"])
-    mix = 0.18 if dark else 0.11
-    t["select"] = QColor(int(surf.red() + (a.red() - surf.red()) * mix), int(surf.green() + (a.green() - surf.green()) * mix),
-                         int(surf.blue() + (a.blue() - surf.blue()) * mix)).name()
+    toward = lambda c, mix: QColor(int(surf.red() + (c.red() - surf.red()) * mix), int(surf.green() + (c.green() - surf.green()) * mix),
+                                   int(surf.blue() + (c.blue() - surf.blue()) * mix)).name()
+    t["select"] = toward(a, 0.18 if dark else 0.11)
+    t["row_hover"] = toward(QColor(t["hover"]), 0.35)        # a row under the mouse: a third of the hover colour, so it never looks selected
     t["chev_down"] = icons.png_path("chev-down", t["muted"])
     t["check"] = icons.png_path("check", t["accent_text"])
     t["chev_up"] = icons.png_path("chev-up", t["muted"])
@@ -155,7 +156,7 @@ QTreeView, QTableView, QListView, QTreeWidget, QTableWidget, QListWidget {
 }
 QTreeView::item, QTableView::item, QListView::item { padding: 5px 6px; border: 0; }
 QTreeView::item, QTableView::item { padding: 6px 8px; border-bottom: 1px solid %(border)s; }
-QTreeView::item:hover, QTableView::item:hover, QListView::item:hover { background: %(hover)s; }
+QTreeView::item:hover, QTableView::item:hover, QListView::item:hover { background: %(row_hover)s; }
 QTreeView::item:selected, QTableView::item:selected, QListView::item:selected {
     background: %(select)s; color: %(text)s;
 }

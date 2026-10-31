@@ -45,7 +45,7 @@ check("log disk percent and managed devices", abs(A.fortinet_log_disk({"used": 8
       and A.fortinet_status_list([{"name": "a", "status": "online"}, {"name": "b", "status": "offline"}, {"serial": "S1", "connection_status": "Disconnected"}]) == (1, ["b", "S1"]))
 
 print("== Fortinet, the driver")
-FGDATA = {"system/resource/usage?scope=global": {"cpu": [{"current": 10}], "mem": [{"current": 30}]}, "system/status": {"version": "v7.4.1"},
+FGDATA = {"system/resource/usage?scope=global": {"cpu": [{"current": 10}], "mem": [{"current": 30}]}, "system/status": {"hostname": "fw", "model_name": "FortiGate", "model_number": "VM64"},
           "system/interface?scope=global": {"port1": {"type": "physical", "link": True, "rx_errors": 0, "tx_errors": 3, "role": "lan"}, "wan1": {"type": "physical", "link": False, "status": "up", "role": "wan"},
                                             "vlan10": {"type": "vlan", "link": True}},
           "system/ha-peer": [], "vpn/ipsec": [], "license/status": lic, "system/available-certificates": certs, "system/ha-checksums": ha,
@@ -53,13 +53,16 @@ FGDATA = {"system/resource/usage?scope=global": {"cpu": [{"current": 10}], "mem"
           "log/current-disk-usage": {"used": 95, "total": 100}}
 def fg_get(url, headers=None, **kw):
     path = url.split("/api/v2/monitor/")[-1]
-    if path in FGDATA: return Resp(js={"results": FGDATA[path]})
+    if path in FGDATA: return Resp(js={"results": FGDATA[path], "serial": "FGVM000000000001", "version": "v8.0.0", "build": 167, "status": "success"})   # (as FortiOS answers)
     return Resp(status=404)
 FG.requests.get = fg_get
 def fg_run(**dev):
     d = {"name": "fw", "vendor": "fortinet", "host": "10.0.0.1", "password": "TOK", **dev}
     return {r.check: r for r in DRIVERS["fortinet"](d, TH, OPTS).run()}
 r = fg_run()
+check("firmware: the version FortiOS puts beside results, not in them", r["firmware"].value == "v8.0.0", r.get("firmware"))
+fg_drv = FG.FortinetDriver({"name": "fw", "vendor": "fortinet", "host": "10.0.0.1", "password": "TOK"}, TH, OPTS); fg_drv.run()
+check("...and it is kept as the device's version", fg_drv.facts.get("software", {}).get("version") == "v8.0.0", fg_drv.facts)
 check("the subscription that ends first decides: 20 days is a failure (limit 30), and it is named", r["licenses"].status == "FAIL" and "enhanced" in r["licenses"].message and r["licenses"].value == "20 days", r["licenses"])
 check("a certificate you manage that ends in 12 days warns; the expired one is the one named", r["certificates"].value == "expired" and r["certificates"].status == "FAIL" and r["certificates"].message == "old", r["certificates"])
 check("interfaces: the wan port that is down, VLANs left out, errors counted", r["interfaces"].value == "1/2 up" and "wan1" in r["interfaces"].message and "interface errors" in r, {k: v.value for k, v in r.items() if "interface" in k})

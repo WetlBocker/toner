@@ -173,7 +173,8 @@ def api(vendor, **stubs):
     except Exception:
         pass
     return drv.facts.get("software", {}).get("version")
-check("Fortinet: system/status version", api("fortinet", _get=lambda path: {"version": "v7.4.5"} if path == "system/status" else {}) == "v7.4.5")
+check("Fortinet: system/status version, beside results", api("fortinet", _get=lambda path, whole=False: ({"version": "v7.4.5", "results": {"hostname": "fw"}} if whole else {"hostname": "fw"})
+                                                                   if path == "system/status" else {}) == "v7.4.5")
 check("Palo Alto: sw-version from system info", api("paloalto", _op=lambda cmd: ET.fromstring("<result><system><sw-version>11.1.4-h7</sw-version><model>PA-440</model></system></result>")) == "11.1.4-h7")
 check("OPNsense: product_version", api("opnsense", get=lambda path, **k: {"product_version": "24.7.9", "status": "none"} if "firmware/status" in path else {}) == "24.7.9")
 check("Proxmox VE: /version", api("proxmox", data=lambda path, params=None, optional=False: {"version": "8.2.4", "release": "8.2"} if path == "/version" else []) == "8.2.4")
