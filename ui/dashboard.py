@@ -226,6 +226,7 @@ class DashboardTab(QWidget):
         self.attention.setTextElideMode(Qt.TextElideMode.ElideRight)
         self.attention.setItemDelegateForColumn(1, StatusDelegate(self.attention))
         self.attention.verticalHeader().setDefaultSectionSize(34)       # room for the row's buttons
+        self.attention.viewport().setAutoFillBackground(True)           # an opaque list: a see-through one keeps stale paint of its buttons
         self.attention.setMinimumHeight(230)
         self.attention.doubleClicked.connect(self._open)
         self.attention.setMinimumWidth(330)                            # "What is wrong" is the point of this table: never squeeze it away
@@ -328,9 +329,10 @@ class DashboardTab(QWidget):
         self.refresh()
 
     def restyle(self):
-        """The look changed (the Panels knob, the theme): the panels and the map follow."""
+        """The look changed (the Panels knob, the theme): the panels, the list's background and the map follow."""
         for p in self.findChildren(Panel):
             p.restyle()
+        self._paint_viewport()
         self.map.update()
 
     # ---------- a run going now
@@ -527,6 +529,13 @@ class DashboardTab(QWidget):
         pal.setColor(QPalette.ColorRole.Window, QColor(t.get("select" if selected else "surface", "#ffffff")))
         cell.setPalette(pal)
 
+    def _paint_viewport(self):
+        """The list's background in the card's colour (it is opaque, so nothing painted earlier shows through)."""
+        t = theme.current() or {}
+        pal = self.attention.viewport().palette()
+        pal.setColor(QPalette.ColorRole.Window, QColor(t.get("surface", "#ffffff")))
+        self.attention.viewport().setPalette(pal)
+
     def _attention_buttons(self):
         cur = self._current()
         sel = self.attention.selectionModel()
@@ -631,7 +640,11 @@ class DashboardTab(QWidget):
         was = self.names
         self.names = [n for n, _ in problems]
         self.rows = [(n, v, aside.get(n, (None,))[0]) for n, v in problems]
-        cells = [self._row_buttons(name) for name, _v in problems]
+        for old in getattr(self, "_cells", []):                        # the old rows' buttons go first (Qt keeps them alive otherwise)
+            old.hide()
+            old.setParent(None)
+            old.deleteLater()
+        cells = self._cells = [self._row_buttons(name) for name, _v in problems]
         if cells:                                                      # the buttons decide the column's width, set before they are placed
             self.attention.setColumnWidth(4, max(c.sizeHint().width() for c in cells) + 24)      # plus the row's own padding
         with filling(self.attention):
@@ -663,6 +676,7 @@ class DashboardTab(QWidget):
         self.show_aside.setText(f"Show put aside ({hidden})" if hidden else "Show put aside")
         self.show_aside.setVisible(bool(hidden) or self.show_aside.isChecked())
         self._attention_buttons()
+        self._paint_viewport()
         self.map.refresh(db.device_health())
         self.map_summary.setText(f"\u00b7 {self.map.summary}" if self.map.summary else "")
         self.hint.setVisible(not problems)
