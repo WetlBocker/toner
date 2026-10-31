@@ -258,45 +258,45 @@ class FilterButton(QToolButton):
 
 
 class StatusDelegate(QStyledItemDelegate):
-    """Draws a status word (OK / WARN / FAIL / ERROR) as a coloured pill. Colours are looked up when painting,
-    so a change in Settings > Appearance shows immediately."""
+    """Draws a status word (OK / WARN / FAIL / ERROR) as a soft chip: a faint tint of the status colour behind a small icon and the word
+    in the readable ink. Colours are looked up when painting, so a change in Settings > Appearance shows immediately."""
+    GLYPH = 10
 
     def paint(self, painter, option, index):
         status = index.data(Qt.ItemDataRole.DisplayRole)
-        bg = reports.COLORS.get(status)
-        if not bg:
+        if not reports.COLORS.get(status):
             return super().paint(painter, option, index)
         opt = QStyleOptionViewItem(option)
         self.initStyleOption(opt, index)
         opt.text = ""
         style = opt.widget.style() if opt.widget else QApplication.style()
         style.drawControl(QStyle.ControlElement.CE_ItemViewItem, opt, painter, opt.widget)
-        ops = theme.is_ops()
+        terminal = theme.is_terminal()
         font = QFont(option.font)
         font.setBold(True)
-        font.setPointSizeF(max(7.0, font.pointSizeF() - (1.5 if ops else 1)))
+        font.setPointSizeF(max(7.0, font.pointSizeF() - (1.5 if terminal else 1)))
         painter.save()
         painter.setFont(font)
         fm = painter.fontMetrics()
-        w, h = fm.horizontalAdvance(status) + (14 if ops else 20), fm.height() + (2 if ops else 4)
+        pad, gap = (6, 4) if terminal else (9, 5)
+        w, h = fm.horizontalAdvance(status) + pad * 2 + self.GLYPH + gap, fm.height() + (2 if terminal else 4)
         r = QRect(option.rect.left() + 6, option.rect.center().y() - h // 2, w, h)
+        bg, ink = st.chip(status)
+        rad = min(st.radius(), h / 2)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
-        if ops:                                           # a flat tag: the status colour as a tint behind its word, in the readable ink
-            c = QColor(bg)
-            painter.setBrush(QColor(c.red(), c.green(), c.blue(), 56))
-            painter.drawRoundedRect(r, 2, 2)
-            painter.setPen(QColor(st.ink(status)))
-        else:
-            painter.setBrush(QColor(bg))
-            painter.drawRoundedRect(r, h / 2, h / 2)
-            painter.setPen(QColor(reports.fg_for(bg)))
-        painter.drawText(r, Qt.AlignmentFlag.AlignCenter, status)
+        painter.setBrush(bg)
+        painter.drawRoundedRect(r, rad, rad)
+        pm = st.glyph(status, self.GLYPH)
+        if pm:
+            painter.drawPixmap(r.left() + pad, r.center().y() - self.GLYPH // 2 + 1, pm)
+        painter.setPen(ink)
+        painter.drawText(QRect(r.left() + pad + self.GLYPH + gap, r.top(), w - pad * 2 - self.GLYPH - gap, h), Qt.AlignmentFlag.AlignCenter, status)
         painter.restore()
 
     def sizeHint(self, option, index):
         s = super().sizeHint(option, index)
-        return QSize(s.width() + (18 if theme.is_ops() else 22), s.height())
+        return QSize(s.width() + (28 if theme.is_terminal() else 34), s.height())
 
 
 class StatChips(QWidget):
@@ -322,12 +322,10 @@ class StatChips(QWidget):
         for s, lab in self.labels.items():
             n = self.counts[s]
             lab.setText(f"{n} {s}")
-            bg = reports.COLORS.get(s, "#cccccc")
             if n:
-                lab.setStyleSheet(f"background:{bg}; color:{reports.fg_for(bg)}; border-radius:11px; "
-                                  "padding:1px 10px; font-weight:600;")
+                lab.setStyleSheet(st.chip_css(s))
             else:                                         # nothing of this kind: show it, but quietly
-                lab.setStyleSheet("background:transparent; color:palette(placeholder-text); border-radius:11px; "
+                lab.setStyleSheet(f"background:transparent; color:palette(placeholder-text); border-radius:{st.radius()}px; "
                                   "padding:0px 9px; border:1px solid palette(mid);")
 
 

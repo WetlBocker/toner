@@ -14,12 +14,34 @@ from ui.settings_base import Page, compact_row, note, row_of, spin
 class AppearancePage(Page):
     title = "Appearance"
     STATUSES = ["OK", "WARN", "FAIL", "ERROR"]
-    preview = Signal(str)                   # the theme to show at once, before Save; Settings puts it back if not saved
+    preview = Signal(object)                # the look to show at once, before Save (a dict: theme, look, panels...); Settings puts it back if not saved
 
     def __init__(self):
         super().__init__()
-        self.theme = QComboBox()
-        self.theme.addItems(theme.THEMES)
+        from PySide6.QtCore import QTimer
+        from ui import themes
+        from ui.themecards import ThemeGrid
+        self.grid = ThemeGrid()
+        self.grid.picked.connect(self._picked)
+        # Your colour's own controls: shown only while that theme is chosen
+        self.accent_btn = QPushButton("Accent\u2026")
+        self.accent_btn.clicked.connect(self.pick_accent)
+        self.accent_btn.setProperty("notSetting", True)
+        self.custom_accent = themes.DEFAULT_LOOK["custom_accent"]
+        self.base = QComboBox()
+        self.base.addItems(themes.BASES)
+        self.base.setToolTip("Dark or light surfaces behind your accent")
+        self.tint = QCheckBox("Tinted base")
+        self.tint.setToolTip("Tints the background and panels faintly toward the accent")
+        self.custom_row = compact_row(self.accent_btn, self.base, self.tint)
+        self.look = QComboBox()
+        self.look.addItems(themes.LOOKS)
+        self.motion = QComboBox()
+        self.motion.addItems(themes.MOTIONS)
+        self.panels = QComboBox()
+        self.panels.addItems(themes.PANELS)
+        self.contrast = QComboBox()
+        self.contrast.addItems(themes.CONTRASTS)
         self.font = spin(0, 24, " pt")
         self.font.setSpecialValueText("default")
         self.preset = QComboBox()
@@ -30,24 +52,77 @@ class AppearancePage(Page):
             b = QPushButton(s)
             b.clicked.connect(lambda _=False, s=s: self.pick(s))
             self.swatch[s] = b
-        self.ui_style = QComboBox()
-        for name, tip in (("Standard", "Roomy rows, rounded pills and large numbers"),
-                          ("Ops console", "Dense and flat for watching many devices: 22 px rows, monospace data, small tags, a lower top bar")):
-            self.ui_style.addItem(name)
-            self.ui_style.setItemData(self.ui_style.count() - 1, tip, Qt.ItemDataRole.ToolTipRole)
-        self.ui_style.setToolTip("How much fits on screen, and how it looks. Works with the light and the dark theme.")
-        self.form.addRow("Style", self.ui_style)
-        self.form.addRow("Theme", self.theme)
+        self.form.addRow("Theme", self.grid)
+        self.form.addRow("", self.custom_row)
+        self.form.addRow("Look", self.look)
+        self.form.addRow("Motion", self.motion)
+        self.form.addRow("Panels", self.panels)
+        self.form.addRow("Contrast", self.contrast)
         self.form.addRow("Text size", self.font)
         self.form.addRow("Status colours", self.preset)
         self.form.addRow("", compact_row(*self.swatch.values()))
-        self.lay.insertWidget(1, note("Style: Standard has roomy rows and rounded pills; Ops console is denser and flatter, with monospace data, for watching many "
-                                      "devices at once. Both follow Theme."))
-        self.lay.insertWidget(2, note("Click a status to choose its colour. Text on top of each colour is "
+        self.lay.insertWidget(1, note("Look: Standard is what Toner has had so far; Soft rounds every corner; Sharp squares them; Terminal is monospace "
+                                      "with no rounding and tighter rows, for people who live in a console."))
+        self.lay.insertWidget(2, note("Motion: Subtle fades and grows things as they change; Lively adds the Aurora wash, a drifting backdrop and a "
+                                      "heartbeat on the logo. Everything is still when Windows' animation effects are turned off."))
+        self.lay.insertWidget(3, note("Panels: Raised panels cast a soft shadow; Flat panels have no border."))
+        self.lay.insertWidget(4, note("Click a status to choose its colour. Text on top of each colour is "
                                       "switched between dark and white automatically so it stays readable. "
                                       "The status word is always shown, so colour is never the only signal."))
         self.preset.currentTextChanged.connect(self.use_preset)
-        self.theme.currentTextChanged.connect(lambda _t: self.preview.emit(self.theme.currentText()))
+        self._debounce = QTimer(self)                         # a quick flick through the boxes restyles the window once
+        self._debounce.setSingleShot(True)
+        self._debounce.setInterval(120)
+        self._debounce.timeout.connect(lambda: self.preview.emit(self.look_dict()))
+        for box in (self.look, self.motion, self.panels, self.contrast, self.base):
+            box.currentTextChanged.connect(lambda _t: self._preview())
+        self.tint.toggled.connect(lambda _on: self._preview())
+        self._loading = False
+        self._show_custom()
+
+    # ---- the look as one dict
+    def look_dict(self):
+        return dict(theme=self.grid.current(), look=self.look.currentText(), motion=self.motion.currentText(), panels=self.panels.currentText(),
+                    contrast=self.contrast.currentText(), custom_accent=self.custom_accent, custom_base=self.base.currentText(),
+                    custom_tint=self.tint.isChecked())
+
+    def _picked(self, _name):
+        self._show_custom()
+        self._preview()
+
+    def _preview(self):
+        if not self._loading:
+            self.grid.set_custom(self.custom_accent, self.base.currentText(), self.tint.isChecked())
+            self._debounce.start()
+
+    def _show_custom(self):
+        on = self.grid.current() == "Your colour"
+        self.custom_row.setVisible(on)
+        self.form.setRowVisible(self.custom_row, on)
+
+    def pick_accent(self):
+        c = QColorDialog.getColor(QColor(self.custom_accent), self, "Accent colour")
+        if c.isValid():
+            self.custom_accent = c.name()
+            self.paint_accent()
+            self._preview()
+
+    def paint_accent(self):
+        from ui import themes
+        self.accent_btn.setStyleSheet(f"background:{self.custom_accent}; color:{themes.text_on(self.custom_accent)}; padding:6px 14px; "
+                                      "border:1px solid #888; border-radius:3px;")
+
+    def describe_extra(self):
+        """The theme and the accent are not boxes, so Settings is told about them here (the unsaved dot, the Save list)."""
+        out = [("Theme", self.grid.current())]
+        if self.grid.current() == "Your colour":
+            out.append(("Accent", self.custom_accent))
+        return out
+
+    def restyle(self):
+        self.grid.restyle()
+        self.paint()
+        self.paint_accent()
 
     def use_preset(self, name):
         self.colors = dict(reports.COLOR_PRESETS.get(name, reports.DEFAULT_COLORS))
@@ -66,10 +141,21 @@ class AppearancePage(Page):
             self.paint()
 
     def load(self):
-        self.ui_style.setCurrentText(db.get_setting("ui_style"))
-        self.theme.blockSignals(True)
-        self.theme.setCurrentText(db.get_setting("theme"))
-        self.theme.blockSignals(False)
+        from ui import themes
+        self._loading = True
+        for box, key in ((self.look, "look"), (self.motion, "motion"), (self.panels, "panels"), (self.contrast, "contrast"), (self.base, "custom_base")):
+            box.blockSignals(True)
+            box.setCurrentText(str(db.get_setting(key)))
+            box.blockSignals(False)
+        self.tint.blockSignals(True)
+        self.tint.setChecked(bool(db.get_setting("custom_tint")))
+        self.tint.blockSignals(False)
+        self.custom_accent = str(db.get_setting("custom_accent") or themes.DEFAULT_LOOK["custom_accent"])
+        self.grid.set_custom(self.custom_accent, self.base.currentText(), self.tint.isChecked())
+        self.grid.set_current(themes.legacy_name(str(db.get_setting("theme"))))
+        self._loading = False
+        self._show_custom()
+        self.paint_accent()
         self.font.setValue(int(db.get_setting("font_size")))
         self.preset.blockSignals(True)
         self.preset.setCurrentText(db.get_setting("color_preset"))
@@ -81,8 +167,8 @@ class AppearancePage(Page):
     def save(self):
         preset = self.preset.currentText()
         base = reports.COLOR_PRESETS.get(preset, reports.DEFAULT_COLORS)
-        db.set_setting("ui_style", self.ui_style.currentText())
-        db.set_setting("theme", self.theme.currentText())
+        for key, value in self.look_dict().items():
+            db.set_setting(key, value)
         db.set_setting("font_size", self.font.value())
         db.set_setting("color_preset", preset)
         db.set_setting("status_colors", {s: c for s, c in self.colors.items() if c != base[s]})

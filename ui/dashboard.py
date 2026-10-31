@@ -53,7 +53,7 @@ class Card(QFrame):
     def set(self, value, sub="", active=True):
         self.value.setText(str(value))
         f = self.value.font()                              # big numbers in the standard look, a step smaller in the console look
-        f.setPointSizeF(QApplication.font().pointSizeF() * (2.2 if theme.is_ops() else 2.8))
+        f.setPointSizeF(QApplication.font().pointSizeF() * (2.2 if theme.is_terminal() else 2.8))
         self.value.setFont(f)
         self.sub.setText(sub)
         self.sub.setVisible(False)                          # Demarc's tiles have no caption line: it is kept in the tooltip
@@ -97,15 +97,15 @@ class BarList(QWidget):
             p.setPen(text)
             fm = p.fontMetrics()
             p.drawText(QRectF(0, y, name_w - 8, 22), Qt.AlignmentFlag.AlignVCenter, fm.elidedText(label, Qt.TextElideMode.ElideRight, int(name_w - 8)))
-            ops = theme.is_ops()
-            bar = QRectF(name_w, y + (9 if ops else 6), self.width() - name_w - 62, 5 if ops else 10)
-            rad = 2 if ops else 5
+            terminal = theme.is_terminal()
+            bar = QRectF(name_w, y + (9 if terminal else 6), self.width() - name_w - 62, 5 if terminal else 10)
+            rad = min(st.radius(), 5)
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(track)
             p.drawRoundedRect(bar, rad, rad)
             if pct is not None:
                 key = "OK" if pct >= 99.5 else "WARN" if pct >= 95 else "FAIL"
-                p.setBrush(QColor(st.ink(key)) if ops else QColor(reports.COLORS.get(key, "#888")))
+                p.setBrush(QColor(st.ink(key)))
                 p.drawRoundedRect(QRectF(bar.left(), bar.top(), max(8.0, bar.width() * pct / 100), bar.height()), rad, rad)
             p.setPen(muted)
             p.drawText(QRectF(self.width() - 56, y, 56, 22), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,

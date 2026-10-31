@@ -368,7 +368,7 @@ with db.within(db.GLOBAL):
 A.apply_look(app); applied.clear()
 w.preview_look("Dark")
 w.reset_look()
-check("after a preview, the saved look comes back", len(applied) == 2 and applied[-1][0] == db.get_setting("theme"), applied)
+check("after a preview, the saved look comes back", len(applied) == 2 and applied[-1][0]["theme"] == db.get_setting("theme"), [a[0]["theme"] for a in applied])
 with db.within(acme):
     db.set_setting("schedule_enabled", True); db.set_setting("schedule_minutes", 30)
 counted = {"availability": 0}

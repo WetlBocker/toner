@@ -11,7 +11,7 @@ def colours():
     tk = theme.current() or {}
     col = lambda k, d: QColor(tk.get(k, d))
     return (col("surface", "#ffffff"), col("border", "#dddddd"), col("muted", "#777777"), col("text", "#222222"),
-            col("accent", theme.ACCENT[0]))
+            col("accent", "#0e7490"))
 
 
 def plot_widget(**kw):

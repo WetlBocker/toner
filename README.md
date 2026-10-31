@@ -138,8 +138,16 @@ and **Run checks** act on the devices shown (all of them when nothing is typed o
 
 Every section has the same header: its name and a line of context. The line along the bottom of the window shows the last run (or
 the progress of the one going), the next scheduled run and backup, the agent receiver and notifications; click a part to go where it is
-set. **Styles.** Settings > Appearance > *Style* switches between **Standard** (roomy rows, rounded pills) and **Ops console** (dense and flat: 22 px rows, monospace data, small tags, a narrower sidebar, teal accent by default) for watching many devices at once. Both follow the light or dark theme; **Ctrl+K** > *Style* switches at once. Status colours are one set everywhere (pills, text, dots, numbers), tuned per theme to stay readable, and marks use shapes as well
-as colours (circle OK, triangle WARN, square FAIL, diamond ERROR).
+set. **Themes and looks.** Settings > Appearance shows every theme as a card; click one to see it at once, Save to keep it. There are
+13 dark themes (Aurora, Ember, Harbor, Moss, Slate, Dusk, Carbon, Nordic, Plum, Cocoa, Steel, Lagoon, High contrast), 5 light ones
+(Linen, Mist, Sand, Arctic, Clay), the two Toner had before 1.12 (Midnight, Daylight), **System** (Daylight or Midnight, following
+Windows) and four that change by themselves: **Your colour** (any accent, on a dark or light base), **Follows health** (the accent takes
+the colour of the worst status on the network), **Time of day** and **Follows organization** (the accent is the colour of the
+organization you are looking at). Four more settings work on any theme: **Look** (Standard; Soft rounds every corner; Sharp squares
+them; Terminal is monospace with no rounding and 22 px rows, for watching many devices at once; **Ctrl+K** > *Look* switches at once),
+**Motion** (Off, Subtle, Lively; everything is still when Windows' animation effects are turned off), **Panels** (Bordered, Flat,
+Raised) and **Contrast** (Normal, More, Most). Status colours are one set everywhere (chips, text, dots, numbers), tuned per theme to
+stay readable, and marks use shapes as well as colours (circle OK, triangle WARN, square FAIL, diamond ERROR).
 
 **Clients.** The top-level folders of the Inventory are treated as clients. Pick one at the top of the sidebar and every section shows
 only that client: the Overview, Results, Inventory, Configs, History and Reports, and the runs and backups you start by hand (scheduled

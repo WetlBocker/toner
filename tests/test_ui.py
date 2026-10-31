@@ -77,10 +77,10 @@ check("new-device dialog follows 'verify SSL by default'", DeviceDialog().verify
 print("== appearance")
 from PySide6.QtGui import QPalette
 import core.reports as RP
-Ap = P["Appearance"]; Ap.theme.setCurrentText("Dark"); Ap.font.setValue(13); S.save()
+Ap = P["Appearance"]; Ap.grid.set_current("Midnight"); Ap.font.setValue(13); S.save()
 check("dark theme applied live", app.palette().color(QPalette.ColorRole.Window).lightness() < 80 and app.font().pointSize() == 13)
-Ap.theme.setCurrentText("Light"); S.save(); check("light theme applied", app.palette().color(QPalette.ColorRole.Window).lightness() > 200)
-Ap.theme.setCurrentText("System"); Ap.font.setValue(0); S.save(); check("system theme restored", app.font().pointSize() != 13 and app.font().pointSize() == 10)
+Ap.grid.set_current("Daylight"); S.save(); check("light theme applied", app.palette().color(QPalette.ColorRole.Window).lightness() > 200)
+Ap.grid.set_current("System"); Ap.font.setValue(0); S.save(); check("system theme restored", app.font().pointSize() != 13 and app.font().pointSize() == 10)
 Ap.preset.setCurrentText("Color-blind safe"); S.save()
 check("colour preset applied to tables and reports", RP.COLORS["OK"] == "#b3d9ff" and db.get_setting("status_colors") == {} and w.results.table.topLevelItemCount() == 0)
 Ap.colors["FAIL"] = "#112233"; Ap.paint(); S.save()
@@ -93,8 +93,9 @@ def has_colour(widget, hexcol):
     want = int(hexcol.lstrip("#"), 16)
     return any((img.pixel(x, y) & 0xFFFFFF) == want for y in range(0, img.height(), 2) for x in range(0, img.width(), 2))
 w.results.results = [Result("d", "cpu", "FAIL", "99%")]; w.results.last_ran = ["d"]; w.results.repopulate(); w.results.resize(900, 400); w.results.show()
-check("status pill in the results table uses the custom colour", w.results.table.topLevelItem(0).text(2) == "FAIL" and has_colour(w.results.table, "#112233"))
-w.results.chips.set_counts({"FAIL": 1}); check("status chips use it too", has_colour(w.results.chips, "#112233") or "#112233" in w.results.chips.labels["FAIL"].styleSheet())
+from ui import status as st
+check("status chip in the results table uses the custom colour (as its readable ink)", w.results.table.topLevelItem(0).text(2) == "FAIL" and has_colour(w.results.table, st.ink("FAIL")) and st.ink("FAIL") != st.ink("OK"))
+w.results.chips.set_counts({"FAIL": 1}); check("status chips use it too", st.ink("FAIL") in w.results.chips.labels["FAIL"].styleSheet())
 Ap.preset.setCurrentText("Default"); Ap.colors = dict(RP.DEFAULT_COLORS); Ap.paint(); S.save(); check("back to defaults (and N/A stays grey)", RP.COLORS == {**RP.DEFAULT_COLORS, "N/A": RP.NA_COLOR})
 
 print("== terminal settings")

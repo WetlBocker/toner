@@ -221,7 +221,7 @@ check("a password already saved is left alone", sessions.password(ids["sw2"]) ==
 print("== buttons fit their words in the Ops console look")
 from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import QPushButton
-db.set_setting("ui_style", "Ops console"); db.set_setting("theme", "Dark"); A.apply_look(app)
+db.set_setting("look", "Terminal"); db.set_setting("theme", "Midnight"); A.apply_look(app)
 import importlib; importlib.reload(vaultdlg)
 md, ud = vaultdlg.MasterDialog("create"), vaultdlg.UnlockDialog()
 for w in (md, ud):

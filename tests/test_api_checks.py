@@ -121,7 +121,7 @@ check("last commit: the newest commit job, whatever else ran since", A.pan_last_
 print("== Palo Alto, the driver")
 def xml(body): return f'<response status="success">{body}</response>'.encode()
 PAN = {"<show><system><info/></system></show>": xml("<result><system><sw-version>11.1.2</sw-version><model>PA-440</model><uptime>12 days, 3:04:05</uptime><app-release-date>2026/08/01 00:00:00 PDT</app-release-date></system></result>"),
-       "<request><license><info/></license></request>": xml("<result><licenses><entry><feature>Threat Prevention</feature><expires>October 30, 2026</expires><expired>no</expired></entry></licenses></result>"),
+       "<request><license><info/></license></request>": xml(f"<result><licenses><entry><feature>Threat Prevention</feature><expires>{(date.today() + timedelta(days=20)).strftime('%B %d, %Y')}</expires><expired>no</expired></entry></licenses></result>"),
        "<show><system><disk-space/></system></show>": xml("<result><![CDATA[" + df + "]]></result>"),
        "<show><panorama-status/></show>": xml("<result><![CDATA[Panorama Server 1 : 10.1.1.5\n    Connected     : no\n]]></result>"),
        "<show><jobs><all/></jobs></show>": xml("<result><job><id>12</id><type>Commit</type><result>FAIL</result><tfin>2026/10/10 10:00:00</tfin></job></result>")}

@@ -70,7 +70,33 @@ def level(value, warn, fail, lower_is_worse=False):
     return "FAIL" if value >= fail else "WARN" if value >= warn else "OK"
 
 
-def pill_css(status):
-    """A QLabel style that makes the label a pill in this status's colour."""
-    bg = fill(status) or GREY
-    return f"background:{bg}; color:{reports.fg_for(bg)}; border-radius:11px; padding:1px 10px; font-weight:600;"
+def chip(status):
+    """The soft chip a status is shown in: (background, ink) as QColors. The background is the ink with most of its alpha taken away,
+    so it sits quietly on any theme; the word and its icon are in the ink."""
+    c = QColor(ink(status))
+    bg = QColor(c)
+    bg.setAlpha(38 if dark() else 26)
+    return bg, c
+
+
+def radius():
+    """A chip's corner radius in the current Look (square in Terminal, a pill elsewhere)."""
+    t = theme.current() or {}
+    return int(t.get("r_chip", 11))
+
+
+def chip_css(status):
+    """A QLabel style that makes the label a status chip."""
+    bg, c = chip(status)
+    return (f"background: rgba({bg.red()},{bg.green()},{bg.blue()},{bg.alpha()}); color:{c.name()}; "
+            f"border-radius:{radius()}px; padding:1px 10px; font-weight:600;")
+
+
+ICONS = {"OK": "ok-fill", "WARN": "warn-fill", "FAIL": "fail-fill", "ERROR": "fail-fill"}
+
+
+def glyph(status, size=10):
+    """The small filled icon drawn before a status word, in its ink."""
+    from ui import icons
+    name = ICONS.get(status)
+    return icons.icon(name, ink(status)).pixmap(size, size) if name else None

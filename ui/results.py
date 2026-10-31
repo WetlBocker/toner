@@ -7,6 +7,7 @@ from core.alerts import base as device_of
 from core.runner import run_all
 from drivers.base import SEVERITY, Result, is_problem
 from ui.columns import ColumnChooser
+from ui import status as st
 from ui.widgets import EmptyHint, SectionHeader, StatChips, StatusDelegate, flow
 from ui.finder import FilterButton, SearchBox, Section, device_ok, device_sections, device_text, listed_devices, shown_devices, wants_archived
 from ui.toast import toast
@@ -276,11 +277,12 @@ class ResultsTab(QWidget):
 
     @staticmethod
     def _paint(item, status, cols):
-        bg = reports.COLORS.get(status)
+        if not reports.COLORS.get(status):
+            return
+        bg, ink = st.chip(status)
         for i in cols:
-            if bg:
-                item.setBackground(i, QColor(bg))
-                item.setForeground(i, QColor(reports.fg_for(bg)))
+            item.setBackground(i, bg)
+            item.setForeground(i, ink)
 
     def _group(self):
         """Results grouped by the inventory device they belong to (UniFi rows are 'controller / device'), for the client being looked at."""

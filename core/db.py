@@ -83,7 +83,9 @@ DEFAULT_SETTINGS = {
     # automation (runs only while the app is open)
     "schedule_enabled": False, "schedule_minutes": 60, "schedule_groups": [], "schedule_on_start": False,
     # appearance
-    "theme": "System", "ui_style": "Standard", "font_size": 0, "color_preset": "Default", "status_colors": {},
+    "theme": "System", "look": "Standard", "motion": "Subtle", "panels": "Bordered", "contrast": "Normal",
+    "custom_accent": "#38bdf8", "custom_base": "Dark", "custom_tint": False,
+    "font_size": 0, "color_preset": "Default", "status_colors": {},
     # terminal
     "term_font": "Consolas", "rdp_embedded": True, "term_font_size": 10, "term_scrollback": 5000, "term_scheme": "Dark", "term_syntax": True, "scan_enabled": True, "hardening_off": [],
     "paging_cmd": "terminal length 0",
@@ -537,6 +539,7 @@ def init():
         CREATE TABLE IF NOT EXISTS advisory_cache (key TEXT PRIMARY KEY, fetched_at TEXT NOT NULL, body TEXT NOT NULL);
         """)
         _migrate(c)
+        _migrate_settings(c)
     _invalidate_folders()
     _forget_settings()
     if target() == GLOBAL:                                # bring every organization's file up to date too
@@ -1114,7 +1117,7 @@ def ensure_folder_path(path):
 # Settings: Global's apply everywhere; an organization's file holds only the ones it changes (Settings > ... while it is picked).
 # These are about this computer or the whole program, so they are always read from and written to the Global file:
 GLOBAL_ONLY = {"window_geometry", "splitters", "sidebar_collapsed", "sessions_list_hidden", "settings_list_hidden", "tools_list_hidden", "automation_list_hidden", "onboarding_done", "org_current",
-               "theme", "ui_style", "font_size", "color_preset", "status_colors",
+               "theme", "look", "motion", "panels", "contrast", "custom_accent", "custom_base", "custom_tint", "font_size", "color_preset", "status_colors",
                "term_font", "rdp_embedded", "term_font_size", "term_scrollback", "term_scheme", "term_syntax", "scan_enabled", "hardening_off", "paging_cmd",
                "hostkey_mode", "ssh_legacy_algorithms", "run_in_background", "metrics_port", "proxy", "ssh_tunnel",
                "update_check", "update_auto_install", "update_last_check", "update_skip", "update_pending",
@@ -1307,10 +1310,48 @@ def export_settings():
     out.update({k: get_setting(k) for k in DEFAULT_SETTINGS if k not in NOT_PORTABLE})
     return out
 
+# Settings written before 1.12: Style became Look (Ops console is now the Terminal look) and the Dark and Light themes got names.
+LEGACY_THEMES = {"Dark": "Midnight", "Light": "Daylight"}
+
+
+def _legacy_setting(key, value):
+    """(key, value) as Toner stores it now, for a setting from an older Toner; None when it is not a setting any more."""
+    if key == "ui_style":
+        return ("look", "Terminal" if value == "Ops console" else "Standard") if isinstance(value, str) else None
+    if key == "theme" and isinstance(value, str):
+        return key, LEGACY_THEMES.get(value, value)
+    return key, value
+
+
+def _migrate_settings(c):
+    """Bring the settings rows of this file up to date (idempotent; runs at every start)."""
+    rows = {r["key"]: r["value"] for r in c.execute("SELECT key, value FROM settings WHERE key IN ('ui_style', 'theme')")}
+    if "ui_style" in rows:
+        try:
+            look = "Terminal" if json.loads(rows["ui_style"]) == "Ops console" else "Standard"
+        except Exception:
+            look = "Standard"
+        if not c.execute("SELECT 1 FROM settings WHERE key = 'look'").fetchone():
+            c.execute("INSERT INTO settings(key, value) VALUES('look', ?)", (json.dumps(look),))
+        c.execute("DELETE FROM settings WHERE key = 'ui_style'")
+    if "theme" in rows:
+        try:
+            name = json.loads(rows["theme"])
+        except Exception:
+            name = None
+        if name in LEGACY_THEMES:
+            c.execute("UPDATE settings SET value = ? WHERE key = 'theme'", (json.dumps(LEGACY_THEMES[name]),))
+
+
 def import_settings(data):
     """Apply a settings dict, keeping only known keys whose value type matches. Returns (applied, skipped)."""
     applied, skipped = [], []
     for key, value in data.items():
+        mapped = _legacy_setting(key, value)
+        if mapped is None:
+            skipped.append(key)
+            continue
+        key, value = mapped
         if key == "thresholds":
             ok = isinstance(value, dict) and all(
                 k in DEFAULT_THRESHOLDS and isinstance(v, dict) and set(v) <= {"warn", "fail"}

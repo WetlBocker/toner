@@ -25,6 +25,49 @@ LOGO = 34                   # the mark in the top bar
 ICON_TAB = 44               # a section shown as just its icon
 
 
+class Beat(QWidget):
+    """The Toner mark. Under Motion: Lively it swells a little every four seconds, like a slow heartbeat."""
+
+    def __init__(self, size):
+        super().__init__()
+        from ui import logo, motion
+        self.size_px, self.scale = size, 1.0
+        self.pm = logo.pixmap(size, 2.0)
+        self.setFixedSize(size, size)
+        self.beat = motion.Phase(self, 4000, self._on_phase, fps=20)
+
+    def restyle(self):
+        from ui import motion
+        if motion.lively() and self.isVisible():
+            self.beat.start()
+        else:
+            self.beat.stop()
+            self.scale = 1.0
+            self.update()
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        self.restyle()
+
+    def hideEvent(self, e):
+        super().hideEvent(e)
+        self.beat.stop()
+
+    def _on_phase(self, p):
+        import math
+        self.scale = 1.0 + 0.08 * (0.5 - 0.5 * math.cos(p * 2 * math.pi))
+        self.update()
+
+    def paintEvent(self, _e):
+        from PySide6.QtGui import QPainter
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        s = self.size_px
+        p.translate(s / 2, s / 2)
+        p.scale(self.scale, self.scale)
+        p.drawPixmap(int(-s / 2), int(-s / 2), self.pm)
+
+
 class NavStack(QWidget):
     currentChanged = Signal(int)
     search_requested = Signal()
@@ -41,10 +84,8 @@ class NavStack(QWidget):
         self._badges = set()
         self.side = QWidget()                      # the top bar
         self.side.setObjectName("topbar")
-        from ui import logo
-        mark = QLabel()
-        mark.setPixmap(logo.pixmap(LOGO, 2.0))
-        mark.setFixedSize(LOGO, LOGO)
+        from ui.backdrop import Backdrop
+        mark = self.mark = Beat(LOGO)                 # the logo; it beats slowly under Motion: Lively
         brand = QLabel(title)
         brand.setObjectName("brand")
         self.list = QListWidget()                  # the sections, side by side
@@ -87,7 +128,8 @@ class NavStack(QWidget):
         bar.addWidget(self.fold)
         self.stack = QStackedWidget()
         self.stack.setMaximumWidth(CONTENT_WIDTH)
-        body = QHBoxLayout()                       # the section in the middle, as wide as it may be; the rest of the width is margin
+        self.backdrop = Backdrop()                 # the page colour, and a theme's glow or wash, behind the sections
+        body = QHBoxLayout(self.backdrop)          # the section in the middle, as wide as it may be; the rest of the width is margin
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
         body.addStretch(1)
@@ -97,14 +139,14 @@ class NavStack(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
         lay.addWidget(self.side)
-        lay.addLayout(body, 1)
+        lay.addWidget(self.backdrop, 1)
         self.list.currentRowChanged.connect(self._row_changed)
         self._brand = brand
         self.setCollapsed(False)
 
     @staticmethod
     def bar_height():
-        return BAR_HEIGHT_OPS if theme.is_ops() else BAR_HEIGHT
+        return BAR_HEIGHT_OPS if theme.is_terminal() else BAR_HEIGHT
 
     # ---------- what the top bar shows
     def collapsed(self):
@@ -264,6 +306,8 @@ class NavStack(QWidget):
             self._fit_tabs()
         self.fold.setIcon(icons.icon("panel", t.get("icon", t["muted"]), t["text"]))
         self.quick.setIcon(icons.icon("search", t.get("icon", t["muted"]), t["text"]))
+        self.mark.restyle()
+        self.backdrop.restyle()
 
     def count(self):
         return self.stack.count()

@@ -1,7 +1,7 @@
 # Run directly (python tests/test_x.py) or all together (python tests/run_all.py). Each test builds its own
 # throw-away database and uses a fake credential store, so nothing on this computer is touched.
-# Settings > Appearance shows a theme at once and puts the saved one back when the edit is dropped (the Toner theme has one accent,
-# with no setting for it); drop-down menus open upward when there is no room below; the import step shows the whole of each name.
+# Settings > Appearance shows a theme at once and puts the saved one back when the edit is dropped; the Classic themes keep the
+# accents Toner had; drop-down menus open upward when there is no room below; the import step shows the whole of each name.
 import os as _os, sys as _sys, tempfile as _tmp
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
@@ -24,44 +24,56 @@ from PySide6.QtWidgets import QApplication, QColorDialog, QMainWindow, QMenu, QM
 app = QApplication([])
 import app as A
 A.apply_look(app)
-from ui import theme
+from ui import theme, themes
 
-print("== the Toner theme's accent")
-check("there is one accent, the Toner theme's, in light and dark", theme.tokens(False)["accent"] == theme.ACCENT[0]
-      and theme.tokens(True)["accent"] == theme.ACCENT[1] and theme.ACCENT == ("#0e7490", "#22d3ee"))
-check("the Ops console uses it too", theme.tokens(True, theme.OPS)["accent"] == theme.ACCENT[1])
+print("== the Classic themes keep the accents Toner had")
+check("Midnight and Daylight have the accents of before", theme.tokens(dict(theme="Daylight"))["accent"] == "#0e7490"
+      and theme.tokens(dict(theme="Midnight"))["accent"] == "#22d3ee")
+check("the old way of asking still works (a dark flag, a theme name)", theme.tokens(True)["accent"] == "#22d3ee" and theme.tokens("Light")["accent"] == "#0e7490")
+check("the Terminal look keeps the theme's accent", theme.tokens(dict(theme="Midnight", look="Terminal"))["accent"] == "#22d3ee")
 check("icons are brighter than muted text in the dark theme", QColor(theme.tokens(True)["icon"]).lightness() > QColor(theme.tokens(True)["muted"]).lightness())
-check("no accent is stored any more", "accent" not in db.DEFAULT_SETTINGS and "accent" not in db.GLOBAL_ONLY)
-check("an older settings export with one still imports, the accent left out", db.import_settings({"accent": "#8e44ad", "theme": "Dark"}) == (["theme"], ["accent"]))
-db.set_setting("theme", "System")
+check("no accent is stored, except Your colour's own", "accent" not in db.DEFAULT_SETTINGS and "custom_accent" in db.DEFAULT_SETTINGS)
+check("an older settings export still imports: its accent left out, its theme and style mapped",
+      db.import_settings({"accent": "#8e44ad", "theme": "Dark", "ui_style": "Ops console"}) == (["theme", "look"], ["accent"])
+      and db.get_setting("theme") == "Midnight" and db.get_setting("look") == "Terminal")
+db.set_setting("theme", "System"); db.set_setting("look", "Standard")
 
 print("== Settings > Appearance")
 import ui.settings as ST
 S = ST.SettingsTab(); S.resize(1200, 800); S.show(); app.processEvents()
 page = next(p for p in S.pages if p.title == "Appearance")
 shown, reset = [], []
-S.look_preview.connect(lambda th: shown.append(th))
+S.look_preview.connect(lambda look: shown.append(look))
 S.look_reset.connect(lambda: reset.append(1))
 labels = [page.form.itemAt(i, page.form.ItemRole.LabelRole).widget().text() for i in range(page.form.rowCount())
           if page.form.itemAt(i, page.form.ItemRole.LabelRole) and page.form.itemAt(i, page.form.ItemRole.LabelRole).widget()]
-check("there is no accent colour to choose", "Accent colour" not in labels and not hasattr(page, "accent") and "Theme" in labels, labels)
-check("and the note no longer mentions one", not any("accent" in w.text().lower() for w in page.findChildren(ST.QLabel) if hasattr(w, "text")))
-other = next(t for t in theme.THEMES if t != page.theme.currentText())
-page.theme.setCurrentText(other)
-check("choosing a theme shows it at once", shown and shown[-1] == other, shown[-1:])
-check("it counts as an unsaved change", S.unsaved_count() >= 1, S.unsaved_count())
-S.cancel()
-check("Cancel puts the saved look back", reset and page.theme.currentText() == db.get_setting("theme"))
-n = len(shown); S.reload()
+check("the page has Theme, Look, Motion, Panels and Contrast, and no accent row of its own", all(x in labels for x in ("Theme", "Look", "Motion", "Panels", "Contrast")) and "Accent colour" not in labels, labels)
+check("every theme has a card", set(page.grid.cards) == set(themes.NAMES) and len(themes.NAMES) == 25, len(page.grid.cards))
+check("the saved theme's card is the chosen one", page.grid.current() == "System")
+other = "Ember"
+page.grid.set_current(other, emit=True); app.processEvents(); time.sleep(0.2); app.processEvents()
+check("choosing a theme shows it at once", shown and shown[-1]["theme"] == other, shown[-1:])
+S.check_dirty()
+check("it counts as an unsaved change, named", S.unsaved_count() >= 1 and any(n == "Theme" for t, rows in S.pending_changes() if t == "Appearance" for n, _a, _b in rows), S.pending_changes())
+S.cancel(); app.processEvents()
+check("Cancel puts the saved look back", reset and page.grid.current() == db.get_setting("theme"))
+n = len(shown); S.reload(); app.processEvents(); time.sleep(0.2); app.processEvents()
 check("loading the saved values does not count as a preview", len(shown) == n)
-page.theme.setCurrentText("Dark")
+page.grid.set_current("Midnight", emit=True)
 QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes)
 page.save()
-check("Save stores the theme", db.get_setting("theme") == "Dark")
+check("Save stores the theme", db.get_setting("theme") == "Midnight")
 S.reload(); page = next(p for p in S.pages if p.title == "Appearance")
-check("and it comes back after a reload", page.theme.currentText() == "Dark")
+check("and it comes back after a reload", page.grid.current() == "Midnight")
 A.apply_look(app)
-check("the dark Toner theme is in use", theme.current()["dark"] and theme.current()["accent"] == theme.ACCENT[1])
+check("the dark Toner theme is in use", theme.current()["dark"] and theme.current()["accent"] == "#22d3ee")
+check("Your colour's own row shows only for Your colour", not page.custom_row.isVisibleTo(page))
+page.grid.set_current("Your colour", emit=True); app.processEvents()
+check("...and does when it is chosen", page.custom_row.isVisibleTo(page) and page.describe_extra()[1][0] == "Accent")
+page.look.setCurrentText("Soft"); app.processEvents(); time.sleep(0.2); app.processEvents()
+check("a knob previews too", shown[-1]["look"] == "Soft" and theme.tokens(shown[-1])["r_btn"] == 12)
+S.cancel(); app.processEvents()
+check("Cancel drops that as well", page.look.currentText() == "Standard" and page.grid.current() == "Midnight")
 
 print("== drop-down menus near the bottom")
 from ui.widgets import MenuPlacer, place_menu

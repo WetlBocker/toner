@@ -72,16 +72,22 @@ _look = None                 # the look last applied; applying the same one agai
 
 
 def apply_look(app):
-    """Theme, text size and status colours from Settings > Appearance. Returns False when they are what is shown already."""
+    """Theme, look, text size and status colours from Settings > Appearance. Returns False when they are what is shown already.
+    An interactive theme (Follows health, Time of day, Follows organization, System) is applied again only when what it follows changed."""
     global _look
-    look = (db.get_setting("theme"), int(db.get_setting("font_size")), db.get_setting("ui_style"), db.get_setting("color_preset"),
-            json.dumps(db.get_setting("status_colors"), sort_keys=True))
-    if look == _look:
+    from ui import themes
+    look = theme.saved_look()
+    ctx = theme.context(app)
+    key = (json.dumps(look, sort_keys=True), int(db.get_setting("font_size")), db.get_setting("color_preset"),
+           json.dumps(db.get_setting("status_colors"), sort_keys=True), tuple(ctx.get(k) for k in themes.uses(look["theme"])))
+    if key == _look:
         return False
-    theme.apply(app, look[0], look[1], look[2])
     reports.apply_colors(db.get_setting("color_preset"), db.get_setting("status_colors"))
+    theme.apply(app, look, int(db.get_setting("font_size")), ctx=ctx)
+    if look["theme"] == "Follows health":                # its accent is a status ink, which depends on the surface just applied
+        theme.apply(app, look, int(db.get_setting("font_size")), ctx=theme.context(app))
     app.setWindowIcon(app_icon(theme.current().get("accent", "#2563eb")))
-    _look = look
+    _look = key
     return True
 
 
@@ -240,6 +246,15 @@ class Main(QMainWindow):
         tabs.currentChanged.connect(lambda _i: self.update_headers(if_changed=True))
         self.results.run_finished.connect(self.update_headers)
         self.inventory.changed.connect(self.update_headers)
+        self.results.run_finished.connect(self.relook)                   # Follows health
+        self.relook_timer = QTimer(self)                                 # Time of day
+        self.relook_timer.setInterval(60000)
+        self.relook_timer.timeout.connect(self.relook)
+        self.relook_timer.start()
+        try:
+            QApplication.instance().styleHints().colorSchemeChanged.connect(lambda _s: self.relook())     # System (Qt 6.5+)
+        except Exception:
+            pass
         tabs.setCollapsed(bool(db.get_setting("sidebar_collapsed")))
         tabs.collapsed_changed.connect(lambda on: db.set_setting("sidebar_collapsed", on))
         QShortcut(QKeySequence("Ctrl+B"), self, activated=lambda: tabs.setCollapsed(not tabs.collapsed()))
@@ -620,8 +635,10 @@ class Main(QMainWindow):
         for i in range(self.tools.tabs.count()):
             entries.append((f"Tool: {self.tools.tabs.tabText(i)}", "",
                             lambda i=i: (self.go("Tools"), self.tools.tabs.setCurrentIndex(i))))
-        other = "Standard" if db.get_setting("ui_style") == theme.OPS else theme.OPS
-        entries.append((f"Style: {other}", "Settings > Appearance", lambda o=other: self.set_style(o)))
+        from ui import themes
+        for other in themes.LOOKS:                        # the other looks (Soft, Sharp, Terminal...), as Settings > Appearance > Look
+            if other != db.get_setting("look"):
+                entries.append((f"Look: {other}", "Settings > Appearance", lambda o=other: self.set_look(o)))
         entries.append(("New playbook", "Tools > Playbook Editor", lambda: (self.go("Tools"), self.tools.playbooks.new_playbook())))
         try:
             from core import ansible
@@ -720,17 +737,24 @@ class Main(QMainWindow):
         except Exception:
             log.exception("housekeeping failed")
 
-    def set_style(self, style):
-        """Switch between the Standard and Ops console looks (Ctrl+K); the same setting as Settings > Appearance."""
-        db.set_setting("ui_style", style)
+    def set_look(self, look):
+        """Switch the Look (Standard, Soft, Sharp, Terminal) from Ctrl+K; the same setting as Settings > Appearance."""
+        db.set_setting("look", look)
         self.settings.reload()
         self.settings_applied()
 
-    def preview_look(self, theme_name):
-        """Settings > Appearance: show a theme at once, before it is saved."""
+    set_style = set_look                               # the old name
+
+    def preview_look(self, look):
+        """Settings > Appearance: show a look at once, before it is saved. `look` is the dict the page holds (theme, look, panels...);
+        a theme name alone still works."""
         app = QApplication.instance()
         global _look
-        theme.apply(app, theme_name, int(db.get_setting("font_size")), db.get_setting("ui_style"))
+        if not isinstance(look, dict):
+            look = dict(theme.saved_look(), theme=look)
+        theme.apply(app, look, int(db.get_setting("font_size")), ctx=theme.context(app))
+        if look.get("theme") == "Follows health":
+            theme.apply(app, look, int(db.get_setting("font_size")), ctx=theme.context(app))
         _look = None                                   # what is shown is not the saved look any more
         self._restyle()
 
@@ -741,6 +765,15 @@ class Main(QMainWindow):
         if apply_look(QApplication.instance()):
             self._restyle()
 
+    def relook(self):
+        """An interactive theme's input may have changed (a run finished, the hour or the organization changed, Windows switched
+        light/dark): apply the look again if so. Costs nothing otherwise."""
+        try:
+            if apply_look(QApplication.instance()):
+                self._restyle()
+        except Exception:
+            log.exception("could not re-apply the look")
+
     def _restyle(self):
         app = QApplication.instance()
         app.setWindowIcon(app_icon(theme.current().get("accent", "#2563eb")))
@@ -748,6 +781,9 @@ class Main(QMainWindow):
         self.strip.restyle()
         self.ai_button.restyle()
         self.inventory.refresh()
+        for page in self.settings.pages:                   # the theme cards' name strips follow the window's colours
+            if hasattr(page, "restyle"):
+                page.restyle()
 
     def settings_applied(self, lists=True):
         """Make a saved (or imported) settings change take effect everywhere, without a restart. lists=False leaves out the lists
