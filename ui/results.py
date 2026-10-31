@@ -1,4 +1,4 @@
-from PySide6.QtCore import Qt, QThread, QUrl, Signal
+from PySide6.QtCore import QSize, Qt, QThread, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QFont, QKeySequence, QPalette, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QLabel, QMessageBox,
                                QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
@@ -8,7 +8,39 @@ from core.runner import run_all
 from drivers.base import SEVERITY, Result, is_problem
 from ui.columns import ColumnChooser
 from ui import status as st
+from ui import theme
 from ui.widgets import EmptyHint, SectionHeader, StatChips, StatusDelegate, flow
+
+
+class ResultDelegate(StatusDelegate):
+    """The Result column: the status chip, then the check's value after it (the Value column's text) in the data font."""
+
+    def paint(self, painter, option, index):
+        super().paint(painter, option, index)
+        value = index.sibling(index.row(), ResultsTab.VALUE).data(Qt.ItemDataRole.DisplayRole) or ""
+        if not value or not reports.COLORS.get(index.data(Qt.ItemDataRole.DisplayRole)):
+            return
+        painter.save()
+        painter.setPen(QColor((theme.current() or {}).get("text", "#000000")))
+        chip_w = self._chip_width(option, index)
+        painter.drawText(option.rect.adjusted(chip_w + 14, 0, -4, 0), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                         option.fontMetrics.elidedText(str(value), Qt.TextElideMode.ElideRight, option.rect.width() - chip_w - 18))
+        painter.restore()
+
+    def _chip_width(self, option, index):
+        status = index.data(Qt.ItemDataRole.DisplayRole)
+        font = QFont(option.font)
+        font.setBold(True)
+        font.setPointSizeF(max(7.0, font.pointSizeF() - (1.5 if theme.is_terminal() else 1)))
+        from PySide6.QtGui import QFontMetrics
+        pad, gap = (6, 4) if theme.is_terminal() else (9, 5)
+        return QFontMetrics(font).horizontalAdvance(status) + pad * 2 + self.GLYPH + gap
+
+    def sizeHint(self, option, index):
+        s = super().sizeHint(option, index)
+        value = index.sibling(index.row(), ResultsTab.VALUE).data(Qt.ItemDataRole.DisplayRole) or ""
+        extra = option.fontMetrics.horizontalAdvance(str(value)) + 14 if value else 0
+        return QSize(s.width() + extra, s.height())
 from ui.finder import FilterButton, SearchBox, Section, device_ok, device_sections, device_text, listed_devices, shown_devices, wants_archived
 from ui.toast import toast
 
@@ -36,7 +68,9 @@ class ResultsTab(QWidget):
     run_started = Signal(list)                 # the devices a run has just started on
     device_done = Signal(str)                  # a device's results are all in                  # devices done, devices in the run (for the status strip)
     open_device = Signal(str)
-    COLS = ["Device", "Check", "Status", "Value", "Message", "Organization"]
+    COLS = ["Device", "Check", "Result", "Value", "Message", "Organization"]      # Result draws the status chip and the value together
+    VALUE = 3                                                                    # (Value stays a column, hidden unless chosen, for a plain copy)
+    EXPLAIN = "FAIL means the check ran and the device failed it. ERROR means Toner couldn't run the check, for example the device didn't answer."
     ORG = 5
     FILTERS = ["All results", "Problems only", "Warnings", "Failing", "Healthy devices"]
     FILTER_KEYS = {"all": 0, "problems": 1, "warn": 2, "fail": 3, "healthy": 4}
@@ -60,8 +94,9 @@ class ResultsTab(QWidget):
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self.show_menu)
-        self.table.setItemDelegateForColumn(2, StatusDelegate(self.table))
-        self.columns = ColumnChooser(self.table, self.table.header(), self.COLUMNS_KEY, self.COLS, locked=(0, 2), org_col=self.ORG)      # right-click a heading
+        self.table.setItemDelegateForColumn(2, ResultDelegate(self.table))
+        self.columns = ColumnChooser(self.table, self.table.header(), self.COLUMNS_KEY, self.COLS, locked=(0, 2), org_col=self.ORG,
+                                     auto=lambda: {self.VALUE})                   # right-click a heading; Value is in the Result column already
         self.table.setIndentation(18)
         self.table.setAlternatingRowColors(False)
         self.hint = EmptyHint(self.table, *self.HINT, actions=[(self.RUN, lambda: self.start())])
@@ -79,6 +114,12 @@ class ResultsTab(QWidget):
         self.find.textChanged.connect(lambda _t: self.repopulate())
         self.funnel.changed.connect(self.repopulate)
         self.chips = StatChips()
+        self.chips.picked.connect(self.set_chip)
+        self.chip = "ALL"                        # the chip picked above the table: only rows of that status are listed
+        self.explain = QLabel(self.EXPLAIN)      # what FAIL and ERROR mean, under the table while either is shown
+        self.explain.setProperty("muted", True)
+        self.explain.setWordWrap(True)
+        self.explain.hide()
         self.summary = QLabel("Ready")
         self.summary.setProperty("muted", True)
         self.last_ran, self.last_scheduled = [], False
@@ -108,6 +149,7 @@ class ResultsTab(QWidget):
         lay.addWidget(self.header)
         lay.addLayout(row)
         lay.addWidget(self.table, 1)
+        lay.addWidget(self.explain)
         self.stored = False                      # what is shown is the latest stored results, not a run from this session
         self.load_stored()
 
@@ -191,10 +233,20 @@ class ResultsTab(QWidget):
         mode = self.FILTER_KEYS.get(key, 0)
         self.funnel.set("status", {mode} if mode else set())
 
+    def set_chip(self, key):
+        """A chip above the table was clicked: list only that status ("FAIL" is FAIL or ERROR; "ALL" lists everything)."""
+        self.chip = key
+        if self.chips.current != key:
+            self.chips.current = key
+            self.chips.restyle()
+        self.repopulate()
+
     def show_all(self):
-        """Clear the search box and the funnel."""
+        """Clear the search box, the funnel and the chip."""
         self.find.clear()
         self.funnel.clear()
+        if self.chip != "ALL":
+            self.set_chip("ALL")
 
     def _searched(self, groups):
         """The devices and rows the search box and the funnel leave: a device that matches shows all its rows; otherwise only
@@ -223,7 +275,15 @@ class ResultsTab(QWidget):
         return names
 
     def _rows_for(self, rows):
-        """(include this device?, the rows to list under it) for the chosen filter."""
+        """(include this device?, the rows to list under it) for the chosen filter: the funnel's Status choice, then the chip."""
+        include, rows = self._rows_for_mode(rows)
+        if not include or self.chip == "ALL":
+            return include, rows
+        want = {"FAIL": ("FAIL", "ERROR")}.get(self.chip, (self.chip,))
+        shown = [r for r in rows if r.status in want]
+        return bool(shown), shown
+
+    def _rows_for_mode(self, rows):
         mode = self.status_mode()
         if mode == 0:
             return True, rows
@@ -362,7 +422,9 @@ class ResultsTab(QWidget):
         self.table.setUpdatesEnabled(True)
         self._building = False
         empty = self.table.topLevelItemCount() == 0
-        if empty and self.results and (self.funnel.active() or self.find.words()):
+        shown_bad = any(self.table.topLevelItem(i).text(2) in ("FAIL", "ERROR") for i in range(self.table.topLevelItemCount()))
+        self.explain.setVisible(shown_bad)
+        if empty and self.results and (self.funnel.active() or self.find.words() or self.chip != "ALL"):
             self.hint.set_text("Nothing matches this filter", "Every device is listed under All results")
             self.hint.set_actions([("Show all results", self.show_all)])
         else:

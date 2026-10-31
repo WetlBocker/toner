@@ -4,7 +4,7 @@ import sqlite3
 import keyring
 from PySide6.QtCore import QPointF, QTimer, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QIcon, QKeySequence, QPainter, QPen, QPixmap, QPolygonF, QShortcut
-from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog,
+from PySide6.QtWidgets import (QFrame, QSplitter, QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog,
                                QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout, QInputDialog, QLabel,
                                QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSizePolicy, QSpinBox, QStyle, QTabWidget,
                                QStackedWidget, QToolButton, QTreeWidget,
@@ -789,6 +789,106 @@ class DeviceTree(QTreeWidget):
             self.moved.emit(moves, (where, tid))
 
 
+class DetailsPane(QWidget):
+    """The selected device, beside the list: its name and status, its facts and latest checks, and what can be done with it."""
+    closed = Signal()
+    run_checks = Signal(dict)
+    connect_requested = Signal(dict)
+    details_requested = Signal(dict)
+    edit_requested = Signal(dict)
+    PLACEHOLDER = "Choose a device to see its details, latest checks and actions here."
+
+    def __init__(self):
+        super().__init__()
+        from ui.device_view import DeviceSummary
+        self.dev = None
+        self.setMinimumWidth(300)
+        self.setMaximumWidth(460)
+        self.title = QLabel("")
+        self.title.setStyleSheet("font-size: 13pt; font-weight: 700;")
+        self.title.setWordWrap(True)
+        self.sub = QLabel("")
+        self.sub.setProperty("muted", True)
+        self.sub.setWordWrap(True)
+        self.chip = QLabel("")
+        self.close_btn = QPushButton()
+        self.close_btn.setProperty("ghost", True)
+        self.close_btn.setFixedSize(28, 28)
+        self.close_btn.setToolTip("Close details")
+        self.close_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.close_btn.clicked.connect(self.closed)
+        head = QHBoxLayout()
+        head.setContentsMargins(0, 0, 0, 0)
+        head.addWidget(self.title, 1)
+        head.addWidget(self.close_btn, 0, Qt.AlignmentFlag.AlignTop)
+        from ui.widgets import FlowLayout
+        self.buttons = {}
+        acts = FlowLayout(6, 6)                                        # four buttons: they wrap in a narrow pane
+        acts.setContentsMargins(0, 0, 0, 0)
+        for key, text, sig in (("run", "Run checks", self.run_checks), ("connect", "Connect", self.connect_requested),
+                               ("details", "Details\u2026", self.details_requested), ("edit", "Edit\u2026", self.edit_requested)):
+            b = QPushButton(text)
+            b.setAutoDefault(False)
+            if key == "run":
+                b.setProperty("primary", True)
+            b.clicked.connect(lambda _=False, s=sig: s.emit(self.dev) if self.dev else None)
+            acts.addWidget(b)
+            self.buttons[key] = b
+        self.summary = DeviceSummary(stacked=True)
+        self.placeholder = QLabel(self.PLACEHOLDER)
+        self.placeholder.setProperty("muted", True)
+        self.placeholder.setWordWrap(True)
+        self.placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.body = QWidget()
+        bl = QVBoxLayout(self.body)
+        bl.setContentsMargins(0, 0, 0, 0)
+        bl.setSpacing(8)
+        bl.addLayout(head)
+        bl.addWidget(self.sub)
+        bl.addWidget(self.chip, 0, Qt.AlignmentFlag.AlignLeft)
+        bl.addLayout(acts)
+        bl.addWidget(self.summary, 1)
+        frame = QFrame()
+        frame.setProperty("card", True)
+        fl = QVBoxLayout(frame)
+        fl.setContentsMargins(14, 12, 14, 12)
+        fl.addWidget(self.body)
+        fl.addWidget(self.placeholder, 1)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(8, 0, 0, 0)
+        lay.addWidget(frame)
+        self.set_device(None)
+
+    def restyle(self):
+        t = theme.current() or {}
+        self.close_btn.setIcon(icons.icon("fail", t.get("icon", t.get("muted", "#888888")), t.get("text", "#000000")))
+        if self.dev:
+            self.set_device(self.dev)
+
+    def set_device(self, dev):
+        """Show this device, or the placeholder for None."""
+        self.dev = dev
+        self.body.setVisible(dev is not None)
+        self.placeholder.setVisible(dev is None)
+        if not dev:
+            return
+        from core import vendors as V
+        from ui import status as st
+        plat = V.mode_label(dev["vendor"]) or (display.platform_name(dev.get("platform")) if dev.get("platform") else "")
+        self.title.setText(dev["name"])
+        self.sub.setText(f"{display.vendor_name(dev['vendor'])} {plat}  \u00b7  {dev['host']}" + (f":{dev['port']}" if dev.get("port") else ""))
+        health = db.device_health().get(dev["name"])
+        status = health["status"] if health else ""
+        self.chip.setVisible(bool(status))
+        if status:
+            self.chip.setText(status)
+            self.chip.setStyleSheet(st.chip_css(status))
+        kind = "rdp" if dev["vendor"] == "windows" else "ssh" if V.uses_ssh_login(dev["vendor"]) else ""
+        self.buttons["connect"].setVisible(bool(kind))
+        self.buttons["connect"].setText({"rdp": "Remote Desktop", "ssh": "SSH"}.get(kind, "Connect"))
+        self.summary.set_device(dev)
+
+
 class InventoryTab(QWidget):
     changed = Signal()
     open_agent_settings = Signal()
@@ -839,7 +939,7 @@ class InventoryTab(QWidget):
         self.table.customContextMenuRequested.connect(self.show_menu)
         self.table.itemSelectionChanged.connect(self.update_buttons)
         self.table.itemDoubleClicked.connect(self.double_clicked)
-        from ui.widgets import StatusDelegate
+        from ui.widgets import remember_sizes, StatusDelegate
         self.table.setItemDelegateForColumn(self.STATUS, StatusDelegate(self.table))      # the same pill as Results and the Overview
         self.columns = ColumnChooser(self.table, self.table.header(), "inventory_columns", self.COLS, locked=(0,), auto=self._empty_columns,
                                      org_col=self.ORG)
@@ -912,12 +1012,57 @@ class InventoryTab(QWidget):
         self.no_vendor.setProperty("muted", True)
         self.no_vendor.setWordWrap(True)
         self.no_vendor.hide()
+        self.pane = DetailsPane()                        # the selected device's facts, latest checks and actions, beside the list
+        self.pane.closed.connect(self._pane_closed)
+        self.pane.run_checks.connect(lambda d: self.run_checks.emit([d.get("key") or d["name"]]))
+        self.pane.connect_requested.connect(lambda d: self.open_rdp_tab.emit(d) if d["vendor"] == "windows" else self.open_ssh.emit(d))
+        self.pane.details_requested.connect(self.open_details)
+        self.pane.edit_requested.connect(lambda _d: self.edit())
+        self.split = QSplitter(Qt.Orientation.Horizontal)
+        self.split.setChildrenCollapsible(False)
+        self.split.setHandleWidth(1)
+        self.split.addWidget(self.stack)
+        self.split.addWidget(self.pane)
+        self.split.setStretchFactor(0, 1)
+        self.split.setStretchFactor(1, 0)
+        remember_sizes(self.split, "inventory_details")
+        self._pane_auto_hidden = False
+        self.table.itemSelectionChanged.connect(self._show_details)
         lay = QVBoxLayout(self)
         lay.addWidget(self.views_w)
         lay.addWidget(self.bar_w)
         lay.addWidget(self.no_vendor)
-        lay.addWidget(self.stack)
+        lay.addWidget(self.split, 1)
         self.refresh()
+        self._show_details()
+
+    # ---------- the details pane ----------
+    PANE_BELOW = 1100                   # a window narrower than this hides the pane (the list needs the room); it comes back with the width
+
+    def _pane_wanted(self):
+        return not db.get_setting("inventory_details_hidden") and self.stack.currentWidget() is self.table
+
+    def _show_details(self):
+        """The pane follows the selection: one device shows its details; none or several show the placeholder."""
+        self.pane.set_device(self.selected())
+        self._place_pane()
+
+    def _place_pane(self):
+        self._pane_auto_hidden = self.width() < self.PANE_BELOW
+        self.pane.setVisible(self._pane_wanted() and not self._pane_auto_hidden)
+
+    def _pane_closed(self):
+        db.set_setting("inventory_details_hidden", True)
+        self._place_pane()
+
+    def show_details_pane(self):
+        """Bring the pane back after Close (the Details button also opens the device's own window)."""
+        db.set_setting("inventory_details_hidden", False)
+        self._place_pane()
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._place_pane()
 
     # ---------- Devices | Agents ----------
     def show_view(self, which):
@@ -927,6 +1072,7 @@ class InventoryTab(QWidget):
         self.view_agents.setChecked(agents_view)
         self.view_devices.setChecked(not agents_view)
         self.bar_w.setVisible(not agents_view)
+        self._place_pane()
         if agents_view:
             self.fleet.refresh()
 

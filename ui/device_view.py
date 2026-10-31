@@ -27,6 +27,113 @@ class _Job(QThread):
             self.done.emit(e)
 
 
+class DeviceSummary(QWidget):
+    """A device's facts (status, version, folder, location, tags...) beside its latest checks. The device window's Overview tab,
+    and the details pane on the Inventory."""
+
+    def __init__(self, stacked=False):
+        super().__init__()
+        self.dev = None
+        self.info = QFormLayout()
+        info_w = QWidget()
+        info_w.setLayout(self.info)
+        self.checks = QTableWidget(0, 4)
+        self.checks.setHorizontalHeaderLabels(["Check", "Status", "Value", "Message"])
+        DeviceView._table(self.checks)
+        self.checks.setItemDelegateForColumn(1, StatusDelegate(self.checks))
+        self.checks_title = QLabel("<b>Latest checks</b>")
+        if stacked:                                                 # the pane: facts above the checks
+            lay = QVBoxLayout(self)
+            lay.setContentsMargins(0, 0, 0, 0)
+            lay.addWidget(info_w)
+            lay.addWidget(self.checks_title)
+            lay.addWidget(self.checks, 1)
+        else:                                                       # the window: side by side
+            lay = QHBoxLayout(self)
+            lay.setContentsMargins(0, 0, 0, 0)
+            lay.addWidget(info_w, 2)
+            right = QVBoxLayout()
+            right.addWidget(self.checks_title)
+            right.addWidget(self.checks, 1)
+            lay.addLayout(right, 3)
+
+    def set_device(self, dev):
+        self.dev = dev
+        self._fill_info()
+        self._fill_checks()
+
+    def _fill_info(self):
+        while self.info.rowCount():
+            self.info.removeRow(0)
+        d = self.dev
+        prof = (profiles.get(d.get("profile_id")) or {}).get("name", "")
+        try:
+            jump = json.loads(d.get("jump") or "{}").get("device", "")
+        except ValueError:
+            jump = ""
+        try:
+            fields = json.loads(d.get("fields") or "{}")
+        except ValueError:
+            fields = {}
+        health = db.device_health().get(d["name"])
+        rows = [("Status", (health["status"] + f"  ({health['at']})") if health else "no results yet"),
+                ("Version", display.software_line(db.software_of(d), long=True)),     # "17.09.04a (INSTALL mode, ...), read 26 Oct 2026 at 14:02"
+                ("Checks and limits", self._own_settings(d)),
+                ("Folder", db.folder_paths().get(d.get("folder_id"), "(top level)")),
+                ("Location", d.get("location") or ""), ("Tags", d.get("tags") or ""),
+                ("Credential profile", prof), ("Jump host", jump),
+                ("SNMP", "configured" if profiles.snmp_configured(d) else ""),
+                ("Enabled", "yes" if d.get("enabled", 1) else "no (checks skip this device)"), ("Notes", d.get("details") or "")]
+        rows += [(k, str(v)) for k, v in fields.items()]
+        s = backup.summary().get(d["name"])
+        if s:
+            rows.append(("Configuration", f"{s['versions']} version(s), last backup {s.get('last', '')}"))
+        for k, v in rows:
+            if v:
+                lab = QLabel(v)
+                if k == "Status" and health and health["status"] in ("WARN", "FAIL", "ERROR"):
+                    lab.setStyleSheet(f"font-weight: 600; color: {st.ink(health['status'])};")
+                lab.setWordWrap(True)
+                lab.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                self.info.addRow(QLabel(f"<span style='color:gray'>{k}</span>"), lab)
+
+    @staticmethod
+    def _own_settings(d):
+        """Whether this device follows the global checks and limits or has its own (Edit > Checks)."""
+        from core import checks
+        own = db.normalize_checkopts(d.get("checkopts"))
+        if not own:
+            return "Global checks and limits"
+        labels = dict(checks.CATALOG.get(d["vendor"], []))
+        parts = []
+        if "checks" in own:
+            parts.append("runs only: " + (", ".join(labels.get(c, c) for c in own["checks"]) or "nothing"))
+        if "thresholds" in own:
+            parts.append("own limits: " + ", ".join(f"{db.THRESHOLD_LABELS.get(k, k)} {p['warn']:g}/{p['fail']:g}" for k, p in own["thresholds"].items()))
+        return "; ".join(parts)
+
+    def _latest_rows(self):
+        name = self.dev["name"]
+        runs = [r for r in db.list_runs(60)]
+        for r in runs:
+            rows = [x for x in db.run_results(r["id"]) if (x["device"] or "").split(" / ")[0] == name
+                    and x["check_name"] != "config backup"]
+            if rows:
+                return rows
+        return []
+
+    def _fill_checks(self):
+        rows = self._latest_rows()
+        rows.sort(key=lambda r: (-{"OK": 0, "WARN": 1, "FAIL": 2, "ERROR": 3}.get(r["status"], 0), r["device"], r["check_name"]))
+        self.checks.setRowCount(len(rows))
+        for i, r in enumerate(rows):
+            label = display.check_name(r["check_name"]) if r["device"] == self.dev["name"] else \
+                f"{r['device'].split(' / ', 1)[1]}: {display.check_name(r['check_name'])}"
+            for j, v in enumerate([label, r["status"], display.value(r["value"]), r["message"] or ""]):
+                self.checks.setItem(i, j, QTableWidgetItem(v))
+        self.checks.resizeColumnsToContents()
+
+
 class DeviceView(QDialog):
     ssh_requested = Signal(dict)
     rdp_requested = Signal(dict)
@@ -66,20 +173,11 @@ class DeviceView(QDialog):
         self.status = QLabel("")
         self.status.setProperty("muted", True)
 
-        self.info = QFormLayout()
-        info_w = QWidget()
-        info_w.setLayout(self.info)
-        self.checks = QTableWidget(0, 4)
-        self.checks.setHorizontalHeaderLabels(["Check", "Status", "Value", "Message"])
-        self._table(self.checks)
-        self.checks.setItemDelegateForColumn(1, StatusDelegate(self.checks))
+        self.summary = DeviceSummary()                 # the facts and the latest checks (the Inventory's details pane shows the same)
+        self.info, self.checks = self.summary.info, self.summary.checks
         over = QWidget()
         ol = QHBoxLayout(over)
-        ol.addWidget(info_w, 2)
-        right = QVBoxLayout()
-        right.addWidget(QLabel("<b>Latest checks</b>"))
-        right.addWidget(self.checks, 1)
-        ol.addLayout(right, 3)
+        ol.addWidget(self.summary)
 
         self.pick = GroupPicker(all_text="Choose checks", noun="checks", clear_text="Clear selection")
         self.chart = ChartStack()
@@ -157,75 +255,18 @@ class DeviceView(QDialog):
         self._fill_versions()
 
     def _fill_info(self):
-        while self.info.rowCount():
-            self.info.removeRow(0)
-        d = self.dev
-        prof = (profiles.get(d.get("profile_id")) or {}).get("name", "")
-        try:
-            jump = json.loads(d.get("jump") or "{}").get("device", "")
-        except ValueError:
-            jump = ""
-        try:
-            fields = json.loads(d.get("fields") or "{}")
-        except ValueError:
-            fields = {}
-        health = db.device_health().get(d["name"])
-        rows = [("Status", (health["status"] + f"  ({health['at']})") if health else "no results yet"),
-                ("Version", display.software_line(db.software_of(d), long=True)),     # "17.09.04a (INSTALL mode, ...), read 26 Oct 2026 at 14:02"
-                ("Checks and limits", self._own_settings(d)),
-                ("Folder", db.folder_paths().get(d.get("folder_id"), "(top level)")),
-                ("Location", d.get("location") or ""), ("Tags", d.get("tags") or ""),
-                ("Credential profile", prof), ("Jump host", jump),
-                ("SNMP", "configured" if profiles.snmp_configured(d) else ""),
-                ("Enabled", "yes" if d.get("enabled", 1) else "no (checks skip this device)"), ("Notes", d.get("details") or "")]
-        rows += [(k, str(v)) for k, v in fields.items()]
-        s = backup.summary().get(d["name"])
-        if s:
-            rows.append(("Configuration", f"{s['versions']} version(s), last backup {s.get('last', '')}"))
-        for k, v in rows:
-            if v:
-                lab = QLabel(v)
-                if k == "Status" and health and health["status"] in ("WARN", "FAIL", "ERROR"):
-                    lab.setStyleSheet(f"font-weight: 600; color: {st.ink(health['status'])};")
-                lab.setWordWrap(True)
-                lab.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-                self.info.addRow(QLabel(f"<span style='color:gray'>{k}</span>"), lab)
+        self.summary.dev = self.dev
+        self.summary._fill_info()
 
-    @staticmethod
-    def _own_settings(d):
-        """Whether this device follows the global checks and limits or has its own (Edit > Checks)."""
-        from core import checks
-        own = db.normalize_checkopts(d.get("checkopts"))
-        if not own:
-            return "Global checks and limits"
-        labels = dict(checks.CATALOG.get(d["vendor"], []))
-        parts = []
-        if "checks" in own:
-            parts.append("runs only: " + (", ".join(labels.get(c, c) for c in own["checks"]) or "nothing"))
-        if "thresholds" in own:
-            parts.append("own limits: " + ", ".join(f"{db.THRESHOLD_LABELS.get(k, k)} {p['warn']:g}/{p['fail']:g}" for k, p in own["thresholds"].items()))
-        return "; ".join(parts)
+    _own_settings = DeviceSummary._own_settings
 
     def _latest_rows(self):
-        name = self.dev["name"]
-        runs = [r for r in db.list_runs(60)]
-        for r in runs:
-            rows = [x for x in db.run_results(r["id"]) if (x["device"] or "").split(" / ")[0] == name
-                    and x["check_name"] != "config backup"]
-            if rows:
-                return rows
-        return []
+        self.summary.dev = self.dev
+        return self.summary._latest_rows()
 
     def _fill_checks(self):
-        rows = self._latest_rows()
-        rows.sort(key=lambda r: (-{"OK": 0, "WARN": 1, "FAIL": 2, "ERROR": 3}.get(r["status"], 0), r["device"], r["check_name"]))
-        self.checks.setRowCount(len(rows))
-        for i, r in enumerate(rows):
-            label = display.check_name(r["check_name"]) if r["device"] == self.dev["name"] else \
-                f"{r['device'].split(' / ', 1)[1]}: {display.check_name(r['check_name'])}"
-            for j, v in enumerate([label, r["status"], display.value(r["value"]), r["message"] or ""]):
-                self.checks.setItem(i, j, QTableWidgetItem(v))
-        self.checks.resizeColumnsToContents()
+        self.summary.dev = self.dev
+        self.summary._fill_checks()
 
     def _fill_history(self):
         keep = self.pick.selected()

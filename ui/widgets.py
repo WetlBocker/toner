@@ -299,31 +299,58 @@ class StatusDelegate(QStyledItemDelegate):
         return QSize(s.width() + (28 if theme.is_terminal() else 34), s.height())
 
 
+class _Chip(QLabel):
+    clicked = Signal()
+
+    def mousePressEvent(self, e):
+        self.clicked.emit()
+
+
 class StatChips(QWidget):
-    """OK / WARN / FAIL / ERROR counters shown as small coloured pills."""
+    """The counts as chips: All, OK, WARN, FAIL or ERROR, ERROR. Click one to show only those rows (picked), click it again for all."""
     ORDER = ["OK", "WARN", "FAIL", "ERROR"]
+    KEYS = ["ALL"] + ORDER
+    TIPS = {"ALL": "Show every result", "OK": "OK: the check passed", "WARN": "WARN: over a warning limit",
+            "FAIL": "FAIL: the check ran and the device failed it", "ERROR": "ERROR: Toner couldn't run the check"}
+    picked = Signal(str)                                  # "ALL", "OK", "WARN", "FAIL" (FAIL or ERROR) or "ERROR"
 
     def __init__(self):
         super().__init__()
         self.counts = {s: 0 for s in self.ORDER}
-        self.labels = {s: QLabel() for s in self.ORDER}
+        self.current = "ALL"
+        self.labels = {s: _Chip() for s in self.KEYS}
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(6)
-        for lab in self.labels.values():
+        for key, lab in self.labels.items():
+            lab.setToolTip(self.TIPS[key])
+            lab.setCursor(Qt.CursorShape.PointingHandCursor)
+            lab.clicked.connect(lambda k=key: self.pick(k))
             lay.addWidget(lab)
         self.set_counts({})
+
+    def pick(self, key):
+        self.current = "ALL" if key == self.current and key != "ALL" else key
+        self.restyle()
+        self.picked.emit(self.current)
 
     def set_counts(self, counts):
         self.counts = {s: int(counts.get(s, 0)) for s in self.ORDER}
         self.restyle()
 
     def restyle(self):
-        for s, lab in self.labels.items():
-            n = self.counts[s]
-            lab.setText(f"{n} {s}")
-            if n:
-                lab.setStyleSheet(st.chip_css(s))
+        total = sum(self.counts.values())
+        t = theme.current() or {}
+        for key, lab in self.labels.items():
+            n = total if key == "ALL" else self.counts[key] + (self.counts["ERROR"] if key == "FAIL" else 0)
+            lab.setText(f"All {n}" if key == "ALL" else f"{n} {key}" + (" or ERROR" if key == "FAIL" else ""))
+            on = key == self.current
+            ring = f" border:1px solid {t.get('accent', '#2563eb')};" if on else ""
+            if key == "ALL":
+                lab.setStyleSheet(f"background:{t.get('accent_soft', 'transparent') if on else 'transparent'}; color:{t.get('text', 'palette(text)')}; "
+                                  f"border-radius:{st.radius()}px; padding:1px 10px; font-weight:600;{ring or ' border:1px solid palette(mid);'}")
+            elif n:
+                lab.setStyleSheet(st.chip_css(key) + ring)
             else:                                         # nothing of this kind: show it, but quietly
                 lab.setStyleSheet(f"background:transparent; color:palette(placeholder-text); border-radius:{st.radius()}px; "
                                   "padding:0px 9px; border:1px solid palette(mid);")

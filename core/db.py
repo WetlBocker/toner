@@ -85,7 +85,7 @@ DEFAULT_SETTINGS = {
     # appearance
     "theme": "System", "look": "Standard", "motion": "Subtle", "panels": "Bordered", "contrast": "Normal",
     "custom_accent": "#38bdf8", "custom_base": "Dark", "custom_tint": False,
-    "font_size": 0, "color_preset": "Default", "status_colors": {},
+    "font_size": 0, "color_preset": "Default", "status_colors": {}, "inventory_details_hidden": False,
     # terminal
     "term_font": "Consolas", "rdp_embedded": True, "term_font_size": 10, "term_scrollback": 5000, "term_scheme": "Dark", "term_syntax": True, "scan_enabled": True, "hardening_off": [],
     "paging_cmd": "terminal length 0",
@@ -140,7 +140,7 @@ DEFAULT_SETTINGS = {
 }
 # Per-machine state that must not travel in an exported settings file (channel secrets stay in
 # the vault, so an imported channel would be broken).
-NOT_PORTABLE = {"vault_provider", "vault_config", "org_current", "window_geometry", "splitters", "ansible_distro", "ansible_playbooks", "ansible_server", "ansible_server_device", "sidebar_collapsed", "sessions_list_hidden", "settings_list_hidden", "tools_list_hidden", "automation_list_hidden", "acks", "client_scope", "onboarding_done", "inventory_columns", "results_columns", "scanning_columns", "topology_last", "topology_prev", "topology_positions", "topology_top", "notify_channels", "notify_snooze_until", "inventory_expanded", "snippets", "fileserver", "iperf_path", "openssl_path",
+NOT_PORTABLE = {"vault_provider", "vault_config", "org_current", "window_geometry", "splitters", "inventory_details_hidden", "ansible_distro", "ansible_playbooks", "ansible_server", "ansible_server_device", "sidebar_collapsed", "sessions_list_hidden", "settings_list_hidden", "tools_list_hidden", "automation_list_hidden", "acks", "client_scope", "onboarding_done", "inventory_columns", "results_columns", "scanning_columns", "topology_last", "topology_prev", "topology_positions", "topology_top", "notify_channels", "notify_snooze_until", "inventory_expanded", "snippets", "fileserver", "iperf_path", "openssl_path",
                 "update_last_check", "update_skip", "update_pending", "sessions_expanded", "agent_enabled", "agent_enroll", "agent_bind",
                 "agent_address", "install_uid", "demarc", "assistant_button"}
 
@@ -1116,7 +1116,7 @@ def ensure_folder_path(path):
 # ---------- settings ----------
 # Settings: Global's apply everywhere; an organization's file holds only the ones it changes (Settings > ... while it is picked).
 # These are about this computer or the whole program, so they are always read from and written to the Global file:
-GLOBAL_ONLY = {"window_geometry", "splitters", "sidebar_collapsed", "sessions_list_hidden", "settings_list_hidden", "tools_list_hidden", "automation_list_hidden", "onboarding_done", "org_current",
+GLOBAL_ONLY = {"window_geometry", "splitters", "sidebar_collapsed", "inventory_details_hidden", "sessions_list_hidden", "settings_list_hidden", "tools_list_hidden", "automation_list_hidden", "onboarding_done", "org_current",
                "theme", "look", "motion", "panels", "contrast", "custom_accent", "custom_base", "custom_tint", "font_size", "color_preset", "status_colors",
                "term_font", "rdp_embedded", "term_font_size", "term_scrollback", "term_scheme", "term_syntax", "scan_enabled", "hardening_off", "paging_cmd",
                "hostkey_mode", "ssh_legacy_algorithms", "run_in_background", "metrics_port", "proxy", "ssh_tunnel",
