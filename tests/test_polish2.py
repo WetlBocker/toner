@@ -70,17 +70,16 @@ from ui import status as st
 fr2 = folder_rows()
 check("it is coloured like the status", fr2["Zeta"].foreground(inv.STATUS).color().name() == st.ink("ERROR") and fr2["Acme"].foreground(inv.STATUS).color().name() == st.ink("FAIL"), fr2["Zeta"].foreground(inv.STATUS).color().name())
 
-print("== the top bar fits the window")
+print("== the sidebar fits the window")
 from ui import nav as navmod
-nav = w.tabs; tall = {nav.list.item(i).sizeHint().height() for i in range(nav.list.count())}
-check("every section is the height of the bar", tall == {navmod.BAR_HEIGHT - 1}, tall)
+nav = w.tabs; tall = {nav.list.item(nav.row_of(i)).sizeHint().height() for i in range(nav.count())}
+check("every section row is the same height", tall == {navmod.NAV_ITEM}, tall)
 w.resize(900, 560); app.processEvents(); app.processEvents()
-rows = {nav.list.item(i).sizeHint().height() for i in range(nav.list.count())}
-check("a short window doesn't change that (the bar runs across the top)", rows == {navmod.BAR_HEIGHT - 1}, rows)
-last = nav.list.visualItemRect(nav.list.item(nav.list.count() - 1))
-check("in a narrow window About is still inside the bar", last.right() <= nav.list.viewport().width() + 2, (last, nav.list.viewport().width()))
+check("a narrow window folds the sidebar to icons by itself", nav._icons_only() and nav.side.width() == navmod.SIDE_FOLDED and not nav.collapsed())
+last = nav.list.visualItemRect(nav.item_for(w.about))
+check("in a short window About is still inside the list", 0 <= last.top() and last.bottom() <= nav.list.viewport().height() + 2, (last, nav.list.viewport().height()))
 w.resize(1300, 820); app.processEvents(); app.processEvents()
-check("and widening it again changes nothing", {nav.list.item(i).sizeHint().height() for i in range(nav.list.count())} == {navmod.BAR_HEIGHT - 1})
+check("and widening it again brings the names back", not nav._icons_only() and nav.side.width() == navmod.SIDE_WIDTH)
 
 print("== History and Configs")
 w.go("History"); app.processEvents(); app.processEvents()

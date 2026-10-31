@@ -46,7 +46,7 @@ def share(sizes):
 print("== a 1920-wide window")
 w = A.Main(); w.resize(1920, 1000); w.show(); wait(100)
 w.go("History"); wait(50)
-check("the content width cap lets a 1920 screen use the whole window", nav.CONTENT_WIDTH >= 1920 and w.history.width() >= 1800, w.history.width())
+check("the content width cap lets a 1920 screen use the whole window beside the sidebar", nav.CONTENT_WIDTH >= 1920 and w.history.width() >= 1920 - nav.SIDE_WIDTH - 60, w.history.width())
 check("'splitters' is a per-computer Global setting, left out of exports", "splitters" in db.NOT_PORTABLE and "splitters" in db.GLOBAL_ONLY)
 
 print("== dragging History's divider")

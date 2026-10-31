@@ -71,6 +71,7 @@ def tokens(look=None, ctx=None):
     shape["btn_bg"] = shape["btn_bg"] % t
     t.update(shape)
     t["terminal"] = t["look"] == TERMINAL
+    t["nav_font"] = 'font-family: "Segoe UI Variable Text", "Segoe UI";' if t["terminal"] else ""
     t["ops"] = t["terminal"]                                    # the old name, for anything still asking
     t["raised"] = t["panels"] == "Raised"
     t["card_bottom"] = f"border-bottom: 2px solid {t['panel_edge']};" if t["raised"] else ""
@@ -225,14 +226,17 @@ QFrame[card="true"] { background: %(surface)s; border: 1px solid %(card_border)s
 QFrame[card="true"] QLabel { background: transparent; border: 0; }
 QFrame[card="true"] QTableWidget, QFrame[card="true"] QTreeWidget { border: 0; border-radius: 0; background: transparent; }
 
-/* ---- top bar: the sections as tabs, the current one underlined ---- */
-QWidget#topbar { background: %(surface)s; border-bottom: 1px solid %(border)s; }
+/* ---- the sidebar: the sections in groups, the current one in the accent with a bar on its left ---- */
+QWidget#sidebar { background: %(surface)s; border-right: 1px solid %(border)s; }
 QLabel#brand { font-size: %(brand_pt)spt; font-weight: 700; color: %(text)s; padding: 0; }
 QLabel#brandMark { background: %(accent)s; color: %(accent_text)s; border-radius: 9px; font-weight: 800; font-size: 12pt; }
-QListWidget#nav { background: transparent; border: 0; border-radius: 0; }
-QListWidget#nav::item { padding: 0 10px; margin: 0; border: 0; border-bottom: 2px solid transparent; color: %(muted)s; background: transparent; }
-QListWidget#nav::item:hover { color: %(text)s; background: transparent; }
-QListWidget#nav::item:selected { background: transparent; color: %(text)s; border-bottom: 2px solid %(accent)s; font-weight: 600; }
+QPushButton#navSearch { text-align: left; padding: 6px 10px; background: %(input)s; border: 1px solid %(border)s; color: %(muted)s; }
+QPushButton#navSearch:hover { color: %(text)s; background: %(hover)s; }
+QListWidget#nav { background: transparent; border: 0; border-radius: 0; %(nav_font)s }
+QListWidget#nav::item { padding: 0 10px; margin: 0; border: 0; border-left: 3px solid transparent; border-radius: %(r_nav)spx; color: %(text)s; background: transparent; }
+QListWidget#nav::item:hover { background: %(hover)s; }
+QListWidget#nav::item:selected { background: %(accent_soft)s; color: %(accent)s; border-left: 3px solid %(accent)s; font-weight: 600; }
+QListWidget#nav::item:!enabled { color: %(muted)s; background: transparent; border: 0; letter-spacing: 1px; }
 QListWidget#settingsNav { background: transparent; border: 0; border-right: 1px solid %(border)s; border-radius: 0; }
 QListWidget#settingsNav::item { padding: %(pad_nav)s; margin: %(margin_nav)s; border-radius: %(r_nav)spx; color: %(muted)s; }
 QListWidget#settingsNav::item:selected { background: %(accent_soft)s; color: %(accent)s; font-weight: 600; }
@@ -245,7 +249,7 @@ QFrame#statusChip { border-radius: %(r_chip)spx; }
 TERMINAL_QSS = """
 QPushButton:hover, QToolButton:hover { border-color: %(muted)s; }
 QPushButton[primary="true"] { font-weight: 700; }
-QListWidget#nav, QListWidget#settingsNav { font-family: "Segoe UI Variable Text", "Segoe UI"; }
+QListWidget#settingsNav { font-family: "Segoe UI Variable Text", "Segoe UI"; }
 QListWidget#settingsNav::item:selected { background: %(select)s; border-left: 2px solid %(accent)s; }
 """
 

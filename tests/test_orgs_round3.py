@@ -294,7 +294,7 @@ was = spin.value(); spin.setValue(was + 5); shown.clear()
 answer["button"] = "Stay in Settings"
 w.go("Inventory"); app.processEvents()
 check("clicking another section with unsaved changes asks, and Stay in Settings stays", shown and w.tabs.currentWidget() is w.settings
-      and w.tabs.list.currentRow() == w.tabs.indexOf(w.settings), [s["text"] for s in shown])
+      and w.tabs.currentIndex() == w.tabs.indexOf(w.settings), [s["text"] for s in shown])
 answer["button"] = "Discard changes"
 w.go("Inventory"); app.processEvents()
 check("Discard changes moves on and drops the edit", w.tabs.currentWidget() is w.inventory and spin.value() == was)

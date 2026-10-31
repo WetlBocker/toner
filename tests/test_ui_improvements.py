@@ -147,7 +147,7 @@ print("== Ctrl+K is visible")
 got = []; w.tabs.search_requested.connect(lambda: got.append(1)); w.tabs.quick.click()
 check("the sidebar has a Search button that shows the shortcut (on it, or in its tooltip when the font is too wide)",
       ("Ctrl+K" in w.tabs.quick.text() or "Ctrl+K" in w.tabs.quick.toolTip()) and got == [1], (w.tabs.quick.text(), w.tabs.quick.toolTip()))
-check("each section's tooltip names its shortcut", "Ctrl+2" in w.tabs.list.item(1).toolTip() and "Ctrl+1" in w.tabs.list.item(0).toolTip())
+check("each section's tooltip names its shortcut", "Ctrl+2" in w.tabs.item_for(w.results).toolTip() and "Ctrl+1" in w.tabs.item_for(w.dashboard).toolTip())
 
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

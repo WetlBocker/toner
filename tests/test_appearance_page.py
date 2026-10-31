@@ -78,7 +78,7 @@ check("Save keeps the theme and the knobs", db.get_setting("theme") == "Mist" an
       and theme.current()["name"] == "Mist" and theme.current()["motion"] == "Lively")
 w.settings.reload(); settle()
 check("...and the page shows them after a reload", page.grid.current() == "Mist" and page.look.currentText() == "Soft" and page.motion.currentText() == "Lively")
-check("the grid is not squeezed to a drop-down's width", page.grid.width() > 600, page.grid.width())
+check("the grid is not squeezed to a drop-down's width", page.grid.width() > 450, page.grid.width())
 
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

@@ -189,15 +189,16 @@ class Main(QMainWindow):
         self.about.update_cleared.connect(lambda: self.tabs.setBadge(self.about, False))
         self.about.quit_requested.connect(self.quit_for_real)           # the installer has been started
         tabs = self.tabs = NavStack("Toner")
-        for page, label, icon in ((self.dashboard, "Overview", "dashboard"), (self.results, "Results", "results"),
-                                  (self.inventory, "Inventory", "inventory"), (self.configs, "Configs", "configs"),
-                                  (self.scanning, "Scanning", "scanning"),
-                                  (self.history, "History", "history"), (self.reports, "Reports", "reports"),
-                                  (self.tools, "Tools", "tools"), (self.sessions, "Sessions", "sessions"),
-                                  (self.automation, "Automation/AI", "automation"),
-                                  (self.settings, "Settings", "settings"),
-                                  (self.about, "About", "about")):
-            tabs.addTab(page, label, icon)
+        # the sections, in the order Ctrl+1..9 and go() know them, each under its group in the sidebar
+        for page, label, icon, group in ((self.dashboard, "Overview", "dashboard", "Watch"), (self.results, "Results", "results", "Watch"),
+                                         (self.inventory, "Inventory", "inventory", "Network"), (self.configs, "Configs", "configs", "Network"),
+                                         (self.scanning, "Scanning", "scanning", "Network"),
+                                         (self.history, "History", "history", "Watch"), (self.reports, "Reports", "reports", "Watch"),
+                                         (self.tools, "Tools", "tools", "Work"), (self.sessions, "Sessions", "sessions", "Work"),
+                                         (self.automation, "Automation/AI", "automation", "Work"),
+                                         (self.settings, "Settings", "settings", NavStack.BOTTOM),
+                                         (self.about, "About", "about", NavStack.BOTTOM)):
+            tabs.addTab(page, label, icon, group)
         # the Assistant's panel sits beside the sections and pushes them narrower when it is open; its width is remembered
         from ui.widgets import remember_sizes
         self.assistant = AssistantPanel(self.screen_context)
@@ -205,7 +206,7 @@ class Main(QMainWindow):
         self.body = QSplitter(Qt.Orientation.Horizontal)
         self.body.setChildrenCollapsible(False)
         self.body.setHandleWidth(1)
-        tabs.setMinimumWidth(600)                          # the sections can give the panel room (the top bar folds to icons by itself)
+        tabs.setMinimumWidth(600)                          # the sections can give the panel room (the sidebar folds to icons by itself)
         self.body.addWidget(tabs)
         self.body.addWidget(self.assistant)
         self.body.setStretchFactor(0, 1)
