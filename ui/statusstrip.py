@@ -14,7 +14,6 @@ from core import agents, db, display, notify, proxy, tunnel
 from core import assistant as AI
 from ui import status as st
 from ui import theme
-from ui import theme
 
 
 class Part(QLabel):

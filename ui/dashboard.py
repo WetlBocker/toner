@@ -14,7 +14,7 @@ from ui import status as st
 from ui import motion
 from ui.glance import GlanceMap
 from ui.panels import Panel, ProgressLine
-from PySide6.QtWidgets import QGraphicsOpacityEffect, QSizePolicy, QToolButton, QWidget
+from PySide6.QtWidgets import QGraphicsOpacityEffect, QSizePolicy
 
 
 class Card(Panel):
