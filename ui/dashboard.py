@@ -14,7 +14,7 @@ from ui import status as st
 from ui import motion
 from ui.glance import GlanceMap
 from ui.panels import Panel, ProgressLine
-from PySide6.QtWidgets import QGraphicsOpacityEffect, QSizePolicy
+from PySide6.QtWidgets import QSizePolicy
 
 
 ATTENTION_ROW = 36          # a row of Needs attention: room for its buttons
@@ -89,8 +89,7 @@ class Card(Panel):
         """The number swells and settles when it changes (nothing when motion is off)."""
         import math
         base = self._base_size()
-        if self._pop is not None:
-            self._pop.stop()
+        motion.stop(self._pop)
         def step(v):
             f = self.value.font()
             f.setPointSizeF(base * (1 + 0.14 * math.sin(math.pi * float(v))))
@@ -135,8 +134,7 @@ class BarList(QWidget):
         self.rows = rows
         self.setMinimumHeight(max(40, 30 * len(rows) + 8))
         if changed and rows:
-            if self._grow is not None:
-                self._grow.stop()
+            motion.stop(self._grow)
             self.grown = 0.0
             self._grow = motion.animate(self, 900, self._on_grow)
         self.update()
@@ -144,6 +142,19 @@ class BarList(QWidget):
     def _on_grow(self, v):
         self.grown = float(v)
         self.update()
+
+    def replay(self):
+        """Fill the bars again, the rows fading in one after another (when the Overview comes into view)."""
+        if not self.rows or not motion.enabled():
+            return
+        motion.stop(self._grow)
+        self.grown = 0.0
+        self._grow = motion.animate(self, 900, self._on_grow)
+        motion.reveal(self, self.bands)
+
+    def bands(self):
+        """(top, height) of each row, for the reveal."""
+        return [(6 + i * 30, 26) for i in range(len(self.rows))]
 
     def paintEvent(self, _):
         tk = theme.current() or {}
@@ -385,15 +396,15 @@ class DashboardTab(QWidget):
         return cell.buttons if cell else {}
 
     def _fade_in(self, table):
-        """The list fades in after a refill (one effect on the whole table, taken off when done), unless motion is off."""
-        if not motion.enabled() or not table.isVisible():
+        """The list's rows fly up and fade in after a refill (the effect takes itself off when done), unless motion is off."""
+        motion.reveal(table)
+
+    def entered(self):
+        """The Overview came into view: the problems fly in, the availability bars fade in and fill again."""
+        if not motion.enabled():
             return
-        eff = QGraphicsOpacityEffect(table)
-        table.setGraphicsEffect(eff)
-        def finish():
-            if table.graphicsEffect() is eff:
-                table.setGraphicsEffect(None)
-        motion.animate(table, 260, eff.setOpacity, start=0.25, end=1.0, on_done=finish)
+        motion.reveal(self.attention)
+        self.bars.replay()
 
     def _build_start(self):
         """A short list for a new installation: add devices, run the checks, set up alerts. Each step ticks itself off."""

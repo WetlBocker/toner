@@ -3,7 +3,7 @@
 Offers the small part of QTabWidget's API that the rest of the app uses (addTab, setCurrentWidget,
 currentWidget, indexOf, count, tabText), so sections can be switched from code.
 """
-from PySide6.QtCore import QEvent, QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QIcon
 from PySide6.QtWidgets import (QApplication, QComboBox, QHBoxLayout, QLabel, QListView, QListWidget, QListWidgetItem, QPushButton, QScrollArea,
                                QStackedWidget, QStyledItemDelegate, QVBoxLayout, QWidget)
@@ -303,6 +303,8 @@ class NavStack(QWidget):
     def showEvent(self, event):
         super().showEvent(event)
         self._fit()
+        if self.stack.currentIndex() >= 0:
+            QTimer.singleShot(0, lambda: self._entered(self.stack.currentIndex()))     # the first section, once the window is up
 
     def _row_changed(self, row):
         if row < 0 or row not in self._rows:
@@ -317,6 +319,13 @@ class NavStack(QWidget):
         self.stack.setMaximumWidth(16777215 if self._names[i] in WIDE_SECTIONS else CONTENT_WIDTH)
         self.stack.setCurrentIndex(i)
         self.currentChanged.emit(i)
+        self._entered(i)
+
+    def _entered(self, i):
+        """A section came into view: it may bring its lists in with motion (`entered()`, where a section has one)."""
+        w = self.stack.widget(i)
+        if w is not None and hasattr(w, "entered"):
+            w.entered()
 
     def _insert(self, row, item):
         """Put an item in at `row`, keeping every map of rows right."""

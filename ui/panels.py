@@ -60,8 +60,7 @@ class ProgressLine(QFrame):
         self.setVisible(running)
         if running:
             target = done / max(1, total)
-            if self._fill is not None:
-                self._fill.stop()
+            motion.stop(self._fill)
             start = self.shown
             self._fill = motion.animate(self, 350, lambda v: self._on_fill(start + (target - start) * v))
             if motion.enabled() and not self.sweep.isActive():

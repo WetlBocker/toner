@@ -19,6 +19,7 @@ from ui.snmpfields import SnmpFields
 from core.runner import run_one
 from ui.toast import toast
 from ui import status as st
+from ui import motion
 
 
 
@@ -1503,6 +1504,11 @@ class InventoryTab(QWidget):
             for i in range(len(self.COLS) - 1):
                 self.table.resizeColumnToContents(i)
             self._fit_tree()
+
+    def entered(self):
+        """The Inventory came into view: the device rows fly up and fade in."""
+        if self.stack.currentWidget() is self.table:
+            motion.reveal(self.table)
 
     def _fit_tree(self):
         """The list ends under its last row, as the Overview's panels do; with more rows than the page has room for it scrolls as before.

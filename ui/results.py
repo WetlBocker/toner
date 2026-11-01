@@ -8,6 +8,7 @@ from core.runner import run_all
 from drivers.base import SEVERITY, Result, is_problem
 from ui.columns import ColumnChooser
 from ui import status as st
+from ui import motion
 from ui import theme
 from ui.widgets import EmptyHint, SectionHeader, StatChips, StatusDelegate, flow
 
@@ -187,6 +188,10 @@ class ResultsTab(QWidget):
         super().showEvent(e)
         if self.stored:                           # stored results may have moved on (a run from the tray, the service, the device window)
             self.load_stored()
+
+    def entered(self):
+        """Results came into view: the rows fly up and fade in."""
+        motion.reveal(self.table)
 
     def _enter(self):
         item = self.table.currentItem()
