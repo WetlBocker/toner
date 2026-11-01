@@ -104,6 +104,16 @@ db.set_setting("panels", "Raised"); A.apply_look(app); p.restyle(); app.processE
 check("Raised keeps a margin round the card and paints a shadow there (the picture changes)", theme.current()["raised"] and p.card.geometry().left() == 6 and p.grab().toImage() != flat)
 db.set_setting("panels", "Bordered"); A.apply_look(app)
 
+print("== a progress line fed again after its fill finished (a real run: a tick every few seconds)")
+motion.force("Subtle")
+line = ProgressLine(); line.resize(300, 4); line.show(); line.set_progress(1, 6); spin(600)
+try:
+    line.set_progress(2, 6); line.set_progress(3, 6); crashed = False
+except RuntimeError as e:
+    crashed = str(e)
+check("...does not raise (the finished animation had deleted itself)", crashed is False and line.isVisible(), crashed)
+line.set_progress(6, 6)
+
 print("== rows fly up and fade in when a list comes into view")
 from PySide6.QtWidgets import QTableWidget, QTableWidgetItem, QTreeWidget, QTreeWidgetItem, QWidget
 tbl = QTableWidget(4, 2); tbl.resize(300, 200); tbl.show(); app.processEvents()
