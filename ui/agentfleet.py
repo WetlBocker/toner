@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QLabel, QMessageB
                                QVBoxLayout, QWidget)
 from core import agents, audit, db
 from ui import status as st
+from ui.panels import fit_rows
 from ui.widgets import filling
 
 DEVICE = Qt.ItemDataRole.UserRole           # on a row's first cell: which computer the row is, whatever the sort order
@@ -70,6 +71,7 @@ class AgentFleet(QWidget):
         lay.addWidget(self.info)
         lay.addWidget(self.table, 1)
         lay.addLayout(bar)
+        lay.addStretch(0)                                  # the list ends under its rows (fit_rows), the buttons right under it
         self.revoke.clicked.connect(self._revoke)
         self.remove.clicked.connect(self._remove)
         self.reload_btn.clicked.connect(self.refresh)
@@ -139,6 +141,7 @@ class AgentFleet(QWidget):
         for i in range(self.table.rowCount()):
             if self.table.item(i, 0).data(DEVICE) in keep:
                 self.table.selectRow(i)
+        fit_rows(self.table)                                               # the list ends under its rows, not at the bottom of the page
         n = len(self.rows)
         self.info.setText(f"{n} computer{'' if n == 1 else 's'} reporting through an agent" + (f", {silent} silent." if silent else ".")
                           if self.rows else "No computer reports through an agent yet. Turn on the receiver and download the package in "

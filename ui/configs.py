@@ -210,8 +210,8 @@ class ConfigsTab(QWidget):
         left = QWidget()                               # the device list ends under its last row (fit_rows); the rest of the column stays empty
         ll = QVBoxLayout(left)
         ll.setContentsMargins(0, 0, 0, 0)
-        ll.addWidget(self.devs)
-        ll.addStretch(1)
+        ll.addWidget(self.devs, 1)
+        ll.addStretch(0)                               # (a stretch of 1 would take height the list still needs: it grows to its rows first)
         split = QSplitter()
         split.addWidget(left)
         split.addWidget(right)

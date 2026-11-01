@@ -34,6 +34,7 @@ class DeviceSummary(QWidget):
     def __init__(self, stacked=False):
         super().__init__()
         self.dev = None
+        self.stacked = stacked                              # the pane shows the status as a chip above, so its facts leave the Status row out
         self.info = QFormLayout()
         info_w = QWidget()
         info_w.setLayout(self.info)
@@ -88,6 +89,8 @@ class DeviceSummary(QWidget):
         s = backup.summary().get(d["name"])
         if s:
             rows.append(("Configuration", f"{s['versions']} version(s), last backup {s.get('last', '')}"))
+        if self.stacked:
+            rows = [r for r in rows if r[0] != "Status"]
         for k, v in rows:
             if v:
                 lab = QLabel(v)
@@ -154,10 +157,17 @@ class DeviceView(QDialog):
         self.title.setProperty("title", True)
         self.sub = QLabel("")
         self.sub.setProperty("muted", True)
-        head = QVBoxLayout()
-        head.setSpacing(0)
-        head.addWidget(self.title)
-        head.addWidget(self.sub)
+        self.mark = QLabel()                               # the maker's mark beside the name
+        self.mark.setFixedSize(40, 40)
+        self.mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        names = QVBoxLayout()
+        names.setSpacing(0)
+        names.addWidget(self.title)
+        names.addWidget(self.sub)
+        head = QHBoxLayout()
+        head.setSpacing(10)
+        head.addWidget(self.mark, 0, Qt.AlignmentFlag.AlignVCenter)
+        head.addLayout(names, 1)
         actions = QHBoxLayout()
         self.buttons = {}
         for key, text in (("checks", "Run checks"), ("backup", "Back up config"), ("ssh", "SSH session"), ("rdp", "Remote Desktop"), ("services", "Services"), ("ping", "Ping"),
@@ -241,6 +251,9 @@ class DeviceView(QDialog):
         plat = vendors.mode_label(d["vendor"]) or (display.platform_name(d.get("platform")) if d.get("platform") else "")
         self.title.setText(d["name"])
         self.sub.setText(f"{display.vendor_name(d['vendor'])} {plat}  -  {d['host']}" + (f":{d['port']}" if d.get("port") else ""))
+        from ui import brandicons
+        self.mark.setPixmap(brandicons.vendor_icon(d["vendor"]).pixmap(36, 36))
+        self.mark.setToolTip(display.vendor_name(d["vendor"]))
         self.buttons["ssh"].setEnabled(info.get("kind") == "ssh")
         self.buttons["ssh"].setVisible(d["vendor"] != "windows")
         self.buttons["rdp"].setVisible(d["vendor"] == "windows")

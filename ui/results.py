@@ -155,9 +155,9 @@ class ResultsTab(QWidget):
         lay = QVBoxLayout(self)
         lay.addWidget(self.header)
         lay.addLayout(row)
-        lay.addWidget(self.table)
+        lay.addWidget(self.table, 1)
         lay.addWidget(self.explain)
-        lay.addStretch(1)                        # the list ends under its last row (fit_rows); the page's spare height stays empty
+        lay.addStretch(0)                        # the list grows to its rows (fit_rows caps it); the page's spare height stays empty below
         self.table.itemExpanded.connect(lambda _it: self._fit())
         self.table.itemCollapsed.connect(lambda _it: self._fit())
         self.stored = False                      # what is shown is the latest stored results, not a run from this session

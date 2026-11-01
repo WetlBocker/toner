@@ -150,6 +150,7 @@ class NavStack(QWidget):
         self._collapsed = False
         self._badges = set()
         self._counts = {}                          # section index -> a number shown after its name (0 shows nothing)
+        self._slide = None                         # the sidebar's width on its way between folded and open
         from ui.backdrop import Backdrop
         self.side = QWidget()                      # the sidebar
         self.side.setObjectName("sidebar")
@@ -237,13 +238,34 @@ class NavStack(QWidget):
         return self._icons_only() and row in self._headings and row != self._spacer and row != 0
 
     def _place_fold(self):
-        """The fold button: at the right of the top row while the names show; astride the sidebar's edge, just outside it, when folded."""
+        """The fold button: at the right of the top row while the names show; astride the sidebar's edge, just outside it, when
+        folded. It rides along while the sidebar slides."""
         m = self.side.layout().contentsMargins()
+        w = self.side.width()
         if self._icons_only():
-            self.fold.move(SIDE_FOLDED - FOLD // 2, m.top() + (LOGO - FOLD) // 2)
+            self.fold.move(w - FOLD // 2, m.top() + (LOGO - FOLD) // 2)
         else:
-            self.fold.move(SIDE_WIDTH - m.right() - FOLD, m.top() + (LOGO - FOLD) // 2)
+            self.fold.move(w - m.right() - FOLD, m.top() + (LOGO - FOLD) // 2)
         self.fold.raise_()
+
+    def _slide_to(self, width):
+        """The sidebar's width: it slides to the folded or open width with a small bounce at the end (at once with motion off, or
+        before the window is up)."""
+        from ui import motion
+        motion.stop(self._slide)
+        start = self.side.width()
+        if start == width or not motion.enabled() or not self.isVisible():
+            self.side.setFixedWidth(width)
+            self._place_fold()
+            return
+        from PySide6.QtCore import QEasingCurve
+        curve = QEasingCurve(QEasingCurve.Type.OutBack)
+        curve.setOvershoot(0.9)                                        # a short way past, then back: the bounce
+
+        def step(p):
+            self.side.setFixedWidth(max(8, round(start + (width - start) * p)))
+            self._place_fold()
+        self._slide = motion.animate(self, 380, step, curve=curve)
 
     def set_orgs(self, orgs, current=0):
         """[(id, name, colour)]: the organizations besides Global (archived ones are not offered). Hidden while there are none."""
@@ -274,7 +296,7 @@ class NavStack(QWidget):
     def _apply_mode(self):
         """Show the names or just the icons: in the sections, the group names, Search, the switcher and the fold button."""
         icons_only = self._icons_only()
-        self.side.setFixedWidth(SIDE_FOLDED if icons_only else SIDE_WIDTH)
+        self._slide_to(SIDE_FOLDED if icons_only else SIDE_WIDTH)
         self.fold.setToolTip("Show the sidebar in full (Ctrl+B)" if self._collapsed else "Fold the sidebar to icons (Ctrl+B)")
         self._brand.setVisible(not icons_only)
         self.head.setStretch(0, 1 if icons_only else 0)                 # the mark sits in the middle of the folded column

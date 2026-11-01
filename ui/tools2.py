@@ -17,7 +17,8 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComb
 from core import audit, cmdrun, custom, db, discovery, listeners, nettools, oui, pinger, profiles, reach, reports, snmp
 from core import proxy, topology, vendors
 from ui import plots, theme
-from ui.tools import DevicePicker, OutputBox, _row
+from ui.tools import DevicePicker, OutputBox, _row, reset_button
+from ui.panels import fit_rows
 from ui.widgets import EmptyHint, GroupPicker
 from ui.finder import FilterButton, SearchBox, device_sections, shown_devices
 from ui.toast import toast
@@ -77,7 +78,7 @@ class DiscoveryTab(QWidget):
         self.communities = QLineEdit("public")
         self.communities.setPlaceholderText("SNMP communities to try, comma separated")
         self.ports = QLineEdit("22,443")
-        self.go, self.stop = _primary("Scan"), QPushButton("Stop")
+        self.go, self.stop, self.reset = _primary("Scan"), QPushButton("Stop"), reset_button()
         self.stop.setEnabled(False)
         self.bar = QProgressBar()
         self.bar.setTextVisible(False)
@@ -86,6 +87,7 @@ class DiscoveryTab(QWidget):
         self.table = _table(["Add", "Address", "Name", "Vendor", "Platform", "What it looks like", "Open ports"])
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.DoubleClicked)
         self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.resizeColumnsToContents()                               # each heading fits before the first scan ("What it looks like" was cut short)
         self.folder, self.profile = QComboBox(), QComboBox()
         self.folder.addItem("(top level)", None)
         self.profile.addItem("(none)", None)
@@ -98,7 +100,7 @@ class DiscoveryTab(QWidget):
         self.group.setToolTip("File the devices in subfolders of the folder chosen, made as needed, so a scan of a whole site comes out tidy.")
         self.add_btn = _primary("Add checked to inventory")
         self.all_btn, self.none_btn = QPushButton("Check all"), QPushButton("Check none")
-        top = _row("Scan", self.target, "Communities", self.communities, "Ports", self.ports, self.go, self.stop)
+        top = _row("Scan", self.target, "Communities", self.communities, "Ports", self.ports, self.go, self.stop, self.reset)
         bottom = QHBoxLayout()
         for w in (QLabel("Folder"), self.folder, self.group, QLabel("Profile"), self.profile, self.location, self.tags):
             bottom.addWidget(w, 1 if isinstance(w, (QLineEdit, QComboBox)) else 0)
@@ -114,8 +116,10 @@ class DiscoveryTab(QWidget):
         lay.addWidget(self.status)
         lay.addWidget(self.table, 1)
         lay.addLayout(bottom)
+        lay.addStretch(0)                                  # the list ends under its rows (fit_rows), the Add row right under it
         self.go.clicked.connect(self.start)
         self.stop.clicked.connect(self.halt)
+        self.reset.clicked.connect(self.clear)
         self.add_btn.clicked.connect(self.add)
         self.all_btn.clicked.connect(lambda: self._check_all(True))
         self.none_btn.clicked.connect(lambda: self._check_all(False))
@@ -173,6 +177,15 @@ class DiscoveryTab(QWidget):
             self.worker.cancel.set()
             self.status.setText("Stopping...")
 
+    def clear(self):
+        """Reset: the scan stops and its results go; the addresses, communities and ports typed stay."""
+        self.halt()
+        self.table.setRowCount(0)
+        self.rows = []
+        self.bar.setValue(0)
+        self.status.setText("")
+        fit_rows(self.table)
+
     def _found(self, r):
         i = len(self.rows)
         self.rows.append(r)
@@ -189,6 +202,7 @@ class DiscoveryTab(QWidget):
             combo.addItem(label, key)
         combo.setCurrentIndex(max(0, combo.findData(r["vendor"])))
         self.table.setCellWidget(i, 3, combo)
+        self.table.setRowHeight(i, combo.sizeHint().height() + 4)         # the drop-down fits its row instead of running past it
         desc = r["descr"] or r["banner"] or r["cert"] or r["hint"]
         for col, text in ((1, r["ip"] + ("   (already in inventory)" if known else "")), (4, r["platform"]),
                           (5, desc), (6, ", ".join(map(str, r["ports"])) + (", SNMP" if r["snmp"] else ""))):
@@ -196,11 +210,13 @@ class DiscoveryTab(QWidget):
             it.setFlags(it.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.table.setItem(i, col, it)
         self.table.resizeColumnsToContents()
+        fit_rows(self.table)                                               # the list ends under its rows, not at the bottom of the page
 
     def _done(self, found):
         self.go.setEnabled(True)
         self.stop.setEnabled(False)
         self.status.setText(f"Found {len(found)} device(s).  Unticked rows are already in the inventory or could not be identified.")
+        fit_rows(self.table)
 
     def _check_all(self, on):
         for i in range(self.table.rowCount()):
@@ -431,13 +447,13 @@ class MtrTab(QWidget):
         self.picker = DevicePicker()
         self.host = QLineEdit()
         self.host.setPlaceholderText("hostname or IP address")
-        self.go, self.stop = _primary("Start"), QPushButton("Stop")
+        self.go, self.stop, self.reset = _primary("Start"), QPushButton("Stop"), reset_button()
         self.stop.setEnabled(False)
         self.via_proxy = QCheckBox("Through the proxy (TCP)")
         self.via_proxy.toggled.connect(self._mode)
         self.status = _muted("")
-        self.table = _table(self.COLS, stretch_last=False)
-        top = _row("Device", self.picker, "Target", self.host, self.via_proxy, self.go, self.stop)
+        self.table = _table(self.COLS)                     # the last column takes the rest of the row, so the header's rule runs the whole width
+        top = _row("Device", self.picker, "Target", self.host, self.via_proxy, self.go, self.stop, self.reset)
         lay = QVBoxLayout(self)
         lay.addLayout(top)
         lay.addWidget(_muted("Finds the route with a traceroute, then pings every router on it once a second and shows loss "
@@ -447,6 +463,7 @@ class MtrTab(QWidget):
         lay.addWidget(self.table, 1)
         self.go.clicked.connect(self.start)
         self.stop.clicked.connect(self.halt)
+        self.reset.clicked.connect(self.clear)
         self.host.returnPressed.connect(self.start)
         self.updated.connect(self.show_hops)
         self.picker.currentIndexChanged.connect(lambda: self.picker.currentData() and self.host.setText(self.picker.currentData()["host"]))
@@ -495,6 +512,12 @@ class MtrTab(QWidget):
             self.mtr = None
         self.go.setEnabled(not self.via_proxy.isChecked())
         self.stop.setEnabled(False)
+
+    def clear(self):
+        """Reset: the trace stops and the hops go; the target stays."""
+        self.halt()
+        self.table.setRowCount(0)
+        self.status.setText("")
 
     def shutdown(self):
         self.halt()
@@ -862,6 +885,7 @@ class TlsTab(QWidget):
         self.sni = QLineEdit()
         self.sni.setPlaceholderText("server name (optional)")
         self.go = _primary("Check")
+        self.reset = reset_button()
         self.audit_btn = QPushButton("Check every inventory device")
         self.status = _muted("")
         self.details = QLabel("")
@@ -869,7 +893,8 @@ class TlsTab(QWidget):
         self.details.setWordWrap(True)
         self.details.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         self.table = _table(["Device", "Address", "Subject", "Expires", "Days left", "Result"])
-        top = _row("Device", self.picker, "Host", self.host, "Port", self.port, self.sni, self.go)
+        self.audited = []                                  # (device, certificate or None, error) per row of the audit, in the table's order
+        top = _row("Device", self.picker, "Host", self.host, "Port", self.port, self.sni, self.go, self.reset)
         lay = QVBoxLayout(self)
         lay.addLayout(top)
         lay.addWidget(self.status)
@@ -880,10 +905,21 @@ class TlsTab(QWidget):
         row.addStretch()
         lay.addLayout(row)
         lay.addWidget(self.table, 1)
+        lay.addStretch(0)                                  # the list ends under its rows (fit_rows), not at the bottom of the page
         self.go.clicked.connect(self.check)
+        self.reset.clicked.connect(self.clear)
         self.host.returnPressed.connect(self.check)
         self.audit_btn.clicked.connect(self.audit)
+        self.table.itemSelectionChanged.connect(self._pick_row)
         self.picker.currentIndexChanged.connect(lambda: self.picker.currentData() and self.host.setText(self.picker.currentData()["host"]))
+
+    def clear(self):
+        """Reset: the certificate shown and the audit go; the host, port and server name stay."""
+        self.status.setText("")
+        self.details.setText("")
+        self.table.setRowCount(0)
+        self.audited = []
+        fit_rows(self.table)
 
     def check(self):
         if self.worker and self.worker.isRunning():
@@ -906,6 +942,23 @@ class TlsTab(QWidget):
             self.status.setText(f"No certificate: {res}")
             self.details.setText("")
             return
+        self._show_info(res)
+
+    def _pick_row(self):
+        """A row of the audit chosen: the certificate shown above the table is that device's."""
+        rows = self.table.selectionModel().selectedRows() if self.table.selectionModel() else []
+        if not rows or rows[0].row() >= len(self.audited):
+            return
+        d, info, err = self.audited[rows[0].row()]
+        self.host.setText(d["host"])
+        if info:
+            self.status.setText("")
+            self._show_info(info)
+        else:
+            self.status.setText(f"No certificate: {err or 'the device did not present one'}")
+            self.details.setText("")
+
+    def _show_info(self, res):
         d = res["days_left"]
         color = st.ink(st.level(d, 30, 7, lower_is_worse=True))
         esc = lambda s: str(s).replace("&", "&amp;").replace("<", "&lt;")
@@ -951,6 +1004,7 @@ class TlsTab(QWidget):
             self.status.setText(f"Failed: {res}")
             return
         res.sort(key=lambda r: (r[1] is None, r[1]["days_left"] if r[1] else 0))
+        self.audited = list(res)
         self.table.setRowCount(len(res))
         for i, (d, info, err) in enumerate(res):
             if info:
@@ -965,6 +1019,7 @@ class TlsTab(QWidget):
                     it.setForeground(st.qink(st.level(info["days_left"], 30, 7, lower_is_worse=True)))
                 self.table.setItem(i, j, it)
         self.table.resizeColumnsToContents()
+        fit_rows(self.table)
         self.status.setText(f"{sum(1 for r in res if r[1])} of {len(res)} device(s) presented a certificate.")
 
     def shutdown(self):

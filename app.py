@@ -294,6 +294,8 @@ class Main(QMainWindow):
         on = bool(on)
         if on == self.assistant.isVisible():
             return
+        from ui import motion
+        motion.stop(getattr(self, "_panel_slide", None))
         if on:
             self.assistant.setVisible(True)
             sizes = self.body.sizes()
@@ -301,11 +303,38 @@ class Main(QMainWindow):
             if len(sizes) == 2 and (not remembered or sizes[1] < self.assistant.minimumWidth()):
                 total = sum(sizes)
                 self.body.setSizes([max(300, total - PANEL_WIDTH), PANEL_WIDTH])
+            self._slide_panel(0, self.body.sizes()[1])
             self.assistant.input.setFocus()
         else:
-            self.assistant.setVisible(False)
+            self._slide_panel(self.body.sizes()[1], 0, then=lambda: self.assistant.setVisible(False))
         self.ai_button.setChecked(on)
         self._place_ai_button()
+
+    def _slide_panel(self, start, end, then=None):
+        """The Assistant panel slides open or shut with a small bounce at the end (at once with motion off)."""
+        from PySide6.QtCore import QEasingCurve
+        from ui import motion
+        total = sum(self.body.sizes())
+        least = self.assistant.minimumWidth()
+        self.assistant.setMinimumWidth(0)                           # the panel may be narrower than usual while on its way
+
+        def step(p):
+            w = max(0, round(start + (end - start) * p))
+            self.body.setSizes([max(0, total - w), w])
+            self._place_ai_button()
+
+        def done():
+            self.assistant.setMinimumWidth(least)
+            if then:
+                then()
+            self._place_ai_button()
+        if not motion.enabled() or not self.isVisible():
+            step(1.0)
+            done()
+            return
+        curve = QEasingCurve(QEasingCurve.Type.OutBack)
+        curve.setOvershoot(0.8)
+        self._panel_slide = motion.animate(self, 380, step, curve=curve, on_done=done)
 
     def open_assistant_conversation(self, conv_id, org):
         """Automation/AI > Assistant > Open: that conversation in the panel (its organization is picked first when it is another)."""

@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QHBoxLayout, Q
 import paramiko
 from core import audit, db, fileserver, iperf, nettools, oui, profiles, proxy, scp, vendors, wifi, xcopy
 from ui import plots, theme
-from ui.tools import DevicePicker, OutputBox, Runner, _row
+from ui.tools import DevicePicker, OutputBox, Runner, _row, reset_button
 from ui.tools2 import _muted, _primary, _table
 from ui import status as st
 
@@ -410,6 +410,7 @@ class IperfTab(QWidget):
         self.go = _primary("Start test")
         self.stop = QPushButton("Stop")
         self.stop.setEnabled(False)
+        self.reset = reset_button()
         self.graph = ThroughputGraph()
         self.result = QLabel("")
         f = self.result.font()
@@ -437,7 +438,7 @@ class IperfTab(QWidget):
         lay.addWidget(self.mode)
         lay.addWidget(self.client_box)
         lay.addWidget(self.server_box)
-        lay.addLayout(self._left(self.go, self.stop))
+        lay.addLayout(self._left(self.go, self.stop, self.reset))
         lay.addWidget(self.result)
         lay.addWidget(self.graph)
         lay.addWidget(self.out, 1)
@@ -445,6 +446,7 @@ class IperfTab(QWidget):
         self.mode.currentIndexChanged.connect(self._mode)
         self.go.clicked.connect(self.start)
         self.stop.clicked.connect(self.halt)
+        self.reset.clicked.connect(self.clear)
         self.choose.clicked.connect(self.pick_exe)
         self.udp.toggled.connect(self.bandwidth.setEnabled)
         self.bandwidth.setEnabled(False)
@@ -525,6 +527,13 @@ class IperfTab(QWidget):
 
     def halt(self):
         self.runner.stop()
+
+    def clear(self):
+        """Reset: the last test's output, result line and graph go; the settings stay."""
+        self.buffer = ""
+        self.result.setText("")
+        self.graph.set_points([])
+        self.out.clear()
 
     def on_output(self, text):
         self.out.add(text)
@@ -735,6 +744,7 @@ class ScpTab(QWidget):
         self.go = _primary("Start")
         self.stop = QPushButton("Stop")
         self.stop.setEnabled(False)
+        self.reset = reset_button()
         self.bar = QProgressBar()
         self.bar.setTextVisible(False)
         self.bar.setMaximumHeight(8)
@@ -743,15 +753,14 @@ class ScpTab(QWidget):
         self.remote_label = QLabel("To (on the device)")
 
         lay = QVBoxLayout(self)
-        lay.addWidget(_muted("Copy files to or from a device over SSH (SCP). Uses the device's saved login, jump host and "
-                             "proxy. The device must allow it: on Cisco IOS turn it on with 'ip scp server enable' and use a "
-                             "user with privilege 15; Juniper, Arista, MikroTik and most Linux systems have it ready."))
+        lay.addWidget(_muted("Copy files to or from a device over SSH (SCP), using the device's saved login, jump host and proxy. "
+                             "Cisco IOS needs 'ip scp server enable' and a privilege 15 user; Juniper, Arista, MikroTik and Linux have it ready."))
         lay.addLayout(_row("Device", self.picker, "Host", self.host, "Port", self.port, "User", self.user, "Password", self.password))
         lay.addLayout(_row("Direction", self.direction))
         lay.addLayout(_row(self.local_label, self.local, self.file_btn, self.folder_btn))
         lay.addLayout(_row(self.remote_label, self.remote))
         lay.addLayout(_row(self.recursive, self.preserve, self.overwrite))
-        lay.addLayout(_row(self.go, self.stop))
+        lay.addLayout(_row(self.go, self.stop, self.reset))
         lay.addWidget(self.bar)
         lay.addWidget(self.out, 1)
 
@@ -761,6 +770,7 @@ class ScpTab(QWidget):
         self.folder_btn.clicked.connect(self.pick_folder)
         self.go.clicked.connect(self.start)
         self.stop.clicked.connect(self.halt)
+        self.reset.clicked.connect(self.clear)
         self.password.returnPressed.connect(self.start)
         self.picked()
         self._direction()
@@ -850,6 +860,11 @@ class ScpTab(QWidget):
     def halt(self):
         if self.running():
             self.worker.cancel.set()
+
+    def clear(self):
+        """Reset: the output and the progress bar go; the device, paths and options stay."""
+        self.out.clear()
+        self.bar.setValue(0)
 
     def refresh(self):
         pass

@@ -82,23 +82,49 @@ class ConnectionsPage(Page):
         super().__init__()
         self.ssh, self.http = spin(5, 300, " s"), spin(5, 300, " s")
         self.retries, self.delay = spin(0, 5), spin(0, 60, " s")
+        from PySide6.QtWidgets import QLineEdit, QPushButton
+        self.ipstack = QLineEdit()                                     # kept in the vault, never shown back
+        self.ipstack.setEchoMode(QLineEdit.EchoMode.Password)
+        self.ipstack.setMinimumWidth(300)
+        self.forget_ipstack = QPushButton("Forget key")
+        self.forget_ipstack.clicked.connect(self._forget_ipstack)
         for label, w in (("SSH timeout (switches, routers)", self.ssh), ("Web API timeout (firewalls, controllers)", self.http),
-                         ("Retries after a timeout", self.retries), ("Wait between retries", self.delay)):
+                         ("Retries after a timeout", self.retries), ("Wait between retries", self.delay),
+                         ("ipstack access key", row_of(self.ipstack, self.forget_ipstack))):
             self.form.addRow(label, w)
         self.lay.insertWidget(1, note(
             "Raise the timeouts for slow or remote links. Only timeouts and dropped connections are retried. "
             "A rejected login is never retried, because repeating a wrong password can lock the account."))
+        self.lay.insertWidget(2, note("ipstack access key: public addresses in the Subnet Calculator are looked up at ipstack.com with it. A free key allows "
+                                      "plain http only, so the address and the key travel unencrypted. Get one at ipstack.com."))
+
+    KEY_SAVED = "a key is saved: type here to replace it"
+
+    def _forget_ipstack(self):
+        from core import iplookup
+        iplookup.set_key("")
+        self.ipstack.clear()
+        self.ipstack.setPlaceholderText("")
 
     def load(self):
+        from core import iplookup
         self.ssh.setValue(int(db.get_setting("ssh_timeout")))
         self.http.setValue(int(db.get_setting("http_timeout")))
         self.retries.setValue(int(db.get_setting("retries")))
         self.delay.setValue(int(db.get_setting("retry_delay")))
+        self.ipstack.clear()
+        self.ipstack.setPlaceholderText(self.KEY_SAVED if iplookup.has_key() else "")
 
     def save(self):
+        from core import iplookup
         for key, w in (("ssh_timeout", self.ssh), ("http_timeout", self.http),
                        ("retries", self.retries), ("retry_delay", self.delay)):
             db.set_setting(key, w.value())
+        typed = self.ipstack.text().strip()
+        if typed:
+            iplookup.set_key(typed)
+        self.ipstack.clear()
+        self.ipstack.setPlaceholderText(self.KEY_SAVED if iplookup.has_key() else "")
 
 
 # ------------------------------------------------------------------ Thresholds

@@ -7,7 +7,7 @@ from PySide6.QtCore import QObject, QProcess, QThread, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QFontDatabase
 from PySide6.QtWidgets import (QAbstractItemView, QApplication as _QApp, QCheckBox, QComboBox, QCompleter, QFileDialog, QGroupBox, QHBoxLayout, QLabel,
                                QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QSpinBox, QSplitter,
-                               QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
+                               QTableWidget, QTableWidgetItem, QTabWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 from core import db, jump, nettools, profiles, reach, sessionlog, snmp, vendors
 
 
@@ -91,6 +91,16 @@ class Runner(QObject):
         if err == QProcess.ProcessError.FailedToStart:
             self.output.emit(f"Could not start the program: {self.proc.errorString()}\n")
             self.finished.emit()
+
+
+RESET_TIP = "Clear the results and start afresh"
+
+
+def reset_button():
+    """The Reset button a tool with results carries (Live Ping had one first): the results go, what was typed stays."""
+    b = QPushButton("Reset")
+    b.setToolTip(RESET_TIP)
+    return b
 
 
 def _row(*widgets):
@@ -314,10 +324,12 @@ class ScanTab(QWidget):
         self.go.setProperty("primary", True)
         self.stop = QPushButton("Stop")
         self.stop.setEnabled(False)
+        self.reset = reset_button()
         self.out = OutputBox()
         self.runner = Runner(self)
         self.runner.output.connect(self.out.add)
         self.runner.finished.connect(lambda: self._busy(False))
+        self.reset.clicked.connect(self.out.clear)
 
         from core.platforms import WINDOWS
         from ui import installdlg
@@ -333,7 +345,7 @@ class ScanTab(QWidget):
         lay.addWidget(self.engine)
         lay.addWidget(self.install_nmap, 0, Qt.AlignmentFlag.AlignLeft)
         lay.addLayout(_row("Device", self.picker, "Target", self.target))
-        lay.addLayout(_row("Profile", self.profile, "Ports", self.ports, self.go, self.stop))
+        lay.addLayout(_row("Profile", self.profile, "Ports", self.ports, self.go, self.stop, self.reset))
         lay.addWidget(self.out, 1)
         self.profile.setEnabled(bool(self.nmap))
         self.go.clicked.connect(self.start)
@@ -390,22 +402,256 @@ class ScanTab(QWidget):
 
 
 # ---------------------------------------------------------------- subnet calculator
+class Call(QThread):
+    """Runs one function off the window thread and hands back what it returned, or the exception."""
+    done = Signal(object)
+
+    def __init__(self, fn):
+        super().__init__()
+        self.fn = fn
+
+    def run(self):
+        try:
+            self.done.emit(self.fn())
+        except Exception as e:
+            self.done.emit(e)
+
+
 class SubnetTab(QWidget):
+    """IPv4 or IPv6: the facts about an address and its network, a public address looked up at ipstack, and a Split tree that breaks
+    the network into smaller subnets (core/subnets.py does the sums)."""
+    NET = Qt.ItemDataRole.UserRole
+    PLACEHOLDER = {"v4": "192.168.1.10/24   or   10.0.0.0/255.255.255.0", "v6": "2001:db8::1/64   or   2001:db8::/48"}
+    COLS = ["Network", "First address", "Last address", "Hosts"]
+
     def __init__(self):
         super().__init__()
+        from core import iplookup, subnets
+        from ui.panels import fit_rows
+        from ui.topology import Segment
+        self.subnets, self.iplookup, self.fit_rows = subnets, iplookup, fit_rows
+        self.worker = None
+        self.iface = None
+        self.mode = Segment((("v4", "IPv4"), ("v6", "IPv6")))
         self.inp = QLineEdit()
-        self.inp.setPlaceholderText("192.168.1.10/24   or   10.0.0.0/255.255.255.0   or   2001:db8::/64")
-        self.out = OutputBox()
+        self.inp.setPlaceholderText(self.PLACEHOLDER["v4"])
+        self.reset = reset_button()
+        self.facts = QLabel("")
+        self.facts.setTextFormat(Qt.TextFormat.RichText)
+        self.facts.setWordWrap(True)
+        self.facts.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.facts.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        # a public address: where it is, by ipstack
+        self.lookup_btn = QPushButton("Look up")
+        self.lookup_btn.setToolTip("Ask ipstack.com where this public address is (your access key is under Settings > Connections)")
+        self.lookup_note = QLabel("Public address: looked up at ipstack.com with the key under Settings > Connections.")
+        self.lookup_note.setProperty("muted", True)
+        self.lookup_note.setWordWrap(True)
+        self.lookup_out = QLabel("")
+        self.lookup_out.setTextFormat(Qt.TextFormat.RichText)
+        self.lookup_out.setWordWrap(True)
+        self.lookup_out.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.lookup_box = QWidget()
+        lb = QVBoxLayout(self.lookup_box)
+        lb.setContentsMargins(0, 0, 0, 0)
+        lrow = QHBoxLayout()
+        lrow.addWidget(self.lookup_btn)
+        lrow.addWidget(self.lookup_note, 1)
+        lb.addLayout(lrow)
+        lb.addWidget(self.lookup_out)
+        self.lookup_box.hide()
+        # the Split tree
+        self.split_title = QLabel("<b>Split</b>")
+        self.split_note = QLabel("Choose a network in the tree, then split it into smaller subnets; Join puts them back together.")
+        self.split_note.setProperty("muted", True)
+        self.split_note.setWordWrap(True)
+        self.split2, self.splitn, self.join = QPushButton("Split in two"), QPushButton("Split into..."), QPushButton("Join")
+        self.split2.setToolTip("Halve the chosen network (one bit longer)")
+        self.splitn.setToolTip("Split the chosen network into subnets of a prefix length you pick")
+        self.join.setToolTip("Put the chosen network's subnets back together")
+        self.tree = QTreeWidget()
+        self.tree.setColumnCount(len(self.COLS))
+        self.tree.setHeaderLabels(self.COLS)
+        self.tree.setRootIsDecorated(True)
+        self.tree.setAlternatingRowColors(False)
+        self.tree.header().setStretchLastSection(True)
         lay = QVBoxLayout(self)
-        lay.addLayout(_row("Address / prefix", self.inp))
-        lay.addWidget(self.out, 1)
+        lay.addLayout(_row(self.mode, "Address / prefix", self.inp, self.reset))
+        lay.addWidget(self.facts)
+        lay.addWidget(self.lookup_box)
+        lay.addWidget(self.split_title)
+        lay.addWidget(self.split_note)
+        srow = QHBoxLayout()
+        for b in (self.split2, self.splitn, self.join):
+            srow.addWidget(b)
+        srow.addStretch(1)
+        lay.addLayout(srow)
+        lay.addWidget(self.tree, 1)
+        lay.addStretch(0)                                  # the tree ends under its rows (fit_rows)
+        self._switching = False
+        self.mode.changed.connect(self._mode)
         self.inp.textChanged.connect(self.calc)
+        self.reset.clicked.connect(self.clear)
+        self.lookup_btn.clicked.connect(self.lookup)
+        self.split2.clicked.connect(lambda: self.split(1))
+        self.splitn.clicked.connect(self.split_into)
+        self.join.clicked.connect(self.join_up)
+        self.tree.itemSelectionChanged.connect(self._buttons)
+        self.calc("")
+
+    # ---- the address
+    def _mode(self, key):
+        self.inp.setPlaceholderText(self.PLACEHOLDER.get(key, ""))
+        if not self._switching:
+            v = self.subnets.version(self.inp.text())
+            if v and (v == 4) != (key == "v4"):
+                self.inp.clear()                           # the other family: start afresh in it
 
     def calc(self, text):
+        self.lookup_out.setText("")
+        if not text.strip():
+            self.iface = None
+            self.facts.setText("")
+            self.lookup_box.hide()
+            self.tree.clear()
+            self._buttons()
+            self.fit_rows(self.tree)
+            return
         try:
-            self.out.setPlainText(nettools.subnet_info(text) if text.strip() else "")
+            iface = self.subnets.parse(text)
         except ValueError as e:
-            self.out.setPlainText(f"Not a valid address: {e}")
+            self.iface = None
+            self.facts.setText(f"<span style='color:gray'>Not a valid address: {self._esc(e)}</span>")
+            self.lookup_box.hide()
+            self.tree.clear()
+            self._buttons()
+            self.fit_rows(self.tree)
+            return
+        self.iface = iface
+        want = "v4" if iface.version == 4 else "v6"
+        if self.mode.value() != want:                      # typed the other family: the switch follows
+            self._switching = True
+            self.mode.set(want)
+            self._switching = False
+        self.facts.setText(self._table(self.subnets.facts(iface)))
+        self.lookup_box.setVisible(self.subnets.is_public(iface.ip))
+        self.tree.clear()
+        self._item(None, iface.network)
+        self.tree.setCurrentItem(self.tree.topLevelItem(0))
+        self._sized()
+
+    @staticmethod
+    def _esc(s):
+        return str(s).replace("&", "&amp;").replace("<", "&lt;")
+
+    def _table(self, rows):
+        return "<table cellpadding='3'>" + "".join(f"<tr><td><b>{self._esc(k)}</b></td><td>{self._esc(v)}</td></tr>" for k, v in rows) + "</table>"
+
+    def clear(self):
+        """Reset: the address, facts, look-up and tree go."""
+        self.inp.clear()
+
+    # ---- where a public address is
+    def lookup(self):
+        if not self.iface or (self.worker and self.worker.isRunning()):
+            return
+        if not self.iplookup.has_key():
+            self.lookup_out.setText("<span style='color:gray'>Add your ipstack access key under Settings > Connections first.</span>")
+            return
+        ip = self.iface.ip
+        self.lookup_btn.setEnabled(False)
+        self.lookup_out.setText(f"<span style='color:gray'>Asking ipstack about {ip}...</span>")
+        self.worker = Call(lambda: self.iplookup.lookup(ip))
+        self.worker.done.connect(self._looked_up)
+        self.worker.start()
+
+    def _looked_up(self, res):
+        self.lookup_btn.setEnabled(True)
+        if isinstance(res, Exception):
+            self.lookup_out.setText(f"<span style='color:gray'>ipstack: {self._esc(res)}</span>")
+            return
+        self.lookup_out.setText(self._table(self.iplookup.summary(res)))
+
+    # ---- the Split tree
+    def _item(self, parent, net):
+        it = QTreeWidgetItem(list(self.subnets.row(net)))
+        it.setData(0, self.NET, str(net))
+        if parent is None:
+            self.tree.addTopLevelItem(it)
+        else:
+            parent.addChild(it)
+        return it
+
+    def _net(self, item):
+        import ipaddress
+        return ipaddress.ip_network(item.data(0, self.NET)) if item is not None else None
+
+    def _chosen(self):
+        it = self.tree.currentItem()
+        return it if it is not None else self.tree.topLevelItem(0)
+
+    def _buttons(self):
+        it = self._chosen()
+        net = self._net(it)
+        top = 32 if net is not None and net.version == 4 else 128
+        can_split = net is not None and net.prefixlen < top
+        self.split2.setEnabled(can_split)
+        self.splitn.setEnabled(can_split)
+        self.join.setEnabled(it is not None and (it.childCount() > 0 or it.parent() is not None))
+
+    def split(self, more):
+        it = self._chosen()
+        net = self._net(it)
+        if net is None:
+            return
+        self.split_to(it, net.prefixlen + more)
+
+    def split_into(self):
+        it = self._chosen()
+        net = self._net(it)
+        if net is None:
+            return
+        top = 32 if net.version == 4 else 128
+        from PySide6.QtWidgets import QInputDialog
+        new, ok = QInputDialog.getInt(self, "Split into", f"New prefix length for {net} (/{net.prefixlen + 1} to /{top})", net.prefixlen + 1, net.prefixlen + 1, top)
+        if ok:
+            self.split_to(it, new)
+
+    def split_to(self, item, new_prefix):
+        net = self._net(item)
+        try:
+            parts = self.subnets.children(net, new_prefix)
+        except ValueError as e:
+            from ui.toast import toast
+            toast(self, str(e))
+            return
+        item.takeChildren()
+        for p in parts:
+            self._item(item, p)
+        item.setExpanded(True)
+        self.tree.setCurrentItem(item)
+        self._sized()
+
+    def join_up(self):
+        it = self._chosen()
+        if it is None:
+            return
+        target = it if it.childCount() else it.parent()
+        if target is None:
+            return
+        target.takeChildren()
+        self.tree.setCurrentItem(target)
+        self._sized()
+
+    def _sized(self):
+        for c in range(len(self.COLS) - 1):
+            self.tree.resizeColumnToContents(c)
+        self.fit_rows(self.tree)
+        self._buttons()
+
+    def shutdown(self):
+        if self.worker:
+            self.worker.wait(3000)
 
 
 # ---------------------------------------------------------------- SNMP
@@ -739,6 +985,6 @@ class ToolsTab(QWidget):
         self.playbooks.open_playbook(name)
 
     def shutdown(self):
-        for t in (self.diag, self.scan, self.snmp, self.liveping, self.mtr, self.tls, self.runner,
+        for t in (self.diag, self.scan, self.snmp, self.liveping, self.mtr, self.tls, self.runner, self.subnet,
                   self.discovery, self.topology, self.listeners, self.utilities, self.tftp, self.sftp, self.ftp, self.iperf, self.wifi, self.scp, self.xcopy, self.openssl, self.sshkeys, self.playbooks, self.apitest, self.firmware):
             t.shutdown()

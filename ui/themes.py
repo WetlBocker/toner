@@ -78,7 +78,8 @@ PANELS = ["Bordered", "Flat", "Raised"]
 CONTRASTS = ["Normal", "More", "Most"]
 BASES = ["Dark", "Light"]
 DEFAULT_LOOK = dict(theme=SYSTEM, look="Standard", motion="Subtle", panels="Bordered", contrast="Normal",
-                    custom_accent="#38bdf8", custom_base="Dark", custom_tint=False)
+                    custom_accent="#38bdf8", custom_base="Dark", custom_tint=False, panel_opacity=100)
+OPACITY_RANGE = (50, 100)           # Panel opacity, in percent: 100 is solid, lower lets the page show through the panels, lists and boxes
 
 # the status colours a theme card's chips are drawn with (the window itself follows Settings > Appearance > Status colours)
 STATUS = {True: dict(OK="#34d399", WARN="#ffb020", FAIL="#fb7185", ERROR="#a99cff"),

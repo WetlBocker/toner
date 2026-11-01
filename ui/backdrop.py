@@ -9,13 +9,15 @@ from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPen, QRadialGradie
 from PySide6.QtWidgets import QApplication, QWidget
 from ui import motion, theme
 
-# a constellation: points in a 640x420 box, and which are joined (the same one the mockup drew)
-_DOTS = [(80, 120), (210, 70), (330, 140), (450, 90), (560, 160), (250, 210), (140, 300), (470, 230), (590, 300), (300, 360), (600, 60)]
-_LINKS = [(0, 1), (1, 2), (2, 3), (3, 4), (1, 5), (2, 5), (5, 6), (3, 7), (7, 2), (7, 8), (8, 4), (6, 9), (9, 7), (4, 10)]
+# a constellation: points in a 640x420 box, and which are joined (the mockup's eleven, and six more round them)
+_DOTS = [(80, 120), (210, 70), (330, 140), (450, 90), (560, 160), (250, 210), (140, 300), (470, 230), (590, 300), (300, 360), (600, 60),
+         (40, 230), (170, 390), (400, 300), (520, 380), (620, 200), (360, 30)]
+_LINKS = [(0, 1), (1, 2), (2, 3), (3, 4), (1, 5), (2, 5), (5, 6), (3, 7), (7, 2), (7, 8), (8, 4), (6, 9), (9, 7), (4, 10),
+          (6, 11), (11, 0), (9, 12), (12, 6), (9, 13), (13, 7), (13, 14), (14, 8), (8, 15), (15, 10), (3, 16), (16, 1)]
 AURORA = ("#38bdf8", "#8b5cf6", "#2dd4bf")
 PERIOD_MS = 30000
 ORBIT_MS = 180000           # one slow lap of the constellation round the page's edges (three minutes)
-WOBBLE = 16                 # how far a dot strays from its place in the shape, in pixels at full size
+WANDER = 44                 # how far each dot wanders from its place in the shape, in pixels at full size (its lines follow it)
 
 
 def _rgba(hexcol, alpha):
@@ -55,6 +57,20 @@ class Backdrop(QWidget):
         self.phase = p
         self.orbit = (self.orbit + self.drift.interval() / ORBIT_MS) % 1.0
         self.update()
+
+    def dot_drift(self):
+        """Where each dot is on its own slow path, as (x factor, y factor) of its place in the shape: a loop of its own speed and
+        size for every dot, so the dots move apart and together while the shape as a whole stretches and squeezes."""
+        u = self.orbit * 2 * math.pi
+        sx = 1 + 0.22 * math.sin(u + 1.3)                                # the whole shape
+        sy = 1 - 0.15 * math.sin(u * 1.7)
+        out = []
+        for i, (x, y) in enumerate(_DOTS):
+            kx, ky = 3 + (i * 7) % 5, 4 + (i * 5) % 4                    # a loop every 22 to 60 seconds, different for each dot
+            wx = WANDER * math.sin(u * kx + i * 1.7)
+            wy = WANDER * math.cos(u * ky + i * 1.1)
+            out.append((sx + wx / (x - 320 or 1), sy + wy / (y - 210 or 1)))
+        return out
 
     def constellation_centre(self):
         """Where the constellation's box is centred: wandering round the edges of the page under Lively, else at the top right."""
@@ -98,17 +114,12 @@ class Backdrop(QWidget):
 
     def _constellation(self, p, t):
         """A faint set of linked dots: at the top right, or, under Lively, wandering round the page's edges while the shape
-        stretches and its dots stray a little from their places."""
+        stretches and every dot drifts on a slow path of its own (the lines between them stay joined)."""
         centre, s = self.constellation_centre()
         lively = motion.lively()
-        u = self.orbit * 2 * math.pi
-        sx = 1 + (0.22 * math.sin(u + 1.3) if lively else 0)           # the shape stretches and squeezes as it goes
-        sy = 1 - (0.15 * math.sin(u * 1.7) if lively else 0)
-        pts = []
-        for i, (x, y) in enumerate(_DOTS):
-            wx = WOBBLE * s * math.sin(u * 3 + i * 1.7) if lively else 0
-            wy = WOBBLE * s * math.cos(u * 2 + i * 1.1) if lively else 0
-            pts.append(QPointF(centre.x() + (x - 320) * s * sx + wx, centre.y() + (y - 210) * s * sy + wy))
+        pts = [QPointF(centre.x() + (x - 320) * s * dx, centre.y() + (y - 210) * s * dy) for (x, y), (dx, dy) in zip(_DOTS, self.dot_drift())]
+        if not lively:
+            pts = [QPointF(centre.x() + (x - 320) * s, centre.y() + (y - 210) * s) for x, y in _DOTS]
         pen = QPen(_rgba(t["accent"], 0.09))
         pen.setWidthF(1.0)
         p.setPen(pen)

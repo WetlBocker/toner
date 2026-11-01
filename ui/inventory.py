@@ -818,6 +818,11 @@ class DetailsPane(QWidget):
         self.sub.setProperty("muted", True)
         self.sub.setWordWrap(True)
         self.chip = QLabel("")
+        self.checked = QLabel("")                                      # "checked 31 Oct 2026 at 19:32", beside the chip (the Status row wrapped and was cut)
+        self.checked.setProperty("muted", True)
+        self.mark = QLabel()                                           # the maker's mark beside the name
+        self.mark.setFixedSize(30, 30)
+        self.mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.close_btn = QPushButton()
         self.close_btn.setProperty("ghost", True)
         self.close_btn.setFixedSize(28, 28)
@@ -826,6 +831,8 @@ class DetailsPane(QWidget):
         self.close_btn.clicked.connect(self.closed)
         head = QHBoxLayout()
         head.setContentsMargins(0, 0, 0, 0)
+        head.setSpacing(8)
+        head.addWidget(self.mark, 0, Qt.AlignmentFlag.AlignTop)
         head.addWidget(self.title, 1)
         head.addWidget(self.close_btn, 0, Qt.AlignmentFlag.AlignTop)
         self.running = QLabel("")                                      # "Running: 3 of 12" while this device's checks run
@@ -859,7 +866,12 @@ class DetailsPane(QWidget):
         bl.addWidget(self.sub)
         bl.addWidget(self.running)
         bl.addWidget(self.progress)
-        bl.addWidget(self.chip, 0, Qt.AlignmentFlag.AlignLeft)
+        status_row = QHBoxLayout()
+        status_row.setContentsMargins(0, 0, 0, 0)
+        status_row.setSpacing(8)
+        status_row.addWidget(self.chip, 0, Qt.AlignmentFlag.AlignLeft)
+        status_row.addWidget(self.checked, 1)
+        bl.addLayout(status_row)
         bl.addLayout(acts)
         bl.addWidget(self.summary, 1)
         frame = QFrame()
@@ -892,9 +904,13 @@ class DetailsPane(QWidget):
         plat = V.mode_label(dev["vendor"]) or (display.platform_name(dev.get("platform")) if dev.get("platform") else "")
         self.title.setText(dev["name"])
         self.sub.setText(f"{display.vendor_name(dev['vendor'])} {plat}  \u00b7  {dev['host']}" + (f":{dev['port']}" if dev.get("port") else ""))
+        from ui import brandicons
+        self.mark.setPixmap(brandicons.vendor_icon(dev["vendor"]).pixmap(28, 28))
+        self.mark.setToolTip(display.vendor_name(dev["vendor"]))
         health = db.device_health().get(dev["name"])
         status = health["status"] if health else ""
         self.chip.setVisible(bool(status))
+        self.checked.setText(f"checked {display.read_on(health['at'])}" if health else "no results yet")
         if status:
             self.chip.setText(status)
             self.chip.setStyleSheet(st.chip_css(status))

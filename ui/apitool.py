@@ -4,13 +4,14 @@ import json
 import threading
 
 from PySide6.QtCore import QThread, Qt, Signal
-from PySide6.QtGui import QFontDatabase, QKeySequence, QShortcut
+from PySide6.QtGui import QColor, QFontDatabase, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout,
                                QHeaderView, QInputDialog, QLabel, QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSpinBox, QSplitter,
-                               QStackedWidget, QTableWidget, QTableWidgetItem, QTabWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
+                               QStackedWidget, QStyledItemDelegate, QTableWidget, QTableWidgetItem, QTabWidget, QTreeWidget, QTreeWidgetItem,
+                               QVBoxLayout, QWidget)
 
 from core import apitool as A, db, profiles
-from ui import status as st
+from ui import status as st, theme
 from ui.orgfield import SHARED_CHOICE, choice_file, org_choices, show_row
 from ui.tools2 import _muted, _primary, _table
 from ui.widgets import EmptyHint, flow, remember_sizes
@@ -38,9 +39,40 @@ def _show_toggle(*boxes):
 
 
 # ---------------------------------------------------------------- key / value tables (Params, Headers)
+class CellEditDelegate(QStyledItemDelegate):
+    """Editing in place that fits its cell: the box takes the cell's exact rectangle with no border or rounding of its own (the window's
+    styled text box floated over the row). An empty cell on the row waiting to be typed into shows a grey hint of what goes there."""
+
+    def __init__(self, table, hints=None):
+        super().__init__(table)
+        self.hints = hints or {}                           # column -> the hint shown on the empty last row
+
+    def createEditor(self, parent, option, index):
+        box = QLineEdit(parent)
+        box.setFrame(False)
+        t = theme.current() or {}
+        box.setStyleSheet(f"QLineEdit {{ border: 0; border-radius: 0; padding: 0 4px; min-height: 0; background: {t.get('input', '#ffffff')}; }}")
+        return box
+
+    def updateEditorGeometry(self, editor, option, index):
+        editor.setGeometry(option.rect)
+
+    def paint(self, painter, option, index):
+        super().paint(painter, option, index)
+        table = self.parent()
+        hint = self.hints.get(index.column())
+        if hint and not index.data(Qt.ItemDataRole.DisplayRole) and index.row() == table.rowCount() - 1:
+            t = theme.current() or {}
+            painter.save()
+            painter.setPen(QColor(t.get("muted", "#888888")))
+            painter.drawText(option.rect.adjusted(6, 0, -4, 0), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, hint)
+            painter.restore()
+
+
 class KeyValueTable(QTableWidget):
     """On / Name / Value rows with an empty row always ready to type into."""
     changed = Signal()
+    HINTS = {1: "name", 2: "value"}
 
     def __init__(self, hint):
         super().__init__(0, 3)
@@ -50,6 +82,7 @@ class KeyValueTable(QTableWidget):
         self.setColumnWidth(0, 36)
         self.setColumnWidth(1, 220)
         self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
+        self.setItemDelegate(CellEditDelegate(self, self.HINTS))
         self.setToolTip(hint)
         self._filling = False
         self.itemChanged.connect(self._changed)
@@ -105,6 +138,7 @@ class VariablesPanel(QWidget):
         self.table.setColumnWidth(2, 70)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setItemDelegate(CellEditDelegate(self.table))
         self.add_btn, self.remove_btn = QPushButton("Add"), QPushButton("Remove")
         self.add_btn.clicked.connect(self.add)
         self.remove_btn.clicked.connect(self.remove)

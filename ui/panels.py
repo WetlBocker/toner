@@ -43,34 +43,42 @@ class Panel(QWidget):
 
 
 EMPTY_STRIP = 18            # what a fitted list keeps under its last row (a drop or a click there still has somewhere to land)
+MAX_ROWS = 25               # a fitted list grows with its rows up to this many; after that it scrolls
 
 
-def fit_rows(view, strip=EMPTY_STRIP):
+def fit_rows(view, strip=EMPTY_STRIP, max_rows=MAX_ROWS):
     """A list ends under its last row, as the Overview's panels do, instead of filling the page: its maximum height becomes the
-    rows showing plus the header. With more rows than the page has room for it scrolls as before; an empty list keeps its
-    height for the hint laid over it. Works for a tree (open children count) and a table."""
+    rows showing plus the header, up to `max_rows` rows, after which it scrolls. An empty list keeps its height for the hint
+    laid over it. Works for a tree (open children count; the tree is laid out first, so a branch just opened counts) and a table."""
     from PySide6.QtWidgets import QTableView, QTreeView, QTreeWidget, QTreeWidgetItemIterator
-    bottom = 0
+    bottoms = []
     if isinstance(view, QTreeWidget):
+        view.doItemsLayout()                                           # a branch opened a moment ago has its rows placed now, not later
         it = QTreeWidgetItemIterator(view, QTreeWidgetItemIterator.IteratorFlag.NotHidden)
         while it.value():
             r = view.visualItemRect(it.value())                        # empty for a row inside a closed branch
             if r.isValid() and r.height():
-                bottom = max(bottom, r.bottom())
+                bottoms.append(r.bottom())
             it += 1
         header = view.header().height() if not view.header().isHidden() else 0
     elif isinstance(view, QTableView):
         for row in range(view.model().rowCount() if view.model() else 0):
             if not view.isRowHidden(row):
-                bottom = max(bottom, view.rowViewportPosition(row) + view.rowHeight(row))
+                bottoms.append(view.rowViewportPosition(row) + view.rowHeight(row))
         header = view.horizontalHeader().height() if not view.horizontalHeader().isHidden() else 0
     elif isinstance(view, QTreeView):
         return None
     else:
         return None
-    if not bottom:
+    bottoms.sort()
+    if not bottoms:
         view.setMaximumHeight(16777215)
         return None
+    try:
+        scrolled = view.verticalOffset()                               # rows are placed against the viewport: a scrolled list has moved them up
+    except Exception:
+        scrolled = 0
+    bottom = bottoms[min(len(bottoms), max_rows) - 1] + scrolled
     extra = view.horizontalScrollBar().height() if view.horizontalScrollBar().isVisible() else 0
     height = bottom + header + 2 * view.frameWidth() + extra + strip
     view.setMaximumHeight(height)

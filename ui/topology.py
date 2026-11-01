@@ -319,9 +319,10 @@ class MapView(QGraphicsView):
         self.boxes, self.lines = {}, []
         self.legend = QFrame(self)
         self.legend.setProperty("card", True)
-        self.legend_lay = QHBoxLayout(self.legend)
+        from ui.widgets import FlowLayout
+        self.legend_lay = FlowLayout(12, 4)                        # one row when the map is wide enough, two or three when it is not
         self.legend_lay.setContentsMargins(10, 6, 10, 6)
-        self.legend_lay.setSpacing(12)
+        self.legend.setLayout(self.legend_lay)
         self.zoom_box = QFrame(self)
         zl = QVBoxLayout(self.zoom_box)
         zl.setContentsMargins(0, 0, 0, 0)
@@ -361,7 +362,12 @@ class MapView(QGraphicsView):
         self._place()
 
     def _place(self):
-        self.legend.adjustSize()
+        lay = self.legend_lay
+        m = lay.contentsMargins()
+        items = [lay.itemAt(i) for i in range(lay.count())]
+        one_row = sum(it.sizeHint().width() for it in items) + 12 * max(0, len(items) - 1) + m.left() + m.right()
+        width = max(60, min(one_row, self.width() - 24))             # never wider than the map: the entries wrap instead
+        self.legend.resize(width, lay.heightForWidth(width))
         self.legend.move(12, self.height() - self.legend.height() - 12)
         self.zoom_box.adjustSize()
         self.zoom_box.move(12, 12)                                  # top left: the legend has the bottom, the card the top right
@@ -702,10 +708,13 @@ class TopologyTab(QWidget):
         self.find = SearchBox("Find device", "Type part of a name or address: the matching boxes and their neighbours stay bright, the rest fade.", page=self)
         self.relayout_btn = QPushButton("Re-run layout")
         self.relayout_btn.setToolTip("Lays the boxes out afresh and forgets where you dragged them")
-        self.save_btn = QPushButton("Save picture...")
+        self.save_btn = QPushButton("Save as...")
+        self.save_btn.setToolTip("Save the map as a picture, or as a diagram draw.io or Visio can open and edit")
         menu = QMenu(self.save_btn)
         menu.addAction("PNG image", lambda: self.save_picture("png"))
         menu.addAction("SVG drawing", lambda: self.save_picture("svg"))
+        menu.addAction("Draw.io diagram (.drawio)", lambda: self.save_picture("drawio"))
+        menu.addAction("Visio drawing (.vsdx)", lambda: self.save_picture("vsdx"))
         self.save_btn.setMenu(menu)
         for w in (self.find, self.relayout_btn, self.save_btn):
             bar.addWidget(w)
@@ -1066,13 +1075,54 @@ class TopologyTab(QWidget):
             menu.addAction(label, fn)
         menu.exec(pos)
 
+    FILTERS = {"png": "PNG image (*.png)", "svg": "SVG drawing (*.svg)", "drawio": "Draw.io diagram (*.drawio)", "vsdx": "Visio drawing (*.vsdx)"}
+
+    def diagram(self, view=None):
+        """The map as the export writers take it: (tiles, links) in pixels, top-left corners, the role colours (core/topoexport.py)."""
+        from core import topoexport  # noqa: F401  (the writers live there)
+        view = view or (self.l3 if self.tab_l3.isChecked() else self.l2)
+        t = _t()
+        tiles, links = [], []
+        for name, it in view.boxes.items():
+            w, h = max(float(it._w), 110.0), 56.0
+            tiles.append({"id": name, "label": it.caption, "sub": it.sub or "", "x": it.pos().x() - w / 2, "y": it.pos().y() - h / 2, "w": w, "h": h,
+                          "colour": topology.ROLE_COLORS.get(it.role, topology.ROLE_COLORS["unknown"])})
+        for e in view.lines:
+            l = e.link
+            if view.layer == "l3":
+                label_a, label_b = l.get("protocol", "") or "", (l.get("state", "") + (f" AS {l['as']}" if l.get("as") else "")).strip()
+                colour = DOWN if l.get("down") else topology.L3_COLORS.get(l.get("protocol"), t.get("muted", "#8d9ea8"))
+            else:
+                label_a, label_b = port_text(l, "a"), port_text(l, "b")
+                colour = DOWN if l.get("down") else (ONE_WAY if not l.get("both") and not l.get("group_link") else t.get("muted", "#8d9ea8"))
+            links.append({"a": e.a.name, "b": e.b.name, "label_a": label_a, "label_b": label_b, "colour": colour,
+                          "dashed": bool(not l.get("both") and not l.get("group_link")) or l.get("change") == "gone", "width": 4 if l.get("channel") else 2})
+        min_x = min((tl["x"] for tl in tiles), default=0)
+        min_y = min((tl["y"] for tl in tiles), default=0)
+        for tl in tiles:                                               # the drawing starts at the top-left corner of the page
+            tl["x"] -= min_x
+            tl["y"] -= min_y
+        return tiles, links
+
     def save_picture(self, kind):
         view = self.l3 if self.tab_l3.isChecked() else self.l2
         if not view.boxes:
             toast(self, "Nothing to save yet. Discover neighbours first.")
             return
-        path, _ = QFileDialog.getSaveFileName(self, "Save picture", f"topology-{view.layer}.{kind}", "PNG image (*.png)" if kind == "png" else "SVG drawing (*.svg)")
+        path, _ = QFileDialog.getSaveFileName(self, "Save as", f"topology-{view.layer}.{kind}", self.FILTERS.get(kind, self.FILTERS["png"]))
         if not path:
+            return
+        if kind in ("drawio", "vsdx"):
+            from core import topoexport
+            tiles, links = self.diagram(view)
+            name = "Layer 3" if view.layer == "l3" else "Layer 2"
+            if kind == "drawio":
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(topoexport.drawio_xml(name, tiles, links))
+            else:
+                with open(path, "wb") as f:
+                    f.write(topoexport.vsdx_bytes(name, tiles, links))
+            toast(self, f"Saved {len(tiles)} devices and {len(links)} links to {path}")
             return
         sc = view.scene()
         if kind == "svg":

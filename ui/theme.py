@@ -3,8 +3,8 @@
 The themes and the colour maths live in ui/themes.py. This module adds what Qt needs: the derived colours (hover row, selected
 row, soft accent), the shape and type tokens of each Look, the palette and the stylesheet, and `current()` for widgets that paint
 themselves."""
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QFont, QPalette
+from PySide6.QtCore import QEvent, QObject, QRectF, Qt
+from PySide6.QtGui import QColor, QFont, QPainterPath, QPalette, QRegion
 from PySide6.QtWidgets import QApplication, QMenu, QProxyStyle
 from ui import icons, themes
 
@@ -13,14 +13,33 @@ LOOK_KEYS = tuple(themes.DEFAULT_LOOK)
 _current = {}
 
 
+class MenuShaper(QObject):
+    """Clips a menu's window to the rounded shape its stylesheet draws, each time it is sized: without this the window shows as a
+    square patch past each rounded corner (a see-through window helps where Windows honours it; the clip holds everywhere)."""
+
+    def eventFilter(self, menu, event):
+        if event.type() in (QEvent.Type.Resize, QEvent.Type.Show) and isinstance(menu, QMenu):
+            r = int(_current.get("r_menu", 8) or 0)
+            path = QPainterPath()
+            path.addRoundedRect(QRectF(menu.rect()), r, r)
+            menu.setMask(QRegion(path.toFillPolygon().toPolygon()))
+        return False
+
+
 class RoundedMenus(QProxyStyle):
-    """Fusion, with every menu given a see-through window: the stylesheet rounds a menu's corners, and without this the window
-    behind it shows as a square patch at each corner."""
+    """Fusion, with every menu given a see-through window and clipped to its rounded shape: the stylesheet rounds a menu's corners,
+    and without this the window behind it shows as a square patch at each corner."""
+
+    def __init__(self, base):
+        super().__init__(base)
+        self.shaper = MenuShaper(self)
 
     def polish(self, what):
         if isinstance(what, QMenu):
             what.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
             what.setWindowFlag(Qt.WindowType.NoDropShadowWindowHint, True)
+            what.removeEventFilter(self.shaper)
+            what.installEventFilter(self.shaper)
         return super().polish(what)
 
 # ---- the shape and type of each Look: corner radii, paddings and fonts
@@ -86,6 +105,16 @@ def tokens(look=None, ctx=None):
     t["ops"] = t["terminal"]                                    # the old name, for anything still asking
     t["raised"] = t["panels"] == "Raised"
     t["card_bottom"] = f"border-bottom: 2px solid {t['panel_edge']};" if t["raised"] else ""
+    # Panel opacity: the panels, lists and boxes let the page show through when it is under 100
+    try:
+        pct = int(look.get("panel_opacity", 100))
+    except (TypeError, ValueError):
+        pct = 100
+    pct = max(themes.OPACITY_RANGE[0], min(themes.OPACITY_RANGE[1], pct))
+    t["panel_opacity"] = pct
+    alpha = pct / 100
+    t["surface_a"] = themes.rgba(t["surface"], alpha) if pct < 100 else t["surface"]
+    t["input_a"] = themes.rgba(t["input"], alpha) if pct < 100 else t["input"]
     return t
 
 
@@ -142,7 +171,7 @@ QToolButton::menu-indicator { image: url(%(chev_down)s); subcontrol-origin: padd
 
 /* ---- inputs ---- */
 QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox, QDoubleSpinBox, QComboBox, QAbstractSpinBox {
-    background: %(input)s; color: %(text)s; border: 1px solid %(border)s; border-radius: %(r_input)spx;
+    background: %(input_a)s; color: %(text)s; border: 1px solid %(border)s; border-radius: %(r_input)spx;
     padding: %(pad_input)s; min-height: %(min_input)spx; selection-background-color: %(accent)s; selection-color: %(accent_text)s;
 }
 QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {
@@ -181,7 +210,7 @@ QListView::indicator:checked, QTreeView::indicator:checked, QTableView::indicato
 
 /* ---- lists, tables, trees ---- */
 QTreeView, QTableView, QListView, QTreeWidget, QTableWidget, QListWidget {
-    background: %(surface)s; alternate-background-color: %(surface)s; border: 1px solid %(border)s; border-radius: %(r_list)spx;
+    background: %(surface_a)s; alternate-background-color: %(surface_a)s; border: 1px solid %(border)s; border-radius: %(r_list)spx;
     gridline-color: transparent; selection-background-color: %(select)s; selection-color: %(text)s; %(data_font)s
 }
 QTreeView::item, QTableView::item, QListView::item { padding: %(pad_cell)s; border: 0; }
@@ -231,12 +260,16 @@ QMenu::item:disabled { color: %(muted)s; }
 QMenu::separator { height: 1px; background: %(border)s; margin: 5px 8px; }
 
 QSplitter::handle { background: transparent; }
+QSlider::groove:horizontal { height: 4px; background: %(surface2)s; border-radius: 2px; }
+QSlider::sub-page:horizontal { background: %(accent)s; border-radius: 2px; }
+QSlider::handle:horizontal { width: 16px; height: 16px; margin: -6px 0; background: %(surface)s; border: 2px solid %(accent)s; border-radius: 8px; }
+QSlider::handle:horizontal:hover { background: %(hover)s; }
 QProgressBar { background: %(surface2)s; border: 0; border-radius: %(r_bar)spx; height: 8px; text-align: center; }
 QProgressBar::chunk { background: %(accent)s; border-radius: %(r_bar)spx; }
 QDialog { background: %(bg)s; }
 
 /* ---- dashboard cards ---- */
-QFrame[card="true"] { background: %(surface)s; border: 1px solid %(card_border)s; border-radius: %(r_card)spx; %(card_bottom)s }
+QFrame[card="true"] { background: %(surface_a)s; border: 1px solid %(card_border)s; border-radius: %(r_card)spx; %(card_bottom)s }
 QFrame[card="true"] QLabel { background: transparent; border: 0; }
 QFrame[card="true"] QTableWidget, QFrame[card="true"] QTreeWidget { border: 0; border-radius: 0; background: transparent; }
 

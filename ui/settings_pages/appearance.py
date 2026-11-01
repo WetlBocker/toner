@@ -4,7 +4,7 @@ import os
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QFont
-from PySide6.QtWidgets import QCheckBox, QColorDialog, QComboBox, QFileDialog, QFontComboBox, QLineEdit, QPushButton
+from PySide6.QtWidgets import QCheckBox, QColorDialog, QComboBox, QFileDialog, QFontComboBox, QLineEdit, QPushButton, QSlider
 from core import db, reports, trends
 from ui import terminal, theme
 from ui.settings_base import Page, compact_row, note, row_of, spin
@@ -42,8 +42,21 @@ class AppearancePage(Page):
         self.panels.addItems(themes.PANELS)
         self.contrast = QComboBox()
         self.contrast.addItems(themes.CONTRASTS)
+        self.opacity = spin(*themes.OPACITY_RANGE, " %")
+        self.opacity.setSingleStep(5)
+        self.opacity.setToolTip("100 is solid. Lower it to let the background show through the panels, lists and boxes.")
+        self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
+        self.opacity_slider.setRange(*themes.OPACITY_RANGE)
+        self.opacity_slider.setProperty("notSetting", True)
+        self.opacity_slider.setFixedWidth(180)
+        self.opacity_slider.valueChanged.connect(self.opacity.setValue)
+        self.opacity.valueChanged.connect(self.opacity_slider.setValue)
         self.font = spin(0, 24, " pt")
         self.font.setSpecialValueText("default")
+        self.icons_folder = QLineEdit()
+        self.icons_folder.setPlaceholderText("blank = Documents\\Vendor Icons when that folder exists")
+        self.icons_browse = QPushButton("Browse...")
+        self.icons_browse.clicked.connect(self.browse_icons)
         self.preset = QComboBox()
         self.preset.addItems(reports.COLOR_PRESETS)
         self.colors = {}
@@ -58,7 +71,9 @@ class AppearancePage(Page):
         self.form.addRow("Motion", self.motion)
         self.form.addRow("Panels", self.panels)
         self.form.addRow("Contrast", self.contrast)
+        self.form.addRow("Panel opacity", compact_row(self.opacity_slider, self.opacity))
         self.form.addRow("Text size", self.font)
+        self.form.addRow("Vendor icons folder", row_of(self.icons_folder, self.icons_browse))
         self.form.addRow("Status colours", self.preset)
         self.form.addRow("", compact_row(*self.swatch.values()))
         self.lay.insertWidget(1, note("Look: Standard is what Toner has had so far; Soft rounds every corner; Sharp squares them; Terminal is monospace "
@@ -66,7 +81,10 @@ class AppearancePage(Page):
         self.lay.insertWidget(2, note("Motion: Subtle fades and grows things as they change; Lively adds the Aurora wash, a drifting backdrop and a "
                                       "heartbeat on the logo. Everything is still when Windows' animation effects are turned off."))
         self.lay.insertWidget(3, note("Panels: Raised panels cast a soft shadow; Flat panels have no border."))
-        self.lay.insertWidget(4, note("Click a status to choose its colour. Text on top of each colour is "
+        self.lay.insertWidget(4, note("Panel opacity: lower it to let the background show through the panels, lists and boxes."))
+        self.lay.insertWidget(5, note("Vendor icons: PNG files named after the vendor (CISCO.png, PALO ALTO.png) are shown beside a device's name in its window "
+                                      "and in the details pane. A vendor without a file gets the mark Toner has built in."))
+        self.lay.insertWidget(6, note("Click a status to choose its colour. Text on top of each colour is "
                                       "switched between dark and white automatically so it stays readable. "
                                       "The status word is always shown, so colour is never the only signal."))
         self.preset.currentTextChanged.connect(self.use_preset)
@@ -77,6 +95,7 @@ class AppearancePage(Page):
         for box in (self.look, self.motion, self.panels, self.contrast, self.base):
             box.currentTextChanged.connect(lambda _t: self._preview())
         self.tint.toggled.connect(lambda _on: self._preview())
+        self.opacity.valueChanged.connect(lambda _v: self._preview())
         self._loading = False
         self._show_custom()
 
@@ -84,7 +103,7 @@ class AppearancePage(Page):
     def look_dict(self):
         return dict(theme=self.grid.current(), look=self.look.currentText(), motion=self.motion.currentText(), panels=self.panels.currentText(),
                     contrast=self.contrast.currentText(), custom_accent=self.custom_accent, custom_base=self.base.currentText(),
-                    custom_tint=self.tint.isChecked())
+                    custom_tint=self.tint.isChecked(), panel_opacity=self.opacity.value())
 
     def _picked(self, _name):
         self._show_custom()
@@ -99,6 +118,15 @@ class AppearancePage(Page):
         on = self.grid.current() == "Your colour"
         self.custom_row.setVisible(on)
         self.form.setRowVisible(self.custom_row, on)
+
+    def browse_icons(self):
+        d = QFileDialog.getExistingDirectory(self, "Vendor icons folder", self.icons_folder.text() or os.path.expanduser("~"))
+        if d:
+            self.icons_folder.setText(d)
+
+    def validate(self):
+        f = self.icons_folder.text().strip()
+        return [f"Appearance: the vendor icons folder '{f}' does not exist."] if f and not os.path.isdir(f) else []
 
     def pick_accent(self):
         c = QColorDialog.getColor(QColor(self.custom_accent), self, "Accent colour")
@@ -150,6 +178,13 @@ class AppearancePage(Page):
         self.tint.blockSignals(True)
         self.tint.setChecked(bool(db.get_setting("custom_tint")))
         self.tint.blockSignals(False)
+        self.opacity.blockSignals(True)
+        try:
+            self.opacity.setValue(int(db.get_setting("panel_opacity") or 100))
+        except (TypeError, ValueError):
+            self.opacity.setValue(100)
+        self.opacity_slider.setValue(self.opacity.value())
+        self.opacity.blockSignals(False)
         self.custom_accent = str(db.get_setting("custom_accent") or themes.DEFAULT_LOOK["custom_accent"])
         self.grid.set_custom(self.custom_accent, self.base.currentText(), self.tint.isChecked())
         self.grid.set_current(themes.legacy_name(str(db.get_setting("theme"))))
@@ -157,6 +192,7 @@ class AppearancePage(Page):
         self._show_custom()
         self.paint_accent()
         self.font.setValue(int(db.get_setting("font_size")))
+        self.icons_folder.setText(str(db.get_setting("vendor_icons_folder") or ""))
         self.preset.blockSignals(True)
         self.preset.setCurrentText(db.get_setting("color_preset"))
         self.preset.blockSignals(False)
@@ -170,6 +206,9 @@ class AppearancePage(Page):
         for key, value in self.look_dict().items():
             db.set_setting(key, value)
         db.set_setting("font_size", self.font.value())
+        db.set_setting("vendor_icons_folder", self.icons_folder.text().strip())
+        from ui import brandicons
+        brandicons.forget_vendor_icons()
         db.set_setting("color_preset", preset)
         db.set_setting("status_colors", {s: c for s, c in self.colors.items() if c != base[s]})
 
