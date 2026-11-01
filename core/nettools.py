@@ -5,6 +5,7 @@ import re
 import shutil
 import socket
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 import paramiko
@@ -319,22 +320,76 @@ def configure_hostkeys(client, mode):
                                        else paramiko.AutoAddPolicy())
 
 
+_ANSI = re.compile(rb"\x1b\[[0-9;?]*[A-Za-z]|\x1b[()][A-Z0-9]|\r")
+PROMPT_WAIT = 12.0                           # the longest a session waits for the device's first prompt before sending its first command
+
+
+def last_line(raw):
+    """The last line the device printed, without escape sequences: what a prompt looks like to us."""
+    text = _ANSI.sub(b"", raw or b"").decode("utf-8", "replace").rstrip()
+    return text.rsplit("\n", 1)[-1].strip()
+
+
+def looks_like_prompt(line):
+    """A command prompt ('switch>', 'switch#', 'user@host:~$', '[admin@MikroTik] >') or a password prompt."""
+    low = line.lower()
+    return line.endswith((">", "#", "$")) or low.endswith(("password:", "password", "passwd:"))
+
+
 class SshSession(QThread):
-    """Interactive shell over SSH. Emits raw bytes for a terminal emulator to interpret."""
+    """Interactive shell over SSH. Emits raw bytes for a terminal emulator to interpret. Waits for the device's first prompt
+    before its first command; on a Cisco device that lands at a '>' prompt it enters enable mode with the enable password first."""
     data = Signal(bytes)
     closed = Signal(str)
 
     def __init__(self, host, port, user, password, init_cmd="", cols=100, rows=30,
-                 hostkey_mode="Trust on first use", timeout=15, jump_dev=None):
+                 hostkey_mode="Trust on first use", timeout=15, jump_dev=None, enable=None):
         super().__init__()
         self.jump_dev = jump_dev                 # inventory device that is reached through a jump host
         self.host, self.port, self.user, self.password = host, port, user, password
         self.init_cmd = init_cmd
+        self.enable = enable                     # the password for enable mode, when the device may need it (Cisco); None = never try
         self.hostkey_mode, self.timeout = hostkey_mode, timeout
         self.cols, self.rows = cols, rows
         self.chan = None
         self.client = None                       # the paramiko client while connected: the Files panel opens SFTP on it
         self._stop = False
+        self.entered_enable = False              # for the tests and the status line: `enable` was sent and a '#' prompt followed
+
+    def _until_prompt(self, budget=PROMPT_WAIT):
+        """Pass the shell's output on to the terminal until the device shows a prompt (or the budget runs out); the prompt line."""
+        buf, end, quiet_since = b"", time.time() + budget, None
+        while not self._stop and self.chan is not None and not self.chan.closed and time.time() < end:
+            try:
+                chunk = self.chan.recv(65536)
+            except socket.timeout:
+                if buf and quiet_since is not None and time.time() - quiet_since > 0.5 and looks_like_prompt(last_line(buf)):
+                    return last_line(buf)
+                continue
+            if not chunk:
+                break
+            self.data.emit(chunk)
+            buf = (buf + chunk)[-8192:]
+            quiet_since = time.time()
+            if looks_like_prompt(last_line(buf)) and not chunk.endswith(b"\n"):
+                return last_line(buf)
+        return last_line(buf)
+
+    def _sign_in_steps(self):
+        """After the shell opens: wait for the first prompt; a Cisco '>' prompt gets `enable` and the enable password; then the
+        first command (turning paging off), if there is one."""
+        if self.enable is None and not self.init_cmd:
+            return
+        line = self._until_prompt()
+        if self.enable is not None and line.endswith(">") and not self._stop:
+            self.chan.send(b"enable\r")
+            line = self._until_prompt(8.0)
+            if "assw" in line.lower():
+                self.chan.send(self.enable.encode("utf-8", "replace") + b"\r")
+                line = self._until_prompt(8.0)
+            self.entered_enable = line.endswith("#")
+        if self.init_cmd and not self._stop:
+            self.chan.send(self.init_cmd + "\r")
 
     def ready(self):
         """Logged in, with the shell open."""
@@ -390,8 +445,7 @@ class SshSession(QThread):
             self.chan = client.invoke_shell(term="xterm-256color", width=self.cols, height=self.rows)
             self.chan.settimeout(0.3)
             self.client = client
-            if self.init_cmd:
-                self.chan.send(self.init_cmd + "\r")
+            self._sign_in_steps()
             while not self._stop and not self.chan.closed:
                 try:
                     chunk = self.chan.recv(65536)

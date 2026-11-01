@@ -2,16 +2,18 @@
 page that shows what it has cost and lists the conversations. The work is in core/assistant; this is the furniture."""
 import threading
 
-from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QThread, Signal
+import math
+
+from PySide6.QtCore import QEasingCurve, QEvent, QPoint, QSize, Qt, QThread, Signal
 from PySide6.QtGui import QFont, QTextCursor, QTextDocumentFragment
-from PySide6.QtWidgets import (QAbstractItemView, QApplication, QHBoxLayout, QLabel, QMessageBox, QPlainTextEdit, QPushButton, QSizePolicy, QTableWidget,
-                               QTableWidgetItem, QTextBrowser, QTextEdit, QToolButton, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QMessageBox, QPlainTextEdit,
+                               QPushButton, QSizePolicy, QTableWidget, QTableWidgetItem, QTextBrowser, QTextEdit, QToolButton, QVBoxLayout, QWidget)
 from urllib.parse import urlsplit
 
 from core import db, orgs
 from core import assistant as AI
 from core.assistant import agent, store, tools as T
-from ui import brandicons, theme
+from ui import brandicons, motion, theme
 from ui.widgets import EmptyHint, filling, flow
 
 BUTTON = 44                     # the round button's size
@@ -62,21 +64,91 @@ def button_place():
 
 class SideButton(QToolButton):
     """The round button at a side edge of the window, carrying the connected provider's mark. A click opens the panel; a drag
-    moves it, and on release it snaps to the nearest side edge at the height it was dropped (remembered per computer)."""
+    moves it, and on release it rubber-bands to the nearest side edge at the height it was dropped (remembered per computer).
+    It sits half-faded until the pointer is over it or the panel is open, and under Motion: Lively it floats gently up and down."""
     moved = Signal(str, float)                      # the side it snapped to, and how far down the window (0..1)
+    IDLE, FULL = 0.62, 1.0                          # how solid it is on its own, and under the pointer
+    SNAP_MS = 520                                   # the rubber-band back to the edge
+    BOB_MS = 3600                                   # one slow float up and down
+    BOB = 3                                         # how far it floats, in pixels
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._press = self._start = None
         self._dragging = False
+        self._settling = False                      # just dropped: the next place it is given is reached by rubber band
+        self._gliding = False
+        self._base = QPoint(0, 0)                   # where the window put it (the float moves it a little around this)
+        self._glide = self._fade_anim = None
         self.setFixedSize(BUTTON, BUTTON)
         self.setIconSize(QSize(24, 24))
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setToolTip("Assistant")
         self.setCheckable(True)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._fade = QGraphicsOpacityEffect(self)
+        self._fade.setOpacity(self.IDLE)
+        self.setGraphicsEffect(self._fade)
+        self.toggled.connect(lambda on: self._fade_to(self.FULL if on or self.underMouse() else self.IDLE))
+        self.bob = motion.Phase(self, self.BOB_MS, self._on_bob, fps=20)
         self.set_provider(AI.provider_id())
         self.restyle()
+
+    # ---- how solid it is
+    def _fade_to(self, value):
+        motion.stop(self._fade_anim)
+        start = self._fade.opacity()
+        self._fade_anim = motion.animate(self, 160, lambda p: self._fade.setOpacity(start + (value - start) * p))
+
+    def enterEvent(self, e):
+        self._fade_to(self.FULL)
+        super().enterEvent(e)
+
+    def leaveEvent(self, e):
+        if not self.isChecked():
+            self._fade_to(self.IDLE)
+        super().leaveEvent(e)
+
+    # ---- where it sits
+    def settle(self, pos):
+        """The window's place for it: reached by rubber band (an overshoot and back) right after a drop, at once otherwise."""
+        motion.stop(self._glide)
+        self._gliding = False
+        self._base = QPoint(pos)
+        if not self._settling or not motion.enabled():
+            self._settling = False
+            self.move(pos)
+            return
+        self._settling = False
+        start = self.pos()
+        self._gliding = True
+        self._glide = motion.animate(self, self.SNAP_MS, lambda p: self.move(QPoint(round(start.x() + (pos.x() - start.x()) * p),
+                                                                                   round(start.y() + (pos.y() - start.y()) * p))),
+                                     curve=QEasingCurve.Type.OutBack, on_done=self._landed)
+
+    def _landed(self):
+        self._gliding = False
+
+    def _on_bob(self, p):
+        if self._dragging or self._gliding or not self.isVisible():
+            return
+        self.move(self._base + QPoint(0, round(self.BOB * math.sin(p * 2 * math.pi))))
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        self._float()
+
+    def hideEvent(self, e):
+        super().hideEvent(e)
+        self.bob.stop()
+
+    def _float(self):
+        """Float gently under Motion: Lively; stay put otherwise."""
+        if motion.lively() and self.isVisible():
+            if not self.bob.isActive():
+                self.bob.start()
+        else:
+            self.bob.stop()
 
     def set_provider(self, provider):
         self.provider = provider
@@ -110,6 +182,7 @@ class SideButton(QToolButton):
             if parent is not None and parent.width() > 0 and parent.height() > 0:
                 side = "left" if self.x() + self.width() / 2 < parent.width() / 2 else "right"
                 y = min(1.0, max(0.0, (self.y() + self.height() / 2) / parent.height()))
+                self._settling = True               # the place the window answers with is reached by rubber band
                 self.moved.emit(side, y)
             e.accept()
             return
@@ -125,6 +198,7 @@ class SideButton(QToolButton):
         self.setStyleSheet(f"QToolButton {{ border-radius: {BUTTON // 2}px; border: 1px solid {t.get('border', '#ccc')}; background: {t.get('surface', '#fff')}; padding: 0px; }}"
                            f"QToolButton:hover {{ background: {t.get('hover', '#eee')}; }}"
                            f"QToolButton:checked {{ border-color: {t.get('accent', '#2563eb')}; }}")
+        self._float()
 
 
 class AssistantPanel(QWidget):
@@ -138,6 +212,8 @@ class AssistantPanel(QWidget):
         self.worker = None
         self.org = db.home()
         self.current = {}                           # organization -> the conversation open in it
+        self.mark = QLabel()                                 # the provider's mark beside the title
+        self.mark.setFixedSize(22, 22)
         self.title = QLabel("Assistant")
         self.title.setProperty("title", True)
         self.model_line = QLabel("")
@@ -148,6 +224,8 @@ class AssistantPanel(QWidget):
         self.view.setReadOnly(True)
         self.view.setAcceptRichText(True)
         self.view.setFrameShape(QTextEdit.Shape.NoFrame)
+        self.view.setStyleSheet("QTextBrowser { background: transparent; }")
+        self.view.viewport().setAutoFillBackground(False)
         self.hint = EmptyHint(self.view, "Ask a question", "The Assistant reads this organization's devices, results, backups and logs, and what is on screen.", wrap=True)
         self.input = QPlainTextEdit()
         self.input.setPlaceholderText(PLACEHOLDER)
@@ -155,17 +233,27 @@ class AssistantPanel(QWidget):
         self.input.installEventFilter(self)
         self.send_btn, self.stop_btn, self.new_btn = QPushButton("Send"), QPushButton("Stop"), QPushButton("New conversation")
         self.send_btn.setProperty("primary", True)
+        self.new_btn.setProperty("ghost", True)
         self.stop_btn.setEnabled(False)
         self.status = QLabel("")
         self.status.setWordWrap(True)
         self.status.setProperty("muted", True)
         buttons = flow(self.new_btn, self.stop_btn, self.send_btn)        # wraps onto a second row when the panel is narrow
+        head = QHBoxLayout()
+        head.setSpacing(8)
+        head.addWidget(self.mark)
+        head.addWidget(self.title)
+        head.addWidget(self.model_line, 1)
+        self.transcript = QFrame()                           # the conversation in a card, like the rest of the app's panels
+        self.transcript.setProperty("card", True)
+        tl = QVBoxLayout(self.transcript)
+        tl.setContentsMargins(10, 8, 10, 8)
+        tl.addWidget(self.view)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(14, 14, 14, 14)
         lay.setSpacing(8)
-        lay.addWidget(self.title)
-        lay.addWidget(self.model_line)
-        lay.addWidget(self.view, 1)
+        lay.addLayout(head)
+        lay.addWidget(self.transcript, 1)
         lay.addWidget(self.status)
         lay.addWidget(self.input)
         lay.addLayout(buttons)
@@ -236,6 +324,7 @@ class AssistantPanel(QWidget):
     def show_model(self):
         s = AI.state()
         self.model_line.setText(f"{AI.PROVIDERS[AI.provider_id()]['label']}  ·  {s.get('model') or AI.model_for()}" if s.get("connected") else "")
+        self.mark.setPixmap(brandicons.provider_icon(AI.provider_id()).pixmap(QSize(*brandicons.mark_size(AI.provider_id(), 22))))
 
     # ---- the transcript
     def _color(self, what):
@@ -253,9 +342,11 @@ class AssistantPanel(QWidget):
         self.hint.setVisible(False)
 
     def _user(self, text):
+        """What you asked, in a tinted block so the turns stand apart."""
         self.entries.append(("user", text))
-        self._append_html(f'<b style="color:{self._color("accent")}">You</b>')
-        self._append_html(self._html(text))
+        t = theme.current() or {}
+        self._append_html(f'<table width="100%" cellpadding="8" cellspacing="0" style="background:{t.get("accent_soft", "#e8eef8")}"><tr><td>'
+                          f'<b style="color:{self._color("accent")}">You</b><br>{self._html(text)}</td></tr></table>')
 
     def _line(self, text, what="muted"):
         self.entries.append((what, text))

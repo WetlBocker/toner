@@ -115,10 +115,10 @@ check("full listing can be left out", "All results by device" not in html and "N
 Rp.include_all.setChecked(True); Rp.folder.setText(r"C:\definitely\not\here"); msgs.clear(); S.save()
 check("missing report folder is refused", msgs and "does not exist" in msgs[-1][1]); Rp.folder.setText(SP); S.save()
 captured = {}
-import ui.reports_tab as RT
-RT.QFileDialog.getSaveFileName = staticmethod(lambda parent, title, start, pattern: (captured.update(start=start), ("", ""))[1])
-w.reports.base = [Result("d", "cpu", "OK", "1%")]; w.reports.filter.set_sections({}); w.reports._meta = {id(w.reports.base[0]): {"Status": "OK", "Location": "", "Vendor": "", "Tag": set()}}; w.reports.show_preview()
-w.reports.export_html(); check("save dialog opens in the default folder with a dated name", captured["start"].startswith(SP) and captured["start"].endswith(".html"), captured)
+import ui.history as HI
+HI.QFileDialog.getSaveFileName = staticmethod(lambda parent, title, start, pattern: (captured.update(start=start), ("", ""))[1])
+w.history._run_rows = [{"device": "d", "check_name": "cpu", "status": "OK", "value": "1%", "message": ""}]
+w.history.export_html(); check("save dialog (reports live on History) opens in the default folder with a dated name", captured["start"].startswith(SP) and captured["start"].endswith(".html"), captured)
 
 print("== automation / scheduler")
 Au = P["Checks"].schedule; Au.enabled.setChecked(True); Au.minutes.setValue(15); Au.groups.boxes["Location: Chicago"].setChecked(True); Au.on_start.setChecked(False); S.save()

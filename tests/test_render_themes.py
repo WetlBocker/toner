@@ -78,7 +78,7 @@ print("== every section, in a few themes and every look")
 for name, look in (("Aurora", "Standard"), ("Linen", "Soft"), ("High contrast", "Sharp"), ("Midnight", "Terminal")):
     db.set_setting("theme", name); db.set_setting("look", look); w.settings_applied(); app.processEvents()
     errs = []
-    for sec in ("Overview", "Results", "Inventory", "Configs", "Scanning", "History", "Reports", "Tools", "Sessions", "Automation/AI", "Settings", "About"):
+    for sec in ("Overview", "Results", "Inventory", "Configs", "Scanning", "History", "Tools", "Sessions", "Automation/AI", "Settings", "About"):
         try:
             shot(f"{name} {look}", sec)
         except Exception as e:

@@ -356,6 +356,32 @@ class StatChips(QWidget):
                                   "padding:0px 9px; border:1px solid palette(mid);")
 
 
+class RefreshButton(QPushButton):
+    """The round-arrow button at the top of a section: reads the page again from what Toner has stored (a run from the tray, the
+    service or a device window may have moved things on). Its icon follows the theme."""
+    TIP = "Refresh: read this page again from what Toner has stored"
+
+    def __init__(self, fn):
+        super().__init__()
+        self.setProperty("ghost", True)
+        self.setObjectName("refresh")
+        self.setFixedSize(32, 32)
+        self.setToolTip(self.TIP)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.clicked.connect(lambda: fn())
+        self._tint = None
+
+    def paintEvent(self, e):
+        from ui import icons, theme
+        t = theme.current() or {}
+        tint = (t.get("icon", t.get("muted", "")), t.get("text", ""))
+        if tint != self._tint and tint[0]:
+            self._tint = tint
+            self.setIcon(icons.icon("refresh", tint[0], tint[1]))
+            self.setIconSize(QSize(18, 18))
+        super().paintEvent(e)
+
+
 class SectionHeader(QWidget):
     """The top line of a section: its name, one line of context ("8 devices, 2 failing") and, on the right, its main actions.
     Every section has one, so where to look and where to click is the same everywhere."""

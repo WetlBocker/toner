@@ -31,7 +31,7 @@ RES = [Result("core-sw1", "cpu", "OK", "12%"), Result("core-sw1", "memory", "WAR
        Result("quiet", "cpu", "OK", "1%"), Result("quiet", "memory", "OK", "20%"),
        Result("dead", "connection", "ERROR", "", "TimeoutError")]
 
-def fake_run_all(devices, thresholds, on_results=None, workers=10, opts=None):
+def fake_run_all(devices, thresholds, on_results=None, workers=10, opts=None, on_check=None):
     for r in RES:
         if on_results: on_results([r])
     return RES
@@ -97,9 +97,12 @@ NA_RES = [Result("quiet", "bgp", "N/A", "not configured", "BGP is not configured
 w.last_ran = ["quiet", "edge-fw"]; w.results = NA_RES + [r for r in RES if r.device == "edge-fw"]; w._active = False
 w.show_filter("all"); w.repopulate()
 q = next(t for t in tops() if t.text(0) == "quiet")
-check("a device with OK and N/A rows is OK, says 'all OK', and lists the N/A rows after the OK one",
-      q.text(2) == "OK" and q.text(4) == "all OK" and [q.child(i).text(2) for i in range(q.childCount())] == ["OK", "N/A", "N/A"],
+check("a device with OK and N/A rows is OK, says 'all OK', and folds the N/A rows into one row after the OK one",
+      q.text(2) == "OK" and q.text(4) == "all OK" and [q.child(i).text(2) for i in range(q.childCount())] == ["OK", "N/A"]
+      and q.child(1).text(1) == "2 checks do not apply" and [q.child(1).child(i).text(1) for i in range(q.child(1).childCount())] == ["bgp", "environment"]
+      and not q.child(1).isExpanded(),
       (q.text(2), q.text(4), [q.child(i).text(2) for i in range(q.childCount())]))
+check("the folded row knows its device (right-click, Enter)", w.device_row(q.child(1).child(0)) is q)
 w.show_filter("healthy"); w.repopulate()
 check("it counts as healthy", "quiet" in [t.text(0) for t in tops()], [t.text(0) for t in tops()])
 w.show_filter("problems"); w.repopulate()

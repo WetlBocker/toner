@@ -78,7 +78,7 @@ print("== every section draws in the Terminal look, light and dark")
 errors = []
 for mode in ("Midnight", "Linen"):
     db.set_setting("theme", mode); w.settings_applied()
-    for sec in ("Overview", "Results", "Inventory", "Configs", "Scanning", "History", "Reports", "Tools", "Sessions", "Automation/AI", "Settings", "About"):
+    for sec in ("Overview", "Results", "Inventory", "Configs", "Scanning", "History", "Tools", "Sessions", "Automation/AI", "Settings", "About"):
         try:
             w.go(sec); app.processEvents(); w.grab()
         except Exception as e:

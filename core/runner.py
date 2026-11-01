@@ -75,7 +75,8 @@ def keep_software(dev, drv):
 NO_VENDOR = "No vendor chosen. Edit the device to choose one. Until then only its ping and port checks run."
 
 
-def run_one(dev, thresholds, opts=None):
+def run_one(dev, thresholds, opts=None, on_check=None):
+    """One device's results. on_check(device name, check) is called as each check's row is made (a progress line)."""
     opts = opts or db.runtime_options()
     opts = {**opts, "disabled": db.disabled_for(dev, opts.get("disabled", ()))}      # the device's own list of checks, if it has one
     pre = reachability(dev, opts) + stored_copy_note(dev)
@@ -89,6 +90,7 @@ def run_one(dev, thresholds, opts=None):
             if vendors.get(dev["vendor"]).get("kind") != "windows" or winmon.needs_dns(dev):
                 resolve_host(dev["host"])    # a clear DNS error beats a cryptic socket one (an agent reports by itself)
             drv = DRIVERS[dev["vendor"]](dev, thresholds, opts)
+            drv.on_check = on_check
             drv.custom = custom.for_device(dev, opts.get("custom"))        # user-defined checks that apply here
             res = drv.run()
             keep_software(dev, drv)
@@ -120,9 +122,9 @@ def run_one(dev, thresholds, opts=None):
             return rows
 
 
-def run_all(devices, thresholds, on_results=None, workers=10, opts=None):
-    """Run every device in parallel; call on_results(list) as each one finishes.
-    `thresholds` is one dict for everyone, or a function dev -> dict (per-device overrides)."""
+def run_all(devices, thresholds, on_results=None, workers=10, opts=None, on_check=None):
+    """Run every device in parallel; call on_results(list) as each one finishes, and on_check(device name, check) as each
+    check's row is made. `thresholds` is one dict for everyone, or a function dev -> dict (per-device overrides)."""
     for_dev = thresholds if callable(thresholds) else (lambda _d: thresholds)
     here, per_org = db.target(), {}
 
@@ -140,7 +142,7 @@ def run_all(devices, thresholds, on_results=None, workers=10, opts=None):
 
     def one(d, th, o):
         with db.within(d.get("org")):                     # its baselines, secrets and history are in its own file
-            res = run_one(d, th, o)
+            res = run_one(d, th, o, on_check) if on_check is not None else run_one(d, th, o)      # (tests stand in a two-argument run_one)
         for r in res:
             r.org = d.get("org")
         return res

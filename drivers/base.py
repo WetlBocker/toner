@@ -49,6 +49,7 @@ class Driver:
         self.transcript = {}             # command -> output, kept so a failed parse can be reported with evidence
         self.custom = []
         self.facts = {}                  # what the run learned about the device besides results: {'software': {...}} (see found_software)
+        self.on_check = None             # called (device name, check) as each check's row is made, for a progress line
 
     def found_software(self, version, image="", mode=""):
         """The software the device runs, read during this run; the runner keeps it on the device record (db.set_software).
@@ -161,6 +162,11 @@ class Driver:
                            ", ".join(f"{n} (+{d:.0f})" for n, d in list(grew.items())[:5]), numeric=float(len(grew)))
 
     def result(self, check, status, value="", message="", numeric=None):
+        if self.on_check is not None:
+            try:
+                self.on_check(self.name, check)
+            except Exception:                                # noqa: BLE001  (a progress line must never spoil a result)
+                pass
         return Result(self.name, check, status, str(value), message, numeric)
 
     def not_applicable(self, check, value, message=""):

@@ -521,9 +521,11 @@ class SessionPane(QWidget):
         if kind == "ssh":
             paging = (vendors.paging_command(dev["vendor"], db.get_setting("paging_cmd")) if dev
                       else db.get_setting("paging_cmd")) if opts.get("paging", True) else ""
+            # a Cisco device that lands at a '>' prompt is taken into enable mode: with its stored enable password, else the login password (as the checks do)
+            enable = (profiles.secret(dev, "enable") or password) if dev and dev.get("vendor") == "cisco" else None
             session = nettools.SshSession(sp["host"], sp["port"], sp["username"], password, paging, self.term.cols, self.term.rows,
                                           hostkey_mode=db.get_setting("hostkey_mode"), timeout=timeout,
-                                          jump_dev=profiles.resolve(dev) if dev else None)
+                                          jump_dev=profiles.resolve(dev) if dev else None, enable=enable)
             self._say(f"Connecting to {sp['host']}:{sp['port']} as {sp['username']}...\n")
         elif kind == "telnet":
             session = TelnetSession(sp["host"], sp["port"], self.term.cols, self.term.rows, timeout, profiles.resolve(dev) if dev else None)
@@ -735,7 +737,7 @@ class SessionsTab(QWidget):
         self.funnel.changed.connect(self.refresh)
         self.payload = {}                                  # item key -> session / folder
         self._building = False
-        self.expanded = set(db.get_setting("sessions_expanded"))
+        self.expanded = set()                              # the folders open now: every folder starts closed when Toner opens
         self.tree = SessionTree(self)
         self.tree.setHeaderLabels(["Name", "Type", "Host"])
         self.tree.setRootIsDecorated(True)
@@ -1183,6 +1185,12 @@ class SessionsTab(QWidget):
                 if can:
                     m.addAction("Edit...", self.edit_selected)
                     m.addAction("Duplicate", self.duplicate_selected)
+                s = found[0]
+                dev = _device(s.get("device"), s.get("org"))
+                host = s.get("host") or (dev["host"] if dev else "")
+                if host:
+                    from ui.pingpop import ping_popup
+                    m.addAction("Ping", lambda: ping_popup(self, s.get("name") or host, host))
             if len(folders) == 1 and not found and can:
                 add = m.addMenu("New session here")
                 for k, label, _, _ in sessions.KINDS:

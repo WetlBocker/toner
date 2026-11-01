@@ -9,7 +9,7 @@ import html
 
 from core import acks, audit, backup, db, display, fleet, maintenance, notify, reports, scope, vendors
 from ui import icons, theme
-from ui.widgets import EmptyHint, FlowLayout, StatusDelegate, filling
+from ui.widgets import EmptyHint, FlowLayout, RefreshButton, StatusDelegate, filling
 from ui import status as st
 from ui import motion
 from ui.glance import GlanceMap
@@ -216,6 +216,8 @@ class DashboardTab(QWidget):
         head = QHBoxLayout()
         head.addWidget(self.title)
         head.addWidget(self.when, 1)
+        self.refresh_btn = RefreshButton(self.refresh)                  # the page again from what is stored
+        head.addWidget(self.refresh_btn)
         head.addWidget(self.backup_btn)
         head.addWidget(self.run_btn)
         self.progress = ProgressLine()                                  # fills under the header while checks run
@@ -669,9 +671,13 @@ class DashboardTab(QWidget):
         m = QMenu(self)
         m.addAction("Open device", lambda: self._device_act("open"))
         m.addAction("Run checks on this device", lambda: self._device_act("run"))
-        kind = self._connect_kind(self._device(cur[0]))
+        dev = self._device(cur[0])
+        kind = self._connect_kind(dev)
         if kind:
             m.addAction(f"Open {'Remote Desktop' if kind == 'rdp' else 'SSH'}", lambda: self._device_act("connect"))
+        if dev and dev.get("host"):
+            from ui.pingpop import ping_popup
+            m.addAction("Ping", lambda: ping_popup(self, dev["name"], dev["host"]))
         m.addSeparator()
         if cur[2]:
             m.addAction("Undo (bring it back)", self._ack_clicked)

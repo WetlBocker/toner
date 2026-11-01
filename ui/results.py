@@ -10,7 +10,8 @@ from ui.columns import ColumnChooser
 from ui import status as st
 from ui import motion
 from ui import theme
-from ui.widgets import EmptyHint, SectionHeader, StatChips, StatusDelegate, flow
+from ui.widgets import EmptyHint, RefreshButton, SectionHeader, StatChips, StatusDelegate, flow
+from ui.panels import fit_rows
 
 
 class ResultDelegate(StatusDelegate):
@@ -54,24 +55,27 @@ AUTO_OPEN = 12                       # failing devices opened by themselves when
 
 class Worker(QThread):
     batch = Signal(list)
+    check = Signal(str, str)                   # (device name, check): a row is made (from a pool thread; Qt queues it to the window)
 
     def __init__(self, devices, thresholds, workers, opts):
         super().__init__()
         self.devices, self.th, self.workers, self.opts = devices, thresholds, workers, opts
 
     def run(self):
-        run_all(self.devices, self.th, on_results=self.batch.emit, workers=self.workers, opts=self.opts)
+        run_all(self.devices, self.th, on_results=self.batch.emit, workers=self.workers, opts=self.opts, on_check=self.check.emit)
 
 
 class ResultsTab(QWidget):
     run_finished = Signal()
-    progress = Signal(int, int)
+    progress = Signal(int, int)                # devices done, devices in the run (for the status strip)
     run_started = Signal(list)                 # the devices a run has just started on
-    device_done = Signal(str)                  # a device's results are all in                  # devices done, devices in the run (for the status strip)
+    device_done = Signal(str)                  # a device's results are all in
+    check_done = Signal(str, str)              # (device name, check): one more check of a device has its row (the Inventory pane's line)
     open_device = Signal(str)
     COLS = ["Device", "Check", "Result", "Value", "Message", "Organization"]      # Result draws the status chip and the value together
     VALUE = 3                                                                    # (Value stays a column, hidden unless chosen, for a plain copy)
     EXPLAIN = "FAIL means the check ran and the device failed it. ERROR means Toner couldn't run the check, for example the device didn't answer."
+    NA_BUNDLE = "Checks that do not apply to this device, folded away; open the row to see them"
     ORG = 5
     FILTERS = ["All results", "Problems only", "Warnings", "Failing", "Healthy devices"]
     FILTER_KEYS = {"all": 0, "problems": 1, "warn": 2, "fail": 3, "healthy": 4}
@@ -146,13 +150,32 @@ class ResultsTab(QWidget):
         row.addLayout(bar, 1)
         row.addWidget(self.find, 1)                    # on the right, as on Inventory
         row.addWidget(self.funnel, 0, Qt.AlignmentFlag.AlignTop)
+        self.refresh_btn = RefreshButton(self.reload)
+        self.header.add(self.refresh_btn)
         lay = QVBoxLayout(self)
         lay.addWidget(self.header)
         lay.addLayout(row)
-        lay.addWidget(self.table, 1)
+        lay.addWidget(self.table)
         lay.addWidget(self.explain)
+        lay.addStretch(1)                        # the list ends under its last row (fit_rows); the page's spare height stays empty
+        self.table.itemExpanded.connect(lambda _it: self._fit())
+        self.table.itemCollapsed.connect(lambda _it: self._fit())
         self.stored = False                      # what is shown is the latest stored results, not a run from this session
         self.load_stored()
+
+    def _fit(self):
+        """The list ends under its last row, as the Overview's panels do; a long list scrolls as before."""
+        if not self._building:
+            fit_rows(self.table)
+
+    def reload(self):
+        """The Refresh button: every device's latest stored results again (a run from the tray, the service or a device window
+        may have moved them on). A run going now is left alone."""
+        if self.running():
+            return
+        self.results, self.stored = [], False
+        self.load_stored()
+        self.repopulate()
 
     def load_stored(self):
         """Show every device's latest stored results, so the section is not empty after a restart. A run started here replaces them."""
@@ -196,7 +219,7 @@ class ResultsTab(QWidget):
     def _enter(self):
         item = self.table.currentItem()
         if item is not None:
-            self.open_device.emit((item.parent() or item).data(0, ROLE))
+            self.open_device.emit(self.device_row(item).data(0, ROLE))
 
     def link_for(self, r):
         """The page a row's check opens, or '' (the Scanning tab's advisory rows have one)."""
@@ -304,12 +327,16 @@ class ResultsTab(QWidget):
         item = self.table.itemAt(pos)
         if item is None:
             return
-        top = item.parent() or item
+        top = self.device_row(item)
         device, check = top.data(0, ROLE), (item.text(1) if item.parent() or item.data(1, ROLE) == "check" else "")
         menu = QMenu(self)
         menu.addAction("Copy row", lambda: QApplication.clipboard().setText(
             "\t".join(item.text(i) for i in range(self.table.columnCount()))))
         menu.addAction("Open device details", lambda: self.open_device.emit(device))
+        dev = db.find_device(device)
+        if dev and dev.get("host"):
+            from ui.pingpop import ping_popup
+            menu.addAction("Ping", lambda: ping_popup(self, dev["name"], dev["host"]))
         if item.data(1, URL_ROLE):
             menu.addAction("Open advisory page", lambda: self.open_link(item))
         diag = db.get_diagnostics(device, check or None, 1)
@@ -414,12 +441,18 @@ class ResultsTab(QWidget):
                 top.setText(4, only.message if only.message else ("" if only.status in ("OK", "N/A") else only.value))
                 self._link(top, only)
                 listed = []
-            for r in listed:
-                label = r.check if device_of(r.device) == r.device else \
-                    f"{r.device.split(' / ', 1)[1]}: {r.check}"
-                child = QTreeWidgetItem(["", label, r.status, r.value, r.message, ""])
-                self._link(child, r)
-                top.addChild(child)
+            na = [r for r in listed if r.status == "N/A"]
+            for r in (listed if len(na) < 2 else [r for r in listed if r.status != "N/A"]):
+                top.addChild(self._check_row(r))
+            if len(na) >= 2:                                   # the checks that do not apply, folded into one row that opens
+                bundle = QTreeWidgetItem(["", f"{len(na)} checks do not apply", "N/A", "", self.NA_BUNDLE, ""])
+                key = f"{name}\x00na"
+                bundle.setData(0, ROLE, key)
+                bundle.setToolTip(1, "Open the row to see them")
+                for r in na:
+                    bundle.addChild(self._check_row(r))
+                top.addChild(bundle)
+                bundle.setExpanded(key in self.expanded)
             top.setExpanded(name in self.expanded)
         if not self._active:
             self.chips.set_counts(self.visible_counts())
@@ -441,6 +474,21 @@ class ResultsTab(QWidget):
             if i != 4:                                     # the message takes what is left
                 self.table.resizeColumnToContents(i)
         self.table.header().setSectionResizeMode(4, self.table.header().ResizeMode.Stretch)
+        self._fit()
+
+    def _check_row(self, r):
+        """One check's row under its device."""
+        label = r.check if device_of(r.device) == r.device else f"{r.device.split(' / ', 1)[1]}: {r.check}"
+        child = QTreeWidgetItem(["", label, r.status, r.value, r.message, ""])
+        self._link(child, r)
+        return child
+
+    @staticmethod
+    def device_row(item):
+        """The device row an item belongs to (itself, or the row above the check or the N/A bundle it sits in)."""
+        while item.parent() is not None:
+            item = item.parent()
+        return item
 
     def running(self):
         return bool(self.worker and self.worker.isRunning())
@@ -493,6 +541,8 @@ class ResultsTab(QWidget):
         self.progress.emit(0, len(self.last_ran))
         self.run_started.emit(list(self.last_ran))
         self.worker.batch.connect(self.add)
+        if hasattr(self.worker, "check"):
+            self.worker.check.connect(self.check_done)
         self.worker.finished.connect(self.done)
         self.worker.start()
 

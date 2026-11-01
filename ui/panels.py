@@ -42,6 +42,41 @@ class Panel(QWidget):
         super().paintEvent(e)
 
 
+EMPTY_STRIP = 18            # what a fitted list keeps under its last row (a drop or a click there still has somewhere to land)
+
+
+def fit_rows(view, strip=EMPTY_STRIP):
+    """A list ends under its last row, as the Overview's panels do, instead of filling the page: its maximum height becomes the
+    rows showing plus the header. With more rows than the page has room for it scrolls as before; an empty list keeps its
+    height for the hint laid over it. Works for a tree (open children count) and a table."""
+    from PySide6.QtWidgets import QTableView, QTreeView, QTreeWidget, QTreeWidgetItemIterator
+    bottom = 0
+    if isinstance(view, QTreeWidget):
+        it = QTreeWidgetItemIterator(view, QTreeWidgetItemIterator.IteratorFlag.NotHidden)
+        while it.value():
+            r = view.visualItemRect(it.value())                        # empty for a row inside a closed branch
+            if r.isValid() and r.height():
+                bottom = max(bottom, r.bottom())
+            it += 1
+        header = view.header().height() if not view.header().isHidden() else 0
+    elif isinstance(view, QTableView):
+        for row in range(view.model().rowCount() if view.model() else 0):
+            if not view.isRowHidden(row):
+                bottom = max(bottom, view.rowViewportPosition(row) + view.rowHeight(row))
+        header = view.horizontalHeader().height() if not view.horizontalHeader().isHidden() else 0
+    elif isinstance(view, QTreeView):
+        return None
+    else:
+        return None
+    if not bottom:
+        view.setMaximumHeight(16777215)
+        return None
+    extra = view.horizontalScrollBar().height() if view.horizontalScrollBar().isVisible() else 0
+    height = bottom + header + 2 * view.frameWidth() + extra + strip
+    view.setMaximumHeight(height)
+    return height
+
+
 class ProgressLine(QFrame):
     """A thin line that fills from the left as checks run, with a sweep of light along it (the shimmer) while motion is on."""
 

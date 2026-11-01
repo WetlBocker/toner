@@ -38,11 +38,12 @@ check("the sections sit in a sidebar on the left, the page beside it", n.side.ma
       and n.side.height() >= w.height() - 60 and n.side.mapTo(w, QPoint(0, 0)).y() < 5)
 check("the page is centred, no wider than the content width", w.dashboard.width() <= nav.CONTENT_WIDTH)
 heads = [n.list.item(r).text() for r in n._headings if r != n._spacer]
-check("the sections are in groups: Watch, Network, Work, with Settings and About at the bottom", heads == ["WATCH", "NETWORK", "WORK"]
+check("the sections are in groups: Observability, Network, Work, with Settings and About at the bottom", heads == ["OBSERVABILITY", "NETWORK", "WORK"]
       and n.row_of(n.indexOf(w.settings)) > n._spacer and n.row_of(n.indexOf(w.about)) == n.list.count() - 1, (heads, n._spacer))
 rows = {name: n.row_of(i) for i, name in enumerate(n._names)}
-check("History and Reports sit with Overview and Results, whatever their place in the order",
-      rows["Overview"] < rows["Results"] < rows["History"] < rows["Reports"] < rows["Inventory"] < rows["Configs"] < rows["Scanning"] < rows["Tools"] < rows["Sessions"] < rows["Automation/AI"], rows)
+check("History sits with Overview and Results, whatever its place in the order",
+      rows["Overview"] < rows["Results"] < rows["History"] < rows["Inventory"] < rows["Configs"] < rows["Scanning"] < rows["Tools"] < rows["Sessions"] < rows["Automation/AI"], rows)
+check("the fold button sits inside the top row while the names show", n.fold.x() + n.fold.width() <= nav.SIDE_WIDTH and n.fold.y() < 40, n.fold.pos())
 check("...while Ctrl+1..9 and go() keep the old order", [n.tabText(i) for i in range(3)] == ["Overview", "Results", "Inventory"] and (w.go("History") or True) and n.currentWidget() is w.history)
 check("the bottom group really sits at the bottom", n.list.visualItemRect(n.item_for(w.about)).bottom() >= n.list.viewport().height() - 6,
       (n.list.visualItemRect(n.item_for(w.about)), n.list.viewport().height()))
@@ -51,6 +52,9 @@ check("the button shows icons only", n.collapsed() and n._icons_only() and n.sid
 check("the names are gone from the sections", all(n.item_for(n.stack.widget(i)).text() == "" for i in range(n.count())))
 check("every section still has its icon", all(not n.item_for(n.stack.widget(i)).icon().isNull() for i in range(n.count())))
 check("the group names are gone too", all(n.list.item(r).text() == "" for r in n._headings))
+check("...a short rule stands between the groups instead (none above the first)", [n.is_break(r) for r in n._headings if r != n._spacer] == [False, True, True])
+check("the fold button moves astride the sidebar's edge, just outside it", n.fold.x() < nav.SIDE_FOLDED < n.fold.x() + n.fold.width(), n.fold.pos())
+check("the mark is centred in the folded column", abs(n.mark.x() + n.mark.width() / 2 - nav.SIDE_FOLDED / 2) <= 2, n.mark.pos())
 check("the names move to the tooltips, with the shortcuts", first.toolTip().startswith("Overview") and "Ctrl+2" in n.item_for(w.results).toolTip())
 check("Search is just its icon, with the shortcut in the tooltip", n.quick.text() == "" and not n.quick.icon().isNull() and "Ctrl+K" in n.quick.toolTip())
 n.setCurrentIndex(2); check("sections can still be switched", n.currentIndex() == 2 and w.inventory.isVisible())

@@ -5,14 +5,14 @@ the inventory's own device actions. The data comes from core/topology (discovery
 import csv
 from datetime import datetime
 
-from PySide6.QtCore import QPointF, QRectF, Qt, QThread, Signal
-from PySide6.QtGui import QBrush, QColor, QFont, QFontDatabase, QPainter, QPainterPath, QPen
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QThread, Signal
+from PySide6.QtGui import QBrush, QColor, QFont, QFontDatabase, QPainter, QPainterPath, QPainterPathStroker, QPen
 from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QFileDialog, QFrame, QGraphicsItem, QGraphicsObject, QGraphicsScene, QGraphicsView,
                                QGridLayout, QHBoxLayout, QLabel, QListWidget, QMenu, QMessageBox, QPushButton, QScrollArea, QStackedWidget,
                                QTableWidgetItem, QVBoxLayout, QWidget)
 
 from core import db, topology
-from ui import theme
+from ui import icons, theme
 from ui.finder import FilterButton, SearchBox, device_sections, shown_devices
 from ui.toast import toast
 
@@ -237,6 +237,24 @@ class EdgeItem(QGraphicsItem):
         p1, p2 = self._ends()
         return QRectF(p1, p2).normalized().adjusted(-70, -24, 70, 24)
 
+    def shape(self):
+        """Where a click lands on the link: a band along the line (the bounding box would catch clicks far from it)."""
+        p1, p2 = self._ends()
+        path = QPainterPath(p1)
+        path.lineTo(p2)
+        stroker = QPainterPathStroker()
+        stroker.setWidth(14)
+        return stroker.createStroke(path)
+
+    def mousePressEvent(self, e):
+        views = self.scene().views() if self.scene() else []
+        v = views[0] if views else None
+        if v is not None and getattr(v, "on_link", None) and e.button() == Qt.MouseButton.LeftButton:
+            v.on_link(self.link)                                    # the detail card: a Port-Channel's members, or the link's ports
+            e.accept()
+            return
+        super().mousePressEvent(e)
+
     def _pen(self):
         t = _t()
         l = self.link
@@ -297,7 +315,7 @@ class MapView(QGraphicsView):
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
-        self.on_select = self.on_open = self.on_menu = self.on_moved = None
+        self.on_select = self.on_open = self.on_menu = self.on_moved = self.on_link = None
         self.boxes, self.lines = {}, []
         self.legend = QFrame(self)
         self.legend.setProperty("card", True)
@@ -308,16 +326,25 @@ class MapView(QGraphicsView):
         zl = QVBoxLayout(self.zoom_box)
         zl.setContentsMargins(0, 0, 0, 0)
         zl.setSpacing(4)
-        self.zoom_in, self.zoom_out, self.fit_btn = QPushButton("+"), QPushButton("−"), QPushButton("⤢")
+        self.zoom_in, self.zoom_out, self.fit_btn = QPushButton(), QPushButton(), QPushButton()
         for b, tip in ((self.zoom_in, "Zoom in"), (self.zoom_out, "Zoom out"), (self.fit_btn, "Fit the whole map")):
             b.setFixedSize(32, 32)
             b.setToolTip(tip)
+            b.setStyleSheet("padding: 0px;")                       # a button this small has no room for the usual padding
+            b.setIconSize(QSize(16, 16))
             zl.addWidget(b)
         self.zoom_in.clicked.connect(lambda: self.scale(1.2, 1.2))
         self.zoom_out.clicked.connect(lambda: self.scale(1 / 1.2, 1 / 1.2))
         self.fit_btn.clicked.connect(self.fit)
         self.card = Card(self)
         self.card.hide()
+        self.restyle()
+
+    def restyle(self):
+        """The zoom buttons' icons in the theme's colours (drawn, not typed: a glyph was cut off by the button's padding)."""
+        t = _t()
+        for b, name in ((self.zoom_in, "plus"), (self.zoom_out, "minus"), (self.fit_btn, "fit")):
+            b.setIcon(icons.icon(name, t.get("icon", t.get("muted", "#888888")), t.get("text", "#000000")))
 
     def drawBackground(self, p, rect):
         t = _t()
@@ -337,7 +364,7 @@ class MapView(QGraphicsView):
         self.legend.adjustSize()
         self.legend.move(12, self.height() - self.legend.height() - 12)
         self.zoom_box.adjustSize()
-        self.zoom_box.move(self.width() - self.zoom_box.width() - 12, self.height() - self.zoom_box.height() - 12)
+        self.zoom_box.move(12, 12)                                  # top left: the legend has the bottom, the card the top right
         self.card.move(self.width() - self.card.width() - 12, 12)
 
     def wheelEvent(self, e):
@@ -364,7 +391,8 @@ class MapView(QGraphicsView):
             super().contextMenuEvent(e)
 
     def set_legend(self, entries):
-        """[(kind, colour, text)]: kind 'swatch' or 'line' / 'dash' / 'dot' / 'thick'."""
+        """[(kind, colour, text)]: kind 'swatch' or 'line' / 'dash' / 'dot' / 'thick'. Shown on an empty map too."""
+        self.restyle()
         while self.legend_lay.count():
             w = self.legend_lay.takeAt(0).widget()
             if w:
@@ -438,12 +466,23 @@ def short_name(name, drop_domain):
     return topology.short_name(name, drop_domain)
 
 
+def port_text(l, side):
+    """A link's port at one end for the table: 'Po1 (Gi1/0/1, Gi1/0/2)' over a Port-Channel, else the port."""
+    port = l.get(f"{side}_port", "") or ""
+    if l.get("channel") and l.get(f"{side}_channel"):
+        members = ", ".join((m[0] if side == "a" else m[1]) for m in l.get("members", []) if (m[0] if side == "a" else m[1]))
+        return f"{port} ({members})" if members else port
+    return port
+
+
 def link_tip(l, layer):
     if layer == "l3":
         lines = [f"{db.label(l['a'])}  <->  {db.label(l['b'])}", l.get("protocol", "") + (f", AS {l['as']}" if l.get("as") else ""), l.get("state", "")]
     else:
         lines = [f"{db.label(l['a'])} {l.get('a_port', '')}  <->  {db.label(l['b'])} {l.get('b_port', '')}", ", ".join(sorted(l.get("protocols") or [])), l.get("speed", "")]
-    if l.get("count", 1) > 1:
+    if l.get("channel"):
+        lines.append(f"Port-Channel: {l.get('count', 1)} member{'s' if l.get('count', 1) != 1 else ''} (click the line to see them)")
+    elif l.get("count", 1) > 1:
         lines.append(f"{l['count']} links merged")
     if not l.get("both") and not l.get("group_link") and l.get("change") != "gone":
         lines.append("seen from one end only")
@@ -474,6 +513,7 @@ class Card(QFrame):
         self.close_btn = QPushButton("×")
         self.close_btn.setFixedSize(24, 24)
         self.close_btn.setFlat(True)
+        self.close_btn.setStyleSheet("padding: 0px;")
         head.addWidget(self.title, 1)
         head.addWidget(self.close_btn, 0, Qt.AlignmentFlag.AlignTop)
         lay.addLayout(head)
@@ -495,9 +535,7 @@ class Card(QFrame):
         self.close_btn.clicked.connect(self.hide)
         self._buttons = []
 
-    def show_node(self, name, info, role, facts, links, actions):
-        self.title.setText(db.label(name) if not info.get("group") else name.split(" » ", 1)[1])
-        self.role.setText(topology.ROLE_NAMES.get(role, "Device") + ("" if info.get("inventory") else "  ·  not in the inventory"))
+    def _facts(self, facts):
         while self.grid.count():
             w = self.grid.takeAt(0).widget()
             if w:
@@ -507,6 +545,27 @@ class Card(QFrame):
             vl.setWordWrap(True)
             self.grid.addWidget(kl, i, 0)
             self.grid.addWidget(vl, i, 1)
+
+    def show_link(self, title, sub, facts):
+        """A link that was clicked: a Port-Channel and its members, or a cable and its ports."""
+        self.title.setText(title)
+        self.role.setText(sub)
+        self._facts(facts)
+        self.links_head.hide()
+        self.links.hide()
+        for b in self._buttons:
+            b.deleteLater()
+        self._buttons = []
+        self.adjustSize()
+        self.show()
+        self.raise_()
+
+    def show_node(self, name, info, role, facts, links, actions):
+        self.title.setText(db.label(name) if not info.get("group") else name.split(" » ", 1)[1])
+        self.role.setText(topology.ROLE_NAMES.get(role, "Device") + ("" if info.get("inventory") else "  ·  not in the inventory"))
+        self._facts(facts)
+        self.links_head.show()
+        self.links.show()
         self.links_head.setText(f"{len(links)} LINK{'S' if len(links) != 1 else ''}")
         t = _t()
         rows = []
@@ -600,10 +659,11 @@ class TopologyTab(QWidget):
             rl.addLayout(row)
         self.show_ip = QCheckBox("Show management IP")
         self.show_platform = QCheckBox("Show platform / model")
-        self.merge = QCheckBox("Merge parallel links")
+        self.merge = QCheckBox("Bundle Port-Channels")
         self.short_ports = QCheckBox("Short port names")
         self.drop_domain = QCheckBox("Drop domain from names")
-        for box, on, tip in ((self.show_ip, True, ""), (self.show_platform, False, ""), (self.merge, True, "One thicker line where several cables join the same two devices"),
+        for box, on, tip in ((self.show_ip, True, ""), (self.show_platform, False, ""),
+                             (self.merge, True, "One thicker line per Port-Channel, where a device reported one; click the line to see its member ports"),
                              (self.short_ports, True, "GigabitEthernet1/0/1 becomes Gi1/0/1"), (self.drop_domain, True, "sw1.corp.local becomes sw1")):
             box.setChecked(on)
             if tip:
@@ -655,6 +715,7 @@ class TopologyTab(QWidget):
             v.on_open = self._open
             v.on_menu = lambda name, pos, layer=v.layer: self.node_menu(name, pos, layer)
             v.on_moved = lambda layer=v.layer: self._moved(layer)
+            v.on_link = lambda link, layer=v.layer: self.select_link(link, layer)
         links_page = QWidget()
         ll = QVBoxLayout(links_page)
         ll.setContentsMargins(0, 0, 0, 0)
@@ -697,6 +758,7 @@ class TopologyTab(QWidget):
         self.csv_btn.clicked.connect(self.download_csv)
         self.oneway_list.itemClicked.connect(lambda it: (self.find.setText(it.data(Qt.ItemDataRole.UserRole) or ""), self.tab_l2.setChecked(True)))
         self.refresh()
+        self._legends()                                   # the legend is there before the first discovery too
         self._load()
 
     def _tile(self, label):
@@ -796,7 +858,7 @@ class TopologyTab(QWidget):
             if l["b"] in nodes and nodes[l["b"]].get("group"):
                 l["group_link"] = True
         if o["merge"]:
-            links = topology.merge_parallel(links)
+            links = topology.bundle_channels(links)
         return nodes, links
 
     def _filtered_l3(self):
@@ -807,6 +869,7 @@ class TopologyTab(QWidget):
 
     def redraw(self):
         if not (self.nodes or self.nodes3):
+            self._legends()
             return
         o = self.opts()
         status = topology.latest_status()
@@ -833,7 +896,7 @@ class TopologyTab(QWidget):
         used = {self.roles.get(n, "unknown") for n in self.drawn["l2"][0]} | {info.get("role") for info in self.drawn["l2"][0].values() if info.get("group")}
         t = _t()
         self.l2.set_legend([("swatch", topology.ROLE_COLORS[r], topology.ROLE_NAMES[r]) for r in topology.ROLES if r in used]
-                           + [("line", t.get("muted", "#8d9ea8"), "Link"), ("thick", t.get("muted", "#8d9ea8"), "Merged links"), ("dash", ONE_WAY, "One-way"),
+                           + [("line", t.get("muted", "#8d9ea8"), "Link"), ("thick", t.get("muted", "#8d9ea8"), "Port-Channel"), ("dash", ONE_WAY, "One-way"),
                               ("thick", t.get("accent", "#55b6d4"), "New"), ("dot", DOWN, "Gone"), ("line", DOWN, "Port down")])
         self.l3.set_legend([("line", topology.L3_COLORS[p], p) for p in topology.L3_PROTOCOLS] + [("dash", t.get("muted", "#8d9ea8"), "One end"), ("line", DOWN, "Down"), ("dot", DOWN, "Gone")])
 
@@ -879,7 +942,7 @@ class TopologyTab(QWidget):
                 seen = "gone" if l["change"] == "gone" else "both ends" if l.get("both") else "one end"
                 proto = l.get("protocol") if layer == "Layer 3" else ", ".join(sorted(l.get("protocols") or []))
                 link = ("down" if l.get("down") else l.get("speed", "")) if layer == "Layer 2" else (l.get("state", "") + (f" AS {l['as']}" if l.get("as") else ""))
-                out.append((layer, seen, db.label(l["a"]), l.get("a_port", ""), db.label(l["b"]), l.get("b_port", ""), proto, link, l["change"]))
+                out.append((layer, seen, db.label(l["a"]), port_text(l, "a"), db.label(l["b"]), port_text(l, "b"), proto, link, l["change"]))
         return out
 
     def _fill_table(self):
@@ -914,6 +977,25 @@ class TopologyTab(QWidget):
 
     def _desc(self, name):
         return next((r.get("remote_desc", "") for r in self.rows if topology._key(r["remote_name"]) == topology._key(name)), "")
+
+    def select_link(self, link, layer):
+        """A link was clicked: its card says what runs over it (a Port-Channel and its members, or the cable's ports)."""
+        view = self.l2 if layer == "l2" else self.l3
+        a, b = db.label(link["a"]), db.label(link["b"])
+        if link.get("channel"):
+            names = "  ⇄  ".join(x for x in (link.get("a_channel"), link.get("b_channel")) if x)
+            n = link.get("count", 1)
+            sub = f"Port-Channel {names}  ·  {n} member{'s' if n != 1 else ''}"
+            facts = [(ap or "?", f"⇄  {bp or '?'}") for ap, bp in link.get("members", [])]
+        elif "protocol" in link and "protocols" not in link:
+            sub = f"{link.get('protocol', '')} adjacency"
+            facts = [("State", link.get("state", "")), ("AS", link.get("as", "")), ("Interface", link.get("interface", ""))]
+        else:
+            sub = "Link" + ("" if link.get("both") else ", seen from one end only") + (", a port is down" if link.get("down") else "")
+            facts = [("Ports", f"{link.get('a_port') or '?'}  ⇄  {link.get('b_port') or '?'}"), ("Protocol", ", ".join(sorted(link.get("protocols") or []))),
+                     ("Speed", link.get("speed", ""))]
+        view.card.show_link(f"{a}  ⇄  {b}", sub, [f for f in facts if f[1]])
+        view._place()
 
     def select(self, name, layer):
         view = self.l2 if layer == "l2" else self.l3

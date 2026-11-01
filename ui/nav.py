@@ -13,18 +13,20 @@ from ui import status as st
 
 ITEM_HEIGHT = 36            # a row in a page list; Qt does not take the style sheet's padding into account by itself
 HEADING_HEIGHT = 44        # a group heading: the room is above it, so the heading sits close to its own items
-NAV_HEADING = 34            # a group name in the sidebar (less above the first)
+NAV_HEADING = 36            # a group name in the sidebar (less above the first)
+NAV_BREAK = 18              # folded to icons, a group name becomes a short rule between the groups
 NAV_ITEM = 34               # a section row in the sidebar
-NAV_ITEM_FOLDED = 30        # and folded to its icon
+NAV_ITEM_FOLDED = 32        # and folded to its icon
 SIDE_WIDTH = 236            # the sidebar with names
 SIDE_FOLDED = 68            # and folded to icons
 AUTO_FOLD_BELOW = 1000      # a window narrower than this folds the sidebar by itself (not stored)
 CONTENT_WIDTH = 2400        # the widest a section gets, centred beside the sidebar: a 1920 or 2560 screen uses all of it; ultra-wide screens keep margins
 WIDE_SECTIONS = ("Sessions",)   # sections that use the whole window width (a terminal or a remote desktop needs the room)
-NAV_ICON = 18               # the icon before each section's name
+NAV_ICON = 21               # the icon before each section's name
 NAV_SCALE = 1.0             # the section names, the size of the page text
 LOGO = 32                   # the mark at the top of the sidebar
 BADGE = 18                  # a count on a section's row (the Results row: devices needing attention)
+FOLD = 28                   # the fold button: inside the sidebar's top row with the names, astride its edge when folded to icons
 
 
 def see_through(widget):
@@ -47,11 +49,20 @@ class NavDelegate(QStyledItemDelegate):
 
     def paint(self, p, opt, index):
         super().paint(p, opt, index)
-        n = self.nav.count_for_row(index.row())
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QFont, QFontMetrics, QPainter, QPen
+        row = index.row()
+        if self.nav.is_break(row):                                     # icons only: a short rule where a group name would be
+            t = theme.current() or {}
+            r = opt.rect
+            p.save()
+            p.setPen(QPen(QColor(t.get("border", "#444444")), 1))
+            p.drawLine(r.left() + 14, r.center().y(), r.right() - 14, r.center().y())
+            p.restore()
+            return
+        n = self.nav.count_for_row(row)
         if not n:
             return
-        from PySide6.QtCore import QRectF
-        from PySide6.QtGui import QFont, QFontMetrics, QPainter
         bg, fg = st.chip("FAIL")
         f = QFont(opt.font)
         f.setBold(True)
@@ -118,8 +129,8 @@ class Beat(QWidget):
 
 
 class NavStack(QWidget):
-    """The sidebar on the left: the Toner mark, the organization switcher, Search, the sections in groups (Watch, Network, Work),
-    and Settings and About at the bottom. Ctrl+B folds it to icons; a narrow window folds it by itself (not stored)."""
+    """The sidebar on the left: the Toner mark, the organization switcher, Search, the sections in groups (Observability, Network,
+    Work), and Settings and About at the bottom. Ctrl+B folds it to icons; a narrow window folds it by itself (not stored)."""
     currentChanged = Signal(int)
     search_requested = Signal()
     collapsed_changed = Signal(bool)
@@ -145,10 +156,11 @@ class NavStack(QWidget):
         self.mark = Beat(LOGO)                     # the logo; it beats slowly under Motion: Lively
         self._brand = QLabel(title)
         self._brand.setObjectName("brand")
-        self.fold = QPushButton()                  # folds the sidebar to icons, and back
+        self.fold = QPushButton(self)              # folds the sidebar to icons, and back: in the top row, or astride the edge when folded
+        self.fold.setObjectName("navFold")
         self.fold.setProperty("ghost", True)
         self.fold.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.fold.setFixedSize(32, 32)
+        self.fold.setFixedSize(FOLD, FOLD)
         self.fold.clicked.connect(lambda: self.setCollapsed(not self._collapsed))
         self.org_label = QLabel("Organization")
         self.org_label.setProperty("muted", True)
@@ -174,12 +186,14 @@ class NavStack(QWidget):
         self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.list.setFrameShape(QListWidget.Shape.NoFrame)
         self.list.setItemDelegate(NavDelegate(self))
-        head = QHBoxLayout()
+        self.head = head = QHBoxLayout()           # the mark and the name; centred on the mark alone when folded
         head.setContentsMargins(0, 0, 0, 0)
         head.setSpacing(8)
+        head.addStretch(0)
         head.addWidget(self.mark)
         head.addWidget(self._brand, 1)
-        head.addWidget(self.fold)
+        head.addSpacing(FOLD + 4)                  # where the fold button sits while the names show
+        head.addStretch(0)
         col = QVBoxLayout(self.side)
         col.setContentsMargins(10, 12, 10, 10)
         col.setSpacing(6)
@@ -218,6 +232,19 @@ class NavStack(QWidget):
         """Only icons show, either because that was chosen (Ctrl+B) or because the window is too narrow for the names."""
         return self._collapsed or self._auto
 
+    def is_break(self, row):
+        """Folded to icons, a group name's row is drawn as a short rule between the groups (none above the first group)."""
+        return self._icons_only() and row in self._headings and row != self._spacer and row != 0
+
+    def _place_fold(self):
+        """The fold button: at the right of the top row while the names show; astride the sidebar's edge, just outside it, when folded."""
+        m = self.side.layout().contentsMargins()
+        if self._icons_only():
+            self.fold.move(SIDE_FOLDED - FOLD // 2, m.top() + (LOGO - FOLD) // 2)
+        else:
+            self.fold.move(SIDE_WIDTH - m.right() - FOLD, m.top() + (LOGO - FOLD) // 2)
+        self.fold.raise_()
+
     def set_orgs(self, orgs, current=0):
         """[(id, name, colour)]: the organizations besides Global (archived ones are not offered). Hidden while there are none."""
         from PySide6.QtGui import QColor, QPixmap
@@ -250,17 +277,25 @@ class NavStack(QWidget):
         self.side.setFixedWidth(SIDE_FOLDED if icons_only else SIDE_WIDTH)
         self.fold.setToolTip("Show the sidebar in full (Ctrl+B)" if self._collapsed else "Fold the sidebar to icons (Ctrl+B)")
         self._brand.setVisible(not icons_only)
+        self.head.setStretch(0, 1 if icons_only else 0)                 # the mark sits in the middle of the folded column
+        self.head.setStretch(self.head.count() - 1, 1 if icons_only else 0)
+        self.head.itemAt(3).changeSize(0 if icons_only else FOLD + 4, 0)
+        self.head.invalidate()
         self.quick.setText("" if icons_only else "Search")
+        self.quick.setProperty("folded", icons_only)                   # the icon alone, in the middle of the button
+        self.quick.style().unpolish(self.quick)
+        self.quick.style().polish(self.quick)
         self.org_label.setVisible(not icons_only and not self.org.isHidden())
         for row in self._headings:
             item = self.list.item(row)
             if row == self._spacer:
                 continue
             item.setText("" if icons_only else item.data(Qt.ItemDataRole.UserRole))
-            item.setSizeHint(QSize(0, 10 if icons_only else (NAV_HEADING if row else NAV_HEADING - 12)))
+            item.setSizeHint(QSize(0, (NAV_BREAK if row else 6) if icons_only else (NAV_HEADING if row else NAV_HEADING - 12)))
         for i in range(len(self._names)):
             self._label(i)
         self._place_spacer()
+        self._place_fold()
         self.restyle()
 
     def _label(self, i):
@@ -294,6 +329,7 @@ class NavStack(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._fit()
+        self._place_fold()
 
     def eventFilter(self, obj, event):
         if obj is self.list.viewport() and event.type() == QEvent.Type.Resize:
@@ -353,7 +389,8 @@ class NavStack(QWidget):
         item.setFlags(Qt.ItemFlag.NoItemFlags)
         f = item.font()
         f.setBold(True)
-        f.setPointSizeF(max(7.0, f.pointSizeF() - 2))
+        f.setPointSizeF(max(8.0, f.pointSizeF() - 0.5))                # a group name reads as a heading, not a footnote
+        f.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 108)
         item.setFont(f)
         item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom)
         self._insert(row, item)

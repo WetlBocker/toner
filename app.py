@@ -21,7 +21,6 @@ from ui.inventory import InventoryTab
 from ui import otpprompt
 from ui.notifier import Notifier
 from ui.palette import CommandPalette
-from ui.reports_tab import ReportsTab
 from ui.results import ResultsTab
 from ui.scanning import ScanningTab
 from ui.scheduler import BackupScheduler, Scheduler
@@ -105,7 +104,6 @@ class Main(QMainWindow):
         self.views = {}                                  # open device windows by name
         self.dashboard = DashboardTab()
         self.results, self.inventory, self.history = ResultsTab(), InventoryTab(), HistoryTab()
-        self.reports = ReportsTab(lambda: self.results.results)
         self.tools = ToolsTab()
         self.sessions = SessionsTab()
         self.automation = AutomationTab()
@@ -138,6 +136,9 @@ class Main(QMainWindow):
                 page.desktop_cb = self.show_desktop
         self.results.run_finished.connect(self.on_run_finished)
         self.results.run_finished.connect(self.inventory.update_values)    # the versions and states the run just read
+        self.results.run_started.connect(self.inventory.pane.run_started)  # the details pane counts the device's checks as they run
+        self.results.check_done.connect(self.inventory.pane.check_done)
+        self.results.run_finished.connect(self.inventory.pane.run_finished)
         self.results.run_finished.connect(self.dashboard.refresh)
         self.dashboard.attention_count.connect(lambda n: self.tabs.setBadge(self.results, n))   # the count on the Results row
         self.inventory.changed.connect(self.tools.refresh)
@@ -145,10 +146,8 @@ class Main(QMainWindow):
         self.inventory.changed.connect(self.dashboard.refresh)
         self.configs.backed_up.connect(self.on_backup_finished)
         self.results.run_finished.connect(self.history.refresh)
-        self.results.run_finished.connect(self.reports.refresh)
         self.inventory.changed.connect(self.results.refresh_groups)
         self.inventory.changed.connect(self.history.refresh)
-        self.inventory.changed.connect(self.reports.refresh)
         self.inventory.changed.connect(self.settings.refresh_dynamic)
         self.inventory.open_ssh.connect(self.open_ssh_console)
         self.inventory.sessions_imported.connect(self.sessions.refresh)
@@ -174,7 +173,7 @@ class Main(QMainWindow):
         topo.open_device.connect(self.open_device_by_name)
         topo.open_ssh.connect(lambda key: self.open_ssh_console(db.find_device(key)) if db.find_device(key) else None)
         topo.run_checks.connect(self.results.run_devices)
-        topo.ping.connect(lambda key: self.open_tool("ping", db.find_device(key)) if db.find_device(key) else None)
+        topo.ping.connect(self.quick_ping)
         topo.add_device.connect(lambda info: (self.go("Inventory"), self.inventory.add(info)))
         topo.inventory_action.connect(self.inventory.act_on)       # Edit..., Scan for vulnerabilities, Edit tags..., Delete... as on the Inventory tab
         self.settings.changed.connect(self.settings_applied)
@@ -192,10 +191,10 @@ class Main(QMainWindow):
         self.about.quit_requested.connect(self.quit_for_real)           # the installer has been started
         tabs = self.tabs = NavStack("Toner")
         # the sections, in the order Ctrl+1..9 and go() know them, each under its group in the sidebar
-        for page, label, icon, group in ((self.dashboard, "Overview", "dashboard", "Watch"), (self.results, "Results", "results", "Watch"),
+        for page, label, icon, group in ((self.dashboard, "Overview", "dashboard", "Observability"), (self.results, "Results", "results", "Observability"),
                                          (self.inventory, "Inventory", "inventory", "Network"), (self.configs, "Configs", "configs", "Network"),
                                          (self.scanning, "Scanning", "scanning", "Network"),
-                                         (self.history, "History", "history", "Watch"), (self.reports, "Reports", "reports", "Watch"),
+                                         (self.history, "History", "history", "Observability"),
                                          (self.tools, "Tools", "tools", "Work"), (self.sessions, "Sessions", "sessions", "Work"),
                                          (self.automation, "Automation/AI", "automation", "Work"),
                                          (self.settings, "Settings", "settings", NavStack.BOTTOM),
@@ -335,7 +334,7 @@ class Main(QMainWindow):
         y = int(round(frac * self.body.height() - b.height() / 2))
         y = max(HEADER_CLEAR, y)                                                # never over a section's title row and its buttons
         from PySide6.QtCore import QPoint
-        b.move(self.body.mapTo(self, QPoint(max(0, x), min(max(0, y), max(0, self.body.height() - b.height())))))
+        b.settle(self.body.mapTo(self, QPoint(max(0, x), min(max(0, y), max(0, self.body.height() - b.height())))))   # by rubber band after a drop
         b.raise_()
 
     def resizeEvent(self, event):
@@ -373,16 +372,19 @@ class Main(QMainWindow):
         return out
 
     # ---------- section headers
-    HEADERS = (("inventory", "Inventory"), ("configs", "Configs"), ("history", "History"), ("reports", "Reports"), ("tools", "Tools"),
+    HEADERS = (("inventory", "Inventory"), ("configs", "Configs"), ("history", "History"), ("tools", "Tools"),
                ("sessions", "Sessions"), ("automation", "Automation/AI"), ("settings", "Settings"))
+    REFRESHABLE = ("inventory", "configs", "history")        # sections whose header gets a Refresh button (Overview, Results and Scanning make their own)
 
     def _add_headers(self):
         """The same top line on every section: its name and a line of context (Overview and Results make their own; About is its own page)."""
-        from ui.widgets import SectionHeader
+        from ui.widgets import RefreshButton, SectionHeader
         self.headers = {}
         for attr, title in self.HEADERS:
             page = getattr(self, attr)
             h = SectionHeader(title)
+            if attr in self.REFRESHABLE:
+                h.add(RefreshButton(lambda p=page: (p.refresh(), self.update_headers())))
             page.layout().insertWidget(0, h)
             self.headers[attr] = h
         self.update_headers()
@@ -423,8 +425,7 @@ class Main(QMainWindow):
         except Exception:
             pass
         run = db.last_run()
-        self.headers["history"].set_context(f"Last run {display.ago(run['started_at'])}" if run else "No runs yet")
-        self.headers["reports"].set_context("Exports (CSV, HTML, PDF) and trend reports")
+        self.headers["history"].set_context((f"Last run {display.ago(run['started_at'])}" if run else "No runs yet") + "  ·  reports (CSV, HTML, PDF) and the trend report")
         self.headers["tools"].set_context("Troubleshooting, discovery, SNMP, file transfer and certificates")
         try:
             saved = len(sessions.list_sessions())
@@ -566,6 +567,13 @@ class Main(QMainWindow):
             return
         from ui import rdpprompt
         rdpprompt.start(self, sessions.rdp_for_device(dev))       # (Linux: FreeRDP, after asking for the password)
+
+    def quick_ping(self, key):
+        """Right-click > Ping on a device anywhere: the small window that sends five echoes."""
+        from ui.pingpop import ping_popup
+        dev = db.find_device(key)
+        if dev and dev.get("host"):
+            ping_popup(self, dev["name"], dev["host"])
 
     def open_ssh_console(self, dev):
         """Inventory > right-click > Open SSH session, the device window and the palette: an SSH tab in Sessions."""
@@ -804,7 +812,6 @@ class Main(QMainWindow):
             self.inventory.refresh()
         self.results.repopulate()
         self.scanning.repopulate()
-        self.reports.show_preview()
         self.history.show_run()
         self.sessions.apply_settings()
         self.scheduler.apply()

@@ -10,6 +10,7 @@ from core import audit, backup, db, display, scope
 from drivers.base import SEVERITY
 from ui import theme
 from ui.widgets import EmptyHint, filling, remember_sizes
+from ui.panels import fit_rows
 from ui.finder import FilterButton, SearchBox, device_sections, listed_devices, shown_devices, wants_archived
 from ui.toast import toast
 from ui import status as st
@@ -206,8 +207,13 @@ class ConfigsTab(QWidget):
         rsplit.setSizes([170, 450])
         remember_sizes(rsplit, "configs_versions")
         rl.addWidget(rsplit)
+        left = QWidget()                               # the device list ends under its last row (fit_rows); the rest of the column stays empty
+        ll = QVBoxLayout(left)
+        ll.setContentsMargins(0, 0, 0, 0)
+        ll.addWidget(self.devs)
+        ll.addStretch(1)
         split = QSplitter()
-        split.addWidget(self.devs)
+        split.addWidget(left)
         split.addWidget(right)
         self.devs.setMinimumWidth(440)                 # the device name keeps room to be read; the other columns fit their contents
         split.setCollapsible(0, False)
@@ -248,6 +254,7 @@ class ConfigsTab(QWidget):
         if keep in self.names:
             self.devs.selectRow(self.names.index(keep))
         self.devs.blockSignals(False)
+        fit_rows(self.devs)
         self.show_versions()                  # always reload: the selection may not have changed but the data did
 
     def current_device(self):

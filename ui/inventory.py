@@ -17,6 +17,9 @@ from ui.devicechecks import DeviceChecks
 from ui.servicepicker import ServicePicker
 from ui.snmpfields import SnmpFields
 from core.runner import run_one
+from ui.orgpick import OrgPicker
+from ui.panels import ProgressLine
+from ui.pingpop import ping_popup
 from ui.toast import toast
 from ui import status as st
 from ui import motion
@@ -825,6 +828,11 @@ class DetailsPane(QWidget):
         head.setContentsMargins(0, 0, 0, 0)
         head.addWidget(self.title, 1)
         head.addWidget(self.close_btn, 0, Qt.AlignmentFlag.AlignTop)
+        self.running = QLabel("")                                      # "Running: 3 of 12" while this device's checks run
+        self.running.setProperty("muted", True)
+        self.running.hide()
+        self.progress = ProgressLine()                                 # and the line that fills under it
+        self._done, self._total = 0, 0
         from ui.widgets import FlowLayout
         self.buttons = {}
         acts = FlowLayout(6, 6)                                        # four buttons: they wrap in a narrow pane
@@ -849,6 +857,8 @@ class DetailsPane(QWidget):
         bl.setSpacing(8)
         bl.addLayout(head)
         bl.addWidget(self.sub)
+        bl.addWidget(self.running)
+        bl.addWidget(self.progress)
         bl.addWidget(self.chip, 0, Qt.AlignmentFlag.AlignLeft)
         bl.addLayout(acts)
         bl.addWidget(self.summary, 1)
@@ -893,6 +903,38 @@ class DetailsPane(QWidget):
         self.buttons["connect"].setText({"rdp": "Remote Desktop", "ssh": "SSH"}.get(kind, "Connect"))
         self.summary.set_device(dev)
 
+    # ---- the checks running on this device (Run checks here, or anywhere else)
+    def _mine(self, name_or_keys):
+        if not self.dev:
+            return False
+        if isinstance(name_or_keys, str):
+            return name_or_keys == self.dev["name"]
+        return (self.dev.get("key") or self.dev["name"]) in name_or_keys
+
+    def _say_running(self):
+        self.running.setText(f"Running: {self._done} of {self._total}" if self._total else f"Running: {self._done} so far")
+        self.running.setVisible(True)
+        self.progress.set_progress(min(self._done, max(1, self._total) - 1), max(1, self._total))
+
+    def run_started(self, keys):
+        """A run began: when this device is in it, the line under its name counts its checks as they come (as many as it had last time)."""
+        if not self._mine(keys):
+            return
+        self._done, self._total = 0, self.summary.checks.rowCount()
+        self._say_running()
+
+    def check_done(self, name, _check):
+        if self._mine(name) and self.running.isVisible():
+            self._done += 1
+            if self._done > self._total:
+                self._total = 0                                        # more checks than last time: count without a total
+            self._say_running()
+
+    def run_finished(self):
+        self.running.hide()
+        self.progress.set_progress(1, 1)                               # hides the line
+        self._done = self._total = 0
+
 
 class InventoryTab(QWidget):
     changed = Signal()
@@ -915,7 +957,7 @@ class InventoryTab(QWidget):
         super().__init__()
         self.payload = {}                       # item key -> device dict / folder id / group name
         self._building = False
-        self.expanded = set(db.get_setting("inventory_expanded"))
+        self.expanded = set()                   # the folders open now: every folder starts closed when Toner opens (what you open stays open while it runs)
         self.vendor_sel, self.location_sel, self.tag_sel = set(), set(), set()    # empty = all; location "" = none
         self.org_sel = set()                    # Global: the organizations ticked in the filter (empty = all active ones)
         self.search = QLineEdit()
@@ -1303,6 +1345,10 @@ class InventoryTab(QWidget):
                 item.setIcon(0, new.icon(0))
             found += 1
         self.columns.apply()                                # a Version column hidden while blank everywhere shows once one is read
+        if self.pane.dev is not None:                       # the details pane shows the new status, version and checks too
+            key = self._key("device", self.pane.dev.get("org", db.target()), self.pane.dev["id"])
+            if key in fresh:
+                self.pane.set_device(fresh[key])
         if hasattr(self, "fleet") and self.stack.currentWidget() is self.fleet:
             self.fleet.refresh()
 
@@ -1359,10 +1405,10 @@ class InventoryTab(QWidget):
         return self.hint
 
     def org_switched(self):
-        """Another organization was picked: its own open folders, a clean search box, and its devices. The list is drawn here:
+        """Another organization was picked: its folders closed, a clean search box, and its devices. The list is drawn here:
         the `changed` signal that follows tells the other sections, not the inventory itself (1.6.10: a switch used to leave
         the old organization's devices on screen until a filter was touched)."""
-        self.expanded = set(db.get_setting("inventory_expanded"))
+        self.expanded = set()
         self.org_sel = set()
         self._update_filter_btn()
         self.search.blockSignals(True)                 # clearing would draw the list once for the search, once more below
@@ -1515,19 +1561,8 @@ class InventoryTab(QWidget):
         An empty list keeps its height for the hint."""
         if self._building:
             return
-        from PySide6.QtWidgets import QTreeWidgetItemIterator
-        bottom = 0
-        it = QTreeWidgetItemIterator(self.table, QTreeWidgetItemIterator.IteratorFlag.NotHidden)
-        while it.value():
-            r = self.table.visualItemRect(it.value())                  # empty for a row inside a closed folder
-            if r.isValid() and r.height():
-                bottom = max(bottom, r.bottom())
-            it += 1
-        if bottom:                                                     # a strip under the last row stays: a drop there means "to the top level",
-            extra = self.table.horizontalScrollBar().height() if self.table.horizontalScrollBar().isVisible() else 0   # a click there deselects
-            self.table.setMaximumHeight(bottom + self.table.header().height() + 2 * self.table.frameWidth() + extra + EMPTY_STRIP)
-        else:
-            self.table.setMaximumHeight(16777215)
+        from ui.panels import fit_rows
+        fit_rows(self.table, EMPTY_STRIP)                              # the strip under the last row: a drop there means "to the top level"
 
     def remember(self, item, open_):
         """Keep which folders are open, across restarts."""
@@ -1869,6 +1904,8 @@ class InventoryTab(QWidget):
                     menu.addAction("Open SSH session", self.open_in_ssh)
             if devs and not folders:
                 menu.addAction("Run Checks", lambda: self.run_checks.emit([d.get("key") or d["name"] for d in self.selected_devices()]))
+            if len(devs) == 1 and not folders and devs[0].get("host"):
+                menu.addAction("Ping", lambda d=devs[0]: ping_popup(self, d["name"], d["host"]))
             if devs and can:
                 menu.addAction("Edit selected..." if len(devs) > 1 else "Edit tags, folder, profile...", self.bulk_edit)
                 menu.addAction("Detect vendors for selected...", self.detect_vendors)
@@ -1886,10 +1923,7 @@ class InventoryTab(QWidget):
                     if fid not in banned:
                         move.addAction(path, lambda fid=fid: self.move_selected_to(fid))
             if devs and not folders and db.everything() and all(d.get("org") not in db.archived_ids() for d in devs):
-                to = menu.addMenu("Move to organization")
-                for text, dest in [("Global", db.GLOBAL)] + [(o["name"], o["id"]) for o in orgs.list_orgs(archived=False)]:
-                    act = to.addAction(text, lambda dest=dest: self.move_to_org(self.selected_devices(), dest))
-                    act.setEnabled(any(d.get("org") != dest for d in devs))
+                menu.addAction("Move to organization...", lambda: self.pick_org(self.selected_devices()))
             if can:
                 menu.addSeparator()
                 menu.addAction("Delete folder..." if folders and not devs else "Delete...", self.delete)
@@ -1902,6 +1936,14 @@ class InventoryTab(QWidget):
         menu.exec(self.table.viewport().mapToGlobal(pos))
 
     # ---------- moving devices between organizations (Global) ----------
+    def pick_org(self, devs):
+        """Move to organization...: pick the organization from a list that scrolls and can be searched, then move."""
+        if not devs:
+            return
+        dlg = OrgPicker(devs, self)
+        if dlg.exec() and dlg.chosen() is not None:
+            self.move_to_org(devs, dlg.chosen())
+
     def move_to_org(self, devs, dest, shared=0):
         """Ask, then move devices to another organization: with their data (results, config backups, sessions) or without."""
         devs = [d for d in devs if d.get("org") != dest]

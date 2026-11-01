@@ -1,14 +1,19 @@
+"""History: every run, the checks of the chosen run, charts of any checks over time, and the reports (CSV, HTML, PDF of the chosen
+run, and the trend report), which used to be a section of their own."""
 import math
+import os
 from datetime import datetime, timedelta
 
 import pyqtgraph as pg
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
-from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFrame, QHBoxLayout, QLabel, QScrollArea, QSizePolicy, QSplitter,
-                               QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout, QWidget)
-from core import db, display, scope
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPixmap
+from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy,
+                               QSplitter, QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout, QWidget)
+from core import db, display, reports, scope, trends
 from core.reports import COLORS, fg_for
+from drivers.base import SEVERITY, Result
 from ui import theme
+from ui.toast import toast
 from ui.widgets import EmptyHint, FlowLayout, GroupPicker, StatusDelegate, filling, flow, remember_sizes
 from ui.finder import FilterButton, SearchBox, device_sections, listed_devices, shown_devices, wants_archived
 from ui import status as st
@@ -423,10 +428,31 @@ class HistoryTab(QWidget):
         self.chart = ChartStack()
         self.dev.currentIndexChanged.connect(lambda _i: self.fill_checks(self.dev.currentData()))
         self.chk.changed.connect(self.draw)
+        self.detail.itemSelectionChanged.connect(self._pick_from_row)      # a check's row puts that device and check on the chart
+        # the reports: of the run chosen above (the devices shown), and the trend report over a period
+        self.csv_btn, self.html_btn, self.pdf_btn = QPushButton("Export CSV"), QPushButton("HTML report"), QPushButton("PDF report")
+        for b, fn in ((self.csv_btn, self.export_csv), (self.html_btn, self.export_html), (self.pdf_btn, self.export_pdf)):
+            b.setToolTip("The checks of the run chosen above, for the devices shown")
+            b.clicked.connect(fn)
+        self.trend_period = QComboBox()
+        for label, days in trends.PERIODS:
+            self.trend_period.addItem(label, days)
+        self.trend_btn = QPushButton("Trend report")
+        self.trend_btn.setToolTip("How the whole period went compared with the one before: availability, worst offenders, what keeps failing, "
+                                  "what is still wrong, changes, and the Windows computers. Not affected by the run chosen above.")
+        self.trend_btn.clicked.connect(self.export_trend)
+        self.report_label = QLabel("Report")
+        self.report_label.setProperty("muted", True)
+        bar = flow(self.report_label, self.csv_btn, self.html_btn, self.pdf_btn, self.trend_period, self.trend_btn)
+        low = QWidget()
+        lowl = QVBoxLayout(low)
+        lowl.setContentsMargins(0, 0, 0, 0)
+        lowl.addWidget(self.detail, 1)
+        lowl.addLayout(bar)
 
         left = QSplitter(Qt.Orientation.Vertical)
         left.addWidget(self.runs)
-        left.addWidget(self.detail)
+        left.addWidget(low)
         right = QWidget()
         rl = QVBoxLayout(right)
         for w in (self.dev, self.chk):               # share the width, and wrap when the pane is narrow
@@ -503,12 +529,93 @@ class HistoryTab(QWidget):
         rid, org = self.run_ids[row]
         res = [r for r in db.run_results(rid, org)
                if names is None or self._base(r["device"]) in names]
+        self.detail.blockSignals(True)
         self.detail.setRowCount(len(res))
         self.detail_hint.setVisible(not res)
+        self._run_rows = res
         for i, r in enumerate(res):
             for j, v in enumerate([db.label(r["device"]), display.check_name(r["check_name"]), r["status"],
                                    display.value(r["value"]), r["message"]]):
-                self.detail.setItem(i, j, QTableWidgetItem(v or ""))
+                it = QTableWidgetItem(v or "")
+                if j < 2:                                        # the row knows its device and check, for the chart
+                    it.setData(Qt.ItemDataRole.UserRole, r["device"] if j == 0 else r["check_name"])
+                self.detail.setItem(i, j, it)
+        self.detail.blockSignals(False)
+
+    def _pick_from_row(self):
+        """A check's row was chosen in the run's list: that device and that check go on the chart (a check with no numbers
+        to chart leaves the device's usual pick)."""
+        row = self.detail.currentRow()
+        if row < 0 or self.detail.item(row, 0) is None:
+            return
+        device = self._base(self.detail.item(row, 0).data(Qt.ItemDataRole.UserRole) or "")
+        check = self.detail.item(row, 1).data(Qt.ItemDataRole.UserRole) or ""
+        i = self.dev.findData(device)
+        if i < 0:
+            return
+        self.dev.setCurrentIndex(i)                               # fills the checks and ticks the first
+        label = display.check_name(check)
+        if label in self.check_keys and self.chk.selected() != [label]:
+            self.chk.set_selected([label])
+            self.draw()
+
+    # ---------- reports
+    def report_rows(self):
+        """The chosen run's checks, for the devices shown, as the report writers take them."""
+        rows = [Result(r["device"], r["check_name"], r["status"], r["value"] or "", r["message"] or "") for r in getattr(self, "_run_rows", [])]
+        for r in rows:
+            if "@@" in r.device:                                 # Global: another organization's device, named with it
+                r.device = db.label_org(r.device)
+        rows.sort(key=lambda r: (-SEVERITY[r.status], r.device, r.check))
+        return rows
+
+    def report_date(self):
+        row = self.runs.currentRow()
+        return self.runs.item(row, 0).text() if 0 <= row < len(self.run_ids) and self.runs.item(row, 0) is not None else None
+
+    def scope_text(self):
+        parts = [self.funnel.describe()] if self.funnel.active() else []
+        if self.find.words():
+            parts.append(f"search: {self.find.text().strip()}")
+        return ", ".join(p for p in parts if p)
+
+    def _export(self, title, pattern, fn, open_after=False):
+        rows = self.report_rows()
+        if not rows:
+            toast(self, "No results to export. Choose a run above, or run the checks first.")
+            return
+        ext = pattern.split("*")[-1].rstrip(")")
+        folder = db.get_setting("report_folder")
+        start = os.path.join(folder, f"Toner-{datetime.now():%Y-%m-%d_%H%M}{ext}") if folder and os.path.isdir(folder) else ""
+        path, _ = QFileDialog.getSaveFileName(self, title, start, pattern)
+        if path:
+            fn(rows, path, scope=self.scope_text(), when=self.report_date())
+            if open_after:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+
+    def export_csv(self):
+        self._export("Export CSV", "CSV (*.csv)", reports.to_csv)
+
+    def export_html(self):
+        self._export("HTML report", "HTML (*.html)", reports.save_html, True)
+
+    def export_pdf(self):
+        self._export("PDF report", "PDF (*.pdf)", reports.save_pdf, True)
+
+    def export_trend(self):
+        data = trends.compute(self.trend_period.currentData())
+        if not data["runs"]:
+            toast(self, "There are no runs in that period yet. Run the checks first.")
+            return
+        folder = db.get_setting("report_folder")
+        start = os.path.join(folder, f"Toner-trend-{datetime.now():%Y-%m-%d}") if folder and os.path.isdir(folder) else ""
+        path, _chosen = QFileDialog.getSaveFileName(self, "Trend report", start, "PDF (*.pdf);;HTML (*.html);;CSV (*.csv)")
+        if not path:
+            return
+        low = path.lower()
+        (trends.to_csv if low.endswith(".csv") else trends.save_html if low.endswith(".html") else trends.save_pdf)(data, path)
+        if not low.endswith(".csv"):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
     def fill_checks(self, device):
         """List this device's checks. Ticks that still apply are kept; a first visit ticks the first check."""

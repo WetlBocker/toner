@@ -18,6 +18,8 @@ CLI = {"cisco_ios": ("show cdp neighbors detail", "show lldp neighbors detail"),
        "arista_eos": ("show lldp neighbors detail",), "juniper_junos": ("show lldp neighbors | no-more",),
        "aruba_aoscx": ("show lldp neighbor-info detail",), "aruba_osswitch": ("show lldp info remote-device detail",),
        "mikrotik_routeros": ("/ip neighbor print detail",)}
+# the port-channel summary per platform: which physical ports are members of which channel, so the map can say a link runs over one
+CHANNELS = {"cisco_ios": "show etherchannel summary", "cisco_xe": "show etherchannel summary", "cisco_nxos": "show port-channel summary"}
 API_VENDORS = ("fortinet", "paloalto")
 NOTHING = ("No devices that can report neighbours: set SNMP on a device (its SNMP tab) or a credential profile with SNMP, an SSH login "
            "on a Cisco, Arista, Juniper, HPE or MikroTik device, or the API key on a Fortinet or Palo Alto firewall.")
@@ -103,6 +105,14 @@ def _cli_rows(dev):
         wait = max(60, int(opts.get("ssh_timeout", 20)) * 3)
         for cmd in cmds:
             rows += parse(plat, cmd, c.send_command(cmd, read_timeout=wait))
+        if rows and plat in CHANNELS:                           # which of the local ports are members of a Port-Channel
+            try:
+                members = channel_members(clichecks.etherchannels(c.send_command(CHANNELS[plat], read_timeout=wait)))
+            except Exception:                                   # a device without Port-Channels, or one that refuses the command
+                members = {}
+                quiet.ignored()
+            for r in rows:
+                r["local_channel"] = members.get(short_port(r["local_port"]), "")
         for protocol, cmd in L3_CLI.get(plat, ()):
             try:
                 l3 += parse_l3(protocol, c.send_command(cmd, read_timeout=wait))
@@ -332,10 +342,20 @@ def short_port(name):
     return s
 
 
+def channel_members(channels):
+    """{short port name: channel} from clichecks.etherchannels: 'gi1/0/1' -> 'Po1'."""
+    out = {}
+    for chan, _flags, members in channels or ():
+        for port, _f in members:
+            out[short_port(port)] = chan
+    return out
+
+
 def build_graph(rows):
     """Turn neighbour rows into (nodes, links). A node is an inventory device or an outside neighbour; a link is
     one cable: the same cable reported from both ends is merged. nodes: {id: {'inventory': bool, 'addr': str}},
-    links: [{'a','b','a_port','b_port','protocols','rows' (indexes into rows),'down','speed','change'}]."""
+    links: [{'a','b','a_port','b_port','a_channel','b_channel','protocols','rows' (indexes into rows),'down','speed','change'}];
+    a_channel / b_channel name the Port-Channel the port at that end belongs to, where the device reported one."""
     inv = {_key(d["name"]): d["key"] for d in db.list_devices()}
     inv.update({_key(d["key"]): d["key"] for d in db.list_devices()})
     nodes, links = {}, []
@@ -372,8 +392,12 @@ def build_graph(rows):
                 found[side[a]] = ap
             if not found[side[b]]:
                 found[side[b]] = bp
+            chan = {found["a"]: "a_channel", found["b"]: "b_channel"}
+            if r.get("local_channel") and not found.get(chan[a]):
+                found[chan[a]] = r["local_channel"]
         else:
-            links.append({"a": a, "b": b, "a_port": ap, "b_port": bp, "protocols": {r["protocol"]}, "rows": [i], "down": down, "speed": speed, "change": ""})
+            links.append({"a": a, "b": b, "a_port": ap, "b_port": bp, "a_channel": r.get("local_channel") or "", "b_channel": "",
+                          "protocols": {r["protocol"]}, "rows": [i], "down": down, "speed": speed, "change": ""})
     for l in links:
         l["both"] = len({rows[i]["device"] for i in l["rows"]}) >= 2        # seen from both ends, or from one device only
     return nodes, links
@@ -779,9 +803,38 @@ def group_endpoints(nodes, links, roles, mode="group"):
             continue
         name = f"{parent} » {n} {GROUP_WORDS[role][1]}"
         out_nodes[name] = {"inventory": False, "addr": "", "group": True, "members": g["members"], "role": role, "count": n}
-        out_links.append({"a": parent, "b": name, "a_port": ", ".join(p for p in g["ports"] if p)[:60], "b_port": "", "protocols": set(), "rows": [],
-                          "down": False, "speed": "", "change": "", "both": False})
+        out_links.append({"a": parent, "b": name, "a_port": ", ".join(p for p in g["ports"] if p)[:60], "b_port": "", "a_channel": "", "b_channel": "",
+                          "protocols": set(), "rows": [], "down": False, "speed": "", "change": "", "both": False})
     return out_nodes, out_links
+
+
+def bundle_channels(links):
+    """Links that run over a Port-Channel become one link per channel, labelled with the channel's name and carrying its
+    members' ports ('members': [(port at A, port at B)], 'count', 'channel': True). Parallel cables with no channel stay
+    as they are: the map says a Port-Channel is there only when the device reported one."""
+    out, by = [], {}
+    for l in links:
+        ca, cb = l.get("a_channel") or "", l.get("b_channel") or ""
+        if not ca and not cb:
+            out.append(l)
+            continue
+        k = (l["a"], ca, l["b"], cb)
+        if k in by:
+            m = by[k]
+            m["count"] += 1
+            m["members"].append((l.get("a_port", ""), l.get("b_port", "")))
+            m["down"] = m.get("down", False) or l.get("down", False)
+            m["change"] = m["change"] if m["change"] == l["change"] else (m["change"] or l["change"])
+            m["both"] = m.get("both", False) or l.get("both", False)
+            continue
+        m = dict(l, count=1, members=[(l.get("a_port", ""), l.get("b_port", ""))], channel=True)
+        by[k] = m
+        out.append(m)
+    for m in by.values():                                      # the link is labelled with the channel; an end without one lists its ports
+        ports = lambda i: ", ".join(p for p, _ in (m["members"] if i == 0 else [(b, a) for a, b in m["members"]]) if p)
+        m["a_port"] = m.get("a_channel") or ports(0)
+        m["b_port"] = m.get("b_channel") or ports(1)
+    return out
 
 
 def merge_parallel(links):

@@ -191,7 +191,7 @@ st.collapse_all(); check("Collapse all closes every folder", not any(it.isExpand
 st.expand_all(); check("Expand all opens them", all(it.isExpanded() for it in st._all_items() if it.childCount()))
 pick_folder("Branches"); G0()["Branches"].setExpanded(False)
 check("which folders are open is remembered across restarts", fid not in set(db.get_setting("sessions_expanded")) and chi in set(db.get_setting("sessions_expanded")), db.get_setting("sessions_expanded"))
-st2 = S.SessionsTab(); check("a new window shows the same open and closed folders", [it.isExpanded() for it in st2._all_items() if st2.kind_of(it) == ("folder", fid)] == [False])
+st2 = S.SessionsTab(); check("a new window starts with every folder closed", not any(it.isExpanded() for it in st2._all_items() if st2.kind_of(it)[0] == "folder"))
 G0()["Branches"].setExpanded(True)
 st.search.setText("telnet"); names_now = [it.text(0).split("  (")[0] for it in st._all_items()]
 check("while searching, folders with nothing that matches are hidden", "Old router" in names_now and "Denver" not in names_now and "Chicago" not in names_now, names_now)

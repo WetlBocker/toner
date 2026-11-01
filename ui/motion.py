@@ -100,7 +100,7 @@ class Phase(QTimer):
 REVEAL_MS = 380             # one row's fade and lift
 REVEAL_STAGGER = 40         # the gap between one row starting and the next
 REVEAL_LIFT = 10            # how far up a row travels, in pixels
-REVEAL_ROWS = 14            # rows after this many start together (a long list should not take seconds)
+REVEAL_TOTAL = 1100         # the longest a whole list takes: a long list starts its rows closer together, every row still in its turn
 
 
 def row_bands(view):
@@ -129,14 +129,15 @@ class Reveal(QGraphicsEffect):
         super().__init__()
         self.target, self.bands_fn, self.t = target, bands, 0.0
         self._anim = None
-        self._stamp = None
+        self._stagger, self._total = float(REVEAL_STAGGER), float(REVEAL_MS)
 
     def start(self):
-        n = max(1, min(REVEAL_ROWS, len(self.bands_fn())))
-        total = REVEAL_MS + REVEAL_STAGGER * (n - 1)
+        n = max(1, len(self.bands_fn()))
+        self._stagger = min(float(REVEAL_STAGGER), (REVEAL_TOTAL - REVEAL_MS) / max(1, n - 1))
+        self._total = REVEAL_MS + self._stagger * (n - 1)
         self.target.setGraphicsEffect(self)
         self.target._reveal = self                             # (a Python reference, or the effect is collected and comes off at once)
-        self._anim = animate(self, total, self._on_value, curve=QEasingCurve.Type.Linear, on_done=self._done)
+        self._anim = animate(self, self._total, self._on_value, curve=QEasingCurve.Type.Linear, on_done=self._done)
 
     def _on_value(self, v):
         self.t = float(v)
@@ -149,10 +150,8 @@ class Reveal(QGraphicsEffect):
             self.target._reveal = None
 
     def progress(self, i):
-        """How far row i has come: 0 (not started) to 1 (landed)."""
-        n = max(1, min(REVEAL_ROWS, len(self.bands_fn())))
-        total = REVEAL_MS + REVEAL_STAGGER * (n - 1)
-        started = self.t * total - REVEAL_STAGGER * min(i, REVEAL_ROWS - 1)
+        """How far row i has come: 0 (not started) to 1 (landed). Every row has its own turn, the gaps shorter in a long list."""
+        started = self.t * self._total - self._stagger * i
         p = max(0.0, min(1.0, started / REVEAL_MS))
         return QEasingCurve(QEasingCurve.Type.OutCubic).valueForProgress(p)
 

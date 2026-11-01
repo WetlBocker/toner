@@ -5,12 +5,23 @@ row, soft accent), the shape and type tokens of each Look, the palette and the s
 themselves."""
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont, QPalette
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMenu, QProxyStyle
 from ui import icons, themes
 
 BASE_POINT_SIZE = 10             # the text size when Settings says "default"
 LOOK_KEYS = tuple(themes.DEFAULT_LOOK)
 _current = {}
+
+
+class RoundedMenus(QProxyStyle):
+    """Fusion, with every menu given a see-through window: the stylesheet rounds a menu's corners, and without this the window
+    behind it shows as a square patch at each corner."""
+
+    def polish(self, what):
+        if isinstance(what, QMenu):
+            what.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+            what.setWindowFlag(Qt.WindowType.NoDropShadowWindowHint, True)
+        return super().polish(what)
 
 # ---- the shape and type of each Look: corner radii, paddings and fonts
 _LOOKS = {
@@ -181,14 +192,16 @@ QTreeView::item:selected, QTableView::item:selected, QListView::item:selected {
 }
 QHeaderView { background: transparent; }
 QHeaderView::section {
-    background: %(surface)s; color: %(muted)s; border: 0; border-bottom: 1px solid %(border)s;
+    background: transparent; color: %(muted)s; border: 0; border-bottom: 1px solid %(border)s;
     padding: %(pad_header)s; font-weight: 600; %(header_font)s
 }
-QTableCornerButton::section { background: %(surface)s; border: 0; }
+/* (a see-through header: a painted one squares off the list's rounded top corners) */
+QTableCornerButton::section { background: transparent; border: 0; }
 
 /* ---- tabs (nested pages such as Tools) ---- */
-QTabWidget::pane { border: 0; border-top: 1px solid %(border)s; top: -1px; }
-QTabBar { background: transparent; }
+QTabWidget::pane { border: 0; }
+QTabBar { background: transparent; border-bottom: 1px solid %(border)s; }
+/* (the rule under the tabs is the bar's own: a pane border in document mode ran above the tabs, and the chosen tab painted over it) */
 QTabBar::tab {
     background: transparent; color: %(muted)s; padding: %(pad_tab)s; margin-right: 2px; border: 0;
     border-bottom: 2px solid transparent;
@@ -232,7 +245,11 @@ QWidget#sidebar { background: %(surface)s; border-right: 1px solid %(border)s; }
 QLabel#brand { font-size: %(brand_pt)spt; font-weight: 700; color: %(text)s; padding: 0; }
 QLabel#brandMark { background: %(accent)s; color: %(accent_text)s; border-radius: 9px; font-weight: 800; font-size: 12pt; }
 QPushButton#navSearch { text-align: left; padding: 6px 10px; background: %(input)s; border: 1px solid %(border)s; color: %(muted)s; }
+QPushButton#navSearch[folded="true"] { text-align: center; padding: 6px 4px; }
 QPushButton#navSearch:hover { color: %(text)s; background: %(hover)s; }
+QPushButton#navFold { padding: 0; background: %(surface)s; border: 1px solid %(border)s; border-radius: %(r_btn)spx; }
+QPushButton#refresh { padding: 0; }
+QPushButton#navFold:hover { background: %(hover)s; }
 QListWidget#nav { background: transparent; border: 0; border-radius: 0; %(nav_font)s }
 QListWidget#nav::item { padding: 0 10px; margin: 0; border: 0; border-left: 3px solid transparent; border-radius: %(r_nav)spx; color: %(text)s; background: transparent; }
 QListWidget#nav::item:hover { background: %(hover)s; }
@@ -317,7 +334,7 @@ def apply(app: QApplication, look=None, font_size=0, style=None, ctx=None):
         pass
     _current.clear()
     _current.update(t)
-    app.setStyle("Fusion")                               # one style everywhere, so the stylesheet looks the same
+    app.setStyle(RoundedMenus("Fusion"))                 # one style everywhere, so the stylesheet looks the same
     app.setPalette(palette(t))
     font = QFont(app.font())
     font.setFamilies(["Segoe UI Variable Text", "Segoe UI", "Inter", "Helvetica Neue", "Arial"])

@@ -220,7 +220,7 @@ top = [inv.table.topLevelItem(i).text(0) for i in range(inv.table.topLevelItemCo
 check("the Inventory shows its own folders", top == ["Acme Dental  (3)"], top)
 check("Configs lists only its devices", sorted(w.configs.names) == ["acme-dc", "acme-fw", "acme-sw1"], w.configs.names)
 w.history.refresh(); check("History's charts list only its devices", all(n.startswith("acme") for n in w.history.map))
-w.reports.load_source(); check("Reports cover only its devices", w.reports.base and all(x.device.startswith("acme") for x in w.reports.base))
+w.history.show_run(); _rows = w.history.report_rows(); check("Reports (on History) cover only its devices", _rows and all(x.device.startswith("acme") for x in _rows), [x.device for x in _rows])
 w.update_headers(); check("the headers count only its devices", w.headers["inventory"].context.text().startswith("3 devices"))
 ran = []; real_worker = A.ResultsTab.__init__.__globals__["Worker"]
 class W:
