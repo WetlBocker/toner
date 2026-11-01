@@ -30,7 +30,8 @@ except ValueError as e: check("limits the size of one scan", "at most" in str(e)
 print("== hints")
 check("banner keywords", discovery.hint_from_text("SSH-2.0-Cisco-1.25") == "cisco" and discovery.hint_from_text("SSH-2.0-ROSSSH") == "mikrotik" and discovery.hint_from_text("FortiGate-60F") == "fortinet" and discovery.hint_from_text("nothing known") == "")
 check("enterprise numbers", snmp.vendor_from_oid("1.3.6.1.4.1.9.1.1745") == "cisco" and snmp.vendor_from_oid("1.3.6.1.4.1.2636.1.1.1.2.21") == "juniper" and snmp.vendor_from_oid("1.3.6.1.4.1.14988.1") == "mikrotik" and snmp.vendor_from_oid("1.3.6.1.4.1.99999") == "")
-check("supported vendor kept, others become generic SNMP only when SNMP answered", discovery.netcheck_vendor("cisco", False) == "cisco" and discovery.netcheck_vendor("dell", True) == "snmp" and discovery.netcheck_vendor("dell", False) == "" and discovery.netcheck_vendor("", False) == "")
+check("supported vendor kept (Dell is one now), others become generic SNMP only when SNMP answered", discovery.netcheck_vendor("cisco", False) == "cisco" and discovery.netcheck_vendor("dell", False) == "dell"
+      and discovery.netcheck_vendor("netgear", True) == "snmp" and discovery.netcheck_vendor("netgear", False) == "" and discovery.netcheck_vendor("", False) == "")
 check("platform guesses", discovery.guess_platform("cisco", "Cisco IOS XE Software") == "cisco_xe" and discovery.guess_platform("cisco", "Cisco NX-OS(tm) n9000") == "cisco_nxos" and discovery.guess_platform("cisco", "Cisco IOS Software, C2960") == "cisco_ios" and discovery.guess_platform("hpe", "ArubaOS-CX 10.08") == "aruba_aoscx" and discovery.guess_platform("hpe", "ProCurve J9") == "aruba_osswitch" and discovery.guess_platform("juniper", "x") == "juniper_junos")
 
 print("== probing local fake devices")

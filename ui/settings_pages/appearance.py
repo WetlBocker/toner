@@ -78,7 +78,7 @@ class AppearancePage(Page):
         self.form.addRow("", compact_row(*self.swatch.values()))
         self.lay.insertWidget(1, note("Look: Standard is what Toner has had so far; Soft rounds every corner; Sharp squares them; Terminal is monospace "
                                       "with no rounding and tighter rows, for people who live in a console."))
-        self.lay.insertWidget(2, note("Motion: Subtle fades and grows things as they change; Lively adds the Aurora wash, a drifting backdrop and a "
+        self.lay.insertWidget(2, note("Motion: Subtle fades and grows things as they change; Lively adds the Constellation wash, a drifting backdrop and a "
                                       "heartbeat on the logo. Everything is still when Windows' animation effects are turned off."))
         self.lay.insertWidget(3, note("Panels: Raised panels cast a soft shadow; Flat panels have no border."))
         self.lay.insertWidget(4, note("Panel opacity: lower it to let the background show through the panels, lists and boxes."))

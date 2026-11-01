@@ -88,7 +88,7 @@ tab = w.results
 tab.last_ran = ["a", "b", "c"]; tab.results = [Result("a", "cpu", "FAIL", "1"), Result("b", "cpu", "OK", "1"), Result("c", "cpu", "WARN", "1")]
 tab.expanded = set(); tab._active = True
 tab.done()
-check("the failing and warning devices are open, the healthy one is not", tab.expanded == {"a", "c"}, tab.expanded)
+check("no device opens by itself when a run ends, failing ones included (every row starts closed)", tab.expanded == set(), tab.expanded)
 many = [Result(f"d{i:02d}", "cpu", "FAIL", "1") for i in range(30)]
 tab.results = many; tab.last_ran = [r.device for r in many]; tab.expanded = set()
 tab.done()

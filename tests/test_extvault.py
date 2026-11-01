@@ -55,6 +55,11 @@ class FakeManager(extvault.Provider):
         return ref
     def delete(self, item):
         SERVER["items"].pop(item.ref, None)
+    def delete_container(self, cid):
+        SERVER["calls"].append(("delete_container", cid))
+        if not SERVER.get("may_delete", True):
+            raise extvault.ExtError("this login may not delete collections")
+        SERVER["containers"].pop(cid)
     def search(self, text):
         return [extvault.Item(ref=r, title=i["title"], username=i["user"], container=SERVER["containers"].get(i["cid"], ""))
                 for r, i in SERVER["items"].items() if text.lower() in i["title"].lower()]
@@ -149,6 +154,43 @@ cfg = extstore.config("bitwarden"); cfg["containers"] = {str(beta): "Beta passwo
 st = extstore.sync_once()
 check("another collection can be picked for an organization", any(i["cid"] == "cx" and i["tid"] == f"org{beta}/beta-sw" for i in SERVER["items"].values()))
 SERVER["may_create"] = True
+
+print("== removing an organization")
+gamma = orgs.create("Gamma", "GAMMA")
+with db.within(gamma):
+    db.save_device(dev("gamma-sw"))
+    db.set_secret(db.secret_name("gamma-sw"), "gamma-pw")
+extstore.sync_once()
+gamma_cid = next(c for c, n in SERVER["containers"].items() if n == "Toner - Gamma")
+check("the organization's collection and item are in the manager", any(i["cid"] == gamma_cid for i in SERVER["items"].values()))
+orgs.remove(gamma)
+waiting = extstore.pending()
+check("removing it queues its collection for removal, beside the deletes of its passwords", waiting.get(extstore.DROP + "Toner - Gamma") == "drop"
+      and waiting.get(f"org{gamma}/gamma-sw") == "delete", waiting)
+st = extstore.sync_once()
+check("the next round deletes the items and the collection, and the queue is empty (before, the deletes of a removed organization waited for ever)",
+      gamma_cid not in SERVER["containers"] and not any(i["cid"] == gamma_cid for i in SERVER["items"].values()) and extstore.pending() == {} and st["connected"], (SERVER["containers"], extstore.pending()))
+extstore.queue("org999/left-over", "delete")
+extstore.queue("org999/other", "put")
+extstore.sync_once()
+check("a stale change of an organization that no longer exists is dropped from the queue instead of waiting", extstore.pending() == {})
+SERVER["containers"]["cold"] = "Toner - Old client"
+SERVER["items"]["old1"] = {"cid": "cold", "tid": "org555/old-sw", "title": "old-sw (Old client) – Password", "user": "u", "pw": "p"}
+SERVER["containers"]["cmine"] = "Team passwords"
+found = extstore.orphan_containers()
+check("Settings lists the Toner collections that belong to no organization Toner has now, with their item counts", found == [("Toner - Old client", 1)], found)
+SERVER["may_delete"] = False
+extstore.drop_containers(["Toner - Old client"])
+st = extstore.sync_once()
+check("when the login may delete items but not the collection, the items go and the status says what is left",
+      "old1" not in SERVER["items"] and "cold" in SERVER["containers"] and any("were deleted, but not the collection itself" in p for p in st["problems"]) and extstore.pending() == {}, st["problems"])
+SERVER["may_delete"] = True
+extstore.drop_containers(["Toner - Old client"])
+extstore.sync_once()
+check("...and with permission the collection goes too", "cold" not in SERVER["containers"] and "cmine" in SERVER["containers"])
+extstore.drop_containers(["Toner - Acme"])
+extstore.sync_once()
+check("a collection an organization still uses is never deleted, even if asked", "Toner - Acme" in SERVER["containers"].values() and extstore.pending() == {})
 
 print("== links")
 SERVER["items"]["team-1"] = {"cid": "c1", "tid": "", "title": "Core switch (team)", "user": "admin", "pw": "team-pw"}

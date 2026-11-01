@@ -49,7 +49,8 @@ if sys.platform == "win32":                     # 'This computer' is Windows' ow
     dlg.platform.setCurrentIndex(dlg.platform.findData("local"))
     check("'This computer' fills in localhost and needs nothing else", dlg.host.text() == "localhost" and not dlg.access.isRowVisible(dlg.username) and not dlg.access.isRowVisible(dlg.secret))
 dlg.vendor.setCurrentIndex(dlg.vendor.findData("cisco"))
-check("back to another vendor: the Windows tab goes, SSH rows return", not dlg.tabs.isTabVisible(4) and dlg.access.isRowVisible(dlg.username) and dlg.form.labelForField(dlg.platform).text() == "Platform")
+check("back to another vendor: the Windows tab goes, SSH rows return (Cisco asks how to monitor, with its platforms under it)", not dlg.tabs.isTabVisible(4) and dlg.access.isRowVisible(dlg.username)
+      and dlg.form.labelForField(dlg.platform).text() == "How to monitor" and dlg.form.isRowVisible(dlg.sub_platform))
 
 dlg = I.DeviceDialog(); dlg.vendor.setCurrentIndex(dlg.vendor.findData("windows")); dlg.platform.setCurrentIndex(dlg.platform.findData("winrm"))
 dlg.name.setText("dc01"); dlg.host.setText("dc01.corp.example.com"); dlg.username.setText(r"CORP\monitor"); dlg.win_auth.setCurrentIndex(dlg.win_auth.findData("ntlm"))

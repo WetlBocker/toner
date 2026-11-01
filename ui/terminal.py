@@ -330,6 +330,8 @@ class TerminalView(QWidget):
         m.addAction("Copy", self.copy).setEnabled(bool(self.selected_text()))
         m.addAction("Paste", self.paste)
         m.addAction("Clear scrollback", lambda: (self.main.history.top.clear(), setattr(self, "scroll", 0), self.update()))
+        from ui.ipmenu import add_ip_actions
+        add_ip_actions(m, self.selected_text() or "", self)          # a selected address: Ping and WHOIS Lookup
         m.exec(e.globalPos())
 
     def wheelEvent(self, e):

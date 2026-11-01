@@ -33,7 +33,7 @@ check("a firewall without an SSH login cannot, and the tooltip says where to set
 check("... nor with only a user name", not C.runnable({**fg, "username": "admin"})[0])
 STORE[("netcheck", "fw1:ssh")] = "sshpw"
 check("with both it can", C.runnable({**fg, "username": "admin"})[0] and not C.runnable(fg)[0])
-check("the SSH password is its own secret, apart from the API key", "ssh" in db.SECRET_KINDS and db.secret_name("fw1", "ssh") == "fw1:ssh" and vendors.CLI_TYPES == {"fortinet": "fortinet", "paloalto": "paloalto_panos"})
+check("the SSH password is its own secret, apart from the API key", "ssh" in db.SECRET_KINDS and db.secret_name("fw1", "ssh") == "fw1:ssh" and vendors.CLI_TYPES["fortinet"] == "fortinet" and vendors.CLI_TYPES["paloalto"] == "paloalto_panos")
 
 print("== the read-only guard for PowerShell")
 good = [r"Get-Service", r"Get-Service | Where-Object { $_.Status -eq 'Running' }", r"Get-Process | Sort-Object CPU -Descending | Select-Object -First 5",

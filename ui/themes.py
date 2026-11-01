@@ -5,12 +5,26 @@ Nothing here touches Qt or the database, so it is cheap to test. ui/theme.py tur
 from datetime import datetime
 
 # ---- the fixed themes. Each is the nine base colours plus `dark`; `glow` paints a soft wash of the accent at the top of the page,
-# `aurora` the drifting sky-blue to violet wash (Aurora only). hover, scroll, icon and accent_hover are derived when not given,
-# so Midnight and Daylight keep every value they had before.
+# `aurora` the drifting three-colour wash with the constellation behind the panels (the Constellation, Nebula and Tide pairs; `wash`
+# gives the three colours). hover, scroll, icon and accent_hover are derived when not given, so Midnight and Daylight keep every
+# value they had before.
 BASE_KEYS = ("bg", "surface", "surface2", "border", "text", "muted", "input", "accent", "accent_text")
+CONSTELLATION_WASH = ("#38bdf8", "#8b5cf6", "#2dd4bf")      # sky blue, violet, teal
+NEBULA_WASH = ("#a78bfa", "#ec4899", "#6366f1")             # violet, magenta, indigo
+TIDE_WASH = ("#2dd4bf", "#22c55e", "#0ea5e9")               # teal, green, blue
 FIXED = {
-    "Aurora":   dict(dark=True,  bg="#0a0e17", surface="#111727", surface2="#18203a", border="#27304d", text="#eef2ff", muted="#9aa6c8", input="#080c14", accent="#38bdf8", accent_text="#061421", aurora=True, glow=True,
-                     note="A slow sky-blue to violet wash that drifts across the page, a faint constellation behind the panels, and motion in every change. Toner's own look."),
+    "Constellation": dict(dark=True, bg="#0a0e17", surface="#111727", surface2="#18203a", border="#27304d", text="#eef2ff", muted="#9aa6c8", input="#080c14", accent="#38bdf8", accent_text="#061421", aurora=True, glow=True, wash=CONSTELLATION_WASH,
+                     note="A slow sky-blue to violet wash that drifts across the page, a faint constellation behind the panels, and motion in every change. Toner's own look (it was called Aurora)."),
+    "Constellation Light": dict(dark=False, bg="#eef3fb", surface="#ffffff", surface2="#e3eaf6", border="#cdd8ea", text="#141c2e", muted="#55658a", input="#f7f9fd", accent="#0369a1", accent_text="#ffffff", aurora=True, glow=True, wash=CONSTELLATION_WASH,
+                     note="Constellation on white: the same drifting wash and stars, for a bright room."),
+    "Nebula":   dict(dark=True,  bg="#100c1c", surface="#181230", surface2="#221a40", border="#352a58", text="#f3eefc", muted="#aa9fc9", input="#0c0916", accent="#c084fc", accent_text="#1b0a2e", aurora=True, glow=True, wash=NEBULA_WASH,
+                     note="Deep violet with a magenta wash drifting through it, and the constellation behind the panels."),
+    "Nebula Light": dict(dark=False, bg="#f4effb", surface="#ffffff", surface2="#ebe3f7", border="#d8ccec", text="#1f1530", muted="#6a5a8a", input="#faf7fe", accent="#7c3aed", accent_text="#ffffff", aurora=True, glow=True, wash=NEBULA_WASH,
+                     note="Nebula on white: the violet and magenta wash, light."),
+    "Tide":     dict(dark=True,  bg="#08141a", surface="#0f1d26", surface2="#162833", border="#24404c", text="#ecf6f8", muted="#95b3bf", input="#061015", accent="#2dd4bf", accent_text="#04201b", aurora=True, glow=True, wash=TIDE_WASH,
+                     note="Deep sea with a teal and green wash rolling across it, and the constellation behind the panels."),
+    "Tide Light": dict(dark=False, bg="#edf7f7", surface="#ffffff", surface2="#dfeeee", border="#c6dcdc", text="#10252a", muted="#4f6f76", input="#f6fbfb", accent="#0f766e", accent_text="#ffffff", aurora=True, glow=True, wash=TIDE_WASH,
+                     note="Tide on white: the teal and green wash, light."),
     "Ember":    dict(dark=True,  bg="#17140f", surface="#1f1b15", surface2="#2a241c", border="#3b3327", text="#f4eee3", muted="#b1a593", input="#14110d", accent="#f2a54a", accent_text="#1a1409", glow=True,
                      note="Warm charcoal with an amber accent and a soft glow at the top."),
     "Harbor":   dict(dark=True,  bg="#1a1e29", surface="#222736", surface2="#2b3142", border="#39405a", text="#e8ebf2", muted="#a3abbf", input="#171b25", accent="#8fb0ff", accent_text="#0f1424",
@@ -65,8 +79,8 @@ INTERACTIVE = {
 }
 SYSTEM = "System"
 SYSTEM_NOTE = "Daylight or Midnight, following Windows."
-GROUPS = [("Dark", ["Aurora", "Ember", "Harbor", "Moss", "Slate", "Dusk", "Carbon", "Nordic", "Plum", "Cocoa", "Steel", "Lagoon", "High contrast"]),
-          ("Light", ["Linen", "Mist", "Sand", "Arctic", "Clay"]),
+GROUPS = [("Dark", ["Constellation", "Nebula", "Tide", "Ember", "Harbor", "Moss", "Slate", "Dusk", "Carbon", "Nordic", "Plum", "Cocoa", "Steel", "Lagoon", "High contrast"]),
+          ("Light", ["Constellation Light", "Nebula Light", "Tide Light", "Linen", "Mist", "Sand", "Arctic", "Clay"]),
           ("Interactive", list(INTERACTIVE)),
           ("Classic", ["Midnight", "Daylight"])]
 NAMES = [SYSTEM] + [n for _g, ns in GROUPS for n in ns]
@@ -107,8 +121,9 @@ def kind(name):
 
 
 def legacy_name(theme):
-    """The theme a setting written before 1.12 means ("Dark", "Light"), or the name itself when it is a theme."""
-    return {"Dark": "Midnight", "Light": "Daylight"}.get(theme, theme if theme in NAMES else SYSTEM)
+    """The theme a setting written before means: "Dark" and "Light" (before 1.12), "Aurora" (Constellation's name before 1.14), or the
+    name itself when it is a theme."""
+    return {"Dark": "Midnight", "Light": "Daylight", "Aurora": "Constellation"}.get(theme, theme if theme in NAMES else SYSTEM)
 
 
 # ---- colour maths (hex strings in, hex strings out)
@@ -208,7 +223,7 @@ def resolve(look, ctx=None):
     p.setdefault("scroll", mix(p["surface"], p["text"], 0.28 if dark else 0.22))
     p.setdefault("icon", mix(p["muted"], p["text"], 0.3) if dark else p["muted"])
     p.setdefault("accent_hover", mix(p["accent"], "#ffffff", 0.18) if dark else mix(p["accent"], "#000000", 0.12))
-    p.update(dark=dark, glow=bool(p.get("glow")), aurora=bool(p.get("aurora")), name=name,
+    p.update(dark=dark, glow=bool(p.get("glow")), aurora=bool(p.get("aurora")), wash=tuple(p.get("wash") or CONSTELLATION_WASH), name=name,
              look=look.get("look") or "Standard", panels=look.get("panels") or "Bordered", motion=look.get("motion") or "Subtle",
              contrast=look.get("contrast") or "Normal")
     return p

@@ -352,6 +352,11 @@ def remove(org, move_to=None):
     if move_to is not None:
         move_devices(devices, move_to, with_data=True)
         _move_rest(org, move_to)
+    try:
+        from core import extstore
+        extstore.forget_org(org)                      # its collection in the password manager goes with it (while its name is still known)
+    except Exception:
+        quiet.ignored()
     _forget_secrets(org)
     with db.within(GLOBAL):
         with db.connect() as c:

@@ -104,7 +104,7 @@ r = w.results
 check("the stored results are there without running anything", r.stored and r.table.topLevelItemCount() == 5 and not r.hint.isVisible(), r.table.topLevelItemCount())
 check("worst first, and the summary says where they come from", r.table.topLevelItem(0).text(0) == "globex-pa" and "Latest results for 5 devices" in r.summary.text() and ("ago" in r.summary.text() or "just now" in r.summary.text()), r.summary.text())
 check("the counts are filled", r.chips.counts == {"OK": 3, "WARN": 1, "FAIL": 1, "ERROR": 1}, r.chips.counts)
-check("the device that needs a look is open", r.table.topLevelItem(0).isExpanded())
+check("the device that needs a look is first, but closed like every row (the third list's wish)", not r.table.topLevelItem(0).isExpanded())
 
 print("== the Overview's cards filter Results")
 d = w.dashboard

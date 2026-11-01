@@ -18,10 +18,91 @@ class TruenasDriver(RestApi):
         self.found_software(self.info.get("version", "") if isinstance(self.info, dict) else "")
         if self.enabled("reachability"):
             out.append(self.result("reachability", OK, str(self.info.get("version", "TrueNAS")), str(self.info.get("hostname", ""))))
-        for key, fn in (("pools", self.pools), ("alerts", self.alerts), ("load", self.load), ("uptime", self.uptime)):
+        for key, fn in (("pools", self.pools), ("alerts", self.alerts), ("load", self.load), ("uptime", self.uptime),
+                        ("disks", self.disks), ("datasets", self.datasets), ("services", self.services)):
             if self.enabled(key):
                 self.safe(out, key, fn)
         return out
+
+    def disks(self):
+        """Every disk: a failed SMART test is a FAIL, the hottest disk is graded against the temperature limit."""
+        disks = self.get("/disk", optional=True) or []
+        if not disks:
+            return []
+        names = [d.get("name") for d in disks if d.get("name")]
+        failed = []
+        results = self.get("/smart/test/results", optional=True) or []
+        for r in results if isinstance(results, list) else []:
+            tests = r.get("tests") or []
+            last = tests[-1] if tests else {}
+            if str(last.get("status") or "").upper() in ("FAILED", "FAIL") or str(r.get("status") or "").upper() == "FAILED":
+                failed.append(str(r.get("disk") or r.get("name") or "disk"))
+        hottest, hot_name = None, ""
+        temps = self._temperatures(names)
+        for n, t in temps.items():
+            if isinstance(t, (int, float)) and (hottest is None or t > hottest):
+                hottest, hot_name = float(t), n
+        th = self.th["temperature"]
+        st = FAIL if failed else (grade(hottest, th["warn"], th["fail"]) if hottest is not None else OK)
+        msg = ("SMART failed: " + ", ".join(failed[:5])) if failed else (f"hottest {hot_name} at {hottest:.0f}C" if hottest is not None else "")
+        return self.result("disks", st, f"{len(disks)} disk(s)", msg, numeric=hottest)
+
+    def _temperatures(self, names):
+        """{disk: C} from the temperatures call (SCALE and newer CORE); nothing when the API lacks it."""
+        if not names:
+            return {}
+        try:
+            import requests
+            from core import proxy
+            headers, _auth = self.auth()
+            r = requests.post(self.base() + "/disk/temperatures", json={"names": names}, headers={"Accept": "application/json", **headers},
+                              timeout=self.opts["http_timeout"], verify=bool(self.dev.get("verify_ssl")), **proxy.requests_kwargs(self.dev))
+            if r.status_code != 200:
+                return {}
+            data = r.json()
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    def datasets(self):
+        """Each dataset's used space against the disk limit; the fullest ones are named."""
+        sets = self.get("/pool/dataset", optional=True) or []
+        rows = []
+        for ds in self._flatten(sets):
+            used, avail = (ds.get("used") or {}).get("parsed"), (ds.get("available") or {}).get("parsed")
+            try:
+                used, avail = float(used), float(avail)
+            except (TypeError, ValueError):
+                continue
+            total = used + avail
+            if total <= 0:
+                continue
+            rows.append((ds.get("name") or ds.get("id") or "dataset", used / total * 100, used, total))
+        if not rows:
+            return []
+        t = self.th["disk"]
+        rows.sort(key=lambda r: -r[1])
+        full = [f"{n} ({p:.0f}%)" for n, p, _u, _t in rows if grade(p, t["warn"], t["fail"]) != OK]
+        worst = grade(rows[0][1], t["warn"], t["fail"])
+        return self.result("datasets", worst, f"{len(rows)} dataset(s)", "; ".join(full[:5]) if full else f"fullest {rows[0][0]} at {rows[0][1]:.0f}%", numeric=rows[0][1])
+
+    @staticmethod
+    def _flatten(sets):
+        out = []
+        for ds in sets or []:
+            if isinstance(ds, dict):
+                out.append(ds)
+                out += TruenasDriver._flatten(ds.get("children") or [])
+        return out
+
+    def services(self):
+        """A service set to start that is not running is a FAIL."""
+        svcs = self.get("/service", optional=True)
+        if svcs is None:
+            return []
+        running = [s for s in svcs if str(s.get("state") or "").upper() == "RUNNING"]
+        stopped = [str(s.get("service") or "service") for s in svcs if s.get("enable") and str(s.get("state") or "").upper() != "RUNNING"]
+        return self.result("services", FAIL if stopped else OK, f"{len(running)} running", "enabled but stopped: " + ", ".join(stopped[:6]) if stopped else "", numeric=float(len(stopped)))
 
     def pools(self):
         pools = self.get("/pool", optional=True) or []

@@ -1,5 +1,6 @@
-"""The page behind the sections: a plain colour, or, for a theme with a glow, a soft wash of the accent at the top; for Aurora,
-the sky-blue to violet wash that drifts slowly across the page with a faint constellation behind the panels (Motion: Lively).
+"""The page behind the sections: a plain colour, or, for a theme with a glow, a soft wash of the accent at the top; for Constellation,
+Nebula and Tide (dark and light), the theme's three-colour wash that drifts slowly across the page with a faint constellation behind
+the panels (Motion: Lively).
 Under Lively the constellation also wanders slowly round the edges of the page, stretching and changing shape as it goes.
 It only moves while the window is shown and the app is in front, and never when motion is off."""
 import math
@@ -97,13 +98,15 @@ class Backdrop(QWidget):
         dark = t.get("dark")
         w, h = self.width(), self.height()
         if t.get("aurora"):
-            # the wash: three hues across the page, slid by the phase (back and forth over one period)
+            # the wash: the theme's three hues across the page, slid by the phase (back and forth over one period); lighter on a light page
+            wash = tuple(t.get("wash") or AURORA)
+            a = (0.16, 0.14, 0.12) if dark else (0.11, 0.09, 0.08)
             shift = (1 - abs(self.phase * 2 - 1)) * 0.5
             g = QLinearGradient(QPointF(-w * shift, 0), QPointF(w * (1.6 - shift), h * 0.7))
-            g.setColorAt(0.0, _rgba(AURORA[0], 0.16))
-            g.setColorAt(0.35, _rgba(AURORA[1], 0.14))
-            g.setColorAt(0.65, _rgba(AURORA[2], 0.12))
-            g.setColorAt(1.0, _rgba(AURORA[0], 0.16))
+            g.setColorAt(0.0, _rgba(wash[0], a[0]))
+            g.setColorAt(0.35, _rgba(wash[1], a[1]))
+            g.setColorAt(0.65, _rgba(wash[2], a[2]))
+            g.setColorAt(1.0, _rgba(wash[0], a[0]))
             p.fillRect(self.rect(), g)
             p.setRenderHint(QPainter.RenderHint.Antialiasing)
             self._constellation(p, t)

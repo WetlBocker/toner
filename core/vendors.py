@@ -52,14 +52,32 @@ VENDORS = {
                     + ([("local", "This computer")] if sys.platform == "win32" else []), paging=""),   # (Toner reading Windows itself)
     "wifi": dict(name="This PC's Wi-Fi", kind="local", secret="", username=False, site="", ha=False,
                  platforms=[], paging="", login=False),
+    # added 2026-11: controllers and managers over their APIs, more switches over SSH, two firewalls over SNMP
+    "ciscoise": dict(name="Cisco ISE", kind="api", secret="Password", username=True, site="", ha=False, platforms=[], paging=""),
+    "ciscosdwan": dict(name="Cisco SD-WAN Manager", kind="api", secret="Password", username=True, site="", ha=False, platforms=[], paging=""),
+    "ciscofmc": dict(name="Cisco FMC", kind="api", secret="Password", username=True, site="", ha=False, platforms=[], paging=""),
+    "vmware": dict(name="VMware vCenter", kind="api", secret="Password", username=True, site="", ha=False, platforms=[], paging=""),
+    "esxi": dict(name="VMware ESXi (SNMP)", kind="snmp", secret="SNMP community", username=False, site="", ha=False, platforms=[], paging=""),
+    "dell": dict(name="Dell PowerSwitch", kind="ssh", secret="Password", username=True, site="", ha=False,
+                 platforms=[("dell_os10", "SmartFabric OS10"), ("dell_force10", "OS9 (S and Z series)"), ("dell_os6", "OS6 (N series)")],
+                 paging="terminal length 0"),
+    "sophos": dict(name="Sophos Firewall (SNMP)", kind="snmp", secret="SNMP community", username=False, site="", ha=False, platforms=[], paging=""),
+    "sonicwall": dict(name="SonicWall", kind="api", secret="Password", username=True, site="", ha=False, platforms=[], paging=""),
+    "extreme": dict(name="Extreme Networks", kind="ssh", secret="Password", username=True, site="", ha=False,
+                    platforms=[("extreme_exos", "Switch Engine / EXOS"), ("extreme_vsp", "Fabric Engine / VOSS")], paging="disable clipaging"),
+    "mist": dict(name="Juniper Mist", kind="api", secret="API token", username=False, site="Organization ID", ha=False, platforms=[], paging=""),
 }
 
 # One entry in the Vendor box can stand for several kinds of monitoring: UniFi is one vendor, and "how to monitor" picks the console login
 # or one of the API-key applications. Each kind is still its own type underneath (its own driver, checks and limits).
-FAMILY = {"unifi": "unifi", "unifi_network": "unifi", "unifi_protect": "unifi", "unifi_cloud": "unifi"}
+FAMILY = {"unifi": "unifi", "unifi_network": "unifi", "unifi_protect": "unifi", "unifi_cloud": "unifi",
+          "ciscoise": "cisco", "ciscofmc": "cisco", "ciscosdwan": "cisco"}
 MODES = {"unifi": [("unifi", "Console login (user name and password)"), ("unifi_network", "Network API (API key)"),
-                   ("unifi_protect", "Protect API (API key)"), ("unifi_cloud", "Site Manager in the cloud (API key)")]}
-SHORT = {"unifi": "login", "unifi_network": "network", "unifi_protect": "protect", "unifi_cloud": "cloud"}     # the platform column in import and export files
+                   ("unifi_protect", "Protect API (API key)"), ("unifi_cloud", "Site Manager in the cloud (API key)")],
+         "cisco": [("cisco", "Switch, router or ASA by SSH"), ("ciscoise", "ISE (Open API)"), ("ciscofmc", "FMC (REST API)"),
+                   ("ciscosdwan", "SD-WAN Manager (REST API)")]}
+SHORT = {"unifi": "login", "unifi_network": "network", "unifi_protect": "protect", "unifi_cloud": "cloud",
+         "ciscoise": "ise", "ciscofmc": "fmc", "ciscosdwan": "sdwan"}     # the platform column in import and export files
 
 
 def family(vendor):
@@ -73,6 +91,10 @@ def modes(vendor):
 
 
 def mode_label(vendor):
+    """The way of monitoring a vendor with several ways ('Network API (API key)'); '' for one with a platform list of its own (a Cisco
+    switch says IOS or NX-OS instead) and for a vendor with one way."""
+    if sub_platforms(vendor):
+        return ""
     return dict(modes(vendor)).get(vendor, "")
 
 
@@ -82,13 +104,20 @@ def listed():
 
 
 def from_file(vendor, platform):
-    """('unifi', 'network') from an import file -> ('unifi_network', ''). Anything else is returned as it came."""
+    """('unifi', 'network') from an import file -> ('unifi_network', ''); ('cisco', 'ise') -> ('ciscoise', ''). Anything else, a Cisco
+    switch with its platform (cisco, cisco_ios) included, is returned as it came."""
     vendor, platform = (vendor or "").lower(), (platform or "").strip().lower()
-    if vendor == "unifi" and platform:
-        for key, short in SHORT.items():
-            if platform in (short, key, key.split("_")[-1]):
+    if vendor in MODES and platform:
+        for key, _label in MODES[vendor]:
+            short = SHORT.get(key, "")
+            if platform in (short, key, key.split("_")[-1], key[len(vendor):] if key.startswith(vendor) and key != vendor else "") and platform:
                 return key, ""
     return vendor, platform
+
+
+def sub_platforms(vendor):
+    """The platforms of one way of monitoring a vendor with several ways (Cisco by SSH has IOS, IOS XE, NX-OS, ASA); [] otherwise."""
+    return list(get(vendor).get("platforms", [])) if modes(vendor) else []
 
 
 DEFAULT_PAGING = "terminal length 0"      # the Settings > Terminal default
@@ -118,12 +147,25 @@ def is_snmp(vendor):
     return get(vendor).get("kind") == "snmp"
 
 
-# firewalls Toner checks through their API, whose command line can also be reached over SSH (for the Command Runner): netmiko's device type
-CLI_TYPES = {"fortinet": "fortinet", "paloalto": "paloalto_panos"}
+# devices Toner checks through their API whose command line can also be reached over SSH (the Command Runner, SSH sessions): netmiko's
+# device type. The firewalls keep a separate SSH login beside the API key; the Cisco managers sign in to both with one account.
+CLI_TYPES = {"fortinet": "fortinet", "paloalto": "paloalto_panos", "ciscoise": "cisco_ios", "ciscofmc": "cisco_ftd", "ciscosdwan": "cisco_viptela"}
+SHARED_LOGIN = {"ciscoise", "ciscofmc", "ciscosdwan"}         # the API user name and password serve SSH too (an SSH password of its own is optional)
+SNMP_EXTRAS = {"ciscoise", "ciscofmc", "ciscosdwan", "vmware", "sonicwall"}   # API-checked managers that also answer SNMP once it is set up on the device
+
+
+def shared_login(vendor):
+    return vendor in SHARED_LOGIN
 
 
 def uses_ssh_login(vendor):
     return get(vendor).get("kind") == "ssh" or vendor == "unifi"     # UniFi stores a password that SSH can reuse
+
+
+def ssh_reachable(vendor):
+    """Whether an SSH session can be opened to this kind of device with the login it stores: switches and routers, UniFi, and the
+    Cisco managers whose one account serves SSH too. (A FortiGate or Palo Alto keeps an SSH login only for the Command Runner.)"""
+    return uses_ssh_login(vendor) or shared_login(vendor)
 
 
 def platform_keys(vendor):

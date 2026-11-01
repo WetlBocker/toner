@@ -40,7 +40,7 @@ QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.StandardButton.Y
 tools = T.ToolsTab(); tools.resize(1300, 800); tools.show()
 print("== Tools navigation")
 names = [tools.tabs.tabText(i) for i in range(tools.tabs.count())]
-check("every tool is listed, grouped under headings", len(names) == 24 and "Firmware Transfer" in names and "API Tester" in names and "OpenSSL" in names and "SSH Keys" in names and "SSH Console" not in names and "Session Logs" not in names and "SCP" in names and ("Copy Files (xcopy)" if sys.platform == "win32" else "Copy Files (rsync)") in names and "Wi-Fi Scanner" in names and "TFTP Server" in names and "SFTP / SCP Server" in names and "FTP Server" in names and "Throughput (iperf3)" in names and "Command Runner" in names and "Find Devices" in names and "SNMP" in names)
+check("every tool is listed, grouped under headings", len(names) == 25 and "MAC OUI Lookup" in names and "Wake-on-LAN" in names and "Subnet Calculator" in names and "Firmware Transfer" in names and "API Tester" in names and "OpenSSL" in names and "SSH Keys" in names and "SSH Console" not in names and "Session Logs" not in names and "SCP" in names and ("Copy Files (xcopy)" if sys.platform == "win32" else "Copy Files (rsync)") in names and "Wi-Fi Scanner" in names and "TFTP Server" in names and "SFTP / SCP Server" in names and "FTP Server" in names and "Throughput (iperf3)" in names and "Command Runner" in names and "Find Devices" in names and "SNMP" in names)
 check("headings are not selectable", sum(1 for r in range(tools.tabs.list.count()) if not (tools.tabs.list.item(r).flags() & Qt.ItemFlag.ItemIsSelectable)) == 8)
 tools.tabs.setCurrentWidget(tools.mtr); check("switching tools", tools.tabs.currentWidget() is tools.mtr)
 dev("sw1", host="127.0.0.1")
@@ -253,15 +253,19 @@ TP = port + 1
 Ls.trap_port.setValue(TP); Ls.communities.setText("c1, c2"); Ls.trap_btn.click(); check("trap receiver starts with its communities", Ls.traps is not None and Ls.traps.communities == ["c1", "c2"] and Ls.trap_btn.text() == "Stop trap receiver")
 Ls.trap_btn.click(); check("and stops", Ls.traps is None)
 
-print("== MAC and Wake-on-LAN")
-U = tools.utilities
+print("== MAC OUI Lookup and Wake-on-LAN (Utilities)")
+U = tools.maclookup
 U.mac.setText("00:0c:29:aa:bb:cc"); check("lookup shows the manufacturer and every notation", "VMware" in U.lookup_out.text() and "00-0C-29-AA-BB-CC" in U.lookup_out.text() and "000c.29aa.bbcc" in U.lookup_out.text())
 U.mac.setText("b827eb"); check("a bare prefix works", "Raspberry Pi" in U.lookup_out.text())
 U.mac.setText("zz:00"); check("junk gives no result, no crash", U.lookup_out.text() == "")
+U.reset.click(); check("Reset clears the address", U.mac.text() == "")
+W = tools.wol
 rx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); rx.bind(("127.0.0.1", 0)); rx.settimeout(2)
-U.wol_mac.setText("aa:bb:cc:dd:ee:ff"); U.wol_bcast.setText("127.0.0.1"); U.wol_port.setValue(rx.getsockname()[1]); U.wol_btn.click()
-data, _ = rx.recvfrom(512); check("magic packet sent", len(data) == 102 and "102-byte" in U.wol_out.text())
-U.wol_mac.setText("nope"); U.wol_btn.click(); check("a bad MAC is explained", "12 hex" in U.wol_out.text())
+W.wol_mac.setText("aa:bb:cc:dd:ee:ff"); W.wol_bcast.setText("127.0.0.1"); W.wol_port.setValue(rx.getsockname()[1]); W.wol_btn.click()
+data, _ = rx.recvfrom(512); check("magic packet sent", len(data) == 102 and "102-byte" in W.wol_out.text())
+W.wol_mac.setText("nope"); W.wol_btn.click(); check("a bad MAC is explained", "12 hex" in W.wol_out.text())
+sections = {tools.tabs.tabText(i) for i in range(tools.tabs.count())}
+check("the Subnet Calculator and Wi-Fi Scanner moved: Utilities and Discover", "Subnet Calculator" in sections and "Wi-Fi Scanner" in sections)
 
 tools.tabs.setCurrentWidget(tools.discovery); tools.discovery.grab().save(SP + (r"\tools_discovery.png").replace("\\", os.sep))
 tools.tabs.setCurrentWidget(tools.runner); tools.runner.grab().save(SP + (r"\tools_runner.png").replace("\\", os.sep))

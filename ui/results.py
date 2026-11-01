@@ -50,7 +50,7 @@ from ui.toast import toast
 ROLE = Qt.ItemDataRole.UserRole
 URL_ROLE = Qt.ItemDataRole.UserRole + 1          # on an advisory row's Check cell: the page its id opens
 OPEN_TIP = "Double-click to open the advisory page"
-AUTO_OPEN = 12                       # failing devices opened by themselves when a run ends
+AUTO_OPEN = 0                        # devices opened by themselves when a run ends or the page loads: none, every row starts closed (the user's wish)
 
 
 class Worker(QThread):

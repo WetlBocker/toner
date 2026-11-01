@@ -1,5 +1,9 @@
 """The checks each vendor driver runs, so they can be switched on and off in Settings."""
 
+# the checks a manager reached through its API also gets by SNMP, once SNMP is set up on it and in the device's SNMP tab (core/runner.snmp_extras)
+SNMP_EXTRA = [("cpu", "CPU (by SNMP, when set up)"), ("memory", "Memory (by SNMP)"), ("storage", "Disk and storage (by SNMP)"),
+              ("uptime", "Uptime and recent reboots (by SNMP)"), ("interfaces", "Interface status (by SNMP)"), ("interface errors", "Interface errors (by SNMP)")]
+
 # vendor -> [(key, label)]. The key is what the driver tests with Driver.enabled(key).
 CATALOG = {
     "cisco": [("reachability", "Reachable (TCP to the management port)"), ("cpu", "CPU"), ("memory", "Memory"), ("uptime", "Uptime and recent reboots"),
@@ -55,7 +59,31 @@ CATALOG = {
                 ("storage", "Storage space and availability"), ("guests", "Virtual machines and containers"), ("tasks", "Failed tasks in the last 24 hours"),
                 ("backups", "Backup jobs in the last 24 hours")],
     "truenas": [("reachability", "API reachable and version"), ("pools", "Pool health, errors and space"), ("alerts", "Active system alerts"),
-                ("load", "Load average"), ("uptime", "Uptime and recent reboots")],
+                ("load", "Load average"), ("uptime", "Uptime and recent reboots"), ("disks", "Disks: SMART results and temperature"),
+                ("datasets", "Dataset space"), ("services", "Services set to start that are not running")],
+    "ciscoise": [("reachability", "ISE reachable and version"), ("nodes", "Deployment nodes connected"), ("patches", "Patches installed"),
+                 ("licensing", "Licensing"), ("sessions", "Active sessions (MnT)")] + SNMP_EXTRA,
+    "ciscosdwan": [("reachability", "Manager reachable and version"), ("devices", "Devices reachable"), ("control connections", "Control connections on the edges"),
+                   ("bfd", "BFD sessions"), ("alarms", "Open alarms"), ("resources", "Manager CPU and memory")] + SNMP_EXTRA,
+    "ciscofmc": [("reachability", "FMC reachable and version"), ("devices", "Managed devices: health and software"), ("deployment", "Deployments waiting"),
+                 ("ha", "HA pairs")] + SNMP_EXTRA,
+    "vmware": [("reachability", "vCenter reachable and version"), ("hosts", "Hosts connected and powered on"), ("vms", "Virtual machines powered on"),
+               ("datastores", "Datastore space"), ("health", "Appliance health (system, memory, load, storage, database)")] + SNMP_EXTRA,
+    "esxi": [("reachability", "Reachability and identity"), ("cpu", "CPU"), ("memory", "Memory"), ("storage", "Datastores and disks"),
+             ("uptime", "Uptime and recent reboots"), ("interfaces", "Interface status"), ("interface errors", "Interface errors"),
+             ("bandwidth", "Interface utilization"), ("version", "ESXi version"), ("vms", "Virtual machines powered on")],
+    "dell": [("reachability", "Reachable (TCP to the management port)"), ("cpu", "CPU"), ("memory", "Memory"), ("uptime", "Uptime and recent reboots"),
+             ("interfaces", "Interfaces"), ("environment", "Fans and power supplies")],
+    "sophos": [("reachability", "Reachability and identity"), ("cpu", "CPU"), ("memory", "Memory"), ("storage", "Storage"),
+               ("uptime", "Uptime and recent reboots"), ("interfaces", "Interface status"), ("interface errors", "Interface errors"),
+               ("bandwidth", "Interface utilization"), ("version", "Firmware version"), ("disk", "Disk used"), ("services", "Services"),
+               ("ha", "HA state"), ("licenses", "Licences")],
+    "sonicwall": [("reachability", "API reachable and firmware"), ("uptime", "Uptime and recent reboots"), ("resources", "CPU and memory"),
+                  ("interfaces", "Interfaces"), ("ha", "HA state"), ("licenses", "Licences")] + SNMP_EXTRA,
+    "extreme": [("reachability", "Reachable (TCP to the management port)"), ("cpu", "CPU"), ("memory", "Memory"), ("uptime", "Uptime and recent reboots"),
+                ("interfaces", "Ports"), ("environment", "Fans and power supplies")],
+    "mist": [("reachability", "Mist reachable"), ("devices", "Devices connected, version and uptime"), ("alarms", "Open alarms"),
+             ("resources", "CPU and memory on switches and gateways")],
     "opnsense": [("reachability", "API reachable and version"), ("firmware", "Updates available"), ("memory", "Memory"), ("disk", "Disk space"),
                  ("uptime", "Uptime and recent reboots"), ("gateways", "Gateways online, delay and loss")],
     "unifi_network": [("reachability", "API reachable and version"), ("devices", "Device state"), ("uptime", "Uptime and recent reboots"),

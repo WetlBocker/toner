@@ -311,12 +311,31 @@ class Main(QMainWindow):
         self._place_ai_button()
 
     def _slide_panel(self, start, end, then=None):
-        """The Assistant panel slides open or shut with a small bounce at the end (at once with motion off)."""
+        """The Assistant panel slides open or shut with a small bounce at the end (at once with motion off). While it slides a snapshot
+        of the panel stands in for it, so a long conversation is not laid out again on every frame (that stuttered)."""
         from PySide6.QtCore import QEasingCurve
+        from PySide6.QtWidgets import QLabel
         from ui import motion
         total = sum(self.body.sizes())
         least = self.assistant.minimumWidth()
         self.assistant.setMinimumWidth(0)                           # the panel may be narrower than usual while on its way
+        if not motion.enabled() or not self.isVisible():
+            self.body.setSizes([max(0, total - end), end])
+            self.assistant.setMinimumWidth(least)
+            if then:
+                then()
+            self._place_ai_button()
+            return
+        full = max(start, end)
+        self.assistant.resize(full, self.body.height())           # laid out at its full width once, then photographed
+        self.assistant.layout().activate()
+        stand_in = QLabel()
+        stand_in.setPixmap(self.assistant.grab())
+        stand_in.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        stand_in.setMinimumWidth(0)
+        self._panel_stand_in = stand_in
+        self.body.replaceWidget(1, stand_in)                        # the real panel is out of the splitter while the picture slides
+        stand_in.show()
 
         def step(p):
             w = max(0, round(start + (end - start) * p))
@@ -324,14 +343,15 @@ class Main(QMainWindow):
             self._place_ai_button()
 
         def done():
+            self.body.replaceWidget(1, self.assistant)
+            self.assistant.show()
+            self.body.setSizes([max(0, total - end), end])
+            stand_in.deleteLater()
+            self._panel_stand_in = None
             self.assistant.setMinimumWidth(least)
             if then:
                 then()
             self._place_ai_button()
-        if not motion.enabled() or not self.isVisible():
-            step(1.0)
-            done()
-            return
         curve = QEasingCurve(QEasingCurve.Type.OutBack)
         curve.setOvershoot(0.8)
         self._panel_slide = motion.animate(self, 380, step, curve=curve, on_done=done)
@@ -1004,6 +1024,8 @@ def main():
     from ui.widgets import MenuPlacer
     app._menu_placer = MenuPlacer(app)             # drop-down menus open upward when there is no room below
     app.installEventFilter(app._menu_placer)
+    from ui import ipmenu
+    ipmenu.install(app)                            # right-click on a selected IP address anywhere: Ping and WHOIS Lookup
     from core import passvault
     from ui import vaultdlg
     passvault.install()                            # saved passwords live in Toner's vault (no longer in Windows Credential Manager)

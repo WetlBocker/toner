@@ -247,14 +247,13 @@ class DeviceView(QDialog):
         if d:
             self.dev = d
         d = self.dev
-        info = vendors.get(d["vendor"])
         plat = vendors.mode_label(d["vendor"]) or (display.platform_name(d.get("platform")) if d.get("platform") else "")
         self.title.setText(d["name"])
         self.sub.setText(f"{display.vendor_name(d['vendor'])} {plat}  -  {d['host']}" + (f":{d['port']}" if d.get("port") else ""))
         from ui import brandicons
         self.mark.setPixmap(brandicons.vendor_icon(d["vendor"]).pixmap(36, 36))
         self.mark.setToolTip(display.vendor_name(d["vendor"]))
-        self.buttons["ssh"].setEnabled(info.get("kind") == "ssh")
+        self.buttons["ssh"].setEnabled(vendors.ssh_reachable(d["vendor"]))
         self.buttons["ssh"].setVisible(d["vendor"] != "windows")
         self.buttons["rdp"].setVisible(d["vendor"] == "windows")
         self.buttons["services"].setVisible(d["vendor"] == "windows")

@@ -28,6 +28,7 @@ from core import db, extvault, passvault
 INTERNAL = "~ext/"
 LOCAL = "~toner/"                      # kept only in Toner's vault, never sent to the manager (Demarc's token)
 PENDING = INTERNAL + "pending"
+DROP = INTERNAL + "drop/"              # a queue entry '~ext/drop/<collection name>': 'drop' = delete its Toner items, then the collection
 INTERVAL = 300                         # seconds between tries
 _lock = threading.RLock()
 _round = threading.Lock()              # one round with the manager at a time (the background one, Settings' own)
@@ -270,15 +271,68 @@ def _save_pending(p):
         passvault.remove(PENDING)
 
 
+def _queue(name, op):
+    with _lock:
+        if memory_only():
+            _mem_pending[name] = op
+        else:
+            p = pending()
+            p[name] = op
+            _save_pending(p)
+    _kick.set()
+
+
 def queue(name, op):
     """A change to send: op 'put' (made or changed) or 'delete'. Called by the vault's keyring store on every write."""
     if is_internal(name) or active() == "toner":
         return
-    with _lock:
-        p = pending()
-        p[name] = op
-        _save_pending(p)
+    _queue(name, op)
+
+
+def queue_drop(container):
+    """A collection (vault, shared folder) to remove from the manager with its Toner items: the next round does it."""
+    if active() == "toner" or not (container or "").strip():
+        return
+    _queue(DROP + container.strip(), "drop")
+
+
+def forget_org(org):
+    """An organization is being removed (core/orgs.py, while its row still exists): its collection in the manager goes too, and the
+    deletes of its passwords, which would otherwise wait for ever (the round looks only at organizations that exist)."""
+    if not org or active() == "toner":
+        return
+    try:
+        queue_drop(container_name(active(), org))
+    except Exception:
+        pass
+
+
+def drop_containers(names):
+    """Settings > Security: these collections of organizations that no longer exist are removed on the next round."""
+    for n in names:
+        queue_drop(n)
     _kick.set()
+
+
+def orphan_containers(conn=None):
+    """[(name, items)] of the manager's Toner collections that belong to no organization Toner has now: 'Toner - ...' by name, or
+    holding Toner items. `conn` is a connected connector, else one is made. Raises ExtError."""
+    kind = active()
+    if kind == "toner":
+        return []
+    if conn is None:
+        conn = connector(kind)
+        conn.connect()
+    orgs = [db.GLOBAL] + [r["id"] for r in db.org_rows()]
+    current = {container_name(kind, o).lower() for o in orgs}
+    out = []
+    for name, cid in sorted(conn.containers().items(), key=lambda kv: kv[0].lower()):
+        if name.lower() in current:
+            continue
+        count = len(conn.items(cid))
+        if name.startswith("Toner - ") or count:
+            out.append((name, count))
+    return out
 
 
 def _done(name, op):
@@ -324,10 +378,30 @@ def _sync_once():
                 remote[tid] = (org, cids[org], item)
         st["found"] = len(remote)
         waiting = pending()
+        current = {container_name(kind, o).lower() for o in cids}
+        for key in [k for k, op in waiting.items() if k.startswith(DROP) and op == "drop"]:    # collections of removed organizations
+            name = key[len(DROP):]
+            if name.lower() not in current:                           # (an organization that took the same name keeps it)
+                cid = next((c for n, c in conn.containers().items() if n.lower() == name.lower()), None)
+                if cid:
+                    for item in list(conn.items(cid).values()):
+                        conn.delete(item)
+                    remote = {t: v for t, v in remote.items() if v[1] != cid}
+                    try:
+                        conn.delete_container(cid)
+                    except extvault.ExtError as e:
+                        st["problems"].append(f"The items in {name} were deleted, but not the {extvault.CONTAINER_WORD[kind].lower()} itself: {e}")
+                    st["sent"] += 1
+            _done(key, "drop")
+        waiting = pending()
         sent_now = set()                                              # (what was just sent is not copied back from the old values)
         for name in sorted(set(local_names()) | set(waiting)):        # send: what is queued, and anything the manager lacks
+            if name.startswith(DROP):
+                continue
             org = org_of(name)
             if org not in cids:
+                if org not in orgs and waiting.get(name):             # a removed organization's change: nothing to send it to
+                    _done(name, waiting[name])
                 continue
             op, have = waiting.get(name), remote.get(name)
             if op == "delete":

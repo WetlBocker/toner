@@ -156,7 +156,10 @@ VENDOR_PATHS = {
 VENDOR_TILES = {"cisco": ("#049FD9", "Ci"), "fortinet": ("#EE3124", "Ft"), "unifi": ("#0559C9", "Ub"), "proxmox": ("#E57000", "Px"),
                 "truenas": ("#0095D5", "TN"), "opnsense": ("#D94F00", "OP"), "juniper": ("#84B135", "Jn"), "arista": ("#2B6FB6", "Ar"),
                 "hpe": ("#01A982", "HP"), "mikrotik": ("#293239", "MT"), "paloalto": ("#FA582D", "PA"), "snmp": ("#6B7280", "SN"),
-                "meraki": ("#67B346", "Mk"), "cloud": ("#0EA5E9", "Cl"), "windows": ("#0078D4", "Wn"), "wifi": ("#0EA5E9", "Wi")}
+                "meraki": ("#67B346", "Mk"), "cloud": ("#0EA5E9", "Cl"), "windows": ("#0078D4", "Wn"), "wifi": ("#0EA5E9", "Wi"),
+                "ciscoise": ("#049FD9", "ISE"), "ciscosdwan": ("#049FD9", "SD"), "ciscofmc": ("#049FD9", "FMC"), "vmware": ("#607078", "VM"),
+                "esxi": ("#607078", "ESX"), "dell": ("#007DB8", "De"), "sophos": ("#0B5FA5", "So"), "sonicwall": ("#F58025", "SW"),
+                "extreme": ("#6F2C91", "Ex"), "mist": ("#84B135", "Mi")}
 
 
 def vendor_tile_svg(vendor):
@@ -174,11 +177,14 @@ def vendor_tile_svg(vendor):
 # Documents\Vendor Icons when it exists). A file there comes before the marks above. Names are matched loosely (case, spaces and
 # punctuation ignored, a few aliases, and a near miss such as PRXMOX for Proxmox), so files can be dropped in without renaming.
 VENDOR_FILE_NAMES = {
-    "cisco": ("cisco", "ciscosystems"), "fortinet": ("fortinet", "fortigate"), "unifi": ("unifi", "ubiquiti", "ubnt"),
+    "cisco": ("cisco", "ciscosystems"), "fortinet": ("fortinet", "fortigate"), "unifi": ("unifi", "ubiquiti", "ubnt"),  # (the aliases are tried in order)
     "proxmox": ("proxmox", "proxmoxve"), "truenas": ("truenas", "ixsystems"), "opnsense": ("opnsense",), "juniper": ("juniper", "junipernetworks"),
     "arista": ("arista", "aristanetworks"), "hpe": ("hpe", "hp", "hpearuba", "aruba", "arubanetworks", "hewlettpackardenterprise"),
     "mikrotik": ("mikrotik",), "paloalto": ("paloalto", "paloaltonetworks", "panos"), "snmp": ("snmp",), "meraki": ("meraki", "ciscomeraki"),
     "cloud": ("cloud", "cloudstatus"), "windows": ("windows", "microsoft", "microsoftwindows"), "wifi": ("wifi", "wireless"),
+    "ciscoise": ("ciscoise", "ise", "cisco"), "ciscosdwan": ("ciscosdwan", "sdwan", "vmanage", "cisco"), "ciscofmc": ("ciscofmc", "fmc", "firepower", "cisco"),
+    "vmware": ("vmware", "vcenter", "vsphere"), "esxi": ("esxi", "vmware"), "dell": ("dell", "dellemc", "delltechnologies", "powerswitch"),
+    "sophos": ("sophos", "sophosfirewall"), "sonicwall": ("sonicwall",), "extreme": ("extreme", "extremenetworks"), "mist": ("mist", "junipermist", "juniper"),
 }
 ICON_FILE_TYPES = (".png", ".jpg", ".jpeg", ".bmp", ".webp")
 

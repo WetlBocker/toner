@@ -25,14 +25,18 @@ class SnmpDriver(SnmpExtras, Driver):
             ident = self._identity()                           # also proves the credentials work
             if self.enabled("reachability"):
                 out.append(ident)
-            for key, fn in (("cpu", self.cpu), ("memory", self.memory), ("storage", self.storage),
-                            ("uptime", self.uptime), ("temperature", self.temperature),
-                            ("interfaces", self.interfaces), ("interface errors", self.errors),
-                            ("bandwidth", self.bandwidth), ("environment", self.environment), ("load", self.load),
-                            ("ups", self.ups), ("printer", self.printer), ("nas", self.nas)):
+            for key, fn in self.check_list():
                 if self.enabled(key):
                     self.safe(out, key, fn)
         return out
+
+    def check_list(self):
+        """[(key, method)] in the order they run; a vendor's own SNMP driver (ESXi, Sophos) gives its own list."""
+        return [("cpu", self.cpu), ("memory", self.memory), ("storage", self.storage),
+                ("uptime", self.uptime), ("temperature", self.temperature),
+                ("interfaces", self.interfaces), ("interface errors", self.errors),
+                ("bandwidth", self.bandwidth), ("environment", self.environment), ("load", self.load),
+                ("ups", self.ups), ("printer", self.printer), ("nas", self.nas)]
 
     # ---------------------------------------------------------------- identity
     def _identity(self):

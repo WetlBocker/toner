@@ -399,13 +399,13 @@ class DeployKey(QWidget):
             if d.get("port"):
                 self.port.setValue(int(d["port"]))
             self.user.setText(profiles.username(d))
-            self.password.setPlaceholderText("blank = use the stored password" if vendors.uses_ssh_login(d["vendor"]) else "")
+            self.password.setPlaceholderText("blank = use the stored password" if vendors.ssh_reachable(d["vendor"]) else "")
         else:
             self.password.setPlaceholderText("")
 
     def stored_password(self):
         d = self.picker.currentData()
-        return (profiles.secret(d) or "") if d and vendors.uses_ssh_login(d["vendor"]) else ""
+        return profiles.ssh_secret(d) if d else ""
 
     def open_pub(self):
         path, _ = QFileDialog.getOpenFileName(self, "Open a public key", sshkeys.ssh_folder(), "Public keys (*.pub);;All files (*)")

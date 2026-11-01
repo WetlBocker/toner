@@ -530,7 +530,7 @@ class DashboardTab(QWidget):
     @staticmethod
     def _connect_kind(dev):
         """'rdp', 'ssh' or '' for a device: what Connect opens."""
-        return ("rdp" if dev["vendor"] == "windows" else "ssh" if vendors.uses_ssh_login(dev["vendor"]) else "") if dev else ""
+        return ("rdp" if dev["vendor"] == "windows" else "ssh" if vendors.ssh_reachable(dev["vendor"]) else "") if dev else ""
 
     def _row_buttons(self, name):
         """Open, Run checks and SSH or Remote Desktop for one row, as small buttons in its Actions cell."""

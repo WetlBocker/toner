@@ -260,9 +260,12 @@ check("editing it shows UniFi and the way it is monitored", again.vendor.current
       and again._vendor() == "unifi_protect" and again.values()["vendor"] == "unifi_protect")
 old_login = I.DeviceDialog({"id": 99, "name": "old", "vendor": "unifi", "host": "1.1.1.1", "port": 0, "platform": "", "site": "default", "enabled": 1})
 check("an existing console-login device opens as the console login", old_login.platform.currentData() == "unifi" and old_login.values()["vendor"] == "unifi")
-other = I.DeviceDialog(); other.vendor.setCurrentIndex(other.vendor.findData("cisco"))
-check("other vendors are as they were (a platform, not 'how to monitor')", other.form.labelForField(other.platform).text() == "Platform" and other.platform.count() == 4
-      and other.values()["platform"] == "cisco_ios" and other._vendor() == "cisco")
+other = I.DeviceDialog(); other.vendor.setCurrentIndex(other.vendor.findData("hpe"))
+check("other vendors are as they were (a platform, not 'how to monitor')", other.form.labelForField(other.platform).text() == "Platform" and other.platform.count() == 2
+      and other.values()["platform"] == "aruba_aoscx" and other._vendor() == "hpe")
+other.vendor.setCurrentIndex(other.vendor.findData("cisco"))
+check("Cisco asks how to monitor (SSH, ISE, FMC, SD-WAN) and keeps IOS as the platform of the SSH way", other.form.labelForField(other.platform).text() == "How to monitor" and other.platform.count() == 4
+      and other.values()["platform"] == "cisco_ios" and other._vendor() == "cisco" and other.values()["vendor"] == "cisco")
 
 print("== UniFi is one vendor everywhere")
 from core import display

@@ -65,6 +65,7 @@ class DeviceDialog(QDialog):
         for v in vendors.listed():
             self.vendor.addItem(display.vendor_name(v), v)       # shown text, stored value
         self.platform = QComboBox()
+        self.sub_platform = QComboBox()                          # Cisco by SSH: IOS, IOS XE, NX-OS or ASA, under the How to monitor box
         self.port = QSpinBox()
         self.port.setRange(0, 65535)
         self.port.setSpecialValueText("default")
@@ -186,7 +187,7 @@ class DeviceDialog(QDialog):
         self.org_pick.currentIndexChanged.connect(self._org_changed)
         self.page_general, self.form = page((("Organization", self.org_pick), ("Name", self.name), ("Vendor", self.vendor), ("Folder", self.folder),
                                              ("Location", self.location), ("Popular pages", self.preset), ("Host / DNS name", self.host),
-                                             ("Port", self.port), ("Platform", self.platform),
+                                             ("Port", self.port), ("Platform", self.platform), ("Platform ", self.sub_platform),
                                              ("Details", self.details), ("", self.enabled)))
         self.form.setRowVisible(self.org_pick, bool(orgs.list_orgs()))      # nothing to choose before there are organizations
         self.page_access, self.access = page((("Credential profile", self.profile), ("Username", self.username), ("SSH password", self.ssh_pw),
@@ -293,6 +294,7 @@ class DeviceDialog(QDialog):
         self.use_snmp.toggled.connect(lambda on: self.snmp.setEnabled(on))
         self.vendor.currentIndexChanged.connect(lambda _: self.adapt(self.vendor.currentData()))
         self.platform.currentIndexChanged.connect(lambda _: self._apply_type() if vendors.modes(self.vendor.currentData()) else self._windows_rows())
+        self.sub_platform.currentIndexChanged.connect(lambda _: self._windows_rows())
         self.adapt(self.vendor.currentData())
         self._start = self._snapshot()                           # how it was when it opened, to notice unsaved edits
 
@@ -342,21 +344,39 @@ class DeviceDialog(QDialog):
         self.form.labelForField(self.platform).setText("How to monitor" if vendor == "windows" or modes else "Platform")
         self._apply_type()
 
+    def _sub_platforms(self, vendor):
+        """A way of monitoring that has platforms of its own (Cisco by SSH): the second Platform box lists them."""
+        subs = vendors.sub_platforms(vendor)
+        keep = self.sub_platform.currentData() or self.dev.get("platform")
+        self.sub_platform.blockSignals(True)
+        self.sub_platform.clear()
+        for key, label in subs:
+            self.sub_platform.addItem(label, key)
+        self.sub_platform.setCurrentIndex(max(0, self.sub_platform.findData(keep)))
+        self.sub_platform.blockSignals(False)
+        self.form.setRowVisible(self.sub_platform, len(subs) > 1)
+
     def _apply_type(self):
         """Show what the chosen kind of device needs: its labels, which boxes apply, its checks."""
         vendor = self._vendor()
         self.checks_tab.set_vendor(vendor)
         info = vendors.get(vendor)
+        self._sub_platforms(vendor)
         snmp_only = vendors.is_snmp(vendor)
         cli = vendor in vendors.CLI_TYPES
+        shared = vendors.shared_login(vendor)                                # ISE, FMC, SD-WAN Manager: one account for the API and SSH
         self.access.setRowVisible(self.username, info["username"] or cli)
         self.access.setRowVisible(self.ssh_pw, cli)
-        self.access.labelForField(self.username).setText("SSH user name" if cli else "Username")
-        self.username.setPlaceholderText("optional, for the Command Runner and config backups (the checks use the API key)" if cli else "")
+        self.access.labelForField(self.username).setText("SSH user name" if cli and not shared else "Username")
+        self.username.setPlaceholderText("optional, for the Command Runner and config backups (the checks use the API key)" if cli and not shared else "")
         tip = ("The Command Runner runs commands over this SSH login, and config backups use it when there is no API token or the API fails. "
-               "The checks use the API key.") if cli else ""
+               "The checks use the API key.") if cli and not shared else \
+              ("The checks sign in to the API with this user name and password; SSH sessions and the Command Runner use the same account, "
+               "or the SSH password below when the SSH login differs.") if shared else ""
         self.username.setToolTip(tip)
         self.ssh_pw.setToolTip(tip)
+        if not self.ssh_pw.placeholderText().startswith("saved"):
+            self.ssh_pw.setPlaceholderText("blank = the password above" if shared else "leave blank to keep the stored value")
         self.access.setRowVisible(self.site, bool(info["site"]))
         from ui.keydialog import KEYS
         self.access.setRowVisible(self.get_key, vendor in KEYS)
@@ -372,7 +392,12 @@ class DeviceDialog(QDialog):
                                       "wifi": "localhost (this computer)",
                                       "unifi_network": "the console's address, e.g. 192.168.1.1 or unifi.corp.example.com",
                                       "unifi_protect": "the console's address, e.g. 192.168.1.1 or unifi.corp.example.com",
-                                      "unifi_cloud": "api.ui.com"}.get(vendor, ""))
+                                      "unifi_cloud": "api.ui.com",
+                                      "ciscoise": "the Primary PAN's address", "ciscofmc": "the FMC's address", "ciscosdwan": "the SD-WAN Manager's address",
+                                      "vmware": "the vCenter's address", "esxi": "the ESXi host's address",
+                                      "mist": "api.mist.com, api.eu.mist.com, api.gc1.mist.com or api.ac2.mist.com"}.get(vendor, ""))
+        if vendor == "mist" and not self.host.text().strip():
+            self.host.setText("api.mist.com")
         if vendor == "wifi" and not self.host.text().strip():
             self.host.setText("localhost")
         if vendor == "unifi_cloud" and not self.host.text().strip():
@@ -483,7 +508,7 @@ class DeviceDialog(QDialog):
                 "folder_id": self.folder.currentData(),
                 "details": self.details.text().strip(),
                 "host": self.host.text().strip(), "port": self.port.value(),
-                "platform": "" if vendors.modes(v) else (self.platform.currentData() or ""),
+                "platform": (self.sub_platform.currentData() or "" if vendors.sub_platforms(v) else "") if vendors.modes(v) else (self.platform.currentData() or ""),
                 "username": self.username.text().strip(), "site": self.site.text().strip() or "default",
                 "verify_ssl": int(self.verify.isChecked()), "ha_expected": int(self.ha.isChecked()),
                 "enabled": int(self.enabled.isChecked()),
@@ -914,7 +939,7 @@ class DetailsPane(QWidget):
         if status:
             self.chip.setText(status)
             self.chip.setStyleSheet(st.chip_css(status))
-        kind = "rdp" if dev["vendor"] == "windows" else "ssh" if V.uses_ssh_login(dev["vendor"]) else ""
+        kind = "rdp" if dev["vendor"] == "windows" else "ssh" if V.ssh_reachable(dev["vendor"]) else ""
         self.buttons["connect"].setVisible(bool(kind))
         self.buttons["connect"].setText({"rdp": "Remote Desktop", "ssh": "SSH"}.get(kind, "Connect"))
         self.summary.set_device(dev)

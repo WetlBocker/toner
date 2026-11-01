@@ -73,6 +73,28 @@ def keep_software(dev, drv):
 
 
 NO_VENDOR = "No vendor chosen. Edit the device to choose one. Until then only its ping and port checks run."
+SNMP_EXTRA_CHECKS = ("cpu", "memory", "storage", "uptime", "interfaces", "interface errors")
+
+
+def snmp_extras(dev, thresholds, opts, have, on_check=None):
+    """A manager checked through its API that also answers SNMP once that is set up on it and in the device's SNMP tab (ISE, FMC,
+    the SD-WAN Manager, vCenter, SonicWall): CPU, memory, storage, uptime and interfaces by SNMP, for whatever the API did not give.
+    An SNMP failure is one ERROR row, never the loss of the API's rows."""
+    from drivers.snmpdev import SnmpDriver
+    done = {r.check for r in have if r.device == dev["name"]}
+
+    class Extras(SnmpDriver):
+        def check_list(self):
+            own = dict([("cpu", self.cpu), ("memory", self.memory), ("storage", self.storage), ("uptime", self.uptime),
+                        ("interfaces", self.interfaces), ("interface errors", self.errors)])
+            return [(k, own[k]) for k in SNMP_EXTRA_CHECKS if k not in done]
+    drv = Extras(dev, thresholds, opts)
+    drv.on_check = on_check
+    try:
+        rows = drv.run()
+    except Exception as e:
+        return [Result(dev["name"], "snmp", ERROR, "", "SNMP: " + Driver.explain(e))]
+    return [r for r in rows if r.check != "reachability"]
 
 
 def run_one(dev, thresholds, opts=None, on_check=None):
@@ -94,6 +116,8 @@ def run_one(dev, thresholds, opts=None, on_check=None):
             drv.custom = custom.for_device(dev, opts.get("custom"))        # user-defined checks that apply here
             res = drv.run()
             keep_software(dev, drv)
+            if dev["vendor"] in vendors.SNMP_EXTRAS and profiles.snmp_configured(dev):
+                res += snmp_extras(dev, thresholds, opts, res, on_check)     # CPU, memory, storage, uptime, interfaces by SNMP, beside the API
             res += custom.run_network(dev, drv.custom)                       # web, port, certificate, ping, SNMP
             if "all:support" not in opts.get("disabled", ()):
                 res += support.rows(dev, thresholds)                         # support, warranty and licence dates kept in the device's fields

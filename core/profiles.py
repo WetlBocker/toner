@@ -206,6 +206,17 @@ def username(dev):
     return dev.get("username") or of(dev).get("username", "")
 
 
+def ssh_secret(dev):
+    """The password an SSH session, the Command Runner or a backup uses for this device: the login password where SSH is the login
+    (switches, routers, UniFi); the separate SSH password kept beside an API key (FortiGate, Palo Alto); for the Cisco managers
+    (ISE, FMC, SD-WAN Manager) their own SSH password when one is stored, else the login password, which serves both."""
+    from core import vendors
+    v = dev.get("vendor") or ""
+    if v in vendors.CLI_TYPES:
+        return secret(dev, "ssh") or ((secret(dev) or "") if vendors.shared_login(v) else "")
+    return (secret(dev) or "") if vendors.uses_ssh_login(v) else ""
+
+
 def resolve(dev):
     """A copy of the device with the username filled in from its profile. Secrets are looked up on demand."""
     out = dict(dev)

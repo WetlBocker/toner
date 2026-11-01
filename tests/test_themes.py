@@ -29,8 +29,8 @@ for name, p in themes.FIXED.items():
     check(f"{name}: the word on a primary button reads (4.5:1)", themes.contrast(p["accent"], p["accent_text"]) >= 4.5, round(themes.contrast(p["accent"], p["accent_text"]), 1))
     check(f"{name}: has a one-line description", len(themes.note(name)) > 10)
 check("the groups list every fixed theme once, and the interactive ones", sorted(n for _g, ns in themes.GROUPS for n in ns) == sorted(list(themes.FIXED) + list(themes.INTERACTIVE))
-      and themes.NAMES[0] == "System" and len(themes.NAMES) == 25)
-check("kinds", themes.kind("Aurora") == "dark" and themes.kind("Linen") == "light" and themes.kind("Time of day") == "interactive" and themes.kind("System") == "follows Windows")
+      and themes.NAMES[0] == "System" and len(themes.NAMES) == 30)
+check("kinds", themes.kind("Constellation") == "dark" and themes.kind("Nebula Light") == "light" and themes.kind("Linen") == "light" and themes.kind("Time of day") == "interactive" and themes.kind("System") == "follows Windows")
 check("old names map", themes.legacy_name("Dark") == "Midnight" and themes.legacy_name("Light") == "Daylight" and themes.legacy_name("System") == "System"
       and themes.legacy_name("Ember") == "Ember" and themes.legacy_name("Nope") == "System")
 

@@ -930,7 +930,7 @@ class ToolsTab(QWidget):
         self.scp, self.xcopy = tools3.ScpTab(), tools3.XcopyTab()
         from ui import firmware
         self.firmware = firmware.FirmwareTab(servers=lambda: {"ftp": self.ftp.server, "sftp": self.sftp.server, "tftp": self.tftp.server})
-        self.utilities = tools2.UtilitiesTab()
+        self.maclookup, self.wol = tools2.MacLookupTab(), tools2.WolTab()
         from ui import opensslui, playbookeditor
         self.openssl = opensslui.OpensslTab()
         from ui import sshkeysui
@@ -943,15 +943,14 @@ class ToolsTab(QWidget):
         for title, pages in (("Connect", ((self.runner, "Command Runner"), (self.apitest, "API Tester"))),
                              ("Diagnose", ((self.diag, "Ping / Traceroute / DNS"), (self.liveping, "Live Ping"),
                                            (self.mtr, "Path Monitor (MTR)"), (self.scan, "Port Scanner"),
-                                           (self.iperf, "Throughput (iperf3)"), (self.wifi, "Wi-Fi Scanner"),
-                                           (self.subnet, "Subnet Calculator"))),
-                             ("Discover", ((self.discovery, "Find Devices"), (self.topology, "Topology"))),
+                                           (self.iperf, "Throughput (iperf3)"))),
+                             ("Discover", ((self.discovery, "Find Devices"), (self.topology, "Topology"), (self.wifi, "Wi-Fi Scanner"))),
                              ("SNMP and logs", ((self.snmp, "SNMP"), (self.listeners, "Syslog and Traps"))),
                              ("File transfer", ((self.firmware, "Firmware Transfer"), (self.tftp, "TFTP Server"), (self.sftp, "SFTP / SCP Server"), (self.ftp, "FTP Server"),
                                                (self.scp, "SCP"), (self.xcopy, f"Copy Files ({self.xcopy.name})"))),
                              ("Crypto", ((self.tls, "TLS Certificates"), (self.openssl, "OpenSSL"), (self.sshkeys, "SSH Keys"))),
                              ("Automation", ((self.playbooks, "Playbook Editor"),)),
-                             ("Utilities", ((self.utilities, "MAC and Wake-on-LAN"),))):
+                             ("Utilities", ((self.maclookup, "MAC OUI Lookup"), (self.wol, "Wake-on-LAN"), (self.subnet, "Subnet Calculator")))):
             self.tabs.addSection(title)
             for w, label in pages:
                 tidy(w, combo_min=460)                          # a button or drop-down is only as wide as what it says, even in a wide window
@@ -986,5 +985,5 @@ class ToolsTab(QWidget):
 
     def shutdown(self):
         for t in (self.diag, self.scan, self.snmp, self.liveping, self.mtr, self.tls, self.runner, self.subnet,
-                  self.discovery, self.topology, self.listeners, self.utilities, self.tftp, self.sftp, self.ftp, self.iperf, self.wifi, self.scp, self.xcopy, self.openssl, self.sshkeys, self.playbooks, self.apitest, self.firmware):
+                  self.discovery, self.topology, self.listeners, self.maclookup, self.wol, self.tftp, self.sftp, self.ftp, self.iperf, self.wifi, self.scp, self.xcopy, self.openssl, self.sshkeys, self.playbooks, self.apitest, self.firmware):
             t.shutdown()

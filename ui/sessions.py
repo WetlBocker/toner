@@ -486,8 +486,8 @@ class SessionPane(QWidget):
         sp = self.spec
         pw = sp.get("password") or ""
         dev = sp.get("dev")
-        if not pw and dev and vendors.uses_ssh_login(dev["vendor"]):
-            pw = profiles.secret(dev) or ""
+        if not pw and dev:
+            pw = profiles.ssh_secret(dev) or ""                  # the device's login, or the SSH password kept beside its API key
         if pw:
             return pw
         text, ok = QInputDialog.getText(self, "Password", f"Password for {sp['username']}@{sp['host']}:", QLineEdit.EchoMode.Password)

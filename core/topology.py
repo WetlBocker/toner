@@ -550,7 +550,9 @@ _NAME_RULES = ((r"\brtr|\brouter|-r\d|\bisr\d|\basr\d|\bwan\b|\bedge\b|\bgw\b|\b
                (r"\bcore|\bdist|\bagg|\bl3|\bn9k|\bnexus|\bc95|\bc93|\bc9[23]00x\b", "l3switch"),
                (r"\bsw\b|\bsw\d|\bacc|\bidf|\bmdf|catalyst|\bws-c|\bc9[23]00|\bc3[68]50|\bc2960|\bcrs\d|\bex\d{4}", "switch"))
 _VENDOR_ROLES = {"fortinet": "firewall", "paloalto": "firewall", "opnsense": "firewall", "juniper": "router", "mikrotik": "router",
-                 "arista": "l3switch", "hpe": "switch", "windows": "server", "proxmox": "server", "truenas": "server"}
+                 "arista": "l3switch", "hpe": "switch", "windows": "server", "proxmox": "server", "truenas": "server",
+                 "sophos": "firewall", "sonicwall": "firewall", "ciscofmc": "server", "ciscoise": "server", "ciscosdwan": "server",
+                 "vmware": "server", "esxi": "server", "dell": "switch", "extreme": "switch", "mist": "wlc"}
 
 
 def role_of(name="", desc="", caps="", dev=None):

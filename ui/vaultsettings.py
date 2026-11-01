@@ -5,8 +5,9 @@ Everything here acts through its own buttons (Test connection, Use this vault), 
 notSetting. Secret fields are never shown: they read 'saved in the vault - leave blank to keep it' when one is kept."""
 from PySide6.QtCore import QThread, QTimer, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QFormLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
-                               QMessageBox, QPushButton, QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout,
+                               QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QStackedWidget,
+                               QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from core import audit, db, extstore, extvault, orgs, passvault
 from core.platforms import exe as platform_exe
@@ -30,6 +31,49 @@ class _Tester(QThread):
     def run(self):
         ok, text, conn = extstore.test(*self.args)
         self.done.emit(ok, text, conn)
+
+
+class _Lister(QThread):
+    """Asks the manager which Toner collections belong to no organization Toner has now (off the window thread)."""
+    done = Signal(object)                                  # [(name, items)] or an ExtError
+
+    def run(self):
+        try:
+            self.done.emit(extstore.orphan_containers())
+        except extvault.ExtError as e:
+            self.done.emit(e)
+
+
+class OrphansDialog(QDialog):
+    """Tick the collections of removed organizations to delete, with everything in them."""
+
+    def __init__(self, kind, found, parent=None):
+        super().__init__(parent)
+        word = extvault.CONTAINER_WORD[kind].lower()
+        self.setWindowTitle(f"Remove {word}s of organizations that no longer exist")
+        self.list = QListWidget()
+        for name, count in found:
+            it = QListWidgetItem(f"{name}   ({count} item{'s' if count != 1 else ''})")
+            it.setData(Qt.ItemDataRole.UserRole, name)
+            it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            it.setCheckState(Qt.CheckState.Unchecked)
+            self.list.addItem(it)
+        note = QLabel(f"These Toner {word}s in {extvault.LABELS[kind]} belong to no organization Toner has now. Tick the ones to delete, "
+                      "with everything in them.")
+        note.setWordWrap(True)
+        self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        self.buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Delete ticked")
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+        lay = QVBoxLayout(self)
+        lay.addWidget(note)
+        lay.addWidget(self.list, 1)
+        lay.addWidget(self.buttons)
+        self.resize(520, 360)
+
+    def ticked(self):
+        return [self.list.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.list.count())
+                if self.list.item(i).checkState() == Qt.CheckState.Checked]
 
 
 class _Fields(QWidget):
@@ -182,6 +226,10 @@ class VaultSection(QWidget):
         self.test_btn, self.use_btn = QPushButton("Test connection"), QPushButton("Use this vault")
         self.test_btn.clicked.connect(self.test)
         self.use_btn.clicked.connect(self.use)
+        self.orphans_btn = QPushButton("Remove collections of organizations that no longer exist...")
+        self.orphans_btn.setToolTip("An organization removed from Toner leaves its collection and items behind in the password manager; list them and delete the ones you tick")
+        self.orphans_btn.clicked.connect(self.orphans)
+        self.lister = None
         self.status = QLabel("")
         self.status.setWordWrap(True)
         self.copies = _quiet(QCheckBox("Keep a copy of each password in Toner's vault"))
@@ -197,6 +245,7 @@ class VaultSection(QWidget):
         buttons = QHBoxLayout()
         buttons.addWidget(self.test_btn)
         buttons.addWidget(self.use_btn)
+        buttons.addWidget(self.orphans_btn)
         buttons.addStretch(1)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -233,8 +282,10 @@ class VaultSection(QWidget):
         self.stack.setVisible(manager)
         for w in (self.where, self.table, self.test_btn):
             w.setVisible(manager)
-        for w in (self.copies, self.copies_note):                    # (it is about the manager in use)
+        for w in (self.copies, self.copies_note, self.orphans_btn):  # (they are about the manager in use)
             w.setVisible(manager and kind == extstore.active())
+        if manager:
+            self.orphans_btn.setText(f"Remove {extvault.CONTAINER_WORD[kind].lower()}s of organizations that no longer exist...")
         self.copies.blockSignals(True)
         self.copies.setChecked(extstore.keep_copies())
         self.copies.blockSignals(False)
@@ -315,6 +366,36 @@ class VaultSection(QWidget):
         if ok:
             self._keep(kind, cfg, {**secrets, **(conn.new_secrets or {})})       # Keeper: its configuration replaces the token
         self.status.setText(text)
+
+    def orphans(self):
+        """List the manager's Toner collections that belong to no organization Toner has now, and queue the ticked ones for removal."""
+        if self.lister is not None:
+            return
+        kind = extstore.active()
+        self.status.setText(f"Asking {extvault.LABELS[kind]} for its {extvault.CONTAINER_WORD[kind].lower()}s...")
+        self.orphans_btn.setEnabled(False)
+        self.lister = _Lister(self)
+        self.lister.done.connect(lambda found, k=kind: self._orphans_listed(k, found))
+        self.lister.start()
+
+    def _orphans_listed(self, kind, found):
+        self.lister = None
+        self.orphans_btn.setEnabled(True)
+        word = extvault.CONTAINER_WORD[kind].lower()
+        if isinstance(found, Exception):
+            self.status.setText(f"Couldn't ask {extvault.LABELS[kind]}: {found}")
+            return
+        if not found:
+            self.status.setText(f"Every Toner {word} in {extvault.LABELS[kind]} belongs to an organization Toner has now.")
+            return
+        dlg = OrphansDialog(kind, found, self)
+        if dlg.exec() and dlg.ticked():
+            names = dlg.ticked()
+            extstore.drop_containers(names)
+            audit.log(f"password manager {word}s queued for removal", ", ".join(names))
+            self.status.setText(f"{len(names)} {word}{'s' if len(names) != 1 else ''} will be removed on the next round, with everything in them.")
+        else:
+            self.show_status()
 
     def use(self):
         kind = self.chosen()

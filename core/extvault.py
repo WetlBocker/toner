@@ -100,6 +100,10 @@ class Provider:
     def delete(self, item):
         raise NotImplementedError
 
+    def delete_container(self, cid):
+        """Remove an empty container (its Toner items are deleted first). Raises ExtError where the manager or the login can't."""
+        raise ExtError(f"{self.label} does not let Toner delete a {CONTAINER_WORD[self.kind].lower()}: remove it there by hand.")
+
     def search(self, text):
         """[Item] whose title contains `text` (values not read), for Link..."""
         raise NotImplementedError
@@ -310,6 +314,10 @@ class Bitwarden(_Cli):
 
     def delete(self, item):
         self.run("delete", "item", item.ref)
+
+    def delete_container(self, cid):
+        self.run("delete", "org-collection", cid, "--organizationid", self.org_id)
+        self._collections = None
 
     def search(self, text):
         names = {cid: n for n, cid in self.containers().items()}

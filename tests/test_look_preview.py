@@ -48,7 +48,7 @@ S.look_reset.connect(lambda: reset.append(1))
 labels = [page.form.itemAt(i, page.form.ItemRole.LabelRole).widget().text() for i in range(page.form.rowCount())
           if page.form.itemAt(i, page.form.ItemRole.LabelRole) and page.form.itemAt(i, page.form.ItemRole.LabelRole).widget()]
 check("the page has Theme, Look, Motion, Panels and Contrast, and no accent row of its own", all(x in labels for x in ("Theme", "Look", "Motion", "Panels", "Contrast")) and "Accent colour" not in labels, labels)
-check("every theme has a card", set(page.grid.cards) == set(themes.NAMES) and len(themes.NAMES) == 25, len(page.grid.cards))
+check("every theme has a card", set(page.grid.cards) == set(themes.NAMES) and len(themes.NAMES) == 30, len(page.grid.cards))
 check("the saved theme's card is the chosen one", page.grid.current() == "System")
 other = "Ember"
 page.grid.set_current(other, emit=True); app.processEvents(); time.sleep(0.2); app.processEvents()

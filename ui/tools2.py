@@ -1181,8 +1181,10 @@ class ListenersTab(QWidget):
         self.syslog = self.traps = None
 
 
-# =============================================================================== MAC utilities
-class UtilitiesTab(QWidget):
+# =============================================================================== MAC OUI Lookup, Wake-on-LAN (Utilities)
+class MacLookupTab(QWidget):
+    """Utilities > MAC OUI Lookup: the maker behind a MAC address, from the IEEE list."""
+
     def __init__(self):
         super().__init__()
         self.mac = QLineEdit()
@@ -1192,38 +1194,21 @@ class UtilitiesTab(QWidget):
         self.lookup_out.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.update_btn = QPushButton("Update OUI database...")
         self.oui_info = _muted("")
-        self.wol_mac, self.wol_bcast = QLineEdit(), QLineEdit("255.255.255.255")
-        self.wol_mac.setPlaceholderText("MAC address of the computer to wake")
-        self.wol_port = QSpinBox()
-        self.wol_port.setRange(1, 65535)
-        self.wol_port.setValue(9)
-        self.wol_btn = _primary("Send magic packet")
-        self.wol_out = _muted("")
+        self.reset = reset_button()
         look = QFormLayout()
-        look.addRow("MAC address", self.mac)
+        look.addRow("MAC address", _row(self.mac, self.reset))
         look.addRow("", self.lookup_out)
-        wol = QFormLayout()
-        wol.addRow("MAC address", self.wol_mac)
-        wol.addRow("Broadcast address", self.wol_bcast)
-        wol.addRow("UDP port", self.wol_port)
-        wol.addRow("", self.wol_btn)
-        wol.addRow("", self.wol_out)
         lay = QVBoxLayout(self)
-        lay.addWidget(QLabel("<b>MAC address lookup</b>"))
+        lay.addWidget(_muted("Type a MAC address, or just its first six digits, to see which maker it was assigned to (the OUI)."))
         lay.addLayout(look)
         row = QHBoxLayout()
         row.addWidget(self.update_btn)
         row.addWidget(self.oui_info, 1)
         lay.addLayout(row)
-        lay.addSpacing(18)
-        lay.addWidget(QLabel("<b>Wake-on-LAN</b>"))
-        lay.addWidget(_muted("Sends a magic packet to the broadcast address of the computer's network. The target must be "
-                             "on the same network segment and have Wake-on-LAN switched on in its firmware."))
-        lay.addLayout(wol)
         lay.addStretch()
         self.mac.textChanged.connect(self.show_lookup)
+        self.reset.clicked.connect(self.mac.clear)
         self.update_btn.clicked.connect(self.update_db)
-        self.wol_btn.clicked.connect(self.send)
         self.show_info()
 
     def show_info(self):
@@ -1265,6 +1250,35 @@ class UtilitiesTab(QWidget):
         finally:
             QApplication.restoreOverrideCursor()
         self.show_lookup(self.mac.text())
+
+    def shutdown(self):
+        pass
+
+
+class WolTab(QWidget):
+    """Utilities > Wake-on-LAN: a magic packet to a computer's network."""
+
+    def __init__(self):
+        super().__init__()
+        self.wol_mac, self.wol_bcast = QLineEdit(), QLineEdit("255.255.255.255")
+        self.wol_mac.setPlaceholderText("MAC address of the computer to wake")
+        self.wol_port = QSpinBox()
+        self.wol_port.setRange(1, 65535)
+        self.wol_port.setValue(9)
+        self.wol_btn = _primary("Send magic packet")
+        self.wol_out = _muted("")
+        wol = QFormLayout()
+        wol.addRow("MAC address", self.wol_mac)
+        wol.addRow("Broadcast address", self.wol_bcast)
+        wol.addRow("UDP port", self.wol_port)
+        wol.addRow("", self.wol_btn)
+        wol.addRow("", self.wol_out)
+        lay = QVBoxLayout(self)
+        lay.addWidget(_muted("Sends a magic packet to the broadcast address of the computer's network. The target must be "
+                             "on the same network segment and have Wake-on-LAN switched on in its firmware."))
+        lay.addLayout(wol)
+        lay.addStretch()
+        self.wol_btn.clicked.connect(self.send)
 
     def send(self):
         try:

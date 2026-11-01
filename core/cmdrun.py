@@ -45,7 +45,7 @@ def runnable(dev):
         return False, "not supported"
     if kind == "windows" and winmon.transport(dev) == "agent":
         return False, "reports by agent"
-    if kind == "cli" and not ((dev.get("username") or "").strip() and profiles.secret(dev, "ssh")):
+    if kind == "cli" and not ((dev.get("username") or "").strip() and profiles.ssh_secret(dev)):
         return False, "no SSH login"
     return True, ""
 
@@ -259,7 +259,7 @@ def _run_ssh(dev, commands, opts, read_timeout, out):
 
 def _run_cli(dev, commands, opts, read_timeout, out):
     """A firewall's own command line, over SSH, with the login stored on the device (its API key is for the checks)."""
-    user, pw = (dev.get("username") or "").strip(), profiles.secret(dev, "ssh")
+    user, pw = (dev.get("username") or "").strip(), profiles.ssh_secret(dev)
     if not user or not pw:
         raise ValueError("no SSH login is stored for this device: Edit device > Access, SSH user name and SSH password")
     t = int((opts or db.runtime_options()).get("ssh_timeout", 20))

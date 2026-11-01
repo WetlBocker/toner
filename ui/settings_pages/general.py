@@ -88,15 +88,20 @@ class ConnectionsPage(Page):
         self.ipstack.setMinimumWidth(300)
         self.forget_ipstack = QPushButton("Forget key")
         self.forget_ipstack.clicked.connect(self._forget_ipstack)
+        self.test_ipstack = QPushButton("Test key")
+        self.test_ipstack.setToolTip("Look up 8.8.8.8 with the key typed here (or the saved one) and say what ipstack answered")
+        self.test_ipstack.clicked.connect(self._test_ipstack)
+        self.ipstack_result = note("")
         for label, w in (("SSH timeout (switches, routers)", self.ssh), ("Web API timeout (firewalls, controllers)", self.http),
                          ("Retries after a timeout", self.retries), ("Wait between retries", self.delay),
-                         ("ipstack access key", row_of(self.ipstack, self.forget_ipstack))):
+                         ("ipstack access key", row_of(self.ipstack, self.test_ipstack, self.forget_ipstack)), ("", self.ipstack_result)):
             self.form.addRow(label, w)
         self.lay.insertWidget(1, note(
             "Raise the timeouts for slow or remote links. Only timeouts and dropped connections are retried. "
             "A rejected login is never retried, because repeating a wrong password can lock the account."))
-        self.lay.insertWidget(2, note("ipstack access key: public addresses in the Subnet Calculator are looked up at ipstack.com with it. A free key allows "
-                                      "plain http only, so the address and the key travel unencrypted. Get one at ipstack.com."))
+        self.lay.insertWidget(2, note("ipstack access key: public addresses in the Subnet Calculator and WHOIS Lookup are looked up with it. A key from ipstack.com "
+                                      "or from the APILayer marketplace both work: Toner asks ipstack.com first and APILayer's own address (api.apilayer.net) when that refuses the key. "
+                                      "A free ipstack.com key allows plain http only, so there the address and the key travel unencrypted."))
 
     KEY_SAVED = "a key is saved: type here to replace it"
 
@@ -105,6 +110,25 @@ class ConnectionsPage(Page):
         iplookup.set_key("")
         self.ipstack.clear()
         self.ipstack.setPlaceholderText("")
+        self.ipstack_result.setText("")
+
+    def _test_ipstack(self):
+        """One look-up with the key typed here, or the saved one, off the window thread; the answer goes under the box."""
+        from core import iplookup
+        from ui.tools import Call
+        key = self.ipstack.text().strip() or iplookup.get_key()
+        if not key:
+            self.ipstack_result.setText("Type the key first.")
+            return
+        self.test_ipstack.setEnabled(False)
+        self.ipstack_result.setText("Asking ipstack...")
+        self._tester = Call(lambda: iplookup.test_key(key))
+        self._tester.done.connect(self._tested_ipstack)
+        self._tester.start()
+
+    def _tested_ipstack(self, res):
+        self.test_ipstack.setEnabled(True)
+        self.ipstack_result.setText(str(res) if isinstance(res, Exception) else res[1])
 
     def load(self):
         from core import iplookup
