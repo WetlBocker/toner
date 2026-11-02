@@ -1,16 +1,10 @@
 import re
 from core.netconn import connect as ConnectHandler      # netmiko's, with Toner's fixes for some devices (ASA)
 from .base import Driver, OK, WARN, FAIL, grade_low
-from .sshbase import Recorder
+from .sshbase import Recorder, uptime_hours
 from .clirows import CliRows
 from . import clichecks
 from core import quiet, display
-
-_UPTIME_UNITS = {"year": 8760, "week": 168, "day": 24, "hour": 1, "min": 1 / 60}
-
-def uptime_hours(text):
-    """'1 year, 2 weeks, 3 days, 4 hours, 5 minutes' (IOS) or '12 days 3 hours 4 mins' (ASA) -> hours."""
-    return sum(int(n) * _UPTIME_UNITS[u] for n, u in re.findall(r"(\d+)\s+(year|week|day|hour|min)", text))
 
 class CiscoDriver(CliRows, Driver):
     def run(self):

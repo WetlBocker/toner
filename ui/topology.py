@@ -337,7 +337,7 @@ class MapView(QGraphicsView):
         self.zoom_in.clicked.connect(lambda: self.scale(1.2, 1.2))
         self.zoom_out.clicked.connect(lambda: self.scale(1 / 1.2, 1 / 1.2))
         self.fit_btn.clicked.connect(self.fit)
-        self.card = Card(self)
+        self.card = DetailCard(self)
         self.card.hide()
         self.restyle()
 
@@ -502,7 +502,8 @@ def link_tip(l, layer):
 
 
 # =============================================================================== the detail card
-class Card(QFrame):
+class DetailCard(QFrame):
+    """The card beside the map for a clicked device or link: its facts, links and actions."""
     def __init__(self, parent):
         super().__init__(parent)
         self.setProperty("card", True)

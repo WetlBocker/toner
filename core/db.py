@@ -74,7 +74,7 @@ LOWER_IS_WORSE = {"uptime", "wifi_signal", "cert_days", "sensor_battery", "wan_u
 DEFAULT_SETTINGS = {
     # general
     "retention_days": 90, "workers": 10, "ssh_log_days": 365,
-    "default_verify_ssl": False, "default_ssh_port": 22, "scan_confirm_over": 256,
+    "default_verify_ssl": True, "default_ssh_port": 22, "scan_confirm_over": 256,
     # connections
     "ssh_timeout": 20, "http_timeout": 15, "retries": 1, "retry_delay": 3,
     # checks

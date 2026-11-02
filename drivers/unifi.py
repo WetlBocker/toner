@@ -1,6 +1,5 @@
-from core import proxy, display
+from core import proxy, display, tlsverify
 import requests
-import urllib3
 from .base import Driver, OK, WARN, FAIL, grade, grade_low
 
 STATES = {0: "disconnected", 1: "connected", 2: "pending", 4: "upgrading",
@@ -12,9 +11,7 @@ def fmt_uptime(s):
 class UnifiDriver(Driver):
     def run(self):
         d = self.dev
-        verify = bool(d.get("verify_ssl"))
-        if not verify:
-            urllib3.disable_warnings()
+        verify = tlsverify.verify(d)
         base = f"https://{d['host']}" + (f":{d['port']}" if d.get("port") else "")
         s = requests.Session()
         s.verify = verify

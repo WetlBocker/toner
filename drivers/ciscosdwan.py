@@ -3,6 +3,7 @@
 and BFD sessions on the edges, open alarms, and the Manager's own CPU and memory."""
 from .base import OK, WARN, FAIL, grade
 from .webapi import WebApi
+from core import quiet
 
 
 class CiscoSdwanDriver(WebApi):
@@ -20,7 +21,7 @@ class CiscoSdwanDriver(WebApi):
             if tok is not None and getattr(tok, "text", ""):
                 s.headers["X-XSRF-TOKEN"] = tok.text.strip()
         except Exception:
-            pass
+            quiet.ignored()
 
     def run(self):
         out = []

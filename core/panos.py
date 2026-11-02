@@ -3,9 +3,8 @@ The password is sent once, over HTTPS, in the body of the request (not in the ad
 import xml.etree.ElementTree as ET
 
 import requests
-import urllib3
 
-from core import proxy
+from core import proxy, tlsverify
 
 
 def keygen(dev, username, password, timeout=20):
@@ -14,9 +13,7 @@ def keygen(dev, username, password, timeout=20):
     if not username or not password:
         raise ValueError("Enter the administrator's user name and password.")
     host, port = dev["host"], dev.get("port") or 443
-    verify = bool(dev.get("verify_ssl"))
-    if not verify:
-        urllib3.disable_warnings()
+    verify = tlsverify.verify(dev)
     try:
         r = requests.post(f"https://{host}:{port}/api/", data={"type": "keygen", "user": username, "password": password},
                           verify=verify, timeout=timeout, **proxy.requests_kwargs(dev))

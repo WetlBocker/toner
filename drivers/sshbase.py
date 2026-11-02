@@ -6,16 +6,17 @@ from core.netconn import connect as ConnectHandler      # netmiko's, with Toner'
 from .base import Driver, OK, WARN, FAIL, SEVERITY, grade_low
 from core import display, quiet
 
-_UNITS = {"year": 8760, "week": 168, "day": 24, "hour": 1, "minute": 1 / 60}
+_UNITS = {"year": 8760, "week": 168, "day": 24, "hour": 1, "min": 1 / 60}
 
 
 def uptime_hours(text):
-    """'1 year, 2 weeks, 3 days, 4 hours, 5 minutes' -> hours. A clock after the days ('12 days 03:04:05', Dell and Extreme) counts too
-    when no hours or minutes are spelled out."""
-    found = re.findall(r"(\d+)\s+(year|week|day|hour|minute)", text)
+    """'1 year, 2 weeks, 3 days, 4 hours, 5 minutes' (IOS, Junos, HPE) or '12 days 3 hours 4 mins' (ASA) -> hours. A clock after
+    the days ('12 days 03:04:05', Dell and Extreme) counts too when no hours or minutes are spelled out. Pass the uptime phrase
+    itself, not a whole `show version`, or the clock rule may pick up a timestamp from elsewhere in it."""
+    found = re.findall(r"(\d+)\s+(year|week|day|hour|min)", text)
     total = sum(int(n) * _UNITS[u] for n, u in found)
     clock = re.search(r"\b(\d{1,2}):(\d{2})(?::(\d{2}))?\b", text)
-    if clock and not any(u in ("hour", "minute") for _n, u in found):
+    if clock and not any(u in ("hour", "min") for _n, u in found):
         total += int(clock.group(1)) + int(clock.group(2)) / 60 + int(clock.group(3) or 0) / 3600
     return total
 

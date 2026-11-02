@@ -10,9 +10,8 @@ import time
 from datetime import datetime, timezone
 
 import requests
-import urllib3
 
-from core import proxy
+from core import proxy, tlsverify
 from .base import Driver, OK, WARN, FAIL
 
 CLOUD_HOST = "api.ui.com"
@@ -31,12 +30,10 @@ class UnifiApi(Driver):
         return f"https://{host}{port}{self.PREFIX}/v1"
 
     def verify(self):
-        return bool(self.dev.get("verify_ssl")) if self.LOCAL else True
+        return tlsverify.verify(self.dev) if self.LOCAL else True
 
     def get(self, path, params=None, optional=False):
         """GET one path and return its JSON. `optional`: a 404 (this version does not have it) gives None."""
-        if not self.verify():
-            urllib3.disable_warnings()
         r = None
         for attempt in range(2):                                      # one polite retry when the rate limit is hit
             r = requests.get(self.base() + path, params=params or None,

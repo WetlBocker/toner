@@ -167,17 +167,20 @@ class NavStack(QWidget):
         self.org_label.setProperty("muted", True)
         self.org = QComboBox()                     # the organization being looked at: every section follows it
         self.org.setObjectName("orgPicker")
+        self.org.setAccessibleName("Organization")
         self.org.setToolTip("The organization every section shows. Global lists every organization.")
         self.org.currentIndexChanged.connect(lambda _i: None if self._filling else self.org_changed.emit(int(self.org.currentData() or 0)))
         self.quick = QPushButton()                 # the command palette (Ctrl+K) is easy to miss otherwise
         self.quick.setProperty("ghost", True)
         self.quick.setObjectName("navSearch")
+        self.quick.setAccessibleName("Search Toner (Ctrl+K)")
         self.quick.setToolTip("Search   (Ctrl+K)\nJump to a section, tool, device or action")
         self.quick.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.quick.setMinimumHeight(36)
         self.quick.clicked.connect(self.search_requested)
         self.list = QListWidget()                  # the sections, one under another, with their group names
         self.list.setObjectName("nav")
+        self.list.setAccessibleName("Sections")
         self.list.setSpacing(0)
         self.list.setMovement(QListView.Movement.Static)
         self.list.setIconSize(QSize(NAV_ICON, NAV_ICON))
@@ -557,6 +560,7 @@ class PageStack(QWidget):
         self.key, self.width_open = key, width
         self.list = QListWidget()
         self.list.setObjectName("settingsNav")
+        self.list.setAccessibleName("Pages")
         self.list.setFixedWidth(width)
         self.list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.fold = fold_button()

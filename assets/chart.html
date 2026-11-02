@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Toner chart</title>
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; }
+  #chart { width: 100%; height: 100%; }
+  #empty { position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+           font: 13px system-ui, "Segoe UI", sans-serif; color: var(--muted, #777); text-align: center; padding: 0 16px; }
+</style>
+<script src="echarts.min.js"></script>
+<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+</head>
+<body>
+<div id="chart"></div>
+<div id="empty"></div>
+<script>
+// The one page every Toner chart is drawn on. Python sets the chart with toner.setOption(json) and the theme with
+// toner.setTheme(json); clicks come back to Python through the QWebChannel object "bridge" (its clicked(json) slot).
+(function () {
+  var el = document.getElementById("chart"), emptyEl = document.getElementById("empty");
+  var chart = null, theme = {}, pending = null, bridge = null, renderer = "canvas";
+
+  function ensure() {
+    if (!chart) {
+      chart = echarts.init(el, null, { renderer: renderer });
+      chart.on("click", function (p) {
+        var payload = { seriesName: p.seriesName, seriesIndex: p.seriesIndex, name: p.name, dataIndex: p.dataIndex,
+                        value: p.value, kind: p.componentType, extra: (p.data && typeof p.data === "object") ? p.data.extra : undefined };
+        if (bridge) bridge.clicked(JSON.stringify(payload));
+      });
+    }
+    return chart;
+  }
+
+  window.toner = {
+    setTheme: function (json) {
+      theme = typeof json === "string" ? JSON.parse(json) : json;
+      document.documentElement.style.setProperty("--muted", theme.muted || "#777");
+      document.body.style.background = theme.background || "transparent";
+      if (pending) window.toner.setOption(pending);
+    },
+    setOption: function (json) {
+      var opt = typeof json === "string" ? JSON.parse(json) : json;
+      pending = opt;
+      if (opt && opt.__empty) {
+        emptyEl.textContent = opt.__empty;
+        emptyEl.style.display = "flex";
+        if (chart) chart.clear();
+        return;
+      }
+      emptyEl.style.display = "none";
+      var c = ensure();
+      c.clear();
+      c.setOption(opt, true);
+    },
+    resize: function () { if (chart) chart.resize(); },
+    dataURL: function () { return chart ? chart.getDataURL({ pixelRatio: 2, backgroundColor: theme.surface || "#fff" }) : ""; }
+  };
+
+  window.addEventListener("resize", function () { if (chart) chart.resize(); });
+  new ResizeObserver(function () { if (chart) chart.resize(); }).observe(el);
+
+  if (typeof QWebChannel !== "undefined" && typeof qt !== "undefined" && qt.webChannelTransport) {
+    new QWebChannel(qt.webChannelTransport, function (channel) {
+      bridge = channel.objects.bridge;
+      if (bridge && bridge.ready) bridge.ready();
+    });
+  }
+})();
+</script>
+</body>
+</html>

@@ -16,6 +16,7 @@ from PySide6.QtGui import QDrag
 from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMessageBox,
                                QProgressBar, QPushButton, QSplitter, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 from ui.widgets import remember_sizes
+from core import quiet
 
 MIME = "application/x-toner-files"            # a drag from one of the two lists: {"side": "local"|"remote", "paths": [...]}
 NOT_CONNECTED = "Connect the session to browse the device's files."
@@ -257,7 +258,7 @@ class Worker(QThread):
             if self.sftp is not None:
                 self.sftp.close()
         except Exception:
-            pass
+            quiet.ignored()
 
 
 # =============================================================================== copying
@@ -286,7 +287,7 @@ def copy_file(worker, src_fs, src, dst_fs, dst, label, policy):
         try:
             dst_fs.delete(dst)                                       # the unfinished file is removed
         except Exception:
-            pass
+            quiet.ignored()
         raise
     return True
 

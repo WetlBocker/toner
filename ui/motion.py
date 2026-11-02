@@ -6,6 +6,7 @@ import sys
 
 from PySide6.QtCore import QEasingCurve, QPoint, QRectF, Qt, QTimer, QVariantAnimation
 from PySide6.QtWidgets import QAbstractItemView, QGraphicsEffect
+from core import quiet
 
 LEVELS = ("Off", "Subtle", "Lively")
 _forced = None
@@ -22,7 +23,7 @@ def system_allows():
             if ctypes.windll.user32.SystemParametersInfoW(0x1042, 0, ctypes.byref(on), 0):      # SPI_GETCLIENTAREAANIMATION
                 return bool(on.value)
         except Exception:
-            pass
+            quiet.ignored()
     return True
 
 

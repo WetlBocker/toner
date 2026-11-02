@@ -1,6 +1,6 @@
 """TrueNAS (CORE and SCALE) through its REST API v2.0 with an API key (the user menu > API Keys). The host is the TrueNAS address; the secret is the key.
 Pool health and space, the system's own alerts, load, uptime and the version."""
-from core import display
+from core import display, tlsverify
 from .base import OK, WARN, FAIL, grade, grade_low
 from .restapi import RestApi
 
@@ -56,7 +56,7 @@ class TruenasDriver(RestApi):
             from core import proxy
             headers, _auth = self.auth()
             r = requests.post(self.base() + "/disk/temperatures", json={"names": names}, headers={"Accept": "application/json", **headers},
-                              timeout=self.opts["http_timeout"], verify=bool(self.dev.get("verify_ssl")), **proxy.requests_kwargs(self.dev))
+                              timeout=self.opts["http_timeout"], verify=tlsverify.verify(self.dev), **proxy.requests_kwargs(self.dev))
             if r.status_code != 200:
                 return {}
             data = r.json()

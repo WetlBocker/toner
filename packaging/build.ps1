@@ -10,8 +10,21 @@ python -m PyInstaller --noconfirm --clean --windowed --onedir --name Toner --ico
     --collect-all netmiko --collect-all ntc_templates --collect-all pysnmp --hidden-import cli --hidden-import PySide6.QtAxContainer --collect-all pypsrp --collect-all spnego --collect-all sspilib `
     --collect-submodules keyring.backends --collect-submodules paramiko --collect-all keeper_secrets_manager_core `
     --collect-submodules anthropic --collect-submodules openai --collect-submodules google.genai `
+    --hidden-import PySide6.QtWebEngineWidgets --hidden-import PySide6.QtWebEngineCore --hidden-import PySide6.QtWebChannel `
+    --add-data "$root\assets\echarts.min.js;assets" --add-data "$root\assets\chart.html;assets" `
     --distpath build\dist --workpath build\work --specpath build app.py
 if ($LASTEXITCODE) { throw "PyInstaller failed" }
+
+# Qt pieces PyInstaller ships that Toner never uses: the virtual keyboard (and its input-context plugin), QtTest, the PDF
+# viewer (PDF reports are written with QPdfWriter, which is in QtGui) and Qt's own translation files (Toner is English only).
+# QtQuick and QtQml stay: the charts' QtWebEngine needs them. (The charts add QtWebEngine itself, about 200 MB.)
+$qt = "build\dist\Toner\_internal\PySide6"
+$prune = @("Qt6VirtualKeyboard.dll", "Qt6Test.dll", "Qt6Pdf.dll", "Qt6PdfWidgets.dll", "Qt6PdfQuick.dll",
+           "QtTest.pyd", "QtPdf.pyd", "QtPdfWidgets.pyd",
+           "plugins\virtualkeyboard", "plugins\platforminputcontexts\qtvirtualkeyboardplugin.dll", "translations")
+foreach ($rel in $prune) { $path = Join-Path $qt $rel; if (Test-Path $path) { Remove-Item -Recurse -Force $path } }
+$mb = [math]::Round((Get-ChildItem build\dist\Toner -Recurse -File | Measure-Object Length -Sum).Sum / 1MB)
+Write-Host "Program folder: $mb MB"
 
 $iscc = @("$env:ProgramFiles\Inno Setup 6\ISCC.exe", "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
           "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1

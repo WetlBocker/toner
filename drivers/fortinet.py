@@ -1,6 +1,6 @@
-from core import proxy
+from core import proxy, tlsverify
+from core import quiet
 import requests
-import urllib3
 from datetime import datetime, timezone
 
 from . import apichecks
@@ -9,12 +9,10 @@ from .base import AuthRejected, Driver, OK, WARN, FAIL, grade, grade_low
 class FortinetDriver(Driver):
     def _get(self, path, whole=False):
         d = self.dev
-        if not d.get("verify_ssl"):
-            urllib3.disable_warnings()
         port = d.get("port") or 443
         r = requests.get(f"https://{d['host']}:{port}/api/v2/monitor/{path}",
                          headers={"Authorization": f"Bearer {self.password}"},
-                         verify=bool(d.get("verify_ssl")), timeout=self.opts["http_timeout"], **proxy.requests_kwargs(d))
+                         verify=tlsverify.verify(d), timeout=self.opts["http_timeout"], **proxy.requests_kwargs(d))
         r.raise_for_status()
         return r.json() if whole else r.json()["results"]
 
@@ -47,7 +45,7 @@ class FortinetDriver(Driver):
                 raise AuthRejected("FortiGate refused the API token (HTTP 403): the REST API admin needs read access, and this computer must be in "
                                    "its trusted hosts.") from None
         except Exception:
-            pass
+            quiet.ignored()
         for name, fn in (("resources", self.resources), ("firmware", self.firmware),
                          ("wan links", self.wan), ("ha", self.ha), ("vpn", self.vpn), ("licenses", self.licenses), ("certificates", self.certificates),
                          ("interfaces", self.interfaces), ("ha sync", self.ha_sync), ("fortiaps", self.fortiaps), ("fortiswitches", self.fortiswitches),

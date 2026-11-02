@@ -25,6 +25,7 @@ The SDKs are imported inside each class, so Toner starts (and the rest of this p
 import base64
 import json
 import threading
+from core import quiet
 
 MAX_TOKENS = 16000             # the longest answer (or batch of tool calls) in one round
 TIMEOUT = 180                  # seconds for one round; a model that thinks hard can take a while
@@ -320,7 +321,7 @@ class OpenAI(Provider):
             try:
                 stream.close()
             except Exception:                                            # noqa: BLE001
-                pass
+                quiet.ignored("noqa: BLE001")
         if final is None:
             raise ProviderError("the answer ended before it was complete")
         for item in final.output:

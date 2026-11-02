@@ -17,6 +17,7 @@ import keyring
 
 from core import audit, db, profiles, proxy
 from core.folders import FolderTree
+from core import quiet
 
 METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
 BODY_TYPES = [("none", "None", ""), ("json", "JSON", "application/json"), ("xml", "XML", "application/xml"),
@@ -409,8 +410,8 @@ def send(prepared, cancel=None):
            "cancelled": False}
     host = urlsplit(prepared["url"]).hostname or ""
     if not prepared["verify"]:
-        import urllib3
-        urllib3.disable_warnings()
+        from core import tlsverify
+        tlsverify.verify({"verify_ssl": 0})          # the "Verify certificate" switch is off: hide that one warning
     started = time.monotonic()
     try:
         r = requests.request(prepared["method"], prepared["url"], headers=prepared["headers"], data=prepared["data"],
@@ -542,7 +543,7 @@ def pretty(body, headers, want=True):
             out = minidom.parseString(text.encode("utf-8")).toprettyxml(indent="  ")
             return "\n".join(line for line in out.splitlines() if line.strip()), "xml"
         except Exception:
-            pass
+            quiet.ignored()
     return text, "text"
 
 

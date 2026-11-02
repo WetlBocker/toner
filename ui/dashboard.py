@@ -245,6 +245,7 @@ class DashboardTab(QWidget):
             self.cards[k].setToolTip(tip)
 
         self.attention = QTableWidget(0, 5)                            # the status chip first, then the device, as the mockup had it
+        self.attention.setAccessibleName("Needs attention")
         self.attention.setHorizontalHeaderLabels(["Status", "Device", "What is wrong", "Checked", "Actions"])
         self.attention.horizontalHeader().setVisible(False)             # the rows explain themselves
         self.attention.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)

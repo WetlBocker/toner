@@ -407,6 +407,7 @@ class HistoryTab(QWidget):
     def __init__(self):
         super().__init__()
         self.runs = _table(["Run time", "OK", "WARN", "FAIL", "ERROR", "Organization"])
+        self.runs.setAccessibleName("Runs")
         self.detail = _table(["Device", "Check", "Status", "Value", "Message"])
         self.detail.setItemDelegateForColumn(2, StatusDelegate(self.detail))
         self.runs.itemSelectionChanged.connect(self.show_run)

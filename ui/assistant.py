@@ -75,6 +75,7 @@ class SideButton(QToolButton):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._press = self._start = None
+        self.setAccessibleName("Assistant")
         self._dragging = False
         self._settling = False                      # just dropped: the next place it is given is reached by rubber band
         self._gliding = False
@@ -229,9 +230,12 @@ class AssistantPanel(QWidget):
         self.hint = EmptyHint(self.view, "Ask a question", "The Assistant reads this organization's devices, results, backups and logs, and what is on screen.", wrap=True)
         self.input = QPlainTextEdit()
         self.input.setPlaceholderText(PLACEHOLDER)
+        self.input.setAccessibleName("Ask the Assistant")
         self.input.setFixedHeight(84)
         self.input.installEventFilter(self)
         self.send_btn, self.stop_btn, self.new_btn = QPushButton("Send"), QPushButton("Stop"), QPushButton("New conversation")
+        for b in (self.send_btn, self.stop_btn, self.new_btn):
+            b.setAccessibleName(b.text())
         self.send_btn.setProperty("primary", True)
         self.new_btn.setProperty("ghost", True)
         self.stop_btn.setEnabled(False)

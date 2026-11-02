@@ -8,6 +8,7 @@ worked out stays without a vendor, to be chosen by hand or later.
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from core import discovery, nettools, vendors
+from core import quiet
 
 # what netmiko's detector answers -> (Toner's vendor, its platform); anything else is not a device Toner monitors over SSH
 NETMIKO = {"cisco_ios": ("cisco", "cisco_ios"), "cisco_xe": ("cisco", "cisco_xe"), "cisco_nxos": ("cisco", "cisco_nxos"),
@@ -45,7 +46,7 @@ def signing_in(host, port, username, password, timeout=20):
             if guesser is not None:
                 guesser.connection.disconnect()
         except Exception:
-            pass
+            quiet.ignored()
     return NETMIKO.get(best or "", ("", ""))
 
 

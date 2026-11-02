@@ -593,6 +593,7 @@ class SessionTree(QTreeWidget):
 
     def __init__(self, owner):
         super().__init__()
+        self.setAccessibleName("Saved sessions")
         self.owner = owner
 
     def mousePressEvent(self, e):

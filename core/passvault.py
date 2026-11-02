@@ -22,6 +22,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
 from core import db
+from core import quiet
 
 MIN_MASTER = 12
 FORMAT = "toner-vault"
@@ -226,7 +227,7 @@ def set_remembered(on):
                 if f.read().startswith(KEYRING_MARK):
                     _native_keyring().delete_password(NATIVE_SERVICE, str(path()))
         except Exception:
-            pass
+            quiet.ignored()
         try:
             key_path().unlink()
         except FileNotFoundError:
@@ -458,7 +459,7 @@ def _tell_manager(name, op):
         from core import extstore
         extstore.queue(name, op)
     except Exception:
-        pass
+        quiet.ignored()
 
 
 def left_in_credential_manager():
@@ -484,4 +485,4 @@ def forget_credential_manager(names_):
         try:
             _old_backend.delete_password(db.SERVICE, name)
         except Exception:
-            pass
+            quiet.ignored()

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import yaml
 
-from core import display, nettools, vendors
+from core import display, nettools, tlsverify, vendors
 
 
 def db_split_tags(text):
@@ -131,7 +131,7 @@ def normalize(raw):
            "folder": "/".join(p.strip() for p in text("folder").replace("\\", "/").split("/") if p.strip()),
            "tags": ", ".join(db_split_tags(text("tags"))), "profile": text("profile"), "jump": text("jump"),
            "snmp_community": text("snmp_community"),
-           "verify_ssl": _flag(row.get("verify_ssl"), 0), "ha_expected": _flag(row.get("ha_expected"), 0),
+           "verify_ssl": _flag(row.get("verify_ssl"), tlsverify.default_for_new()), "ha_expected": _flag(row.get("ha_expected"), 0),
            "enabled": _flag(row.get("enabled"), 1), "winopts": winopts, "proxy": proxy_cfg, "checkopts": _checkopts(row)}
     return dev, text("secret") or None
 

@@ -173,10 +173,9 @@ def _fetch_firewall(dev, opts):
 
 
 def _api_config(dev, token, opts):
-    import requests, urllib3
-    if not dev.get("verify_ssl"):
-        urllib3.disable_warnings()
-    kw = dict(verify=bool(dev.get("verify_ssl")), timeout=max(opts["http_timeout"], 60), **proxy.requests_kwargs(dev))
+    import requests
+    from core import tlsverify
+    kw = dict(verify=tlsverify.verify(dev), timeout=max(opts["http_timeout"], 60), **proxy.requests_kwargs(dev))
     base = f"https://{dev['host']}:{dev.get('port') or 443}"
     if dev["vendor"] == "fortinet":
         url, headers = f"{base}/api/v2/monitor/system/config/backup", {"Authorization": f"Bearer {token}"}

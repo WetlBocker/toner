@@ -1,9 +1,9 @@
-from core import proxy, display
+from core import proxy, display, tlsverify
+from core import quiet
 import re
 import xml.etree.ElementTree as ET
 
 import requests
-import urllib3
 
 from . import apichecks
 from .base import AuthRejected, Driver, OK, WARN, FAIL, grade, grade_low
@@ -15,11 +15,9 @@ class PaloAltoDriver(Driver):
 
     def _op(self, cmd):
         d = self.dev
-        if not d.get("verify_ssl"):
-            urllib3.disable_warnings()
         r = requests.get(f"https://{d['host']}:{d.get('port') or 443}/api/",
                          params={"type": "op", "cmd": cmd}, headers={"X-PAN-KEY": self.password or ""},
-                         verify=bool(d.get("verify_ssl")), timeout=self.opts["http_timeout"], **proxy.requests_kwargs(d))
+                         verify=tlsverify.verify(d), timeout=self.opts["http_timeout"], **proxy.requests_kwargs(d))
         if r.status_code in (401, 403):
             why = ""
             try:
@@ -44,7 +42,7 @@ class PaloAltoDriver(Driver):
         except AuthRejected:
             raise
         except Exception:
-            pass                                             # anything else: each check reports its own reason
+            quiet.ignored("anything else: each check reports its own reason")
         for name, fn in (("resources", self.resources), ("uptime", self.uptime), ("firmware", self.firmware),
                          ("sessions", self.sessions), ("ha", self.ha), ("interfaces", self.interfaces), ("licenses", self.licenses),
                          ("content", self.content), ("disk", self.disk), ("panorama", self.panorama), ("last commit", self.last_commit)):

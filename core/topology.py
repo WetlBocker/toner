@@ -122,12 +122,10 @@ def _cli_rows(dev):
 
 
 def _api_rows(dev):
-    import requests, urllib3
-    from core import proxy
-    if not dev.get("verify_ssl"):
-        urllib3.disable_warnings()
+    import requests
+    from core import proxy, tlsverify
     opts = db.runtime_options()
-    kw = dict(verify=bool(dev.get("verify_ssl")), timeout=opts["http_timeout"], **proxy.requests_kwargs(dev))
+    kw = dict(verify=tlsverify.verify(dev), timeout=opts["http_timeout"], **proxy.requests_kwargs(dev))
     base = f"https://{dev['host']}:{dev.get('port') or 443}"
     token = profiles.secret(dev) or ""
     if dev["vendor"] == "fortinet":

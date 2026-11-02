@@ -1,31 +1,13 @@
 """A quick ping: right-click a device anywhere > Ping opens a small window that sends five echoes and shows each reply as it
 comes, with the count and the times at the end. Ping Again sends five more; OK closes it. Uses the system's ping (core.pinger),
 so no admin rights are needed."""
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton, QVBoxLayout
 
-from core import pinger
+from ui.pingworker import PingWorker
 
 COUNT = 5
 TIMEOUT_MS = 1000
-
-
-class PingWorker(QThread):
-    reply = Signal(int, object)                   # (echo number from 1, milliseconds or None)
-
-    def __init__(self, host, count=COUNT):
-        super().__init__()
-        self.host, self.count = host, count
-        self._stop = False
-
-    def run(self):
-        for i in range(1, self.count + 1):
-            if self._stop:
-                return
-            self.reply.emit(i, pinger.ping_once(self.host, TIMEOUT_MS))
-
-    def stop(self):
-        self._stop = True
 
 
 def line(i, ms, host):
@@ -82,8 +64,8 @@ class PingPopup(QDialog):
         self.text.clear()
         self.result.setText(f"Pinging {self.host}…")
         self.again.setEnabled(False)
-        self.worker = PingWorker(self.host)
-        self.worker.reply.connect(self._reply)
+        self.worker = PingWorker(self.host, count=COUNT, interval=0, timeout_ms=TIMEOUT_MS)
+        self.worker.sample.connect(self._reply)
         self.worker.finished.connect(self._done)
         self.worker.start()
 

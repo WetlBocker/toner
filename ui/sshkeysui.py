@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QDialogButtonBo
                                QMessageBox, QPushButton, QSizePolicy, QSpinBox, QTabWidget, QVBoxLayout, QWidget)
 
 from core import audit, db, profiles, scp, sshkeys, vendors
+from core import quiet
 from ui.opensslui import _Base, _secret, _text
 from ui.tools import DevicePicker, OutputBox, _row
 from ui.tools2 import _muted, _primary
@@ -348,7 +349,7 @@ class DeployWorker(QThread):
                 try:
                     c.close()
                 except Exception:
-                    pass
+                    quiet.ignored()
             self.finished_ok.emit(ok)
 
 

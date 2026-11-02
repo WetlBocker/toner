@@ -21,6 +21,7 @@ from pathlib import Path
 import yaml
 
 from core import db, paths, profiles, vendors, winmon
+from core import quiet
 
 SERVER_SECRET = "service:ansible-server"          # the password of the control-node server typed in Settings > Ansible (also in core/vault.py)
 DEFAULT_COMMAND = "ansible-playbook"
@@ -449,7 +450,7 @@ def _kill_tree(proc):
         try:
             proc.kill()
         except Exception:
-            pass
+            quiet.ignored()
 
 
 def _decode_line(raw):
@@ -744,7 +745,7 @@ class ServerBackend(Backend):
                 if remote.startswith("/tmp/toner-ansible."):
                     client.exec_command("rm -rf " + shlex.quote(remote), timeout=20)[1].channel.recv_exit_status()
             except Exception:
-                pass
+                quiet.ignored()
             client.close()
 
     @staticmethod

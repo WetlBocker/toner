@@ -21,7 +21,7 @@ import subprocess
 import time
 from datetime import datetime, timezone
 
-from core import db, proxy
+from core import db, proxy, tlsverify
 from drivers.base import Result, OK, WARN, FAIL, ERROR
 
 KINDS = [("ssh", "SSH command"), ("snmp", "SNMP object"), ("http", "Web page (HTTP/HTTPS)"),
@@ -196,13 +196,10 @@ def run_tcp(chk, dev, timeout=5):
 
 def run_http(chk, dev, timeout=10):
     import requests
-    import urllib3
     url = (chk["target"] or "").replace("{host}", dev["host"])
     if "://" not in url:
         url = "https://" + url
-    verify = bool(dev.get("verify_ssl"))
-    if not verify:
-        urllib3.disable_warnings()
+    verify = tlsverify.verify(dev)
     t0 = time.time()
     try:
         from urllib.parse import urlparse

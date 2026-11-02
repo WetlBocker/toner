@@ -21,6 +21,7 @@ import time
 from datetime import datetime
 
 from core import db, vendors
+from core import quiet
 
 # ---------------------------------------------------------------- which devices, and what their copy command can fetch from
 PLATFORMS = ("cisco_ios", "cisco_xe", "cisco_nxos", "cisco_asa")
@@ -383,7 +384,7 @@ def saved():
         import keyring
         out["password"] = keyring.get_password(db.SERVICE, db.qualify(SECRET)) or ""
     except Exception:
-        pass
+        quiet.ignored()
     return out
 
 
@@ -872,7 +873,7 @@ def cleanup(dev, r, pick, src_password="", on_item=None, opts=None):
             try:
                 c.enable()
             except Exception:                               # noqa: BLE001
-                pass
+                quiet.ignored("noqa: BLE001")
             prompt = _prompt_re(c)
             for item in items:
                 report(item, "Deleting...")
@@ -1059,7 +1060,7 @@ def _poll_size(dev, path, name, total, on_progress, done, poll, opts):
                 if size is not None:
                     on_progress(size if total is None else min(size, total), total)
     except Exception:                                       # noqa: BLE001  (progress is a help; the copy itself decides)
-        pass
+        quiet.ignored("noqa: BLE001  (progress is a help; the copy itself decides)")
 
 
 def transfer(dev, r, choice, src, vrf="management", on_step=None, cancel=None, poll=None, opts=None, then=None):
@@ -1092,7 +1093,7 @@ def transfer(dev, r, choice, src, vrf="management", on_step=None, cancel=None, p
             try:
                 c.enable()
             except Exception:                               # noqa: BLE001
-                pass
+                quiet.ignored("noqa: BLE001")
             prompt = _prompt_re(c)
             say("Copying", (0, size), "")
             done = threading.Event()
@@ -1221,7 +1222,7 @@ def save_and_install(dev, r, name, secrets=(), on_step=None, opts=None):
             try:
                 c.enable()
             except Exception:                               # noqa: BLE001
-                pass
+                quiet.ignored("noqa: BLE001")
             prompt = _prompt_re(c)
             report("Saving configuration")
             out = c.send_command("write memory", expect_string=prompt, read_timeout=600)

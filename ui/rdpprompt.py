@@ -1,31 +1,15 @@
 """Starting Remote Desktop in the system's own client. On Linux, FreeRDP has no window to ask for the password in, so Toner asks
 (user name and password) and hands the password to FreeRDP on standard input; it is never stored or put on a command line."""
-from PySide6.QtWidgets import QDialog, QDialogButtonBox, QFormLayout, QLabel, QLineEdit, QMessageBox, QVBoxLayout
+from PySide6.QtWidgets import QMessageBox
+
+from ui.signin import SignInDialog
 
 from core import sessions
 
 
-class SignIn(QDialog):
+class SignIn(SignInDialog):
     def __init__(self, s, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Remote Desktop")
-        self.setMinimumWidth(380)
-        self.user, self.password = QLineEdit(s.get("username") or ""), QLineEdit()
-        self.password.setEchoMode(QLineEdit.EchoMode.Password)
-        form = QFormLayout()
-        form.addRow("User name", self.user)
-        form.addRow("Password", self.password)
-        buttons = QDialogButtonBox()
-        ok = buttons.addButton("Connect", QDialogButtonBox.ButtonRole.AcceptRole)
-        ok.setProperty("primary", True)
-        buttons.addButton("Cancel", QDialogButtonBox.ButtonRole.RejectRole)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        lay = QVBoxLayout(self)
-        lay.addWidget(QLabel(f"Sign in to {s['host']}"))
-        lay.addLayout(form)
-        lay.addWidget(buttons)
-        (self.password if self.user.text() else self.user).setFocus()
+        super().__init__("Remote Desktop", f"Sign in to {s['host']}", parent, username=s.get("username") or "", ok_text="Connect", require_both=False)
 
 
 def start(parent, s):
