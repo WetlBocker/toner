@@ -407,6 +407,9 @@ class AgentsPage(Page):
                              "Leave it off to keep each computer as it was installed. Only agents from this version of Toner on take it.")
         self.download = QPushButton("Download agent package...")
         self.download.setProperty("primary", True)
+        have = agents.agent_binaries()
+        self.download.setToolTip(("The package holds toner-agent, the agent as a service (" + ", ".join(sorted(have)) + "), and the PowerShell script as a fallback.")
+                                 if have else "The package holds the PowerShell agent. This copy of Toner carries no toner-agent binary (a build from a release does).")
         self.dest = QComboBox()                                           # Global: which organization the package signs computers up to
         self.dest.setProperty("notSetting", True)
         self.dest.setToolTip("The package carries that organization's sign-up key, so the computers it signs up are added there.")
@@ -600,8 +603,10 @@ class AgentsPage(Page):
             return
         with db.within(org):
             audit.log("agent package downloaded", f"reports every {minutes} min")
-        QMessageBox.information(self, "Agent package", f"Saved {path}.\n\nCopy it to the Windows computer, unzip it, and double-click "
-                                f"Install-TonerAgent.cmd. The package holds the sign-up key: keep it private.")
+        unix = [p for p in agents.agent_binaries() if not p.startswith("windows")]
+        QMessageBox.information(self, "Agent package", f"Saved {path}.\n\nCopy it to the computer, unzip it, and double-click "
+                                f"Install-TonerAgent.cmd" + (" (on Linux or a Mac: sudo ./install.sh)" if unix else "")
+                                + ". The package holds the sign-up key: keep it private.")
 
     def _newkey(self):
         if QMessageBox.question(self, "New sign-up key", "Packages already downloaded will no longer be able to sign computers up "
