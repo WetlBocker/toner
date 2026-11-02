@@ -442,15 +442,17 @@ def notify_cert(left):
 
 # ---------------------------------------------------------------- the agent binary
 PLATFORMS = ("windows-amd64", "windows-arm64", "linux-amd64", "linux-arm64", "darwin-arm64")
+# The file for each platform. The request's text is only ever a key into this table, never part of a path.
+AGENT_FILES = {p: "toner-agent-" + p + (".exe" if p.startswith("windows") else "") for p in PLATFORMS}
 
 
 def agent_binary(platform):
     """Path of the toner-agent binary for 'windows-amd64' and the like, or None when this copy of Toner does not carry it. The
     installer build copies them into an `agent` folder beside the program (agent/dist when run from source)."""
-    if platform not in PLATFORMS:
+    name = AGENT_FILES.get(str(platform))
+    if name is None:
         return None
     import os
-    name = "toner-agent-" + platform + (".exe" if platform.startswith("windows") else "")
     base = paths.app_dir()
     for folder in (os.path.join(base, "agent"), os.path.join(base, "_internal", "agent"), os.path.join(base, "agent", "dist")):
         p = os.path.join(folder, name)
@@ -508,7 +510,9 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             if not (auth.lower().startswith("bearer ") and device_for_token(auth[7:].strip())):
                 self.close_connection = True
                 return self._send(401, b'{"ok":false}')
-            path = agent_binary(self.path[len("/agent/"):].strip("/"))
+            wanted = self.path[len("/agent/"):].strip("/")
+            platform = next((p for p in PLATFORMS if p == wanted), None)     # one of the five names, or nothing
+            path = agent_binary(platform) if platform else None
             if not path:
                 return self._send(404, b'{"ok":false,"error":"no agent binary for this platform"}')
             with open(path, "rb") as f:
