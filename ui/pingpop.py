@@ -4,6 +4,7 @@ so no admin rights are needed."""
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton, QVBoxLayout
 
+from core import pinger                        # the worker pings through this module; tests patch pinger.ping_once here
 from ui.pingworker import PingWorker
 
 COUNT = 5
