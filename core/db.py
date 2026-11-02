@@ -74,7 +74,7 @@ LOWER_IS_WORSE = {"uptime", "wifi_signal", "cert_days", "sensor_battery", "wan_u
 DEFAULT_SETTINGS = {
     # general
     "retention_days": 90, "workers": 10, "ssh_log_days": 365,
-    "default_verify_ssl": True, "default_ssh_port": 22, "scan_confirm_over": 256,
+    "scanning_charts": True, "default_verify_ssl": True, "default_ssh_port": 22, "scan_confirm_over": 256,
     # connections
     "ssh_timeout": 20, "http_timeout": 15, "retries": 1, "retry_delay": 3,
     # checks
@@ -1498,7 +1498,7 @@ def run_results(run_id, org=None):
     with within(org):
         with connect() as c:
             rows = [dict(r) for r in c.execute(
-                "SELECT device, check_name, status, value, message FROM results WHERE run_id=? "
+                "SELECT device, check_name, status, value, message, numeric FROM results WHERE run_id=? "
                 "ORDER BY device, check_name", (run_id,))]
         o = target()
     if qualify_names and o:
@@ -1548,6 +1548,30 @@ def device_checks():
     return _per_device(here)
 
 AGENT_COLUMNS = {"cpu": "cpu", "memory": "memory", "disks": "disk", "uptime": "uptime_h"}     # check name -> agent_metrics column
+
+
+def problems(days=7):
+    """Every FAIL and ERROR row of the last `days` days, for the History page's charts: [{'t', 'device', 'check', 'status'}],
+    oldest first, devices keyed with dkey. Counted in SQLite, read from every file of the view (Shared devices only, from Global
+    seen in an organization), as availability is."""
+    cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:00")
+
+    def here():
+        with connect() as c:
+            return [dict(r) for r in c.execute(
+                "SELECT runs.started_at AS t, results.device AS device, results.check_name AS 'check', results.status AS status "
+                "FROM results JOIN runs ON runs.id = results.run_id "
+                "WHERE runs.started_at >= ? AND results.status IN ('FAIL', 'ERROR') ORDER BY runs.started_at", (cutoff,))]
+    out = []
+    for org, only in _each_file():
+        with within(org):
+            part = here()
+        for r in part:
+            if only is None or _base(r["device"]) in only:
+                r["device"] = dkey(r["device"], org)
+                out.append(r)
+    out.sort(key=lambda r: r["t"])
+    return out
 
 
 def series(device, check, limit=200):

@@ -57,6 +57,7 @@
       c.setOption(opt, true);
     },
     resize: function () { if (chart) chart.resize(); },
+    emitClick: function (payload) { if (bridge) bridge.clicked(JSON.stringify(payload)); },   // what a click does, for tests
     dataURL: function () { return chart ? chart.getDataURL({ pixelRatio: 2, backgroundColor: theme.surface || "#fff" }) : ""; }
   };
 

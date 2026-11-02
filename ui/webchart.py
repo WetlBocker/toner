@@ -28,6 +28,9 @@ def available():
 def _web():
     global _WEB
     if _WEB is None:
+        if os.environ.get("TONER_NO_WEBCHARTS"):          # the tests: a browser engine per window would slow every file for nothing
+            _WEB = False
+            return _WEB
         try:
             from PySide6.QtWebEngineWidgets import QWebEngineView
             from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings

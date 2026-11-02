@@ -847,6 +847,8 @@ class Main(QMainWindow):
         self.ai_button.restyle()
         self.inventory.refresh()
         self.dashboard.restyle()
+        self.history.restyle()
+        self.scanning.restyle()
         for page in self.settings.pages:                   # the theme cards' name strips follow the window's colours
             if hasattr(page, "restyle"):
                 page.restyle()
