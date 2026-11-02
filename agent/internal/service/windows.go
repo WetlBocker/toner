@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"time"
 
@@ -114,10 +115,10 @@ func RemoveDir() error {
 // RunUnderManager runs fn as the service body when started by the service manager, or directly otherwise (so `run` in a
 // console works the same for testing). fn returns when ctx ends.
 func RunUnderManager(fn func(ctx context.Context) error) error {
-	interactive, err := svc.IsWindowsService()
-	if err != nil || !interactive {
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
+	isService, err := svc.IsWindowsService()
+	if err != nil || !isService {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt) // a console: Ctrl+C stops it
+		defer stop()
 		return fn(ctx)
 	}
 	return svc.Run(Name, &handler{fn: fn})
