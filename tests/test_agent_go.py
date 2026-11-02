@@ -70,7 +70,8 @@ binary = os.path.join(SP, "toner-agent")
 built = False
 if go and os.path.isdir(AGENT_SRC):
     env = dict(os.environ)
-    env.setdefault("GOFLAGS", "-mod=mod")
+    if not env.get("GOWORK"):                                # a fresh checkout has no go.sum entries yet: let the build add them
+        env.setdefault("GOFLAGS", "-mod=mod")
     r = subprocess.run([go, "build", "-ldflags", "-X github.com/WetlBocker/toner/agent/internal/agent.Version=" + agents.AGENT_VERSION, "-o", binary, "./cmd/toner-agent"],
                        cwd=AGENT_SRC, capture_output=True, text=True, timeout=600, env=env)
     built = r.returncode == 0 and os.path.exists(binary)
