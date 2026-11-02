@@ -54,6 +54,8 @@ check("the binary route wants a token", code == 401)
 db.save_device({"name": "GOTEST", "vendor": "windows", "host": "GOTEST", "port": 0, "platform": "agent", "username": "", "site": "default",
                 "verify_ssl": 0, "ha_expected": 0, "enabled": 1, "location": "", "details": "", "folder_id": None, "tags": "", "fields": "", "profile_id": None})
 token = agents.token_for("GOTEST")
+real_binary = agents.agent_binary
+agents.agent_binary = lambda platform: None          # a copy without the binaries (the release build puts the fresh ones in agent/dist first)
 code, body, _ = http("/agent/linux-amd64", headers={"Authorization": "Bearer " + token})
 check("with a token but no binary in this copy it is a 404, not an error", code == 404 and b"no agent binary" in body, (code, body))
 code, body, _ = http("/agent/../../etc/passwd", headers={"Authorization": "Bearer " + token})
@@ -61,6 +63,7 @@ check("only the known platforms are served", code == 404)
 pkg = zipfile.ZipFile(io.BytesIO(agents.package_bytes(5, host="127.0.0.1", port=port)))
 names = pkg.namelist()
 check("a copy without the binary makes the PowerShell package, as before", "toner-agent/toner-agent.ps1" in names and "toner-agent/Install-TonerAgent.cmd" in names and not any(n.endswith(".exe") for n in names))
+agents.agent_binary = real_binary
 cfg = json.loads(pkg.read("toner-agent/agent.json"))
 check("agent.json has the server, the pin and the sign-up key", cfg["server"] == f"https://127.0.0.1:{port}/report" and cfg["pin"] == pin and cfg["key"] and cfg["token"] == "")
 
