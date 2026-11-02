@@ -96,7 +96,8 @@ else:
     check("once: the agent signs up with the key and sends a report", r.returncode == 0, r.stderr[-400:])
     saved = json.load(open(cfg_path))
     check("the token is saved and the key forgotten", saved["token"] and saved["key"] == "")
-    hostname = os.uname().nodename.split(".")[0].upper() if hasattr(os, "uname") else ""
+    import socket
+    hostname = socket.gethostname().split(".")[0].upper()                   # what the agent sends as the computer's name, on every platform
     name = agents.device_for_token(saved["token"])
     check("Toner added the computer under its name", name and name.upper() == agents.safe_name(hostname).upper(), (name, hostname))
     report, age = agents.latest(name)
