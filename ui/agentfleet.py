@@ -123,7 +123,9 @@ class AgentFleet(QWidget):
                 if r["version"] and agents.agent_outdated(r["version"]):
                     notes.append("agent will update")
                 vals = (db.label_org(r["device"]), r["computer"], r["os"].replace("Microsoft ", "") + (f"  ({r['domain']})" if r["domain"] else ""),
-                        self._when(r["received_at"]), self._age(age), r["source"], f"v{r['version']}" if r["version"] else "", ", ".join(notes))
+                        self._when(r["received_at"]), self._age(age), r["source"],
+                        (f"v{r['version']}" if r["version"] else "") + (f"  {r['kind']}" if r.get("kind") and not r["kind"].startswith("PowerShell") else ""),
+                        ", ".join(notes))
                 for j, v in enumerate(vals):
                     item = _Item(v)
                     item.setToolTip(v)

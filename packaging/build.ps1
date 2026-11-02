@@ -23,6 +23,13 @@ $prune = @("Qt6VirtualKeyboard.dll", "Qt6Test.dll", "Qt6Pdf.dll", "Qt6PdfWidgets
            "QtTest.pyd", "QtPdf.pyd", "QtPdfWidgets.pyd",
            "plugins\virtualkeyboard", "plugins\platforminputcontexts\qtvirtualkeyboardplugin.dll", "translations")
 foreach ($rel in $prune) { $path = Join-Path $qt $rel; if (Test-Path $path) { Remove-Item -Recurse -Force $path } }
+# The toner-agent binaries (agent/build.sh, or the CI artifact) ride along in agent\, so Toner can hand them to computers
+# and update the agents it already has. Without them the package Toner makes is the PowerShell one.
+if (Test-Path "$root\agent\dist") {
+    New-Item -ItemType Directory -Force -Path "build\dist\Toner\agent" | Out-Null
+    Copy-Item "$root\agent\dist\toner-agent-*" "build\dist\Toner\agent\" -Force
+    Write-Host ("Agent binaries: " + ((Get-ChildItem "build\dist\Toner\agent").Name -join ", "))
+} else { Write-Host "No agent\dist: the installer carries no toner-agent binary (run agent\build.sh first to include it)." }
 $mb = [math]::Round((Get-ChildItem build\dist\Toner -Recurse -File | Measure-Object Length -Sum).Sum / 1MB)
 Write-Host "Program folder: $mb MB"
 

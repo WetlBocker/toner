@@ -1,8 +1,10 @@
-"""Windows agents: the receiver inside Toner, the certificate and tokens that protect it, and the agent script.
+"""Agents: the receiver inside Toner, the certificate and tokens that protect it, the agent script, and the agent binary.
 
-A Windows computer runs a small PowerShell script on a schedule. It collects the same data Toner can collect over WinRM
-(core/winmon.py) and POSTs it to Toner over HTTPS. The script only ever sends: it opens no port and takes no
-commands. Two things keep a stranger out of Toner:
+A computer runs an agent that collects the same data Toner can collect over WinRM (core/winmon.py) and POSTs it to Toner
+over HTTPS. There are two agents, with one protocol and one agent.json: the PowerShell script on a scheduled task
+(Windows only, the original) and `toner-agent`, one binary built from the `agent/` folder that runs as a service on
+Windows, Linux and macOS (docs/agent-design.md). Both only ever send: they open no port and take no commands. Two things
+keep a stranger out of Toner:
   * a certificate Toner made for itself. The script is given its SHA-256 fingerprint and refuses any server that
     does not match, so there is nothing to trust-on-first-use and no certificate authority to set up.
   * a long random token per device. Only a hash of it is kept in Toner's database; the token itself is in
@@ -316,13 +318,36 @@ def store(device, report, source="", version=0):
             mem = (report["mem_total_mb"] - (report.get("mem_free_mb") or 0)) / report["mem_total_mb"] * 100
         worst = max(((1 - d["free"] / d["size"]) * 100 for d in report.get("disks") or [] if d.get("size")), default=None)
         c.execute("INSERT INTO agent_metrics(device, at, cpu, memory, disk, uptime_h) VALUES(?,?,?,?,?,?)",
-                  (device, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), report.get("cpu"), mem, worst, report.get("uptime_h")))
+                  (device, metric_time(report), report.get("cpu"), mem, worst, report.get("uptime_h")))
         c.execute("INSERT INTO agent_seen(device, first_seen, last_ip) VALUES(?,?,?) "
                   "ON CONFLICT(device) DO UPDATE SET last_ip=excluded.last_ip", (device, _now(), source))
         if time.time() - _last_purge[0] > 3600:                # once an hour: keep as long as run history is kept
             _last_purge[0] = time.time()
             cutoff = (datetime.now() - timedelta(days=int(db.get_setting("retention_days")))).strftime("%Y-%m-%d %H:%M:%S")
             c.execute("DELETE FROM agent_metrics WHERE at < ?", (cutoff,))
+
+
+def metric_time(report):
+    """When a report's numbers were read, for the charts: the report's own `at` when it is recent (the binary agent keeps
+    reports it could not send and sends them later, so a laptop's day away still fills History), else now."""
+    now = datetime.now()
+    try:
+        at = datetime.fromisoformat(str(report.get("at") or "").replace("Z", "+00:00"))
+        if at.tzinfo is not None:
+            at = at.astimezone().replace(tzinfo=None)
+        if timedelta(0) <= now - at <= timedelta(days=int(db.get_setting("retention_days") or 90)):
+            return at.strftime("%Y-%m-%d %H:%M:%S")
+    except (ValueError, TypeError):
+        pass
+    return now.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def agent_kind_of(report):
+    """'binary 1.14.0 (linux/amd64)' for a report from toner-agent, 'PowerShell' for one from the script."""
+    a = report.get("agent") if isinstance(report, dict) else None
+    if isinstance(a, dict) and a.get("name"):
+        return f"{a.get('name')} {a.get('version', '')} ({a.get('os', '?')}/{a.get('arch', '?')})".replace("  ", " ")
+    return "PowerShell"
 
 
 def facts(device):
@@ -382,7 +407,7 @@ def overview():
         out.append({"device": r["device"], "org": r["org"], "received_at": r["received_at"], "source": r["source"], "age": age,
                     "has_token": bool(r["token_hash"]), "version": r["version"], "issued_at": r["issued_at"],
                     "computer": rep.get("computer", ""), "os": rep.get("os", ""), "domain": rep.get("domain", "") if rep.get("joined") else "",
-                    "pending_reboot": bool(rep.get("reboot")), "uptime_h": rep.get("uptime_h")})
+                    "pending_reboot": bool(rep.get("reboot")), "uptime_h": rep.get("uptime_h"), "kind": agent_kind_of(rep) if rep else ""})
     return out
 
 
@@ -413,6 +438,40 @@ def notify_cert(left):
                         "Renew it in Settings > Agents, then give each agent a new package or script.", "FAIL" if left < 30 else "WARN")
     except Exception:
         quiet.ignored()
+
+
+# ---------------------------------------------------------------- the agent binary
+PLATFORMS = ("windows-amd64", "windows-arm64", "linux-amd64", "linux-arm64", "darwin-arm64")
+# The file for each platform. The request's text is only ever a key into this table, never part of a path.
+AGENT_FILES = {p: "toner-agent-" + p + (".exe" if p.startswith("windows") else "") for p in PLATFORMS}
+
+
+def agent_binary(platform):
+    """Path of the toner-agent binary for 'windows-amd64' and the like, or None when this copy of Toner does not carry it. The
+    installer build copies them into an `agent` folder beside the program (agent/dist when run from source)."""
+    name = AGENT_FILES.get(str(platform))
+    if name is None:
+        return None
+    import os
+    base = paths.app_dir()
+    for folder in (os.path.join(base, "agent"), os.path.join(base, "_internal", "agent"), os.path.join(base, "agent", "dist")):
+        p = os.path.join(folder, name)
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+def agent_binaries():
+    """{platform: path} for the binaries this copy carries."""
+    return {p: agent_binary(p) for p in PLATFORMS if agent_binary(p)}
+
+
+def _file_sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 # ---------------------------------------------------------------- the receiver
@@ -446,6 +505,26 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 return self._send(200, ("\ufeff" + package_script()).encode("utf-8"), "text/plain; charset=utf-8")
             self.close_connection = True
             return self._send(401, b'{"ok":false}')
+        if self.path.startswith("/agent/"):                 # toner-agent fetching a newer binary for its platform: only for a known token
+            auth = self.headers.get("Authorization", "")
+            if not (auth.lower().startswith("bearer ") and device_for_token(auth[7:].strip())):
+                self.close_connection = True
+                return self._send(401, b'{"ok":false}')
+            wanted = self.path[len("/agent/"):].strip("/")
+            platform = next((p for p in PLATFORMS if p == wanted), None)     # one of the five names, or nothing
+            path = agent_binary(platform) if platform else None
+            if not path:
+                return self._send(404, b'{"ok":false,"error":"no agent binary for this platform"}')
+            with open(path, "rb") as f:
+                data = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("X-Toner-Agent-Sha256", hashlib.sha256(data).hexdigest())
+            self.send_header("X-Toner-Agent", str(AGENT_VERSION))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         self._send(404)
 
     def _drain(self):
@@ -864,6 +943,40 @@ UNINSTALL_CMD = """@echo off
 rem Removes the Toner agent from this computer. Windows will ask for administrator permission.
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0toner-agent.ps1" -Uninstall
 """
+# With the binary in the package, the .cmd files run it (as a service, no PowerShell); the script stays as the fallback.
+INSTALL_CMD_BINARY = """@echo off
+rem Installs the Toner agent on this computer as a service. Windows will ask for administrator permission.
+net session >nul 2>&1
+if %errorlevel% neq 0 (
+  powershell.exe -NoProfile -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
+  exit /b
+)
+"%~dp0toner-agent.exe" install "%~dp0agent.json"
+pause
+"""
+UNINSTALL_CMD_BINARY = """@echo off
+rem Removes the Toner agent service from this computer. Windows will ask for administrator permission.
+net session >nul 2>&1
+if %errorlevel% neq 0 (
+  powershell.exe -NoProfile -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
+  exit /b
+)
+"%~dp0toner-agent.exe" uninstall
+pause
+"""
+INSTALL_SH = """#!/bin/sh
+# Installs the Toner agent on this computer as a service (systemd, or launchd on a Mac). Run with sudo.
+set -e
+here="$(cd "$(dirname "$0")" && pwd)"
+case "$(uname -s)-$(uname -m)" in
+  Linux-x86_64) bin="toner-agent-linux-amd64" ;;
+  Linux-aarch64) bin="toner-agent-linux-arm64" ;;
+  Darwin-arm64) bin="toner-agent-darwin-arm64" ;;
+  *) echo "No Toner agent for $(uname -s) $(uname -m) in this package."; exit 1 ;;
+esac
+chmod +x "$here/$bin"
+exec "$here/$bin" install "$here/agent.json"
+"""
 PACKAGE_README = """Toner agent
 
 What it is
@@ -908,11 +1021,34 @@ def package_bytes(minutes=5, host=None, port=None):
     cfg = {"server": url, "enroll": url.rsplit("/", 1)[0] + "/enroll", "pin": fingerprint(), "key": enroll_key(),
            "minutes": minutes, "token": ""}
     script = package_script(minutes)
+    binaries = agent_binaries()
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("toner-agent/toner-agent.ps1", "\ufeff" + script.replace("\n", "\r\n"))     # a BOM, so Windows PowerShell reads UTF-8
         z.writestr("toner-agent/agent.json", json.dumps(cfg, indent=2))
-        z.writestr("toner-agent/Install-TonerAgent.cmd", INSTALL_CMD.replace("\n", "\r\n"))
-        z.writestr("toner-agent/Uninstall-TonerAgent.cmd", UNINSTALL_CMD.replace("\n", "\r\n"))
-        z.writestr("toner-agent/README.txt", PACKAGE_README.replace("@@MINUTES@@", str(minutes)).replace("\n", "\r\n"))
+        if "windows-amd64" in binaries:                                                    # the binary agent: a service, no PowerShell
+            z.write(binaries["windows-amd64"], "toner-agent/toner-agent.exe")
+            z.writestr("toner-agent/Install-TonerAgent.cmd", INSTALL_CMD_BINARY.replace("\n", "\r\n"))
+            z.writestr("toner-agent/Uninstall-TonerAgent.cmd", UNINSTALL_CMD_BINARY.replace("\n", "\r\n"))
+            z.writestr("toner-agent/Install-TonerAgent-PowerShell.cmd", INSTALL_CMD.replace("\n", "\r\n"))
+        else:
+            z.writestr("toner-agent/Install-TonerAgent.cmd", INSTALL_CMD.replace("\n", "\r\n"))
+            z.writestr("toner-agent/Uninstall-TonerAgent.cmd", UNINSTALL_CMD.replace("\n", "\r\n"))
+        unix = [p for p in binaries if not p.startswith("windows")]
+        for p in unix:
+            info = zipfile.ZipInfo("toner-agent/toner-agent-" + p)
+            info.external_attr = 0o755 << 16
+            info.compress_type = zipfile.ZIP_DEFLATED
+            with open(binaries[p], "rb") as f:
+                z.writestr(info, f.read())
+        if unix:
+            info = zipfile.ZipInfo("toner-agent/install.sh")
+            info.external_attr = 0o755 << 16
+            z.writestr(info, INSTALL_SH)
+        readme = PACKAGE_README.replace("@@MINUTES@@", str(minutes))
+        if binaries:
+            readme = readme.replace("What it is\n", "What it is\n  toner-agent.exe is the agent as a Windows service (Install-TonerAgent.cmd uses it; no PowerShell"
+                                    " is run). Install-TonerAgent-PowerShell.cmd is the older script agent, for a computer where the service"
+                                    " cannot be used." + ("\n  install.sh installs the agent on Linux (systemd) or a Mac (launchd): sudo ./install.sh" if unix else "") + "\n\n")
+        z.writestr("toner-agent/README.txt", readme.replace("\n", "\r\n"))
     return buf.getvalue()

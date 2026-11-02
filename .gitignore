@@ -24,3 +24,6 @@ toner-settings.json
 # Postman workspace files
 .postman/
 postman/
+
+# the agent binaries agent/build.sh makes (CI builds them for releases)
+agent/dist/

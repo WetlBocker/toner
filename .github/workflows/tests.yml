@@ -40,8 +40,37 @@ jobs:
       - name: The libraries Qt needs to draw windows (offscreen too)
         run: sudo apt-get update && sudo apt-get install -y libgl1 libegl1 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-render-util0 libxcb-image0 libxcb-randr0 libxcb-xinerama0 libdbus-1-3 libfontconfig1 fonts-dejavu traceroute libnss3 libnspr4 libasound2t64 libxcomposite1 libxdamage1 libxrandr2 libxtst6 libgbm1 libxss1 libatk-bridge2.0-0 libcups2   # the last ones for the charts' Qt WebEngine (test_webchart)
       - run: 'python -m pip install --require-hashes --only-binary=:all: -r requirements.lock'
-      - name: Run the test suite
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5  # v5.5.0
+        with:
+          go-version: "1.24"
+          cache-dependency-path: agent/go.sum
+      - name: Run the test suite (with the Go toolchain, test_agent_go builds and runs the binary agent against the receiver)
         env:
           QT_QPA_PLATFORM: offscreen
           PYTHONUTF8: "1"
         run: python tests/run_all.py
+  agent:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5  # v5.5.0
+        with:
+          go-version: "1.24"
+          cache-dependency-path: agent/go.sum
+      - name: Vet the agent for every platform it is built for
+        working-directory: agent
+        run: |
+          go mod tidy
+          go vet ./...
+          GOOS=windows GOARCH=amd64 go vet ./...
+          GOOS=darwin GOARCH=arm64 go vet ./...
+          go test ./...
+      - name: Build it for every platform
+        run: bash agent/build.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: toner-agent
+          path: agent/dist/toner-agent-*

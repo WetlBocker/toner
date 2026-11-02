@@ -230,13 +230,18 @@ the raw output is saved so it can be fixed from a real sample.
 Add a device with Vendor **Windows** and choose how to monitor it:
 
 - **Agent**: a small program on the computer reports to Toner over HTTPS. Nothing connects to the computer, so it suits laptops,
-  computers outside the domain and anything behind a firewall.
+  computers outside the domain and anything behind a firewall. There are two: **toner-agent**, one binary that runs as a
+  service (Windows, and Linux and macOS hosts too; see `docs/agent-design.md` and `agent/README.md`), and the older
+  PowerShell script on a scheduled task. A Toner built from a release carries the binary and the package installs it;
+  the script is in the package as a fallback. Both read the same `agent.json`, so a computer moves from one to the other by
+  running the new installer once; reports it could not send (a laptop away from the network) wait in a queue and are sent later.
   1. In Settings > **Agents** turn on "Receive reports" (port 8750, while Toner runs; the tray is fine) and "Let computers sign
      themselves up", save, then **Download agent package**.
   2. Copy the zip to the computer, unzip it and double-click **Install-TonerAgent.cmd** (it asks for administrator permission).
      The computer signs itself up and appears in the Inventory. The same package works for every computer.
 
-  The agent is a scheduled task running as SYSTEM in `C:\ProgramData\Toner Agent`. It only sends: no port, no commands. Toner is
+  The binary agent is a Windows service ("Toner Agent", LocalSystem) in `C:\ProgramData\Toner Agent`; the script agent is a scheduled task
+  running as SYSTEM in the same folder. Either only sends: no port, no commands. Toner is
   identified by its certificate fingerprint built into the package, and each computer gets its own token. The package holds a
   sign-up key, so keep it private and turn sign-up off when done (a new key makes old packages useless). For one computer by
   hand: add a device with How to monitor: Agent, then its Windows tab > Get agent script.

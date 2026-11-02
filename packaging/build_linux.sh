@@ -23,6 +23,13 @@ for rel in Qt/lib/libQt6VirtualKeyboard.so.6 Qt/lib/libQt6Test.so.6 Qt/lib/libQt
            Qt/plugins/virtualkeyboard Qt/plugins/platforminputcontexts/libqtvirtualkeyboardplugin.so Qt/translations; do
     rm -rf "$qt/$rel"
 done
+if [ -d "$root/agent/dist" ]; then                       # the toner-agent binaries (agent/build.sh): see build.ps1
+    mkdir -p build/dist/Toner/agent
+    cp "$root"/agent/dist/toner-agent-* build/dist/Toner/agent/
+    echo "Agent binaries: $(ls build/dist/Toner/agent | tr '\n' ' ')"
+else
+    echo "No agent/dist: the AppImage carries no toner-agent binary (run agent/build.sh first to include it)."
+fi
 du -sh build/dist/Toner | sed 's/^/Program folder: /'
 
 appdir="build/AppDir"
