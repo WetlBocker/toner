@@ -38,7 +38,7 @@ jobs:
           cache: pip
           cache-dependency-path: requirements.lock
       - name: The libraries Qt needs to draw windows (offscreen too)
-        run: sudo apt-get update && sudo apt-get install -y libgl1 libegl1 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-render-util0 libxcb-image0 libxcb-randr0 libxcb-xinerama0 libdbus-1-3 libfontconfig1 fonts-dejavu traceroute
+        run: sudo apt-get update && sudo apt-get install -y libgl1 libegl1 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-render-util0 libxcb-image0 libxcb-randr0 libxcb-xinerama0 libdbus-1-3 libfontconfig1 fonts-dejavu traceroute libnss3 libnspr4 libasound2t64 libxcomposite1 libxdamage1 libxrandr2 libxtst6 libgbm1 libxss1 libatk-bridge2.0-0 libcups2   # the last ones for the charts' Qt WebEngine (test_webchart)
       - run: 'python -m pip install --require-hashes --only-binary=:all: -r requirements.lock'
       - name: Run the test suite
         env:
