@@ -342,6 +342,7 @@ class HistoryPage(QWidget):
     def __init__(self):
         super().__init__()
         self.table = _table(["When", "Playbook", "Mode", "Backend", "Devices", "Changed", "Failed", "Result"])
+        self.table.setAccessibleName("Run history")
         self.hint = EmptyHint(self.table, "No runs yet", "Checks and runs from Automation > Playbooks are listed here")
         self.output = _mono()
         self.copy_btn, self.save_btn, self.clear_btn = QPushButton("Copy"), QPushButton("Save output..."), QPushButton("Clear history")

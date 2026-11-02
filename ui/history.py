@@ -2,13 +2,14 @@
 run, and the trend report), which used to be a section of their own."""
 import math
 import os
+import re
 from datetime import datetime, timedelta
 
 import pyqtgraph as pg
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy,
-                               QSplitter, QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout, QWidget)
+                               QSplitter, QTabWidget, QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout, QWidget)
 from core import db, display, reports, scope, trends
 from core.reports import COLORS, fg_for
 from drivers.base import SEVERITY, Result
@@ -16,6 +17,8 @@ from ui import theme
 from ui.toast import toast
 from ui.widgets import EmptyHint, FlowLayout, GroupPicker, StatusDelegate, filling, flow, remember_sizes
 from ui.finder import FilterButton, SearchBox, device_sections, listed_devices, shown_devices, wants_archived
+from ui import chartspec
+from ui.webchart import ChartView
 from ui import status as st
 
 PCT_CHECKS = ("cpu", "memory")
@@ -407,6 +410,7 @@ class HistoryTab(QWidget):
     def __init__(self):
         super().__init__()
         self.runs = _table(["Run time", "OK", "WARN", "FAIL", "ERROR", "Organization"])
+        self.runs.setAccessibleName("Runs")
         self.detail = _table(["Device", "Check", "Status", "Value", "Message"])
         self.detail.setItemDelegateForColumn(2, StatusDelegate(self.detail))
         self.runs.itemSelectionChanged.connect(self.show_run)
@@ -453,12 +457,46 @@ class HistoryTab(QWidget):
         left = QSplitter(Qt.Orientation.Vertical)
         left.addWidget(self.runs)
         left.addWidget(low)
-        right = QWidget()
-        rl = QVBoxLayout(right)
+        over_time = QWidget()
+        rl = QVBoxLayout(over_time)
+        rl.setContentsMargins(0, 8, 0, 0)
         for w in (self.dev, self.chk):               # share the width, and wrap when the pane is narrow
             w.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         rl.addLayout(flow("Device", self.dev, "Check", self.chk))
         rl.addWidget(self.chart, 1)
+        # Across devices: the run chosen on the left, one bar per device for the check picked here, coloured by its status
+        self.compare_check = QComboBox()
+        self.compare_check.setToolTip("A check with a number: every device's value in the chosen run, worst first")
+        self.compare_check.currentIndexChanged.connect(lambda _i: self.draw_compare())
+        self.compare_chart = ChartView(min_height=240)
+        self.compare_chart.setAccessibleName("Values across devices")
+        across = QWidget()
+        al = QVBoxLayout(across)
+        al.setContentsMargins(0, 8, 0, 0)
+        al.addLayout(flow("Check", self.compare_check))
+        al.addWidget(self.compare_chart, 1)
+        # Failures: when problems happen (weekday by hour) and where (the devices with most), over the trend period
+        self.fail_period = QComboBox()
+        for label, days in trends.PERIODS:
+            self.fail_period.addItem(label, days)
+        self.fail_period.currentIndexChanged.connect(lambda _i: self.draw_failures())
+        self.fail_when = ChartView(min_height=200)
+        self.fail_when.setAccessibleName("Failures by weekday and hour")
+        self.fail_where = ChartView(min_height=200)
+        self.fail_where.setAccessibleName("Failures by device")
+        fails = QWidget()
+        fl = QVBoxLayout(fails)
+        fl.setContentsMargins(0, 8, 0, 0)
+        fl.addLayout(flow("Period", self.fail_period))
+        fl.addWidget(self.fail_when, 1)
+        fl.addWidget(self.fail_where, 1)
+        self.chart_tabs = QTabWidget()
+        self.chart_tabs.setDocumentMode(True)
+        self.chart_tabs.addTab(over_time, "Over time")
+        self.chart_tabs.addTab(across, "Across devices")
+        self.chart_tabs.addTab(fails, "Failures")
+        self.chart_tabs.currentChanged.connect(self._chart_tab_shown)
+        right = self.chart_tabs
         split = QSplitter()
         split.addWidget(left)
         split.addWidget(right)
@@ -541,6 +579,90 @@ class HistoryTab(QWidget):
                     it.setData(Qt.ItemDataRole.UserRole, r["device"] if j == 0 else r["check_name"])
                 self.detail.setItem(i, j, it)
         self.detail.blockSignals(False)
+        self._fill_compare()
+
+    # ---------- the charts beside the run
+    def _chart_tab_shown(self, i):
+        """A chart tab came into view: draw it from what is stored (the Failures tab reads a period, so only when looked at)."""
+        if i == 1:
+            self.draw_compare()
+        elif i == 2:
+            self.draw_failures()
+
+    def restyle(self):
+        for c in (self.compare_chart, self.fail_when, self.fail_where):
+            c.restyle()
+
+    def _fill_compare(self):
+        """The checks of the chosen run that carry a number, for the Across devices box; the pick is kept when it still applies."""
+        rows = getattr(self, "_run_rows", [])
+        names = {}
+        for r in rows:
+            if display.value(r.get("value")) and self._numeric(r.get("value")) is not None:
+                names.setdefault(display.check_name(r["check_name"]), r["check_name"])
+        cur = self.compare_check.currentData()
+        self.compare_check.blockSignals(True)
+        self.compare_check.clear()
+        for label, key in sorted(names.items(), key=lambda kv: kv[0].lower()):
+            self.compare_check.addItem(label, key)
+        if cur in names.values():
+            self.compare_check.setCurrentIndex(self.compare_check.findData(cur))
+        self.compare_check.blockSignals(False)
+        if self.chart_tabs.currentIndex() == 1:
+            self.draw_compare()
+
+    @staticmethod
+    def _numeric(value):
+        """The number in a stored value ('73 %', '12.5 ms', '3 of 48'): the first one, or None."""
+        m = re.search(r"-?\d+(?:\.\d+)?", str(value or ""))
+        return float(m.group(0)) if m else None
+
+    def draw_compare(self):
+        check = self.compare_check.currentData()
+        rows = [r for r in getattr(self, "_run_rows", []) if r["check_name"] == check] if check else []
+        vals = [(db.label_org(r["device"]), self._numeric(r["value"]), r["status"]) for r in rows]
+        vals = [v for v in vals if v[1] is not None]
+        if not vals:
+            self.compare_chart.draw(lambda p: chartspec.empty("Choose a run on the left and a check with a number"))
+            return
+        order = {"FAIL": 0, "ERROR": 0, "WARN": 1, "OK": 2}
+        vals.sort(key=lambda v: (order.get(v[2], 3), -v[1]))
+        vals = vals[:40]
+        unit = ""
+        m = re.search(r"\d\s*([%a-zA-Z/]+)\s*$", str(rows[0].get("value") or ""))
+        if m and len(m.group(1)) <= 4:
+            unit = (" " if m.group(1) != "%" else "") + m.group(1)
+        title = display.check_name(check)
+        self.compare_chart.draw(lambda p: chartspec.bars(p, [v[0] for v in vals], [v[1] for v in vals], title=title, unit=unit, horizontal=True,
+                                                         colors=[chartspec.status_color(p, v[2]) for v in vals], extra=[v[0] for v in vals]))
+
+    def draw_failures(self):
+        days = int(self.fail_period.currentData() or 7)
+        with db.including_archived(wants_archived(self.funnel)):
+            rows = db.problems(days)
+        names = self._group_names()
+        if names is not None:
+            rows = [r for r in rows if self._base(r["device"]) in names]
+        if not rows:
+            self.fail_when.draw(lambda p: chartspec.empty(f"No failures or errors in the last {days} days"))
+            self.fail_where.draw(lambda p: chartspec.empty(""))
+            return
+        cells = {}
+        per_device = {}
+        for r in rows:
+            try:
+                t = datetime.strptime(str(r["t"])[:16], "%Y-%m-%d %H:%M")
+            except ValueError:
+                continue
+            cells[(t.hour, t.weekday())] = cells.get((t.hour, t.weekday()), 0) + 1
+            per_device[r["device"]] = per_device.get(r["device"], 0) + 1
+        hours = [f"{h:02d}" for h in range(24)]
+        weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+        grid = [(h, d, n) for (h, d), n in cells.items()]
+        self.fail_when.draw(lambda p: chartspec.heatmap(p, hours, weekdays, grid, title=f"When: FAIL and ERROR rows, last {days} days"))
+        worst = sorted(per_device.items(), key=lambda kv: (-kv[1], kv[0].lower()))[:12]
+        self.fail_where.draw(lambda p: chartspec.bars(p, [db.label_org(d) for d, _n in worst], [n for _d, n in worst], title="Where: devices with most",
+                                                      horizontal=True, colors=[chartspec.status_color(p, "FAIL")] * len(worst)))
 
     def _pick_from_row(self):
         """A check's row was chosen in the run's list: that device and that check go on the chart (a check with no numbers

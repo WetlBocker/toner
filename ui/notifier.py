@@ -4,6 +4,7 @@ import threading
 from PySide6.QtCore import QObject, Signal
 
 from core import alerts, notify
+from core import quiet
 
 
 class Notifier(QObject):
@@ -26,4 +27,4 @@ class Notifier(QObject):
             try:
                 alerts.log_delivery("(notifier)", False, 0, f"{type(e).__name__}: {e}")
             except Exception:
-                pass
+                quiet.ignored()

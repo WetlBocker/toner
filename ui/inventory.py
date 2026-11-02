@@ -787,6 +787,7 @@ class DeviceTree(QTreeWidget):
 
     def __init__(self, owner):
         super().__init__()
+        self.setAccessibleName("Devices and folders")
         self.owner = owner
 
     def mousePressEvent(self, e):

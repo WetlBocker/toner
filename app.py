@@ -29,6 +29,7 @@ from ui.automation import AutomationTab
 from ui.assistant import AssistantPanel, SideButton, PANEL_WIDTH
 HEADER_CLEAR = 72                                   # the Assistant button stays below a section's title row (Run checks lives there)
 from core import assistant as AI
+from core import quiet
 from ui.settings import SettingsTab
 from ui.tools import ToolsTab
 
@@ -57,7 +58,7 @@ def setup_logging():
                 box.setDetailedText(text)
                 box.exec()
         except Exception:
-            pass
+            quiet.ignored()
         sys.__excepthook__(kind, value, tb)
     sys.excepthook = hook
 
@@ -259,7 +260,7 @@ class Main(QMainWindow):
         try:
             QApplication.instance().styleHints().colorSchemeChanged.connect(lambda _s: self.relook())     # System (Qt 6.5+)
         except Exception:
-            pass
+            quiet.ignored()
         tabs.setCollapsed(bool(db.get_setting("sidebar_collapsed")))
         tabs.collapsed_changed.connect(lambda on: db.set_setting("sidebar_collapsed", on))
         QShortcut(QKeySequence("Ctrl+B"), self, activated=lambda: tabs.setCollapsed(not tabs.collapsed()))
@@ -404,7 +405,7 @@ class Main(QMainWindow):
                 if i >= 0:
                     out["page"] = inner.tabText(i)
             except Exception:
-                pass
+                quiet.ignored()
             if hasattr(sub, "screen_context") and not hasattr(page, "screen_context"):
                 page = sub
         fn = getattr(page, "screen_context", None)
@@ -472,7 +473,7 @@ class Main(QMainWindow):
             n = sum(1 for v in summ.values() if v.get("versions"))
             self.headers["configs"].set_context(f"{n} device{'s' if n != 1 else ''} backed up" + (f"  ·  last backup {display.ago(last)}" if last else ""))
         except Exception:
-            pass
+            quiet.ignored()
         run = db.last_run()
         self.headers["history"].set_context((f"Last run {display.ago(run['started_at'])}" if run else "No runs yet") + "  ·  reports (CSV, HTML, PDF) and the trend report")
         self.headers["tools"].set_context("Troubleshooting, discovery, SNMP, file transfer and certificates")
@@ -482,7 +483,7 @@ class Main(QMainWindow):
             opened = len(self.sessions.panes())
             self.headers["sessions"].set_context(f"{saved} saved" + (f"  ·  {opened} open" if opened else "") + (f"  ·  {live} connected" if live else ""))
         except Exception:
-            pass
+            quiet.ignored()
         self.headers["automation"].set_context("Run Ansible playbooks on your devices. Write them in Tools > Playbook Editor.")
         self.headers["settings"].set_context("Checks, connections, alerts, look and data. Nothing changes until you press Save changes.")
         return True
@@ -846,6 +847,8 @@ class Main(QMainWindow):
         self.ai_button.restyle()
         self.inventory.refresh()
         self.dashboard.restyle()
+        self.history.restyle()
+        self.scanning.restyle()
         for page in self.settings.pages:                   # the theme cards' name strips follow the window's colours
             if hasattr(page, "restyle"):
                 page.restyle()
@@ -956,7 +959,7 @@ def console_streams():
             sys.stdout = sys.stderr = open("CONOUT$", "w", encoding="utf-8", errors="replace", buffering=1)
             return "console"
     except Exception:
-        pass
+        quiet.ignored()
     sys.stdout = sys.stderr = open(data_dir() / "toner-service.log", "a", encoding="utf-8", errors="replace", buffering=1)
     return "log"
 
@@ -973,7 +976,7 @@ def run_cli(args):
         tunnel.migrate()
         legacyssh.apply()
     except Exception:
-        pass                                       # cli.main reports a database problem in its own words
+        quiet.ignored("cli.main reports a database problem in its own words")
     try:
         from core import extstore
         if extstore.memory_only():                 # ...or only from the password manager: read them now, keep them in step
@@ -1018,6 +1021,8 @@ def main():
         updates.prune()                            # keep the installers of the newest few versions, for going back
     except OSError:
         pass
+    from ui import webchart
+    webchart.prepare_application()                 # the charts' QtWebEngine shares OpenGL contexts with the window
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(True)
     apply_look(app)

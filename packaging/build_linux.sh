@@ -11,7 +11,19 @@ python -m PyInstaller --noconfirm --clean --windowed --onedir --name Toner \
     --collect-all netmiko --collect-all ntc_templates --collect-all pysnmp --hidden-import cli --collect-all pypsrp --collect-all spnego \
     --collect-submodules keyring.backends --collect-submodules paramiko --collect-all keeper_secrets_manager_core \
     --collect-submodules anthropic --collect-submodules openai --collect-submodules google.genai \
+    --hidden-import PySide6.QtWebEngineWidgets --hidden-import PySide6.QtWebEngineCore --hidden-import PySide6.QtWebChannel \
+    --add-data "$root/assets/echarts.min.js:assets" --add-data "$root/assets/chart.html:assets" \
     --distpath build/dist --workpath build/work --specpath build app.py
+
+# Qt pieces PyInstaller ships that Toner never uses (see build.ps1 for the list and why). QtQuick and QtQml stay for the
+# charts' QtWebEngine.
+qt="build/dist/Toner/_internal/PySide6"
+for rel in Qt/lib/libQt6VirtualKeyboard.so.6 Qt/lib/libQt6Test.so.6 Qt/lib/libQt6Pdf.so.6 Qt/lib/libQt6PdfWidgets.so.6 Qt/lib/libQt6PdfQuick.so.6 \
+           QtTest.abi3.so QtPdf.abi3.so QtPdfWidgets.abi3.so \
+           Qt/plugins/virtualkeyboard Qt/plugins/platforminputcontexts/libqtvirtualkeyboardplugin.so Qt/translations; do
+    rm -rf "$qt/$rel"
+done
+du -sh build/dist/Toner | sed 's/^/Program folder: /'
 
 appdir="build/AppDir"
 rm -rf "$appdir"

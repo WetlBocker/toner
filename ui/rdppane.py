@@ -11,6 +11,7 @@ from PySide6.QtNetwork import QAbstractSocket, QTcpSocket
 from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from core import audit, sessions
+from core import quiet
 
 DISCONNECTED, CONNECTED, CONNECTING = 0, 1, 2             # the control's Connected property
 POLL_MS = 400
@@ -132,7 +133,7 @@ class RdpPane(QWidget):
         try:
             self.ax.dynamicCall(name, [value])
         except Exception:
-            pass
+            quiet.ignored()
 
     def _sub(self, *names):
         """A group of the control's settings (older versions of the control have fewer): the newest one that exists."""
@@ -151,7 +152,7 @@ class RdpPane(QWidget):
             try:
                 obj.setProperty(name, value)
             except Exception:
-                pass
+                quiet.ignored()
 
     def _state(self):
         try:
@@ -274,7 +275,7 @@ class RdpPane(QWidget):
         try:
             self.ax.dynamicCall("Disconnect()")
         except Exception:
-            pass
+            quiet.ignored()
 
     def _poll(self):
         st = self._state()
@@ -312,7 +313,7 @@ class RdpPane(QWidget):
         try:
             self.ax.dynamicCall("UpdateSessionDisplaySettings(uint,uint,uint,uint,uint,uint,uint)", [w, h, 0, 0, 0, scale, 100])
         except Exception:
-            pass
+            quiet.ignored()
 
     def _fill_toggled(self, on):
         """Switch this tab between filling the window and keeping the session's own size, while connected or not."""
@@ -335,7 +336,7 @@ class RdpPane(QWidget):
             try:
                 self.ax.dynamicCall("Disconnect()")
             except Exception:
-                pass
+                quiet.ignored()
             deadline = time.monotonic() + 1.5               # give the control a moment to say goodbye before it is destroyed
             while self._state() != DISCONNECTED and time.monotonic() < deadline:
                 time.sleep(0.05)

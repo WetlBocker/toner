@@ -22,7 +22,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 
-from core import audit, db, paths, winmon
+from core import audit, db, paths, tlsverify, winmon
 from core.version import VERSION
 from core import quiet
 
@@ -231,7 +231,7 @@ def _enroll(computer, source, org):
     else:
         try:
             db.save_device({"name": name, "vendor": "windows", "host": name, "port": 0, "platform": "agent", "username": "",
-                            "site": "default", "verify_ssl": 0, "ha_expected": 0, "enabled": 1, "location": "",
+                            "site": "default", "verify_ssl": tlsverify.default_for_new(), "ha_expected": 0, "enabled": 1, "location": "",
                             "details": "Signed up with the agent package " + datetime.now().strftime("%Y-%m-%d"),
                             "folder_id": None, "tags": "", "fields": "", "profile_id": None})
         except sqlite3.IntegrityError:

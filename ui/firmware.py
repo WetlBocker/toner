@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QHBoxLayout, 
                                QVBoxLayout, QWidget)
 
 from core import db, firmware as fw
+from core import quiet
 from ui.finder import FilterButton, SearchBox, device_sections, shown_devices
 from ui.tools import _row
 from ui.tools2 import _muted, _primary, _table
@@ -511,7 +512,7 @@ class CheckStep(QWidget):
             from core.assistant import tools as T
             T.firmware_snapshot([self.results[k] for k in self.rows if k in self.results])    # the Assistant's firmware_check tool reads these
         except Exception:                                                              # noqa: BLE001
-            pass
+            quiet.ignored("noqa: BLE001")
         self.changed.emit()
 
     def ready_results(self):

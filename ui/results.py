@@ -91,6 +91,7 @@ class ResultsTab(QWidget):
         self.expanded = set()                    # devices whose checks are open; survives live updates
         self._building = False
         self.table = QTreeWidget()               # one row per device; its checks are the children
+        self.table.setAccessibleName(type(self).__name__.replace("Tab", "") + " by device")       # "Results by device", "Scanning by device"
         self.table.setColumnCount(len(self.COLS))
         self.table.setHeaderLabels(self.COLS)
         self.table.header().setStretchLastSection(False)
@@ -111,6 +112,7 @@ class ResultsTab(QWidget):
         self.table.itemCollapsed.connect(lambda it: self._remember(it, False))
         self.run_btn = QPushButton(self.RUN)
         self.run_btn.setProperty("primary", True)
+        self.run_btn.setAccessibleName(self.RUN)
         self.run_btn.clicked.connect(self.start)
         self.run_btn.setToolTip(self.RUN_TIP)
         self.find = SearchBox("Search results", "Type part of a device's name, address, vendor or location, or of a check or its "

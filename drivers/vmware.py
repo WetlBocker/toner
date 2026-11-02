@@ -3,6 +3,7 @@ checks: vCenter answers and its version, every host is connected and powered on,
 space, and the appliance's own health lights (system, memory, load, storage, database)."""
 from .base import OK, WARN, FAIL, grade
 from .webapi import WebApi
+from core import quiet
 
 LIGHT = {"green": OK, "gray": OK, "grey": OK, "yellow": WARN, "orange": WARN, "red": FAIL}
 
@@ -32,7 +33,7 @@ class VmwareDriver(WebApi):
             try:
                 self.call("DELETE", "/api/session", optional=True, raw=True)
             except Exception:
-                pass
+                quiet.ignored()
             self.close()
         return out
 

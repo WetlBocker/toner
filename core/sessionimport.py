@@ -12,7 +12,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from urllib.parse import unquote
 
-from core import sessions
+from core import sessions, tlsverify
 
 SESSION_FILTER = "MobaXterm sessions (*.mobaconf);;PuTTY sessions (*.reg);;SecureCRT sessions (*.xml *.ini)"
 EXTENSIONS = (".mobaconf", ".reg", ".xml", ".ini")
@@ -506,7 +506,7 @@ def add_devices(items, passwords=None):
             while name.lower() in names:
                 name, n = f"{base} ({n})", n + 1
             dev = {"name": name, "vendor": vendor, "host": host, "port": port, "platform": platform,
-                   "username": (item.get("username") or "").strip(), "site": "default", "verify_ssl": 0, "ha_expected": 0,
+                   "username": (item.get("username") or "").strip(), "site": "default", "verify_ssl": tlsverify.default_for_new(), "ha_expected": 0,
                    "enabled": 1, "location": "", "details": "", "folder_id": None}
             try:
                 if item.get("folder"):

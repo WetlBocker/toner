@@ -24,6 +24,7 @@ import threading
 import time
 
 from core import db, extvault, passvault
+from core import quiet
 
 INTERNAL = "~ext/"
 LOCAL = "~toner/"                      # kept only in Toner's vault, never sent to the manager (Demarc's token)
@@ -304,7 +305,7 @@ def forget_org(org):
     try:
         queue_drop(container_name(active(), org))
     except Exception:
-        pass
+        quiet.ignored()
 
 
 def drop_containers(names):

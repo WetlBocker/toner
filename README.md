@@ -277,6 +277,10 @@ In import files that is `vendor: unifi` with `platform: login`, `network`, `prot
 
 ### API keys from the device
 
+New devices check the HTTPS certificate of the device's API (**Verify SSL certificate** on the Access tab), as **Settings > General >
+Verify SSL certificates on new devices** says; untick it for a device with a self-signed certificate. Devices already stored keep
+the choice they were saved with; imports, discovery and agents signing up follow the setting unless the file says otherwise.
+
 For **Palo Alto** and **Proxmox**, the **Get API key / token** button on the device's Access tab signs in once with an
 administrator's user name and password, asks the device for a key and fills it in. The password is sent over HTTPS in the request
 body and never kept; only the key is saved. Proxmox gets a read-only token called `toner` (PVEAuditor on `/`), and an account with
@@ -588,6 +592,24 @@ does it without Python: `Toner.exe cli service`, `Toner.exe cli run --json` (out
 in the data folder when there is none). The service also runs the agent receiver when it is on, makes the scheduled trend report and
 watches the agent certificate. It uses the data folder of the account it runs as, and opens the vault only when it is remembered on this computer
 for that account, so run it as the account you set Toner up with.
+
+## Charts
+
+Toner's charts are drawn by [Apache ECharts](https://echarts.apache.org/) on a web page inside the window (Qt WebEngine), in the
+theme's colours, with the same status colours as every pill and dot. Nothing is fetched from the internet: the library ships with
+Toner (`assets/echarts.min.js`). Hover a chart for the values; right-click is Toner's own.
+
+- **Overview**: **Health**, the devices by status as a ring (click a slice to open those results), and **Last runs**, the latest
+  twelve runs as stacked OK / WARN / FAIL / ERROR bars.
+- **History**: beside the pyqtgraph chart of a device's checks over time, **Across devices** (every device's value of one check in
+  the chosen run, worst first, coloured by status) and **Failures** (when FAIL and ERROR rows happen, weekday by hour, and the
+  devices with most, over the trend period).
+- **Scanning**: **Advisories by vendor** (stacked by status; click a vendor to search for it) and **CVSS scores** (how many
+  advisories at each level), over the list; the **Charts** button hides them.
+- **A device's window**: dials for its latest readings that have limits (CPU, memory, disk, temperature, utilisation...) on the
+  Overview tab, and a **Trends** tab drawing the checks chosen on the History tab as areas over time with the limits as dashed lines.
+
+A copy built without Qt WebEngine shows a short note where a chart would be; the rest of the page is unchanged.
 
 ## Updates and About
 

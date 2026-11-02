@@ -5,7 +5,7 @@ import socket
 import ssl
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from core import db, nettools, snmp, vendors
+from core import db, nettools, snmp, tlsverify, vendors
 
 MAX_TARGETS = 4096
 
@@ -259,7 +259,7 @@ def add_to_inventory(rows, folder_id=None, profile_id=None, location="", tags=""
         logs_in = vendors.has_login(vendor) and not vendors.is_snmp(vendor)
         db.save_device({"name": name, "vendor": vendor, "host": r["ip"], "port": 0,
                         "platform": r.get("platform") or vendors.default_platform(vendor), "username": "",
-                        "site": "default", "verify_ssl": 0, "ha_expected": 0, "enabled": 1, "location": location,
+                        "site": "default", "verify_ssl": tlsverify.default_for_new(), "ha_expected": 0, "enabled": 1, "location": location,
                         "details": (r.get("descr") or "")[:120], "folder_id": where, "profile_id": profile_id if logs_in else None,
                         "tags": tags, "snmp": snmp_cfg if (vendor == "snmp" or r.get("snmp")) else ""})
         if r.get("snmp") and r.get("community"):

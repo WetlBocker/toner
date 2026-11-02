@@ -5,6 +5,7 @@ import re
 from .base import OK, WARN, FAIL
 from .clirows import CliRows
 from .sshbase import SshDriver, uptime_hours
+from core import quiet
 
 
 class ExtremeDriver(CliRows, SshDriver):
@@ -20,7 +21,7 @@ class ExtremeDriver(CliRows, SshDriver):
         try:
             c.send_command("disable clipaging" if not self.voss() else "terminal more disable")
         except Exception:
-            pass
+            quiet.ignored()
 
     def software(self, c):
         if self.voss():

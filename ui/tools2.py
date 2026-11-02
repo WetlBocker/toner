@@ -21,6 +21,7 @@ from ui.tools import DevicePicker, OutputBox, _row, reset_button
 from ui.panels import fit_rows
 from ui.widgets import EmptyHint, GroupPicker
 from ui.finder import FilterButton, SearchBox, device_sections, shown_devices
+from ui.pingworker import PingWorker
 from ui.toast import toast
 from ui import status as st
 
@@ -273,28 +274,6 @@ def picked_device(picker, host):
     return d if isinstance(d, dict) and d.get("host") == host else None
 
 
-class PingWorker(QThread):
-    sample = Signal(object)                       # milliseconds, or None for a lost reply
-
-    def __init__(self, host, interval, timeout_ms, tcp_dev=None):
-        super().__init__()
-        self.host, self.interval, self.timeout_ms = host, interval, timeout_ms
-        self.tcp_dev = tcp_dev                       # Through the proxy (TCP): a TCP connection instead of ICMP
-        self.stop_event = threading.Event()
-
-    def once(self):
-        if self.tcp_dev is None:
-            return pinger.ping_once(self.host, self.timeout_ms)
-        p = reach.probe(self.tcp_dev, host=self.host, timeout=self.timeout_ms / 1000)
-        return p.ms if p.up else None
-
-    def run(self):
-        while not self.stop_event.is_set():
-            t0 = time.time()
-            self.sample.emit(self.once())
-            self.stop_event.wait(max(0.0, self.interval - (time.time() - t0)))
-
-
 class LatencyGraph(QFrame):
     """The live ping graph, drawn with pyqtgraph: one point per reply, the newest at the right; a lost reply is a red tick on the
     floor and breaks the line."""
@@ -412,8 +391,8 @@ class LivePingTab(QWidget):
         self.go.setEnabled(False)
         self.stop.setEnabled(True)
         tcp_dev = (picked_device(self.picker, host) or {}) if self.via_proxy.isChecked() else None
-        self.worker = PingWorker(host, self.interval.value(), self.timeout.value(), tcp_dev)
-        self.worker.sample.connect(self._sample)
+        self.worker = PingWorker(host, interval=self.interval.value(), timeout_ms=self.timeout.value(), tcp_dev=tcp_dev)
+        self.worker.sample.connect(lambda _n, ms: self._sample(ms))
         self.worker.start()
 
     def _sample(self, ms):

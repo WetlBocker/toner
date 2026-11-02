@@ -6,6 +6,7 @@ import re
 
 from .base import OK, WARN, FAIL, grade, grade_low
 from core import display
+from core import quiet
 from .webapi import WebApi
 
 
@@ -33,7 +34,7 @@ class SonicwallDriver(WebApi):
             try:
                 self.call("DELETE", "/auth", optional=True, raw=True)
             except Exception:
-                pass
+                quiet.ignored()
             self.close()
         return out
 

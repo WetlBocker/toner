@@ -7,6 +7,7 @@ from PySide6.QtCore import QEvent, QObject, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QPainterPath, QPalette, QRegion
 from PySide6.QtWidgets import QApplication, QMenu, QProxyStyle
 from ui import icons, themes
+from core import quiet
 
 BASE_POINT_SIZE = 10             # the text size when Settings says "default"
 LOOK_KEYS = tuple(themes.DEFAULT_LOOK)
@@ -334,20 +335,20 @@ def context(app=None):
     try:
         system_dark = app.styleHints().colorScheme() == Qt.ColorScheme.Dark
     except Exception:
-        pass
+        quiet.ignored()
     worst, colour = None, ""
     try:
         rank = {"ERROR": 0, "FAIL": 1, "WARN": 2, "OK": 3}
         states = [v.get("status") for v in db.device_health().values() if v.get("status") in rank]
         worst = min(states, key=rank.get) if states else None
     except Exception:
-        pass
+        quiet.ignored()
     try:
         home = db.home()
         if home:
             colour = next((r.get("colour") or "" for r in db.org_rows() if r["id"] == home), "")
     except Exception:
-        pass
+        quiet.ignored()
     from datetime import datetime
     hour = datetime.now().hour
     dark = bool(_current.get("dark", True))
@@ -364,7 +365,7 @@ def apply(app: QApplication, look=None, font_size=0, style=None, ctx=None):
     try:                                                 # window frames and native pop-ups follow (Qt 6.8+)
         app.styleHints().setColorScheme(Qt.ColorScheme.Dark if t["dark"] else Qt.ColorScheme.Light)
     except Exception:
-        pass
+        quiet.ignored()
     _current.clear()
     _current.update(t)
     app.setStyle(RoundedMenus("Fusion"))                 # one style everywhere, so the stylesheet looks the same

@@ -13,6 +13,8 @@ from ui.widgets import EmptyHint, FlowLayout, RefreshButton, StatusDelegate, fil
 from ui import status as st
 from ui import motion
 from ui.glance import GlanceMap
+from ui import chartspec
+from ui.webchart import ChartView
 from ui.panels import Panel, ProgressLine
 from PySide6.QtWidgets import QSizePolicy
 
@@ -245,6 +247,7 @@ class DashboardTab(QWidget):
             self.cards[k].setToolTip(tip)
 
         self.attention = QTableWidget(0, 5)                            # the status chip first, then the device, as the mockup had it
+        self.attention.setAccessibleName("Needs attention")
         self.attention.setHorizontalHeaderLabels(["Status", "Device", "What is wrong", "Checked", "Actions"])
         self.attention.horizontalHeader().setVisible(False)             # the rows explain themselves
         self.attention.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -306,6 +309,9 @@ class DashboardTab(QWidget):
         self.recent.setWordWrap(True)
         self.recent.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
 
+        self.health_chart = ChartView(min_height=210)                   # devices by status as a ring; a slice opens those results
+        self.health_chart.clicked.connect(self._health_clicked)
+        self.runs_chart = ChartView(min_height=200)                     # the last runs as stacked OK / WARN / FAIL / ERROR bars
         self.map = GlanceMap()                                          # the devices as a small map, links from Tools > Topology
         self.map.setMinimumWidth(330)                                   # the right column keeps room for the map's dots and their names
         self.map.open_device.connect(self.open_device)
@@ -339,7 +345,9 @@ class DashboardTab(QWidget):
         right = QVBoxLayout()
         right.setSpacing(12)
         right.addWidget(panel("Network at a glance", self.map, self.map_summary))
+        right.addWidget(panel("Health", self.health_chart))
         right.addWidget(panel("Availability", self.bars, self.period))
+        right.addWidget(panel("Last runs", self.runs_chart))
         right.addWidget(self.fleet_panel)
         right.addWidget(panel("Recent activity", self.recent), 1)
         cols = self.cols = QHBoxLayout()
@@ -373,6 +381,24 @@ class DashboardTab(QWidget):
             p.restyle()
         self._paint_viewport()
         self.map.update()
+        self.health_chart.restyle()
+        self.runs_chart.restyle()
+
+    def _health_clicked(self, hit):
+        """A slice of the Health ring: the Results page listing that status."""
+        what = {"OK": "healthy", "WARN": "warn", "FAIL": "fail", "ERROR": "fail"}.get(hit.get("name"))
+        if what:
+            self.show_results.emit(what)
+
+    def _charts(self, health, runs):
+        counts = {"OK": 0, "WARN": 0, "FAIL": 0, "ERROR": 0}
+        for v in health.values():
+            counts[v["status"] if v["status"] in counts else "ERROR"] += 1
+        self.health_chart.draw(lambda p: chartspec.donut(p, counts, order=("OK", "WARN", "FAIL", "ERROR")) if any(counts.values()) else chartspec.empty("No results yet"))
+        recent = list(reversed(runs[:12]))                              # oldest on the left
+        labels = [str(r["started_at"])[5:16].replace("-", "/") for r in recent]
+        series = [(st, [int(r.get(k) or 0) for r in recent]) for st, k in (("OK", "ok"), ("WARN", "warn"), ("FAIL", "fail"), ("ERROR", "error"))]
+        self.runs_chart.draw(lambda p: chartspec.grouped_bars(p, labels, series, stacked=True) if recent else chartspec.empty("No checks run yet"))
 
     # ---------- a run going now
     def run_started(self, names):
@@ -784,7 +810,9 @@ class DashboardTab(QWidget):
             parts.append("<b>Configuration changes (24 h)</b><br>" + "<br>".join(
                 f"{html.escape(db.label_org(c['device']))} &nbsp; <span style='color:gray'>{c['taken_at']}  +{c['added']} / -{c['removed']}</span>"
                 for c in changes[:6]))
-        runs = db.list_runs(5)
+        runs = db.list_runs(12)
+        self._charts(health, runs)
+        runs = runs[:5]
         if runs:
             parts.append(("<b>Runs</b><br>" if changes else "") + "<br>".join(
                 f"<span style='color:gray'>{r['started_at']}</span> &nbsp; OK {r['ok']} &nbsp; WARN {r['warn']} &nbsp; "

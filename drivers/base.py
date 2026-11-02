@@ -166,7 +166,7 @@ class Driver:
             try:
                 self.on_check(self.name, check)
             except Exception:                                # noqa: BLE001  (a progress line must never spoil a result)
-                pass
+                quiet.ignored("noqa: BLE001  (a progress line must never spoil a result)")
         return Result(self.name, check, status, str(value), message, numeric)
 
     def not_applicable(self, check, value, message=""):

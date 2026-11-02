@@ -3,6 +3,7 @@ from PySide6.QtCore import QThread, Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QComboBox, QDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QMenu, QMessageBox,
                                QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout)
+from ui.signin import SignInDialog
 
 from core import audit, profiles, winmon, winservices
 from ui import status as st
@@ -28,41 +29,15 @@ class _Job(QThread):
             self.done.emit(e)
 
 
-class SignIn(QDialog):
+class SignIn(SignInDialog):
     """A Windows account for this window only: a computer that reports by agent has no login of its own, and Toner keeps nothing from here."""
 
     def __init__(self, host, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Sign in to manage services")
-        self.setMinimumWidth(440)
-        self.user, self.password = QLineEdit(), QLineEdit()
-        self.password.setEchoMode(QLineEdit.EchoMode.Password)
-        self.user.setPlaceholderText("DOMAIN\\user, user@domain or .\\user")
-        intro = QLabel(f"This computer reports to Toner through an agent, which only sends. To list its services live and control them, "
-                       f"Toner signs in to <b>{host}</b> with PowerShell remoting (WinRM). The account needs to be an administrator there. "
-                       "The user name and password are used for this window only and are not saved.")
-        intro.setWordWrap(True)
-        form = QFormLayout()
-        form.addRow("User name", self.user)
-        form.addRow("Password", self.password)
-        ok, cancel = QPushButton("Sign in"), QPushButton("Cancel")
-        ok.setProperty("primary", True)
-        ok.clicked.connect(self._accept)
-        cancel.clicked.connect(self.reject)
-        bar = QHBoxLayout()
-        bar.addStretch()
-        bar.addWidget(cancel)
-        bar.addWidget(ok)
-        lay = QVBoxLayout(self)
-        lay.addWidget(intro)
-        lay.addLayout(form)
-        lay.addLayout(bar)
-
-    def _accept(self):
-        if not self.user.text().strip() or not self.password.text():
-            QMessageBox.warning(self, "Sign in", "Enter the user name and the password.")
-            return
-        self.accept()
+        super().__init__("Sign in to manage services",
+                         f"This computer reports to Toner through an agent, which only sends. To list its services live and control them, "
+                         f"Toner signs in to <b>{host}</b> with PowerShell remoting (WinRM). The account needs to be an administrator there. "
+                         "The user name and password are used for this window only and are not saved.",
+                         parent, placeholder="DOMAIN\\user, user@domain or .\\user", width=440)
 
 
 class ServicesDialog(QDialog):

@@ -23,7 +23,7 @@ TH = db.get_thresholds()
 OPTS = {**db.runtime_options(), "disabled": set(), "http_timeout": 5, "counter_mode": "total"}
 ROUTES, CALLS = {}, []
 class Resp:
-    def __init__(self, status=200, js=None): self.status_code, self._js = status, js
+    def __init__(self, status=200, js=None): self.status_code, self._js, self.content = status, js, b"{}"      # content: a reply with a body, as requests' has
     def json(self): return self._js
     def raise_for_status(self):
         if self.status_code >= 400:

@@ -179,23 +179,73 @@ def filter_icon():
     return QIcon(_FunnelEngine())
 
 
-class FilterButton(QToolButton):
-    """A funnel button that opens a menu with one submenu of tick boxes per kind of filter (Status, Location, ...).
-    Ticking several values in one submenu means 'any of these'; different submenus must all match. The button shows
-    how many values are ticked. It looks and behaves like the filter button on the Inventory tab."""
+class FunnelButton(QToolButton):
+    """What every funnel button shares: the icon, a menu that is rebuilt each time it opens, tick boxes that keep the menu
+    open while ticking, the count of ticked values on the button and the ticked values in its tooltip, and Clear filter.
+    Subclasses keep the ticks their own way and fill the menu in `build()`; `ticked_labels()` names what is ticked.
+    `FilterButton` here (a dict of sections) and `ui.finder.FilterButton` (sections read from the data each time) both
+    build on it, so the look and behaviour cannot drift apart."""
     changed = Signal()
 
     def __init__(self, tip="Filter"):
         super().__init__()
         self.tip = tip
-        self.sections = {}                        # title -> [(shown text, value)]
-        self.picked = {}                          # title -> set of ticked values
         self.setIcon(filter_icon())
         self.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.setStyleSheet("QToolButton::menu-indicator { image: none; }")
         self.menu = QMenu(self)
-        self.menu.aboutToShow.connect(self._build)
+        self.menu.aboutToShow.connect(self.build)
         self.setMenu(self.menu)
+        self.setAccessibleName(tip)
+
+    def build(self):
+        """Fill `self.menu` (it has been cleared). Subclasses override; call `finish_menu()` last."""
+        self.menu.clear()
+
+    def finish_menu(self):
+        self.menu.addSeparator()
+        self.menu.addAction("Clear filter", self.clear).setEnabled(self.filtering())
+
+    @staticmethod
+    def add_box(sub, text, checked, slot):
+        """A tick box inside a submenu (a widget action keeps the menu open while ticking). Returns the box."""
+        box = QCheckBox(text)
+        box.setChecked(checked)
+        box.toggled.connect(slot)
+        act = QWidgetAction(sub)
+        act.setDefaultWidget(box)
+        sub.addAction(act)
+        return box
+
+    def ticked_labels(self):
+        """The shown text of every ticked value, in menu order."""
+        return []
+
+    def filtering(self):
+        return bool(self.ticked_labels())
+
+    def clear(self):
+        raise NotImplementedError
+
+    def _update(self):
+        labels = self.ticked_labels()
+        self.setToolTip("Filter: " + self.describe() if labels else self.tip)
+        self.setText(f" {len(labels)}" if labels else "")
+        self.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon if labels else Qt.ToolButtonStyle.ToolButtonIconOnly)
+
+    def describe(self):
+        return ", ".join(self.ticked_labels())
+
+
+class FilterButton(FunnelButton):
+    """A funnel button that opens a menu with one submenu of tick boxes per kind of filter (Status, Location, ...).
+    Ticking several values in one submenu means 'any of these'; different submenus must all match. The button shows
+    how many values are ticked. It looks and behaves like the filter button on the Inventory tab."""
+
+    def __init__(self, tip="Filter"):
+        self.sections = {}                        # title -> [(shown text, value)]
+        self.picked = {}                          # title -> set of ticked values
+        super().__init__(tip)
         self._update()
 
     def set_sections(self, sections):
@@ -218,6 +268,9 @@ class FilterButton(QToolButton):
         self._update()
         self.changed.emit()
 
+    def ticked_labels(self):
+        return [text for title, opts in self.sections.items() for text, val in opts if val in self.picked.get(title, ())]
+
     def describe(self):
         """'Status: FAIL; Location: Chicago, Denver' for the ticked values, in menu order."""
         parts = []
@@ -227,34 +280,23 @@ class FilterButton(QToolButton):
                 parts.append(f"{title}: {', '.join(names)}")
         return "; ".join(parts)
 
-    def _build(self):
+    def build(self):
         self.menu.clear()
         for title, opts in self.sections.items():
             sub = self.menu.addMenu(title)
             if not opts:
                 sub.setEnabled(False)
             for text, val in opts:
-                box = QCheckBox(text)                 # a widget action keeps the menu open while ticking
-                box.setChecked(val in self.picked.get(title, ()))
-                box.toggled.connect(lambda on, title=title, val=val: self._toggle(title, val, on))
-                act = QWidgetAction(sub)
-                act.setDefaultWidget(box)
-                sub.addAction(act)
-        self.menu.addSeparator()
-        self.menu.addAction("Clear filter", self.clear).setEnabled(self.filtering())
+                self.add_box(sub, text, val in self.picked.get(title, ()), lambda on, title=title, val=val: self._toggle(title, val, on))
+        self.finish_menu()
+
+    _build = build                                # the name the tests and older callers know
 
     def _toggle(self, title, val, on):
         s = self.picked.setdefault(title, set())
         (s.add if on else s.discard)(val)
         self._update()
         self.changed.emit()
-
-    def _update(self):
-        n = sum(len(v) for v in self.picked.values())
-        text = self.describe()
-        self.setToolTip(f"Filter: {text}" if text else self.tip)
-        self.setText(f" {n}" if n else "")
-        self.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon if n else Qt.ToolButtonStyle.ToolButtonIconOnly)
 
 
 class StatusDelegate(QStyledItemDelegate):

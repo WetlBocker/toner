@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QHBoxLayout, Q
                                QProgressBar, QPushButton, QSpinBox, QStackedWidget, QTableWidgetItem, QVBoxLayout, QWidget, QFrame)
 import paramiko
 from core import audit, db, fileserver, iperf, nettools, oui, profiles, proxy, scp, vendors, wifi, xcopy
+from core import quiet
 from ui import plots, theme
 from ui.tools import DevicePicker, OutputBox, Runner, _row, reset_button
 from ui.tools2 import _muted, _primary, _table
@@ -141,7 +142,7 @@ class FileServerTab(QWidget):
                 import keyring
                 self.password.setText(keyring.get_password(db.SERVICE, SECRETS[self.proto]) or "")
             except Exception:
-                pass
+                quiet.ignored()
         if self.proto == "sftp":
             self._show_fingerprint()
         if self.proto == "ftp":
@@ -231,7 +232,7 @@ class FileServerTab(QWidget):
             try:
                 db.set_secret(SECRETS[self.proto], self.password.text())
             except Exception:
-                pass
+                quiet.ignored()
         if self.proto == "sftp":
             self._show_fingerprint()
         self.save_choices()
@@ -717,7 +718,7 @@ class ScpWorker(QThread):
                 try:
                     c.close()
                 except Exception:
-                    pass
+                    quiet.ignored()
             self.finished_ok.emit(ok)
 
 

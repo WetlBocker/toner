@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 here = os.path.dirname(os.path.abspath(__file__))
 env = dict(os.environ, QT_QPA_PLATFORM="offscreen", PYTHONUTF8="1")
+env.setdefault("TONER_NO_WEBCHARTS", "1")               # the charts' browser engine is tried in test_webchart alone; elsewhere a note stands in
 if sys.platform != "win32":                       # never the desktop's own keyring (a build machine has none); tests that store fake it
     env.setdefault("PYTHON_KEYRING_BACKEND", "keyring.backends.null.Keyring")
 env.pop("SP", None)                               # each file makes its own throw-away folder

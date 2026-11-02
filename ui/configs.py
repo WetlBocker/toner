@@ -68,6 +68,7 @@ class SearchDialog(QDialog):
         go.clicked.connect(self.run)
         self.box.returnPressed.connect(self.run)
         self.table = QTableWidget(0, 4)
+        self.table.setAccessibleName("Configuration backups")
         self.table.setHorizontalHeaderLabels(["Device", "Backup taken", "Line", "Text"])
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)

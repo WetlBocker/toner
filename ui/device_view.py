@@ -10,7 +10,8 @@ from core.runner import run_one
 from ui.configs import DiffHighlighter
 from ui.history import ChartStack
 from ui.widgets import GroupPicker, StatusDelegate
-from ui import status as st
+from ui import chartspec, status as st
+from ui.webchart import ChartView
 
 
 class _Job(QThread):
@@ -185,9 +186,16 @@ class DeviceView(QDialog):
 
         self.summary = DeviceSummary()                 # the facts and the latest checks (the Inventory's details pane shows the same)
         self.info, self.checks = self.summary.info, self.summary.checks
+        self.gauges = QWidget()                        # the latest readings that have limits (CPU, memory, disk...), as dials
+        self.gauges_lay = QHBoxLayout(self.gauges)
+        self.gauges_lay.setContentsMargins(0, 0, 0, 0)
+        self.gauges_lay.setSpacing(8)
+        self._gauges = []
         over = QWidget()
-        ol = QHBoxLayout(over)
-        ol.addWidget(self.summary)
+        ol = QVBoxLayout(over)
+        ol.setContentsMargins(0, 0, 0, 0)
+        ol.addWidget(self.gauges)
+        ol.addWidget(self.summary, 1)
 
         self.pick = GroupPicker(all_text="Choose checks", noun="checks", clear_text="Clear selection")
         self.chart = ChartStack()
@@ -200,6 +208,16 @@ class DeviceView(QDialog):
         hl.addLayout(bar)
         hl.addWidget(self.chart, 1)
         self.pick.changed.connect(self.draw)
+        self.trend = ChartView(min_height=260)         # the same checks as areas over time, with the limits as dashed lines
+        self.trend.setAccessibleName("Trend of the chosen checks")
+        trend_tab = QWidget()
+        tl = QVBoxLayout(trend_tab)
+        tl.setContentsMargins(0, 8, 0, 0)
+        self.trend_note = QLabel("The checks chosen on the History tab, over time. Hover for the values at a moment.")
+        self.trend_note.setProperty("muted", True)
+        self.trend_note.setWordWrap(True)
+        tl.addWidget(self.trend_note)
+        tl.addWidget(self.trend, 1)
 
         self.versions = QComboBox()
         self.cfg_view = QComboBox()
@@ -223,6 +241,7 @@ class DeviceView(QDialog):
         self.tabs = QTabWidget()
         self.tabs.addTab(over, "Overview")
         self.tabs.addTab(hist, "History")
+        self.tabs.addTab(trend_tab, "Trends")
         self.tabs.addTab(cfgw, "Configuration")
         lay = QVBoxLayout(self)
         lay.setContentsMargins(18, 16, 18, 16)
@@ -279,6 +298,47 @@ class DeviceView(QDialog):
     def _fill_checks(self):
         self.summary.dev = self.dev
         self.summary._fill_checks()
+        self._fill_gauges()
+
+    GAUGED = ("cpu", "memory", "disk", "storage", "temperature", "utilization", "sessions", "channel_util", "load")
+
+    def _fill_gauges(self):
+        """A dial for each of the latest readings that is a percentage (or has limits in Settings > Thresholds): CPU, memory, disk and
+        the like. Nothing with a number means no dials and no empty strip."""
+        for g in self._gauges:
+            g.setParent(None)
+            g.deleteLater()
+        self._gauges = []
+        th = db.thresholds_for(self.dev)
+        shown = 0
+        for r in self._latest_rows():
+            base = (r["check_name"] or "").split(" (")[0]
+            key = next((k for k in self.GAUGED if base == k or base.startswith(k + " ") or base.startswith(k + "_")), None)
+            if key is None or r.get("numeric") is None or shown >= 6:
+                continue
+            limits = th.get(key) or th.get(base) or {}
+            value = float(r["numeric"])
+            pct = "%" in (r.get("value") or "") or key in ("cpu", "memory", "disk", "storage", "utilization", "sessions", "channel_util")
+            maximum = 100 if pct else max(value * 1.25, float(limits.get("fail") or 0) * 1.1, 1)
+            unit = "%" if pct else (" °C" if key == "temperature" else "")
+            title = display.check_name(r["check_name"])
+            g = ChartView(min_height=150)
+            g.setMaximumHeight(170)
+            g.setFixedWidth(210)
+            g.setAccessibleName(f"{title} dial")
+            g.draw(lambda p, v=value, w=limits.get("warn"), f=limits.get("fail"), t=title, u=unit, m=maximum:
+                   chartspec.gauge(p, v, warn=w or None, fail=f or None, title=t, unit=u, maximum=m))
+            self.gauges_lay.addWidget(g)
+            self._gauges.append(g)
+            shown += 1
+        if shown and not getattr(self, "_gauge_stretch", False):
+            self.gauges_lay.addStretch(1)                          # the dials sit together on the left, as the facts do
+            self._gauge_stretch = True
+        self.gauges.setVisible(shown > 0)
+
+    def restyle(self):
+        for g in self._gauges + [self.trend]:
+            g.restyle()
 
     def _fill_history(self):
         keep = self.pick.selected()
@@ -291,8 +351,39 @@ class DeviceView(QDialog):
 
     def draw(self, *_):
         picked = [self.keys[k] for k in self.pick.selected() if k in self.keys]
-        self.chart.set_series([(c, db.series(self.dev["name"], c)) for c in picked],
-                              db.thresholds_for(self.dev).get(picked[0].split(" (")[0]) if picked else None)
+        series = [(c, db.series(self.dev["name"], c)) for c in picked]
+        limits = db.thresholds_for(self.dev).get(picked[0].split(" (")[0]) if picked else None
+        self.chart.set_series(series, limits)
+        self._draw_trend(series, limits)
+
+    def _draw_trend(self, series, limits):
+        """The Trends tab: every picked check as an area over time; the first check's limits as dashed lines when all share a scale."""
+        series = [(display.check_name(c), pts) for c, pts in series if pts]
+        if not series:
+            self.trend.draw(lambda p: chartspec.empty("Choose checks on the History tab; a check with numbers is drawn here"))
+            return
+        times = sorted({t for _n, pts in series for t, _v in pts})
+        index = {t: i for i, t in enumerate(times)}
+        cols = []
+        for name, pts in series:
+            vals = [None] * len(times)
+            for t, v in pts:
+                vals[index[t]] = v
+            cols.append((name, vals))
+        from datetime import datetime
+        stamps = []
+        for t in times:
+            try:
+                stamps.append(datetime.strptime(str(t)[:19], "%Y-%m-%d %H:%M:%S") if not isinstance(t, datetime) else t)
+            except ValueError:
+                stamps.append(datetime.strptime(str(t)[:16], "%Y-%m-%d %H:%M"))
+        one_scale = len(cols) == 1
+        warn = fail = None
+        if limits and one_scale:
+            warn, fail = limits.get("warn") or None, limits.get("fail") or None
+            if limits.get("warn", 0) and limits.get("fail", 0) and limits["warn"] > limits["fail"]:        # lower is worse (uptime): no bands
+                warn = fail = None
+        self.trend.draw(lambda p: chartspec.area(p, stamps, cols, warn=warn, fail=fail, stacked=False))
 
     def _fill_versions(self):
         self.versions.blockSignals(True)

@@ -5,9 +5,9 @@ import time
 from urllib.parse import quote
 
 import requests
-import urllib3
 
-from core import proxy
+from core import proxy, tlsverify
+from core import quiet
 
 DEFAULT_PORT = 8006
 ROLE = "PVEAuditor"
@@ -21,7 +21,7 @@ def _fail(r, what):
         errs = body.get("errors")
         said = (", ".join(f"{k}: {v}" for k, v in errs.items()) if isinstance(errs, dict) and errs else "") or str(body.get("message") or "")
     except Exception:
-        pass
+        quiet.ignored()
     if r.status_code in (401, 403) and what == "sign-in":
         return ValueError("Proxmox refused that user name or password. Enter the user with its realm, e.g. root@pam or admin@pve.")
     return ValueError(f"Proxmox could not {what} (HTTP {r.status_code})" + (f": {said}" if said else "."))
@@ -35,9 +35,7 @@ def create_token(dev, username, password, timeout=20):
     if "@" not in username:
         raise ValueError("Enter the user with its realm, e.g. root@pam or admin@pve.")
     host, port = dev["host"], dev.get("port") or DEFAULT_PORT
-    verify = bool(dev.get("verify_ssl"))
-    if not verify:
-        urllib3.disable_warnings()
+    verify = tlsverify.verify(dev)
     base = f"https://{host}:{port}/api2/json"
     common = dict(verify=verify, timeout=timeout, **proxy.requests_kwargs(dev))
     try:

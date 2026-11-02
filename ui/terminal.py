@@ -84,6 +84,7 @@ class TerminalView(QWidget):
     def __init__(self, cols=100, rows=30):
         super().__init__()
         self.syntax, self._marks_cache = None, {}
+        self.setAccessibleName("Terminal")
         self.cols, self.rows = cols, rows
         self.scroll = 0               # lines scrolled back from the live view
         self.sel = None               # ((line, col), (line, col)) in absolute line numbers
