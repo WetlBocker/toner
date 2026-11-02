@@ -37,8 +37,8 @@ check("Dependabot watches the packages and the actions, weekly", os.path.exists(
       and all(s in read(".github", "dependabot.yml") for s in ("package-ecosystem: pip", "package-ecosystem: github-actions", "interval: weekly")))
 
 print("== every release lists its files' SHA-256")
-check("the Linux job, which runs last, writes SHA256SUMS.txt for both files and adds it to the release",
-      "sha256sum \"Toner-Setup-$v.exe\" \"Toner-$v-x86_64.AppImage\" > SHA256SUMS.txt" in release_yml
+check("the Linux job, which runs last, writes SHA256SUMS.txt for every file (the installer, the AppImage, the agent binaries) and adds it to the release",
+      "sha256sum \"Toner-Setup-$v.exe\" \"Toner-$v-x86_64.AppImage\" toner-agent-* > SHA256SUMS.txt" in release_yml
       and "gh release upload \"${{ github.ref_name }}\" SHA256SUMS.txt" in release_yml)
 check("it fetches the installer the Windows job published, so the sums are of what people download", 'gh release download "${{ github.ref_name }}"' in release_yml)
 check("the README says so, in the agreed words", "Each release includes `SHA256SUMS.txt` with the SHA-256 of every file." in read("README.md"))
