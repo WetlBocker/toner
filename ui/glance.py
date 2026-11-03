@@ -1,6 +1,7 @@
 """Network at a glance: the devices as a small map on the Overview. A dot per device in its status colour, the links Tools > Topology
-found between them (dashed in the status colour when an end is down), a slow pulsing ring on a device that is down and a quick one
-on a device being checked. Clicking a dot opens the device. Before a topology scan there are no links: the dots sit in a grid with a hint."""
+found between them (dashed in the status colour when an end fails), a mark per status (round OK, triangle WARN, square FAIL, a hollow
+ring for ERROR), a still ring on a failing device, a slow pulsing one on a device Toner could not reach and a quick one on a device
+being checked. Clicking a dot opens the device. Before a topology scan there are no links: the dots sit in a grid with a hint."""
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import QWidget
@@ -9,7 +10,15 @@ from ui import motion, theme
 from ui import status as st
 
 LABELS_UP_TO = 12               # names are drawn when there are no more devices than this (else on hover)
-DOWN = ("FAIL", "ERROR")
+DOWN = ("FAIL", "ERROR")         # drawn with a ring, in its status colour; only one Toner could not reach counts as down (is_down)
+DOWN_TIP = "Down: Toner could not connect to it in the last run."
+
+
+def is_down(health):
+    """A device whose connection check ended in ERROR in its latest run: Toner could not reach it (a FAIL answered)."""
+    return any(c == "connection" and s == "ERROR" for c, s, _m in (health or {}).get("problems", ()))
+
+
 NO_MAP = "No map yet. Run a scan in Tools > Topology to draw the links between your devices."
 
 
@@ -23,6 +32,7 @@ class GlanceMap(QWidget):
         self.nodes = {}                 # name -> (x, y) in 0..1
         self.links = []                 # [(a, b)]
         self.status = {}                # name -> 'OK' | 'WARN' | 'FAIL' | 'ERROR'
+        self.down = set()               # the names Toner could not connect to
         self.checking = set()           # devices being checked now
         self.scanned = False
         self._sig = None                # what the layout was made for, so it is not laid out again for nothing
@@ -39,6 +49,7 @@ class GlanceMap(QWidget):
         names = [d["key"] for d in devs]
         health = health if health is not None else db.device_health()
         self.status = {n: health[n]["status"] for n in names if n in health}
+        self.down = {n for n in names if is_down(health.get(n))}
         k = topology.last()
         rows = k.get("rows") or []
         self.scanned = bool(rows)
@@ -55,7 +66,7 @@ class GlanceMap(QWidget):
             self._sig = sig
             self.links = links
             self.nodes = self._layout(names, links)
-        down = sum(1 for n in names if self.status.get(n) in DOWN)
+        down = len(self.down)
         self.summary = f"{down} of {len(names)} down" if down else f"all {len(names)} up" if names else ""
         self.setToolTip("")
         self.setAccessibleName("Map of " + ", ".join(f"{n} {self.status.get(n, 'not checked')}" for n in names) if names else "No devices")
@@ -86,7 +97,7 @@ class GlanceMap(QWidget):
         self.update()
 
     def _pulsing(self):
-        want = motion.enabled() and self.isVisible() and (self.checking or any(s in DOWN for s in self.status.values()))
+        want = motion.enabled() and self.isVisible() and bool(self.checking or self.down)
         if want and self._anim is None:
             self._anim = motion.animate(self, 1800, self._on_pulse, loop=True, curve=motion.QEasingCurve.Type.Linear)
         elif not want and self._anim is not None:
@@ -148,21 +159,18 @@ class GlanceMap(QWidget):
             c = self._pt(n)
             status = self.status.get(n)
             ink = st.qink(status) if status else QColor(st.GREY)
+            moving = n in self.checking or n in self.down               # only a device being checked or one Toner could not reach pulses
             ring = accent if n in self.checking else ink if status in DOWN else None
             if ring is not None:
-                r = 8 + 9 * self.pulse
+                r = 8 + 9 * self.pulse if moving else 11
                 col = QColor(ring)
-                col.setAlphaF(max(0.0, 0.9 * (1 - self.pulse)))
+                col.setAlphaF(max(0.0, 0.9 * (1 - self.pulse)) if moving else 0.55)
                 pen = QPen(col)
                 pen.setWidthF(2)
                 p.setPen(pen)
                 p.setBrush(Qt.BrushStyle.NoBrush)
                 p.drawEllipse(QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r))
-            fill = QColor(ink)
-            fill.setAlphaF(0.35 if t.get("dark") else 0.25)
-            p.setPen(QPen(ink, 2))
-            p.setBrush(fill)
-            p.drawEllipse(QRectF(c.x() - 7, c.y() - 7, 14, 14))
+            st.mark(p, c, status, 14, soft=True)
             if labels or n == self._hover:
                 p.setPen(ink if status in DOWN else muted)
                 text = fm.elidedText(db.label_org(n), Qt.TextElideMode.ElideRight, 120)

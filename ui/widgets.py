@@ -1,7 +1,7 @@
 from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QIcon, QIconEngine, QPainter, QPalette, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (QAbstractButton, QAbstractSpinBox, QApplication, QCheckBox, QComboBox, QHBoxLayout, QHeaderView, QLabel, QLayout, QLineEdit,
-                               QMenu, QPushButton, QSizePolicy, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QToolButton,
+                               QAbstractItemView, QFormLayout, QMenu, QPushButton, QSizePolicy, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QToolButton,
                                QVBoxLayout, QWidget, QWidgetAction)
 from core import db, reports
 from ui import status as st, theme
@@ -24,9 +24,9 @@ class FlowLayout(QLayout):
     """A row of controls that wraps onto more lines when the window is too narrow, instead of squeezing or overlapping.
     On a wide window it looks like an ordinary row: boxes that can grow (text fields) share the spare width."""
 
-    def __init__(self, hspacing=8, vspacing=6):
+    def __init__(self, hspacing=8, vspacing=6, even=False):
         super().__init__()
-        self._items, self._h, self._v = [], hspacing, vspacing
+        self._items, self._h, self._v, self._even = [], hspacing, vspacing, even      # even: tiles wrap 3 + 2, not 4 + 1
         self.setContentsMargins(0, 0, 0, 0)
 
     def addItem(self, item):
@@ -92,11 +92,17 @@ class FlowLayout(QLayout):
             used += need
         if line:
             lines.append(line)
+        if self._even and len(lines) > 1:              # the same number on each line (the last may have fewer), all one width
+            flat = [it for ln in lines for it, _w in ln]
+            per = -(-len(flat) // len(lines))
+            width = (avail - self._h * (per - 1)) // per
+            if all(it.minimumSize().width() <= width for it in flat):
+                lines = [[[it, width] for it in flat[i:i + per]] for i in range(0, len(flat), per)]
         y = eff.y()
         for line in lines:
             height = max(it.sizeHint().height() for it, _ in line)
             extra = avail - sum(w for _, w in line) - self._h * (len(line) - 1)
-            grow = [e for e in line if self._grows(e[0])]
+            grow = [] if self._even and len(lines) > 1 else [e for e in line if self._grows(e[0])]
             if extra > 0 and grow:
                 share, rest = divmod(extra, len(grow))
                 for k, e in enumerate(grow):
@@ -329,7 +335,7 @@ class StatusDelegate(QStyledItemDelegate):
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(bg)
         painter.drawRoundedRect(r, rad, rad)
-        pm = st.glyph(status, self.GLYPH)
+        pm = st.glyph(status, self.GLYPH, ink.name())
         if pm:
             painter.drawPixmap(r.left() + pad, r.center().y() - self.GLYPH // 2 + 1, pm)
         painter.setPen(ink)
@@ -349,15 +355,17 @@ class _Chip(QLabel):
 
 
 class StatChips(QWidget):
-    """The counts as chips: All, OK, WARN, FAIL or ERROR, ERROR. Click one to show only those rows (picked), click it again for all."""
+    """The counts as chips: All, OK, WARN, FAIL, ERROR. Click one to show only those rows (picked), click it again for all.
+    `noun`: what the rows are ("checks": "All 9 checks"), or "" for just "All 9"."""
     ORDER = ["OK", "WARN", "FAIL", "ERROR"]
     KEYS = ["ALL"] + ORDER
     TIPS = {"ALL": "Show every result", "OK": "OK: the check passed", "WARN": "WARN: over a warning limit",
             "FAIL": "FAIL: the check ran and the device failed it", "ERROR": "ERROR: Toner couldn't run the check"}
-    picked = Signal(str)                                  # "ALL", "OK", "WARN", "FAIL" (FAIL or ERROR) or "ERROR"
+    picked = Signal(str)                                  # "ALL", "OK", "WARN", "FAIL" or "ERROR"
 
-    def __init__(self):
+    def __init__(self, noun=""):
         super().__init__()
+        self.noun = noun
         self.counts = {s: 0 for s in self.ORDER}
         self.current = "ALL"
         self.labels = {s: _Chip() for s in self.KEYS}
@@ -384,8 +392,9 @@ class StatChips(QWidget):
         total = sum(self.counts.values())
         t = theme.current() or {}
         for key, lab in self.labels.items():
-            n = total if key == "ALL" else self.counts[key] + (self.counts["ERROR"] if key == "FAIL" else 0)
-            lab.setText(f"All {n}" if key == "ALL" else f"{n} {key}" + (" or ERROR" if key == "FAIL" else ""))
+            n = total if key == "ALL" else self.counts[key]
+            noun = (self.noun[:-1] if n == 1 and self.noun.endswith("s") else self.noun) if self.noun else ""
+            lab.setText((f"All {n} {noun}" if noun else f"All {n}") if key == "ALL" else f"{n} {key}")
             on = key == self.current
             ring = f" border:1px solid {t.get('accent', '#2563eb')};" if on else ""
             if key == "ALL":
@@ -409,7 +418,7 @@ class RefreshButton(QPushButton):
         self.setObjectName("refresh")
         self.setFixedSize(32, 32)
         self.setToolTip(self.TIP)
-        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self.clicked.connect(lambda: fn())
         self._tint = None
 
@@ -532,8 +541,15 @@ class EmptyHint(QWidget):
         if not self.buttons:
             self.setGeometry(r)
             return
+        self.ensurePolished()                                # measured in the fonts it will be shown in
+        m = self.layout().contentsMargins()
+        room = r.width() - m.left() - m.right()
+        for lab in (self.head, self.sub):                    # a wrapping label is as wide as its text, until it has to wrap
+            if lab.wordWrap():
+                lab.setMinimumWidth(min(lab.fontMetrics().horizontalAdvance(lab.text()) + 4, max(0, room)))
         hint = self.sizeHint()
-        w, h = min(r.width(), max(hint.width(), 360)), min(r.height(), hint.height())
+        w = min(r.width(), max(hint.width(), 360))
+        h = min(r.height(), self.heightForWidth(w) if self.hasHeightForWidth() else hint.height())
         self.setGeometry(r.x() + (r.width() - w) // 2, r.y() + (r.height() - h) // 2, w, h)
 
     def eventFilter(self, obj, ev):
@@ -614,6 +630,51 @@ class MenuPlacer(QObject):
             if isinstance(button, QAbstractButton) and button.isVisible():
                 place_menu(obj, button)
         return False
+
+
+class KeyboardAccess(QObject):
+    """Every widget as it is first shown: Tab leaves a list that cannot be edited (Qt's tables move from cell to cell, so Tab
+    never got out of Needs attention), a button that is only an icon is called by its tooltip, and a box is called by the
+    label beside it (else its placeholder). Screen readers read those names; nothing on screen changes."""
+
+    def eventFilter(self, obj, event):
+        kind = event.type()
+        if kind == QEvent.Type.Polish:
+            if isinstance(obj, QAbstractItemView) and obj.editTriggers() == QAbstractItemView.EditTrigger.NoEditTriggers:
+                obj.setTabKeyNavigation(False)
+            elif isinstance(obj, QAbstractButton):
+                self._name_button(obj)
+            elif isinstance(obj, (QLineEdit, QComboBox, QAbstractSpinBox)) and not obj.accessibleName():
+                name = form_label(obj) or (obj.placeholderText() if isinstance(obj, QLineEdit) else "")
+                if name:
+                    obj.setAccessibleName(name)
+        elif kind == QEvent.Type.ToolTipChange and isinstance(obj, QAbstractButton) and obj.property("tipName"):
+            self._name_button(obj)                                           # the fold button says the other thing once used
+        return False
+
+    @staticmethod
+    def _name_button(b):
+        if b.text() or (b.accessibleName() and not b.property("tipName")) or not b.toolTip():
+            return
+        b.setAccessibleName(b.toolTip().split("\n")[0].split("   (")[0].strip())
+        b.setProperty("tipName", True)
+
+
+def form_label(w):
+    """The text of the label a form shows beside `w`, without its colon (or "")."""
+    p = w.parentWidget()
+    stack = [p.layout()] if p is not None and p.layout() is not None else []
+    while stack:
+        lay = stack.pop()
+        if isinstance(lay, QFormLayout):
+            lab = lay.labelForField(w)
+            if isinstance(lab, QLabel) and lab.text():
+                return lab.text().replace("&", "").rstrip(": ").strip()
+        for i in range(lay.count()):
+            child = lay.itemAt(i).layout()
+            if child is not None:
+                stack.append(child)
+    return ""
 
 
 def place_menu(menu, button):

@@ -94,8 +94,9 @@ def has_colour(widget, hexcol):
     return any((img.pixel(x, y) & 0xFFFFFF) == want for y in range(0, img.height(), 2) for x in range(0, img.width(), 2))
 w.results.results = [Result("d", "cpu", "FAIL", "99%")]; w.results.last_ran = ["d"]; w.results.repopulate(); w.results.resize(900, 400); w.results.show()
 from ui import status as st
-check("status chip in the results table uses the custom colour (as its readable ink)", w.results.table.topLevelItem(0).text(2) == "FAIL" and has_colour(w.results.table, st.ink("FAIL")) and st.ink("FAIL") != st.ink("OK"))
-w.results.chips.set_counts({"FAIL": 1}); check("status chips use it too", st.ink("FAIL") in w.results.chips.labels["FAIL"].styleSheet())
+chip_ink = st.chip("FAIL")[1].name()                 # the custom colour, made readable on the chip's own tint
+check("status chip in the results table uses the custom colour (as its readable ink)", w.results.table.topLevelItem(0).text(2) == "FAIL" and has_colour(w.results.table, chip_ink) and st.ink("FAIL") != st.ink("OK"))
+w.results.chips.set_counts({"FAIL": 1}); check("status chips use it too", chip_ink in w.results.chips.labels["FAIL"].styleSheet())
 Ap.preset.setCurrentText("Default"); Ap.colors = dict(RP.DEFAULT_COLORS); Ap.paint(); S.save(); check("back to defaults (and N/A stays grey)", RP.COLORS == {**RP.DEFAULT_COLORS, "N/A": RP.NA_COLOR})
 
 print("== terminal settings")

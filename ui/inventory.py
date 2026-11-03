@@ -853,7 +853,7 @@ class DetailsPane(QWidget):
         self.close_btn.setProperty("ghost", True)
         self.close_btn.setFixedSize(28, 28)
         self.close_btn.setToolTip("Close details")
-        self.close_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.close_btn.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self.close_btn.clicked.connect(self.closed)
         head = QHBoxLayout()
         head.setContentsMargins(0, 0, 0, 0)

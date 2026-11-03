@@ -134,8 +134,8 @@ import app as A
 A.apply_look(app)
 import ui.tools2 as T2
 cmdrun_name = lambda d: d["name"]
-asked = []
-QMessageBox.question = staticmethod(lambda *a, **k: (asked.append(a[2]), QMessageBox.StandardButton.Yes)[1])
+asked, defaults = [], []
+QMessageBox.question = staticmethod(lambda *a, **k: (asked.append(a[2]), defaults.append(k.get("defaultButton")), QMessageBox.StandardButton.Yes)[2])
 R = T2.CommandRunnerTab(); R.show(); R.fill_devices()
 def listed():
     return {R.devs.item(i).data(Qt.ItemDataRole.UserRole): R.devs.item(i) for i in range(R.devs.count()) if R.devs.item(i).data(Qt.ItemDataRole.UserRole)}
@@ -188,6 +188,8 @@ check("ticking two kinds asks first, saying what is different", asked and "netwo
 check("and with 'show version' on a Windows computer it is not read-only, so read-only mode stops it, after asking", not ran and "Blocked" in R.status.text(), R.status.text())
 R.safe.setChecked(False); tick("fw2"); ran.clear(); asked.clear(); R.commands.setPlainText("get system status"); R.go.click(); pump(lambda: R.go.isEnabled())
 check("a firewall runs its command line", ran.get("devs") == ["fw2"] and not asked)
+tick("sw1"); ran.clear(); asked.clear(); defaults.clear(); R.commands.setPlainText("hostname"); R.go.click(); pump(lambda: R.go.isEnabled())
+check("with read-only mode off, a changing command asks first, and Enter answers No", asked and "could change" in asked[-1] and defaults[-1] == QMessageBox.StandardButton.No, (asked, defaults))
 C.run_many = real_many
 R.funnel.clear(); R.fill_devices()
 check("with devices to choose from, there is no empty message", R.devs.count() > 0 and not R.devs_hint.isVisibleTo(R))

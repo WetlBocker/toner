@@ -168,11 +168,13 @@ u.word.setText("a brand new master pw"); u.accept()
 check("the right one opens the vault", u.result() == 1 and passvault.is_open())
 
 asked = []
-QMessageBox.question = staticmethod(lambda *a, **k: asked.append(a[2]) or QMessageBox.StandardButton.Yes)
+defaults = []
+QMessageBox.question = staticmethod(lambda *a, **k: asked.append(a[2]) or defaults.append(k.get("defaultButton")) or QMessageBox.StandardButton.Yes)
 vaultdlg.MasterDialog.exec = lambda self: (self.first.setText("fresh master pw!"), self.second.setText("fresh master pw!"), 1)[2]
 passvault.lock()
 u = vaultdlg.UnlockDialog(); u.forgot()
 check("Forgot it? asks first, in the agreed words", asked and asked[-1] == "Start a new, empty vault? Every saved password is lost. Devices, sessions and settings stay.", asked)
+check("and Enter answers No, as every saved password would go", defaults[-1:] == [QMessageBox.StandardButton.No], defaults)
 check("...then a new, empty vault with the new master password", u.reset_done and passvault.is_open() and passvault.names() == [])
 passvault.lock()
 check("which opens with it", (passvault.unlock("fresh master pw!") or True) and passvault.is_open())

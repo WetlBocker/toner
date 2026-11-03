@@ -82,6 +82,7 @@ class ResultsTab(QWidget):
     # what the Scanning section says and does differently (ui/scanning.py)
     TITLE, RUN, RUN_TIP, COLUMNS_KEY = "Results", "Run checks", "Runs the checks of the devices shown", "results_columns"
     HINT = ("No results yet", "Choose devices and press Run checks")
+    CHIP_NOUN = "checks"                         # the All chip: "All 9 checks"
     LATEST, FRESH = "Latest results for", "Run checks for fresh ones."
 
     def __init__(self):
@@ -120,7 +121,7 @@ class ResultsTab(QWidget):
         self.funnel = FilterButton(self._sections)
         self.find.textChanged.connect(lambda _t: self.repopulate())
         self.funnel.changed.connect(self.repopulate)
-        self.chips = StatChips()
+        self.chips = StatChips(self.CHIP_NOUN)
         self.chips.picked.connect(self.set_chip)
         self.chip = "ALL"                        # the chip picked above the table: only rows of that status are listed
         self.explain = QLabel(self.EXPLAIN)      # what FAIL and ERROR mean, under the table while either is shown
@@ -264,7 +265,7 @@ class ResultsTab(QWidget):
         self.funnel.set("status", {mode} if mode else set())
 
     def set_chip(self, key):
-        """A chip above the table was clicked: list only that status ("FAIL" is FAIL or ERROR; "ALL" lists everything)."""
+        """A chip above the table was clicked: list only that status ("ALL" lists everything)."""
         self.chip = key
         if self.chips.current != key:
             self.chips.current = key
@@ -309,8 +310,7 @@ class ResultsTab(QWidget):
         include, rows = self._rows_for_mode(rows)
         if not include or self.chip == "ALL":
             return include, rows
-        want = {"FAIL": ("FAIL", "ERROR")}.get(self.chip, (self.chip,))
-        shown = [r for r in rows if r.status in want]
+        shown = [r for r in rows if r.status == self.chip]
         return bool(shown), shown
 
     def _rows_for_mode(self, rows):
@@ -375,7 +375,7 @@ class ResultsTab(QWidget):
     def _paint(item, status, cols):
         if not reports.COLORS.get(status):
             return
-        bg, ink = st.chip(status)
+        bg, ink = st.chip(status, solid=False)
         for i in cols:
             item.setBackground(i, bg)
             item.setForeground(i, ink)

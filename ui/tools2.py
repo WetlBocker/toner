@@ -549,7 +549,7 @@ class CommandRunnerTab(QWidget):
         self.stop.setEnabled(False)
         self.status = _muted("")
         self.table = _table(["Device", "Result", "Seconds", "First line of output"])
-        self.table_hint = EmptyHint(self.table, "No results yet", "Tick devices, type a command and press Run")
+        self.table_hint = EmptyHint(self.table, "No results yet", "Tick devices, type a command and press Run", wrap=True)
         for sig in (self.table.model().rowsInserted, self.table.model().rowsRemoved, self.table.model().modelReset):
             sig.connect(self._sync_hint)
         self.output = QPlainTextEdit()
@@ -736,7 +736,7 @@ class CommandRunnerTab(QWidget):
         if risky and QMessageBox.question(
                 self, "Commands that may change devices",
                 f"These commands could change the {len(devs)} selected device(s):\n\n" + "\n".join(risky[:8]) +
-                "\n\nRun them anyway?") != QMessageBox.StandardButton.Yes:
+                "\n\nRun them anyway?", defaultButton=QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
             return
         audit.log("command run", f"{len(devs)} device(s): {'; '.join(cmds)[:300]}")
         self.results = {}

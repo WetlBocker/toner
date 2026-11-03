@@ -2,9 +2,9 @@
 from datetime import datetime
 
 from PySide6.QtCore import QEvent, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPalette, QPen
+from PySide6.QtGui import QColor, QFont, QKeySequence, QPainter, QPalette, QPen, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QBoxLayout, QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu,
-                               QPushButton, QScrollArea, QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout, QWidget)
+                               QPushButton, QScrollArea, QTableWidget, QTableWidgetItem, QToolButton, QToolTip, QVBoxLayout, QWidget)
 import html
 
 from core import acks, audit, backup, db, display, fleet, maintenance, notify, reports, scope, vendors
@@ -12,6 +12,7 @@ from ui import icons, theme
 from ui.widgets import EmptyHint, FlowLayout, RefreshButton, StatusDelegate, filling
 from ui import status as st
 from ui import motion
+from ui import glance
 from ui.glance import GlanceMap
 from ui import chartspec
 from ui.webchart import ChartView
@@ -21,7 +22,7 @@ from PySide6.QtWidgets import QSizePolicy
 
 ATTENTION_ROW = 36          # a row of Needs attention: room for its buttons
 ATTENTION_EMPTY = 120       # the list's height while it has nothing to show (the hint sits there)
-ATTENTION_WORDS = 170       # the least "What is wrong" may have beside the row buttons; with less, the buttons go
+ATTENTION_WORDS = 170       # the least "What is wrong" may have beside the row buttons; with less, the row gives up room (see _fit_columns)
 
 
 class Card(Panel):
@@ -32,7 +33,7 @@ class Card(Panel):
         super().__init__()
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.color_key = color_key
-        self.caption = caption                          # what a click does, under the number
+        self.caption = caption                          # under the number: what a click does, or (status cards) what it counts
         self._pop = None
         self._lifted = False
         self.value = QLabel("0")
@@ -75,7 +76,7 @@ class Card(Panel):
         self.value.setFont(f)
         if changed and self.isVisible():
             self._pop_value()
-        self.sub.setText(self.caption)                      # the caption says what a click does; the count's own words go in the tooltip
+        self.sub.setText(self.caption)                      # the caption (what a click does, or "of 6 devices"); the count's own words go in the tooltip
         self.sub.setVisible(bool(self.caption))
         self._tip = self._tip if hasattr(self, "_tip") else self.toolTip()
         self.setToolTip(self._tip + (f"\n{sub}" if sub else ""))
@@ -189,7 +190,16 @@ class BarList(QWidget):
             p.drawText(QRectF(self.width() - 64, y, 64, 22), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
                        f"{pct:.1f}%" if pct is not None else "-")
             p.restore()
-        self.setToolTip("Share of runs in the period where nothing was worse than WARN")
+
+    def event(self, e):
+        if e.type() == QEvent.Type.ToolTip:                # each row says how often its device was reached
+            row = int((e.pos().y() - 6) // 30)
+            if 0 <= row < len(self.rows) and self.rows[row][2]:
+                QToolTip.showText(e.globalPos(), self.rows[row][2], self)
+            else:
+                QToolTip.hideText()
+            return True
+        return super().event(e)
 
 
 class DashboardTab(QWidget):
@@ -197,9 +207,9 @@ class DashboardTab(QWidget):
     backup_requested = Signal()
     open_device = Signal(str)
     goto = Signal(str)
-    show_results = Signal(str)
+    show_results = Signal(str)                   # a card was clicked: Results, filtered to what it counts ("healthy", "warn", "fail")
     device_action = Signal(str, str)             # ("open" | "run" | "ssh" | "rdp", device name) from Needs attention
-    attention_count = Signal(int)                # how many devices need attention (the sidebar shows it on Results)                   # a card was clicked: Results, filtered to what it counts ("healthy", "warn", "fail")
+    attention_count = Signal(int, int, str)      # devices needing attention, how many of them fail, and that in words (the badge on Results)
     action = Signal(str)                  # a step of the getting-started card: add, scan, notify
 
     PERIODS = [("Last 24 hours", 1), ("Last 7 days", 7), ("Last 30 days", 30)]
@@ -234,7 +244,7 @@ class DashboardTab(QWidget):
         self.cards = {"devices": Card("Devices", "devices", "Open the Inventory"), "ok": Card("Healthy", "OK", "Show OK results"),
                       "warn": Card("Warnings", "WARN", "Show warnings"), "fail": Card("Failing", "FAIL", "Show FAIL and ERROR"),
                       "changes": Card("Config changes", "changes", "Open Configs")}
-        grid = FlowLayout(12, 12)                                       # five tiles sharing the width; a narrow window wraps them
+        grid = FlowLayout(12, 12, even=True)                            # five tiles sharing the width; a narrow window wraps them 3 + 2
         for c in self.cards.values():
             c.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
             grid.addWidget(c)
@@ -242,8 +252,8 @@ class DashboardTab(QWidget):
         for k, what in (("ok", "healthy"), ("warn", "warn"), ("fail", "fail")):
             self.cards[k].clicked.connect(lambda _=False, w=what: self.show_results.emit(w))
         self.cards["changes"].clicked.connect(lambda: self.goto.emit("Configs"))
-        for k, tip in (("devices", "Open the Inventory"), ("ok", "Show OK results"), ("warn", "Show warnings"),
-                       ("fail", "Show FAIL and ERROR"), ("changes", "Open Configs")):
+        for k, tip in (("devices", "Open the Inventory"), ("ok", "Click to show OK results"), ("warn", "Click to show warnings"),
+                       ("fail", "Click to show FAIL and ERROR"), ("changes", "Open Configs")):
             self.cards[k].setToolTip(tip)
 
         self.attention = QTableWidget(0, 5)                            # the status chip first, then the device, as the mockup had it
@@ -267,6 +277,8 @@ class DashboardTab(QWidget):
         self.attention.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)  # (a narrow list hides its Actions instead)
         self.attention.viewport().installEventFilter(self)
         self.attention.doubleClicked.connect(self._open)
+        for key in ("Return", "Enter"):
+            QShortcut(QKeySequence(key), self.attention, activated=self._open, context=Qt.ShortcutContext.WidgetShortcut)
         self.attention.setMinimumWidth(330)                            # "What is wrong" is the point of this table: never squeeze it away
         self.hint = EmptyHint(self.attention, "Nothing needs attention", "Every device's latest checks are OK")
         self.names = []
@@ -317,6 +329,7 @@ class DashboardTab(QWidget):
         self.map.open_device.connect(self.open_device)
         self.map_summary = QLabel("")
         self.map_summary.setProperty("muted", True)
+        self.map_summary.setToolTip(glance.DOWN_TIP)
 
         def panel(title, widget, extra=None):
             f = Panel()
@@ -450,6 +463,10 @@ class DashboardTab(QWidget):
         row.addWidget(self.start_title)
         self.start_next.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         row.addWidget(self.start_next)
+        acts = QWidget()                                                # the step's buttons and Hide go to the next line together
+        al = QHBoxLayout(acts)
+        al.setContentsMargins(0, 0, 0, 0)
+        al.setSpacing(8)
         self.steps, self.step_buttons = {}, {}
         for key, text, buttons in (("devices", "Add the devices to watch", (("Add a device", "add"), ("Scan the network", "scan"))),
                                    ("run", "Run the checks once to see how they are doing", (("Run checks", "run"),)),
@@ -461,14 +478,15 @@ class DashboardTab(QWidget):
             for caption, action in buttons:
                 b = QPushButton(caption)
                 b.clicked.connect(lambda _=False, a=action: self.run_requested.emit() if a == "run" else self.action.emit(a))
-                row.addWidget(b)
+                al.addWidget(b)
                 self.step_buttons[key].append(b)
             self.steps[key] = (mark, label)
         hide = QPushButton("Hide")
         hide.setProperty("ghost", True)
         hide.setToolTip("Do not show this again")
         hide.clicked.connect(self._hide_start)
-        row.addWidget(hide)
+        al.addWidget(hide)
+        row.addWidget(acts)
         return f
 
     def _hide_start(self):
@@ -558,8 +576,9 @@ class DashboardTab(QWidget):
         """'rdp', 'ssh' or '' for a device: what Connect opens."""
         return ("rdp" if dev["vendor"] == "windows" else "ssh" if vendors.ssh_reachable(dev["vendor"]) else "") if dev else ""
 
-    def _row_buttons(self, name):
-        """Open, Run checks and SSH or Remote Desktop for one row, as small buttons in its Actions cell."""
+    def _row_buttons(self, name, health=None):
+        """Open, Run checks and SSH or Remote Desktop for one row, as small buttons in its Actions cell. A device Toner could not reach
+        has Open and Ping instead (Run checks and SSH are still in its ··· menu)."""
         cell = QWidget()
         cell.setObjectName("rowActions")
         cell.setAutoFillBackground(True)                              # opaque: the table under it is see-through, and a see-through cell
@@ -568,9 +587,12 @@ class DashboardTab(QWidget):
         lay.setContentsMargins(2, 2, 2, 2)
         lay.setSpacing(3)
         cell.buttons = {}
-        kind = self._connect_kind(self._device(name))
-        for key, caption, what in (("open", "Open", "open"), ("run", "Run checks", "run"),
-                                   ("connect", {"rdp": "Remote Desktop", "ssh": "SSH"}.get(kind, ""), kind), ("more", "\u00b7\u00b7\u00b7", "more")):
+        dev = self._device(name)
+        kind = self._connect_kind(dev)
+        down = glance.is_down(health) and bool(dev and dev.get("host"))
+        connect = ("Ping", "ping") if down else ({"rdp": "Remote Desktop", "ssh": "SSH"}.get(kind, ""), kind)
+        for key, caption, what in (("open", "Open", "open"), ("run", "" if down else "Run checks", "run"),
+                                   ("connect", *connect), ("more", "\u00b7\u00b7\u00b7", "more")):
             if not caption:
                 cell.buttons[key] = None
                 continue
@@ -583,8 +605,11 @@ class DashboardTab(QWidget):
             b.setStyleSheet("padding: 0 7px; min-height: 0;" + (" font-weight: 700; padding: 0 2px;" if key == "more" else ""))
             b.setFixedWidth(24 if key == "more" else b.fontMetrics().horizontalAdvance(caption) + 18)   # as wide as its word (a button's own hint is wider)
             if key == "more":
-                b.setToolTip("More: acknowledge or snooze")
+                b.setToolTip("More: open, run checks, connect, ping, acknowledge or snooze")
                 b.clicked.connect(lambda _=False, n=name, btn=b: self._row_menu(n, btn))
+            elif what == "ping":
+                from ui.pingpop import ping_popup
+                b.clicked.connect(lambda _=False, d=dev: ping_popup(self, d["name"], d["host"]))
             else:
                 b.clicked.connect(lambda _=False, w=what, n=name: self.device_action.emit(w, n))
             lay.addWidget(b)
@@ -608,12 +633,27 @@ class DashboardTab(QWidget):
         self._fit_columns()
 
     def _fit_columns(self):
-        """A list too narrow for the row buttons and a readable "What is wrong" hides the Actions column (the right-click menu and the
-        buttons under the list still do everything)."""
-        t = self.attention
-        fixed = sum(t.columnWidth(c) for c in (0, 1, 3))
-        narrow = t.viewport().width() < fixed + getattr(self, "_actions_w", 0) + ATTENTION_WORDS     # (a hidden column is 0 wide: use the remembered width)
-        t.setColumnHidden(4, narrow and t.rowCount() > 0)
+        """A list too narrow for every row button and a readable "What is wrong" gives up room in this order: the Checked time, then
+        Run checks and SSH or Remote Desktop, then Open. The "···" button stays, and its menu has all of them, so a row can
+        always be acted on where it is."""
+        t, cells = self.attention, getattr(self, "_cells", [])
+        if not t.rowCount() or not cells:
+            return
+        def width(keys):                                               # the widest row decides (one may have SSH, another nothing),
+            return max(sum(c.buttons[k].width() + 3 for k in keys if c.buttons.get(k) is not None) for c in cells) + 16   # plus margins
+        levels = ((True, ("open", "run", "connect", "more")), (False, ("open", "run", "connect", "more")),
+                  (False, ("open", "more")), (False, ("more",)))
+        room = t.viewport().width() - ATTENTION_WORDS - t.sizeHintForColumn(0) - t.sizeHintForColumn(1)
+        when = t.sizeHintForColumn(3)
+        for keep_when, keys in levels:
+            if (when if keep_when else 0) + width(keys) <= room:
+                break
+        t.setColumnHidden(3, not keep_when)
+        for c in cells:
+            for k, b in c.buttons.items():
+                if b is not None:
+                    b.setVisible(k in keys)
+        t.setColumnWidth(4, width(keys))
 
     def eventFilter(self, obj, event):
         if obj is self.attention.viewport() and event.type() == QEvent.Type.Resize:
@@ -724,6 +764,9 @@ class DashboardTab(QWidget):
         bad = count("FAIL") + count("ERROR")
         changes = [c for c in backup.recent_changes(24) if c["device"] in known]
         self.cards["devices"].set(len(devs), f"{len(enabled)} enabled", active=False)
+        of = f"of {len(devs)} device{'' if len(devs) == 1 else 's'}"                 # the three status cards count devices, and say so
+        for k in ("ok", "warn", "fail"):
+            self.cards[k].caption = of
         self.cards["ok"].set(count("OK"), "all checks OK")
         warned = sum(1 for v in health.values() if any(sv == "WARN" for _c, sv, _m in v["problems"]))    # a device that also fails still has its warning
         self.cards["warn"].set(warned, "with a warning")
@@ -752,17 +795,23 @@ class DashboardTab(QWidget):
             old.hide()
             old.setParent(None)
             old.deleteLater()
-        cells = self._cells = [self._row_buttons(name) for name, _v in problems]
+        cells = self._cells = [self._row_buttons(name, v) for name, v in problems]
         if cells:                                                      # the buttons decide the column's width, set before they are placed
             self._actions_w = max(c.sizeHint().width() for c in cells) + 12                      # plus the row's own padding
             self.attention.setColumnWidth(4, self._actions_w)
+            self.attention.setColumnHidden(4, False)
         with filling(self.attention):
             self.attention.setRowCount(len(problems))
             muted = QColor((theme.current() or {}).get("muted", "#888888"))
             for i, (name, v) in enumerate(problems):
-                what = "; ".join(display.said(display.check_name(c), m) for c, _, m in v["problems"][:2])
-                if len(v["problems"]) > 2:
-                    what += f"  (+{len(v['problems']) - 2} more)"
+                since = db.down_since(name) if glance.is_down(v) else None
+                if since:                                              # Toner could not reach it: for how long, and why
+                    why = next((m for c, s, m in v["problems"] if c == "connection" and s == "ERROR"), "")
+                    what = f"Down for {display.span(since)}" + (f": {why}" if why else "")
+                else:
+                    what = "; ".join(display.said(display.check_name(c), m) for c, _, m in v["problems"][:2])
+                    if len(v["problems"]) > 2:
+                        what += f"  (+{len(v['problems']) - 2} more)"
                 if name in held:
                     what = "(maintenance) " + what
                 if name in aside:
@@ -771,7 +820,7 @@ class DashboardTab(QWidget):
                             else f"(snoozed until {entry['until'][11:16]}) ") + what
                 for j, text in enumerate([v["status"], db.label_org(name), what, self._ago(v["at"])]):
                     item = QTableWidgetItem(text)
-                    item.setToolTip(v["at"] if j == 3 else text)
+                    item.setToolTip(v["at"] if j == 3 else f"Toner could not connect to it since {since[:16]}." if j == 2 and since else text)
                     if j == 1:                                         # the device's name stands out; the time is quiet
                         f = item.font()
                         f.setBold(True)
@@ -784,7 +833,12 @@ class DashboardTab(QWidget):
                     self.attention.selectRow(i)
         self._fit_attention()
         self.attention_panel.count.setText(f"\u00b7 {len(problems)} device{'s' if len(problems) != 1 else ''}" if problems else "")
-        self.attention_count.emit(sum(1 for n, _v in problems if n not in aside))
+        open_ = [v for n, v in problems if n not in aside]
+        failing = sum(1 for v in open_ if v["status"] in ("FAIL", "ERROR"))
+        warned = len(open_) - failing
+        parts = [f"{failing} failing"] * bool(failing) + [f"{warned} with a warning"] * bool(warned)
+        words = (f"{len(open_)} device{'s need' if len(open_) != 1 else ' needs'} attention: " + ", ".join(parts)) if open_ else ""
+        self.attention_count.emit(len(open_), failing, words)
         self.attention.viewport().update()
         if self.names != was:
             self._fade_in(self.attention)
@@ -801,7 +855,8 @@ class DashboardTab(QWidget):
                            if health else "Press Run checks to see how the network is doing")
 
         av = db.availability(int(self.period.currentData()))
-        rows = [(db.label_org(n), v["healthy"] / v["runs"] * 100, "") for n, v in av.items() if v["runs"] and n in known]
+        rows = [(db.label_org(n), v["reachable"] / v["runs"] * 100, f"Reached in {v['reachable']} of {v['runs']} runs")
+                for n, v in av.items() if v["runs"] and n in known]
         rows.sort(key=lambda r: (r[1], r[0].lower()))
         self.bars.set_rows(rows[:10])
 

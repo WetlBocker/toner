@@ -116,7 +116,7 @@ d.cards["warn"].clicked.emit(); app.processEvents()
 check("Warnings: only the warnings", [r.table.topLevelItem(i).text(0) for i in range(r.table.topLevelItemCount())] == ["acme-fw"])
 d.cards["ok"].clicked.emit(); app.processEvents()
 check("Healthy: the devices with nothing wrong, every check listed", sorted(r.table.topLevelItem(i).text(0) for i in range(r.table.topLevelItemCount())) == ["acme-dc", "globex-sw"])
-check("each card says what it shows", d.cards["fail"].toolTip().startswith("Show FAIL and ERROR") and "Inventory" in d.cards["devices"].toolTip())
+check("each card says what it shows", d.cards["fail"].toolTip().startswith("Click to show FAIL and ERROR") and "Inventory" in d.cards["devices"].toolTip())
 r.show_filter("all")
 
 print("== empty states with a next step")

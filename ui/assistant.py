@@ -86,7 +86,7 @@ class SideButton(QToolButton):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setToolTip("Assistant")
         self.setCheckable(True)
-        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self._fade = QGraphicsOpacityEffect(self)
         self._fade.setOpacity(self.IDLE)
         self.setGraphicsEffect(self._fade)

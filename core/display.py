@@ -97,6 +97,20 @@ def value(v):
     return v[:1].upper() + v[1:] if re.fullmatch(r"[a-z][a-z ]*", v) else v
 
 
+def span(stamp, now=None):
+    """How long since a stored time: '45 min', '2 h 15 min', '3 days 4 h' (at least '1 min'). Unreadable: ''."""
+    from datetime import datetime
+    try:
+        mins = int(((now or datetime.now()) - datetime.strptime(str(stamp)[:19], "%Y-%m-%d %H:%M:%S")).total_seconds() // 60)
+    except (TypeError, ValueError):
+        return ""
+    days, rest = divmod(max(mins, 1), 1440)
+    hours, mins = divmod(rest, 60)
+    if days:
+        return f"{days} day{'s' if days != 1 else ''}" + (f" {hours} h" if hours else "")
+    return f"{hours} h {mins} min" if hours and mins else f"{hours} h" if hours else f"{mins} min"
+
+
 def ago(stamp, now=None):
     """'just now', '12 min ago', '3 h ago' or '4 days ago' for a stored time such as '2026-10-12 16:06:37'. Unreadable: as it is."""
     from datetime import datetime

@@ -80,8 +80,10 @@ import ui.dashboard as D
 dash = D.DashboardTab(); dash.resize(1200, 760); dash.show()
 c = {k: v.value.text() for k, v in dash.cards.items()}
 check("cards count devices and states", c["devices"] == str(len(db.list_devices())) and c["ok"] == "1" and c["warn"] == "2" and c["fail"] == "2", c)
-check("the caption says what a click does; the count's own words are in the tooltip", dash.cards["devices"].sub.text() == "Open the Inventory" and "enabled" in dash.cards["devices"].toolTip()
-      and dash.cards["fail"].sub.text() == "Show FAIL and ERROR" and "failing" in dash.cards["fail"].toolTip())
+check("Devices says what a click does; Failing says what it counts, and its click and own words are in the tooltip",
+      dash.cards["devices"].sub.text() == "Open the Inventory" and "enabled" in dash.cards["devices"].toolTip()
+      and dash.cards["fail"].sub.text() == f"of {dash.cards['devices'].value.text()} devices" and dash.cards["fail"].toolTip().startswith("Click to show FAIL and ERROR")
+      and "failing" in dash.cards["fail"].toolTip(), (dash.cards["fail"].sub.text(), dash.cards["fail"].toolTip()))
 check("the attention list shows only unhealthy devices, worst first (the status chip first, then the name)", [dash.attention.item(i, 1).text() for i in range(dash.attention.rowCount())] == ["dead", "edge-fw", "ap-ctrl", "core1"]
       and dash.attention.item(0, 0).text() in ("ERROR", "FAIL"), [dash.attention.item(i, 1).text() for i in range(dash.attention.rowCount())])
 check("it says what is wrong", "WAN Links: down: wan2" in dash.attention.item(1, 2).text() and "Temperature" in dash.attention.item(2, 2).text(), dash.attention.item(1, 2).text())

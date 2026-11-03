@@ -63,7 +63,7 @@ class NavDelegate(QStyledItemDelegate):
         n = self.nav.count_for_row(row)
         if not n:
             return
-        bg, fg = st.chip("FAIL")
+        bg, fg = st.chip(self.nav.tone_for_row(row))
         f = QFont(opt.font)
         f.setBold(True)
         f.setPointSizeF(max(7.0, f.pointSizeF() - 1.5))
@@ -150,6 +150,7 @@ class NavStack(QWidget):
         self._collapsed = False
         self._badges = set()
         self._counts = {}                          # section index -> a number shown after its name (0 shows nothing)
+        self._tones, self._words = {}, {}          # section index -> that number's colour ("FAIL" or "WARN"), and what it counts in words
         self._slide = None                         # the sidebar's width on its way between folded and open
         from ui.backdrop import Backdrop
         self.side = QWidget()                      # the sidebar
@@ -160,7 +161,7 @@ class NavStack(QWidget):
         self.fold = QPushButton(self)              # folds the sidebar to icons, and back: in the top row, or astride the edge when folded
         self.fold.setObjectName("navFold")
         self.fold.setProperty("ghost", True)
-        self.fold.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.fold.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self.fold.setFixedSize(FOLD, FOLD)
         self.fold.clicked.connect(lambda: self.setCollapsed(not self._collapsed))
         self.org_label = QLabel("Organization")
@@ -175,7 +176,7 @@ class NavStack(QWidget):
         self.quick.setObjectName("navSearch")
         self.quick.setAccessibleName("Search Toner (Ctrl+K)")
         self.quick.setToolTip("Search   (Ctrl+K)\nJump to a section, tool, device or action")
-        self.quick.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.quick.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self.quick.setMinimumHeight(36)
         self.quick.clicked.connect(self.search_requested)
         self.list = QListWidget()                  # the sections, one under another, with their group names
@@ -185,7 +186,7 @@ class NavStack(QWidget):
         self.list.setMovement(QListView.Movement.Static)
         self.list.setIconSize(QSize(NAV_ICON, NAV_ICON))
         self.list.setTextElideMode(Qt.TextElideMode.ElideRight)
-        self.list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.list.setFocusPolicy(Qt.FocusPolicy.TabFocus)       # Tab reaches it, the arrow keys move between sections
         self.list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.list.setFrameShape(QListWidget.Shape.NoFrame)
@@ -332,7 +333,7 @@ class NavStack(QWidget):
         item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | (Qt.AlignmentFlag.AlignHCenter if icons_only else Qt.AlignmentFlag.AlignLeft))
         item.setSizeHint(QSize(0, NAV_ITEM_FOLDED if icons_only else NAV_ITEM))
         tip = self._names[i] + ("   (new)" if dot and icons_only else "")
-        item.setToolTip(tip + (f"   (Ctrl+{i + 1})" if i < 9 else ""))
+        item.setToolTip(tip + (f"   (Ctrl+{i + 1})" if i < 9 else "") + (f"\n{self._words[i]}" if self._words.get(i) else ""))
 
     def _place_spacer(self):
         """The blank row before the bottom group takes whatever height is left, so Settings and About sit at the bottom."""
@@ -455,9 +456,10 @@ class NavStack(QWidget):
         i = self.stack.indexOf(widget)
         return self.list.item(self._rows[i]) if i >= 0 else None
 
-    def setBadge(self, widget, on):
+    def setBadge(self, widget, on, tone="FAIL", words=""):
         """Mark a section that has something new: True puts a dot after its name (on its icon when only icons show); a number is
-        drawn as a count after the name, and 0 or False clears it."""
+        drawn as a count after the name, in the colour of `tone` ("FAIL", or "WARN" when only warnings are left), with `words` in
+        its tooltip; 0 or False clears it."""
         i = self.stack.indexOf(widget)
         if i < 0:
             return
@@ -465,6 +467,7 @@ class NavStack(QWidget):
             (self._badges.add if on else self._badges.discard)(i)
         else:
             self._counts[i] = int(on)
+            self._tones[i], self._words[i] = tone, (words if on else "")
         self._label(i)
         self.restyle()
         self.list.viewport().update()
@@ -472,6 +475,10 @@ class NavStack(QWidget):
     def count_for_row(self, row):
         """The number drawn on this list row, if it is a section with one."""
         return self._counts.get(self._rows.index(row), 0) if row in self._rows else 0
+
+    def tone_for_row(self, row):
+        """The status colour of that row's count: "FAIL", or "WARN" when only warnings are left."""
+        return self._tones.get(self._rows.index(row), "FAIL") if row in self._rows else "FAIL"
 
     def restyle(self):
         """Re-tint the icons and re-measure the names after the theme, accent or text size changed."""
@@ -529,7 +536,7 @@ def fold_button():
     b = QPushButton()
     b.setProperty("ghost", True)
     b.setFixedWidth(FOLD_WIDTH)
-    b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+    b.setFocusPolicy(Qt.FocusPolicy.TabFocus)
     return b
 
 
@@ -562,7 +569,7 @@ class PageStack(QWidget):
         self.list.setObjectName("settingsNav")
         self.list.setAccessibleName("Pages")
         self.list.setFixedWidth(width)
-        self.list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.list.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self.fold = fold_button()
         self.side = QWidget()
         side = QVBoxLayout(self.side)

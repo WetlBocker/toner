@@ -1794,6 +1794,19 @@ def _changes_here():
     return {"worse": worse, "better": better}
 
 
+def down_since(key):
+    """When a device (a key from the current view) stopped answering: the start of the first run in its current unbroken stretch
+    of connection errors, or None while it answers. Read from the stored results, so it holds whether or not alerts are on."""
+    name, org = split_key(key)
+    with within(org), connect() as c:
+        answered = c.execute("SELECT MAX(runs.started_at) FROM results JOIN runs ON runs.id = results.run_id WHERE results.device = ? "
+                             "AND results.check_name != 'config backup' AND NOT (results.check_name = 'connection' AND results.status = 'ERROR')",
+                             (name,)).fetchone()[0]
+        return c.execute("SELECT MIN(runs.started_at) FROM results JOIN runs ON runs.id = results.run_id WHERE results.device = ? "
+                         "AND results.check_name = 'connection' AND results.status = 'ERROR' AND runs.started_at > ?",
+                         (name, answered or "")).fetchone()[0]
+
+
 def availability(days=7, start=None, end=None):
     return _per_device(lambda: _availability_here(days, start, end))
 

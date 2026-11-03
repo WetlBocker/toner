@@ -32,6 +32,7 @@ class ScanWorker(QThread):
 class ScanningTab(ResultsTab):
     TITLE, RUN, RUN_TIP, COLUMNS_KEY = "Scanning", "Scan", "Looks up known vulnerabilities for the devices shown", "scanning_columns"
     HINT = ("No scans yet", "Choose devices and press Scan")
+    CHIP_NOUN = ""
     LATEST, FRESH = "Latest scan of", "Scan again for fresh ones."
 
     def __init__(self):

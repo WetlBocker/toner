@@ -141,7 +141,7 @@ class UnlockDialog(QDialog):
 
     def forgot(self):
         if QMessageBox.question(self, "Unlock Toner", "Start a new, empty vault? Every saved password is lost. Devices, sessions and "
-                                "settings stay.") != QMessageBox.StandardButton.Yes:
+                                "settings stay.", defaultButton=QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
             return
         dlg = MasterDialog("reset", self)
         if dlg.exec():

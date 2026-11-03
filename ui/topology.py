@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QFileDialog, QFrame, QGr
 
 from core import db, topology
 from ui import icons, theme
+from ui import status as st
 from ui.finder import FilterButton, SearchBox, device_sections, shown_devices
 from ui.toast import toast
 
@@ -166,10 +167,7 @@ class NodeItem(QGraphicsObject):
         else:
             p.drawPath(_glyph(self.role))
         if self.status:                                             # the latest health result, as a dot on the corner
-            dot = {"OK": "#2fb37a", "WARN": "#e2a33b", "FAIL": "#e2573f", "ERROR": "#a66cd9"}.get(self.status, "#888888")
-            p.setPen(QPen(QColor(t.get("bg", "#0f171b")), 2))
-            p.setBrush(QBrush(QColor(dot)))
-            p.drawEllipse(QRectF(TILE / 2 - 8, -TILE / 2 - 2, 10, 10))
+            st.mark(p, QPointF(TILE / 2 - 3, -TILE / 2 + 3), self.status, 11, halo=t.get("bg", "#0f171b"))
         if self.isSelected():
             p.setPen(QPen(QColor(t.get("accent", "#55b6d4")), 2))
             p.setBrush(Qt.BrushStyle.NoBrush)

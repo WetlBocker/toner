@@ -112,7 +112,7 @@ class PlaybooksPage(QWidget):
         hdr.setSectionResizeMode(0, hdr.ResizeMode.Stretch)
         for c in range(1, 6):
             hdr.setSectionResizeMode(c, hdr.ResizeMode.ResizeToContents)
-        self.recap_hint = EmptyHint(self.recap, "No recap yet", "Ansible's summary per device appears when a run finishes")
+        self.recap_hint = EmptyHint(self.recap, "No recap yet", "Ansible's summary per device appears when a run finishes", wrap=True)
         self.copy_btn, self.save_btn = QPushButton("Copy"), QPushButton("Save output...")
         left = QVBoxLayout()
         left.addWidget(QLabel("Playbook"))

@@ -260,12 +260,15 @@ class StatusStrip(QWidget):
     # ---------------------------------------------------------------- everything else
     @staticmethod
     def _counts(run):
-        bits = []
+        total = sum(int(run.get(k) or 0) for k in ("ok", "warn", "fail", "error"))
+        bits = [f"{total} check{'' if total == 1 else 's'}"]
         for key, word in (("fail", "FAIL"), ("error", "ERROR"), ("warn", "WARN")):
             n = int(run.get(key) or 0)
             if n:
                 bits.append(f"<span style='color:{st.ink(word)}; font-weight:600'>{n} {word}</span>")
-        return ", ".join(bits) if bits else f"<span style='color:{st.ink('OK')}; font-weight:600'>all OK</span>"
+        if len(bits) == 1:
+            bits.append(f"<span style='color:{st.ink('OK')}; font-weight:600'>all OK</span>")
+        return ", ".join(bits)
 
     def refresh(self):
         if self.running:

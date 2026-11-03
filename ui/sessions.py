@@ -811,7 +811,7 @@ class SessionsTab(QWidget):
         self.list_btn = QPushButton()
         self.list_btn.setProperty("ghost", True)
         self.list_btn.setFixedWidth(36)
-        self.list_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.list_btn.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self.split_btn = QPushButton("Split view")
         self.split_btn.setCheckable(True)
         self.split_btn.setToolTip("Show every open session at once, in an equal grid, instead of in tabs.")

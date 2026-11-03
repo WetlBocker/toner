@@ -141,7 +141,7 @@ class Main(QMainWindow):
         self.results.check_done.connect(self.inventory.pane.check_done)
         self.results.run_finished.connect(self.inventory.pane.run_finished)
         self.results.run_finished.connect(self.dashboard.refresh)
-        self.dashboard.attention_count.connect(lambda n: self.tabs.setBadge(self.results, n))   # the count on the Results row
+        self.dashboard.attention_count.connect(lambda n, failing, words: self.tabs.setBadge(self.results, n, "FAIL" if failing else "WARN", words))
         self.inventory.changed.connect(self.tools.refresh)
         self.inventory.changed.connect(self.configs.refresh)
         self.inventory.changed.connect(self.dashboard.refresh)
@@ -1029,6 +1029,9 @@ def main():
     from ui.widgets import MenuPlacer
     app._menu_placer = MenuPlacer(app)             # drop-down menus open upward when there is no room below
     app.installEventFilter(app._menu_placer)
+    from ui.widgets import KeyboardAccess
+    app._keys = KeyboardAccess(app)                 # Tab gets out of lists; icon buttons and boxes have names for screen readers
+    app.installEventFilter(app._keys)
     from ui import ipmenu
     ipmenu.install(app)                            # right-click on a selected IP address anywhere: Ping and WHOIS Lookup
     from core import passvault

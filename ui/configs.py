@@ -4,12 +4,12 @@ from datetime import datetime
 from PySide6.QtCore import QRegularExpression, Qt, QThread, Signal
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QSyntaxHighlighter, QTextCharFormat
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
-                               QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QSplitter,
-                               QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+                               QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QSizePolicy,
+                               QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 from core import audit, backup, db, display, scope
 from drivers.base import SEVERITY
 from ui import theme
-from ui.widgets import EmptyHint, filling, remember_sizes
+from ui.widgets import EmptyHint, FlowLayout, filling, remember_sizes
 from ui.panels import fit_rows
 from ui.finder import FilterButton, SearchBox, device_sections, listed_devices, shown_devices, wants_archived
 from ui.toast import toast
@@ -139,6 +139,7 @@ class ConfigsTab(QWidget):
         self.devs = QTableWidget(0, 6)
         self.devs.setHorizontalHeaderLabels(["Device", "Vendor", "Versions", "Last backup", "State", "Organization"])
         self.vers = QTableWidget(0, 4)
+        self.vers.setMinimumHeight(180)                # tall enough for its empty message, wrapped, and its button
         self.vers.setHorizontalHeaderLabels(["Taken", "Size", "Lines", "Change"])
         for t in (self.devs, self.vers):
             t.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -159,11 +160,12 @@ class ConfigsTab(QWidget):
         self.vers.itemSelectionChanged.connect(self.show_text)
         self.hint = EmptyHint(self.devs, "No devices to back up", "Add devices on the Inventory tab")
         self.vers_hint = EmptyHint(self.vers, "No saved versions", "Select a device on the left, then press Back up now",
-                                   actions=[("Back up now", lambda: self.start())])
+                                   actions=[("Back up now", lambda: self.start())], wrap=True)
 
         self.view = QComboBox()
         self.view.addItem("Changes from the previous version", "diff")
         self.view.addItem("Full configuration", "full")
+        self.view.setMinimumWidth(180)                 # it may shorten its text in a narrow window, so the pane fits beside the list
         self.view.currentIndexChanged.connect(self.show_text)
         self.text = QPlainTextEdit()
         self.text.setReadOnly(True)
@@ -187,10 +189,15 @@ class ConfigsTab(QWidget):
         top.addWidget(self.status, 1)
         top.addWidget(self.find, 1)                    # on the right, as on Inventory
         top.addWidget(self.funnel)
-        right_bar = QHBoxLayout()
-        right_bar.addWidget(QLabel("Show"))
-        right_bar.addWidget(self.view)
-        right_bar.addWidget(self.note, 1)
+        right_bar = FlowLayout(8, 6)                   # wraps in a narrow window, so the pane never grows over the device list
+        show = QWidget()                               # "Show" stays beside its list when the bar wraps
+        sl = QHBoxLayout(show)
+        sl.setContentsMargins(0, 0, 0, 0)
+        sl.addWidget(QLabel("Show"))
+        sl.addWidget(self.view)
+        right_bar.addWidget(show)
+        self.note.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        right_bar.addWidget(self.note)
         right_bar.addWidget(self.copy_btn)
         right_bar.addWidget(self.save_btn)
         right_bar.addWidget(self.prune_btn)
@@ -218,7 +225,7 @@ class ConfigsTab(QWidget):
         split.addWidget(right)
         self.devs.setMinimumWidth(440)                 # the device name keeps room to be read; the other columns fit their contents
         split.setCollapsible(0, False)
-        split.setSizes([560, 620])
+        split.setSizes([470, 680])                     # the versions side keeps its bar on one line in an ordinary window
         remember_sizes(split, "configs")
         lay = QVBoxLayout(self)
         lay.addLayout(top)

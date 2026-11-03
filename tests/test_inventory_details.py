@@ -87,7 +87,7 @@ V.close()
 print("== Results chips")
 w.go("Results"); app.processEvents()
 r = w.results
-check("the chips: All, OK, WARN, FAIL or ERROR, ERROR, with tooltips that explain", [r.chips.labels[k].text() for k in r.chips.KEYS] == ["All 4", "2 OK", "1 WARN", "1 FAIL or ERROR", "0 ERROR"]
+check("the chips: All, OK, WARN, FAIL, ERROR, with tooltips that explain", [r.chips.labels[k].text() for k in r.chips.KEYS] == ["All 4 checks", "2 OK", "1 WARN", "1 FAIL", "0 ERROR"]
       and r.chips.labels["FAIL"].toolTip() == "FAIL: the check ran and the device failed it" and r.chips.labels["ALL"].toolTip() == "Show every result",
       [r.chips.labels[k].text() for k in r.chips.KEYS])
 check("the Result column carries the status and the value; Value is hidden unless chosen", r.COLS[2] == "Result" and r.table.isColumnHidden(r.VALUE) and r.table.topLevelItem(0).text(2) in ("FAIL", "WARN"))
