@@ -128,9 +128,26 @@ w.tabs.org.setCurrentIndex(0); app.processEvents()
 check("back on Global", db.home() == 0 and d.org_panel.isVisibleTo(d))
 r = next(i for i in range(b.table.rowCount()) if b.table.item(i, 0).text().startswith("Calm"))
 w.activateWindow(); QTest.qWaitForWindowActive(w, 3000)
-b.table.setFocus(); b.table.setCurrentCell(r, 0); QTest.keyClick(b.table, Qt.Key.Key_Return); app.processEvents()
+b.table.setFocus(); b.table.setCurrentCell(r, 0); app.processEvents()      # (focus settles before the key)
+QTest.keyClick(b.table, Qt.Key.Key_Return); app.processEvents()
 check("Enter on a row in Organizations switches too", db.home() == calm, db.home())
 w.tabs.org.setCurrentIndex(0); app.processEvents()
+
+print("== a heading's row becomes a device's row")
+from PySide6.QtCore import QCoreApplication, QEvent
+d.refresh(); app.processEvents()
+before = d.heads.copy()
+with db.within(bolt):
+    db.save_run([Result("bolt-core", "connection", "ERROR", "", "timeout"), Result("bolt-ap", "cpu", "FAIL", "99%")])
+d.refresh()
+for _ in range(3):                                   # the old headings are really deleted now
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    app.processEvents()
+moved = [r for r in before if r not in d.heads]
+check("a row that held a heading now holds a device", moved and all(d.names[r] for r in moved), (before, d.heads))
+check("...and the list has let go of the old heading (no widget left in its first column)", all(t.cellWidget(r, 0) is None for r in moved))
+t.resize(t.width() - 40, t.height()); t.viewport().repaint(); t.grab(); app.processEvents()
+check("the list still lays out and draws", t.rowCount() == len(d.names))
 
 print("== all well")
 for oid, names in ((acme, ("acme-fw", "acme-sw")), (bolt, ("bolt-core", "bolt-ap"))):

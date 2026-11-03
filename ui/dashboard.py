@@ -920,8 +920,9 @@ class DashboardTab(QWidget):
         self.names = [x if kind == "dev" else None for kind, x, _v in entries]
         self.rows = [(x, v, aside.get(x, (None,))[0]) if kind == "dev" else None for kind, x, v in entries]
         self.heads = {i: x for i, (kind, x, _v) in enumerate(entries) if kind == "head"}
-        for old in getattr(self, "_placed", []):                       # the old rows' widgets go first (Qt keeps them alive otherwise)
-            old.hide()
+        self.attention.setRowCount(0)                                  # the list lets go of every row's widgets first: a heading's row can
+        for old in getattr(self, "_placed", []):                       # become a device's, and it must not keep a deleted heading; then
+            old.hide()                                                 # the old widgets go (Qt keeps them alive otherwise)
             old.setParent(None)
             old.deleteLater()
         cells = {i: self._row_buttons(x, v) for i, (kind, x, v) in enumerate(entries) if kind == "dev"}
