@@ -1,8 +1,8 @@
 """Overview: how the network is doing right now, from the stored results (so it is useful the moment Toner opens)."""
 from datetime import datetime
 
-from PySide6.QtCore import QEvent, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QKeySequence, QPainter, QPalette, QPen, QShortcut
+from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QFont, QKeySequence, QPainter, QPalette, QPen, QPixmap, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QBoxLayout, QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu,
                                QPushButton, QScrollArea, QTableWidget, QTableWidgetItem, QToolButton, QToolTip, QVBoxLayout, QWidget)
 import html
@@ -14,6 +14,7 @@ from ui import status as st
 from ui import motion
 from ui import glance
 from ui.glance import GlanceMap
+from ui import orgboard
 from ui import chartspec
 from ui.webchart import ChartView
 from ui.panels import Panel, ProgressLine
@@ -202,6 +203,50 @@ class BarList(QWidget):
         return super().event(e)
 
 
+class _Heading(QWidget):
+    """An organization's heading in Needs attention on Global: a fold mark, its colour, its name, its worst status and its counts.
+    A click folds or unfolds its devices."""
+    clicked = Signal()
+
+    def __init__(self, name, colour, status, counts):
+        super().__init__()
+        self.setAutoFillBackground(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAccessibleName(f"{name}, {counts}" if counts else name)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(10, 0, 8, 0)
+        lay.setSpacing(8)
+        self.chevron = QLabel()
+        self.dot = QLabel()
+        self.dot.setPixmap(orgboard.dot(colour).pixmap(10, 10))
+        self.name = QLabel(name)
+        f = self.name.font()
+        f.setBold(True)
+        self.name.setFont(f)
+        self.mark = QLabel()
+        self.mark.setFixedSize(16, 16)
+        pm = QPixmap(16, 16)
+        pm.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        st.mark(p, QPointF(8, 8), status, 12, soft=True)
+        p.end()
+        self.mark.setPixmap(pm)
+        self.counts = QLabel(counts)
+        self.counts.setProperty("muted", True)
+        for w in (self.chevron, self.dot, self.name, self.mark, self.counts):
+            lay.addWidget(w)
+        lay.addStretch(1)
+        self.set_open(True)
+
+    def set_open(self, on):
+        t = theme.current() or {}
+        self.chevron.setPixmap(icons.icon("chev-down" if on else "chev-right", t.get("icon", t.get("muted", "#888888"))).pixmap(14, 14))
+
+    def mousePressEvent(self, e):
+        self.clicked.emit()
+
+
 class DashboardTab(QWidget):
     run_requested = Signal()
     backup_requested = Signal()
@@ -211,6 +256,7 @@ class DashboardTab(QWidget):
     device_action = Signal(str, str)             # ("open" | "run" | "ssh" | "rdp", device name) from Needs attention
     attention_count = Signal(int, int, str)      # devices needing attention, how many of them fail, and that in words (the badge on Results)
     action = Signal(str)                  # a step of the getting-started card: add, scan, notify
+    open_org = Signal(int)                # Global: an organization's Open (or its row in Organizations) was used: switch Toner to it
 
     PERIODS = [("Last 24 hours", 1), ("Last 7 days", 7), ("Last 30 days", 30)]
 
@@ -281,8 +327,10 @@ class DashboardTab(QWidget):
             QShortcut(QKeySequence(key), self.attention, activated=self._open, context=Qt.ShortcutContext.WidgetShortcut)
         self.attention.setMinimumWidth(330)                            # "What is wrong" is the point of this table: never squeeze it away
         self.hint = EmptyHint(self.attention, "Nothing needs attention", "Every device's latest checks are OK")
-        self.names = []
-        self.rows = []                                                   # (name, health, put-aside state or None) per row
+        self.names = []                                                  # the device on each row (None on an organization's heading)
+        self.rows = []                                                   # (name, health, put-aside state or None) per row (None on a heading)
+        self.heads = {}                                                  # row -> organization id, for the headings on Global
+        self.folded = set()                                              # organizations whose devices are folded under their heading
         self.attention.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.attention.customContextMenuRequested.connect(self._attention_menu)
         self.attention.itemSelectionChanged.connect(self._attention_buttons)
@@ -357,7 +405,12 @@ class DashboardTab(QWidget):
         left.card.layout().addLayout(self.attention_bar)
         right = QVBoxLayout()
         right.setSpacing(12)
-        right.addWidget(panel("Network at a glance", self.map, self.map_summary))
+        self.map_panel = panel("Network at a glance", self.map, self.map_summary)
+        right.addWidget(self.map_panel)
+        self.org_board = orgboard.OrgBoard(self)                       # Global with organizations: one row each, under Needs attention
+        self.org_board.open_org.connect(self.open_org)                 # (its columns need the wide column; the map is not shown there)
+        self.org_panel = panel("Organizations", self.org_board)
+        self.org_panel.hide()
         right.addWidget(panel("Health", self.health_chart))
         right.addWidget(panel("Availability", self.bars, self.period))
         right.addWidget(panel("Last runs", self.runs_chart))
@@ -365,7 +418,12 @@ class DashboardTab(QWidget):
         right.addWidget(panel("Recent activity", self.recent), 1)
         cols = self.cols = QHBoxLayout()
         cols.setSpacing(12)
-        cols.addWidget(left, 2, Qt.AlignmentFlag.AlignTop)             # the panel ends under its last row, not level with the right column
+        left_col = QVBoxLayout()                                       # each panel ends under its last row, not level with the right column
+        left_col.setSpacing(12)
+        left_col.addWidget(left)
+        left_col.addWidget(self.org_panel)
+        left_col.addStretch(1)
+        cols.addLayout(left_col, 2)
         cols.addLayout(right, 1)                                       # (two thirds to the problems: their words are the point of the page)
 
         self.start = self._build_start()
@@ -560,8 +618,73 @@ class DashboardTab(QWidget):
 
     def _open(self, *_):
         r = self.attention.currentRow()
-        if 0 <= r < len(self.names):
+        if r in self.heads:
+            self._fold(self.heads[r])
+        elif 0 <= r < len(self.names) and self.names[r]:
             self.open_device.emit(self.names[r])
+
+    def _fold(self, oid):
+        """Fold an organization's devices under its heading, or unfold them."""
+        (self.folded.discard if oid in self.folded else self.folded.add)(oid)
+        self._show_folds()
+        self._fit_attention()
+
+    def _show_folds(self):
+        group = None
+        for r in range(self.attention.rowCount()):
+            if r in self.heads:
+                group = self.heads[r]
+                w = self.attention.cellWidget(r, 0)
+                if w is not None:
+                    w.set_open(group not in self.folded)
+                self.attention.setRowHidden(r, False)
+            else:
+                self.attention.setRowHidden(r, group is not None and group in self.folded)
+
+    def _layout_rows(self, problems, aside):
+        """Global with organizations: [("head", org, (name, colour, down, failing, warned)), ("dev", name, health), ...], each
+        organization's devices under its heading, the organization worst off first (a device down, then failing, then warned)."""
+        from core import orgs
+        info = {o["id"]: (o["name"] + (f" ({o['code']})" if o.get("code") else ""), o["colour"]) for o in orgs.list_orgs()}
+        groups = {}
+        for n, v in problems:
+            groups.setdefault(db.split_key(n)[1] or 0, []).append((n, v))
+        out = []
+        def order(oid):
+            down, failing, warned = orgboard.tally([v for n, v in groups[oid] if n not in aside])
+            return (-(3 if down else 2 if failing else 1 if warned else 0), -down, -failing, -warned, info.get(oid, ("Global",))[0].lower())
+        for oid in sorted(groups, key=order):
+            name, colour = info.get(oid, ("Global", ""))
+            out.append(("head", oid, (name, colour) + orgboard.tally([v for n, v in groups[oid] if n not in aside])))
+            out.extend(("dev", n, v) for n, v in groups[oid])
+        return out
+
+    def _heading(self, oid, name, colour, down, failing, warned):
+        """An organization's heading row: its fold mark, colour, name, worst status and counts (columns 0-3), and Open (column 4)."""
+        status = orgboard.worst(down, failing, warned, True)[0]
+        head = _Heading(name, colour, status, orgboard.counts_text(down, failing, warned))
+        head.clicked.connect(lambda o=oid: self._fold(o))
+        cell = QWidget()
+        cell.setAutoFillBackground(True)
+        lay = QHBoxLayout(cell)
+        lay.setContentsMargins(2, 2, 2, 2)
+        cell.buttons = {}
+        if oid:                                                        # Global's own devices are where Toner already is
+            b = QPushButton("Open")
+            b.setProperty("outline", True)
+            b.setAutoDefault(False)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setFixedHeight(28)
+            b.setStyleSheet("padding: 0 7px; min-height: 0;")
+            b.setFixedWidth(b.fontMetrics().horizontalAdvance("Open") + 18)
+            b.setToolTip(f"Switch Toner to {name}")
+            b.clicked.connect(lambda _=False, o=oid: self.open_org.emit(o))
+            lay.addWidget(b)
+            cell.buttons["switch"] = b
+        lay.addStretch(1)
+        for w in (head, cell):
+            self._paint_cell(w, False, heading=True)
+        return head, cell
 
     # ---------- doing something about a problem
     def _current(self):
@@ -627,7 +750,7 @@ class DashboardTab(QWidget):
 
     def _fit_attention(self):
         """The list is as tall as its rows (or the hint when there are none): the panel ends under the last device."""
-        rows = self.attention.rowCount()
+        rows = sum(1 for r in range(self.attention.rowCount()) if not self.attention.isRowHidden(r))
         h = rows * ATTENTION_ROW + 2 * self.attention.frameWidth() if rows else ATTENTION_EMPTY
         self.attention.setFixedHeight(h + 2)
         self._fit_columns()
@@ -653,7 +776,8 @@ class DashboardTab(QWidget):
             for k, b in c.buttons.items():
                 if b is not None:
                     b.setVisible(k in keys)
-        t.setColumnWidth(4, width(keys))
+        heads = [t.cellWidget(r, 4) for r in self.heads]
+        t.setColumnWidth(4, max([width(keys)] + [w.buttons["switch"].width() + 16 for w in heads if w is not None and w.buttons]))
 
     def eventFilter(self, obj, event):
         if obj is self.attention.viewport() and event.type() == QEvent.Type.Resize:
@@ -661,10 +785,10 @@ class DashboardTab(QWidget):
         return super().eventFilter(obj, event)
 
     @staticmethod
-    def _paint_cell(cell, selected):
+    def _paint_cell(cell, selected, heading=False):
         t = theme.current() or {}
         pal = cell.palette()
-        pal.setColor(QPalette.ColorRole.Window, QColor(t.get("select" if selected else "surface", "#ffffff")))
+        pal.setColor(QPalette.ColorRole.Window, QColor(t.get("surface2" if heading else "select" if selected else "surface", "#ffffff")))
         cell.setPalette(pal)
 
     def _paint_viewport(self):
@@ -679,7 +803,7 @@ class DashboardTab(QWidget):
         sel = self.attention.selectionModel()
         for i in range(self.attention.rowCount()):                     # the Actions cell follows its row's selection colour
             cell = self.attention.cellWidget(i, 4)
-            if cell is not None:
+            if cell is not None and i not in self.heads:
                 self._paint_cell(cell, sel.isRowSelected(i))
         for b in (self.act_ack, self.act_snooze):
             b.setEnabled(cur is not None)
@@ -789,21 +913,38 @@ class DashboardTab(QWidget):
                           key=lambda kv: (kv[0] in aside, -{"OK": 0, "WARN": 1, "FAIL": 2, "ERROR": 3}[kv[1]["status"]], kv[0].lower()))
         keep = self._current()[0] if self._current() else None
         was = self.names
-        self.names = [n for n, _ in problems]
-        self.rows = [(n, v, aside.get(n, (None,))[0]) for n, v in problems]
-        for old in getattr(self, "_cells", []):                        # the old rows' buttons go first (Qt keeps them alive otherwise)
+        grouped = db.several()                                         # Global with organizations: each one's devices under its heading
+        entries = self._layout_rows(problems, aside) if grouped else [("dev", n, v) for n, v in problems]
+        self.names = [x if kind == "dev" else None for kind, x, _v in entries]
+        self.rows = [(x, v, aside.get(x, (None,))[0]) if kind == "dev" else None for kind, x, v in entries]
+        self.heads = {i: x for i, (kind, x, _v) in enumerate(entries) if kind == "head"}
+        for old in getattr(self, "_placed", []):                       # the old rows' widgets go first (Qt keeps them alive otherwise)
             old.hide()
             old.setParent(None)
             old.deleteLater()
-        cells = self._cells = [self._row_buttons(name, v) for name, v in problems]
+        cells = {i: self._row_buttons(x, v) for i, (kind, x, v) in enumerate(entries) if kind == "dev"}
+        self._cells = list(cells.values())
+        self._placed = list(self._cells)                               # every widget the list is given, the headings' too
         if cells:                                                      # the buttons decide the column's width, set before they are placed
-            self._actions_w = max(c.sizeHint().width() for c in cells) + 12                      # plus the row's own padding
+            self._actions_w = max(c.sizeHint().width() for c in cells.values()) + 12             # plus the row's own padding
             self.attention.setColumnWidth(4, self._actions_w)
             self.attention.setColumnHidden(4, False)
         with filling(self.attention):
-            self.attention.setRowCount(len(problems))
+            self.attention.clearSpans()
+            self.attention.setRowCount(len(entries))
             muted = QColor((theme.current() or {}).get("muted", "#888888"))
-            for i, (name, v) in enumerate(problems):
+            for i, (kind, name, v) in enumerate(entries):
+                if kind == "head":                                     # an organization's heading: spans the first four columns
+                    head, cell = self._heading(name, *v)
+                    self._placed += [head, cell]
+                    for j in range(4):
+                        item = QTableWidgetItem("")
+                        item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                        self.attention.setItem(i, j, item)
+                    self.attention.setSpan(i, 0, 1, 4)
+                    self.attention.setCellWidget(i, 0, head)
+                    self.attention.setCellWidget(i, 4, cell)
+                    continue
                 since = db.down_since(name) if glance.is_down(v) else None
                 if since:                                              # Toner could not reach it: for how long, and why
                     why = next((m for c, s, m in v["problems"] if c == "connection" and s == "ERROR"), "")
@@ -818,7 +959,8 @@ class DashboardTab(QWidget):
                     state, entry = aside[name]
                     what = (f"(acknowledged {display.ago(entry['at'])}) " if state == "acknowledged"
                             else f"(snoozed until {entry['until'][11:16]}) ") + what
-                for j, text in enumerate([v["status"], db.label_org(name), what, self._ago(v["at"])]):
+                label = db.split_key(name)[0] if grouped else db.label_org(name)      # under its organization's heading, the name alone
+                for j, text in enumerate([v["status"], label, what, self._ago(v["at"])]):
                     item = QTableWidgetItem(text)
                     item.setToolTip(v["at"] if j == 3 else f"Toner could not connect to it since {since[:16]}." if j == 2 and since else text)
                     if j == 1:                                         # the device's name stands out; the time is quiet
@@ -831,13 +973,17 @@ class DashboardTab(QWidget):
                 self.attention.setCellWidget(i, 4, cells[i])
                 if name == keep:
                     self.attention.selectRow(i)
+        self._show_folds()
         self._fit_attention()
         self.attention_panel.count.setText(f"\u00b7 {len(problems)} device{'s' if len(problems) != 1 else ''}" if problems else "")
-        open_ = [v for n, v in problems if n not in aside]
-        failing = sum(1 for v in open_ if v["status"] in ("FAIL", "ERROR"))
+        open_ = [(n, v) for n, v in problems if n not in aside]
+        failing = sum(1 for _n, v in open_ if v["status"] in ("FAIL", "ERROR"))
         warned = len(open_) - failing
         parts = [f"{failing} failing"] * bool(failing) + [f"{warned} with a warning"] * bool(warned)
         words = (f"{len(open_)} device{'s need' if len(open_) != 1 else ' needs'} attention: " + ", ".join(parts)) if open_ else ""
+        if grouped and open_:                                          # Global: and how many organizations that is
+            n_orgs = len({db.split_key(n)[1] or 0 for n, _v in open_})
+            words += f", across {n_orgs} organization{'s' if n_orgs != 1 else ''}"
         self.attention_count.emit(len(open_), failing, words)
         self.attention.viewport().update()
         if self.names != was:
@@ -849,6 +995,11 @@ class DashboardTab(QWidget):
         self._paint_viewport()
         self.map.refresh(db.device_health())
         self.map_summary.setText(f"\u00b7 {self.map.summary}" if self.map.summary else "")
+        self.map_panel.setVisible(not grouped)
+        self.org_panel.setVisible(grouped)
+        if grouped:
+            self.org_board.fill(devs, health, set(aside))
+            self.org_panel.count.setText(self.org_board.summary)
         self.hint.setVisible(not problems)
         self.hint.set_text("Nothing needs attention" if health else "No results yet",
                            (f"Every other device's latest checks are OK ({hidden} put aside)" if hidden else "Every device's latest checks are OK")

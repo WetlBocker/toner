@@ -141,6 +141,7 @@ class Main(QMainWindow):
         self.results.check_done.connect(self.inventory.pane.check_done)
         self.results.run_finished.connect(self.inventory.pane.run_finished)
         self.results.run_finished.connect(self.dashboard.refresh)
+        self.dashboard.open_org.connect(lambda oid: self.tabs.org.setCurrentIndex(max(0, self.tabs.org.findData(oid))))   # (the switcher's own path)
         self.dashboard.attention_count.connect(lambda n, failing, words: self.tabs.setBadge(self.results, n, "FAIL" if failing else "WARN", words))
         self.inventory.changed.connect(self.tools.refresh)
         self.inventory.changed.connect(self.configs.refresh)
