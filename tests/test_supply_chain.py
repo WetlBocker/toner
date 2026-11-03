@@ -41,6 +41,8 @@ check("the Linux job, which runs last, writes SHA256SUMS.txt for every file (the
       "sha256sum \"Toner-Setup-$v.exe\" \"Toner-$v-x86_64.AppImage\" toner-agent-* > SHA256SUMS.txt" in release_yml
       and "gh release upload \"${{ github.ref_name }}\" SHA256SUMS.txt" in release_yml)
 check("it fetches the installer the Windows job published, so the sums are of what people download", 'gh release download "${{ github.ref_name }}"' in release_yml)
+check("the agent binaries and the AppImage are fetched from the release too, not this job's own build (signed copies, reruns)",
+      '--pattern "Toner-$v-x86_64.AppImage" --pattern "toner-agent-*"' in release_yml and "cp ../../agent/dist" not in release_yml)
 check("the README says so, in the agreed words", "Each release includes `SHA256SUMS.txt` with the SHA-256 of every file." in read("README.md"))
 
 print(f"\n{ok} passed, {bad} failed")

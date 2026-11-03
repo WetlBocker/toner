@@ -163,11 +163,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Hash the files the release actually holds. This job's own agent/dist is not them: the Windows job signs its
+          # copies before publishing, and a rerun builds the agent again (Go builds are not byte for byte the same).
           v=$(python -c "from core.version import VERSION; print(VERSION)")
           mkdir -p build/sums && cd build/sums
-          cp "../installer/Toner-$v-x86_64.AppImage" .
-          gh release download "${{ github.ref_name }}" --repo "${{ github.repository }}" --pattern "Toner-Setup-$v.exe"
-          cp ../../agent/dist/toner-agent-* . 2>/dev/null || true
+          gh release download "${{ github.ref_name }}" --repo "${{ github.repository }}" --pattern "Toner-Setup-$v.exe" --pattern "Toner-$v-x86_64.AppImage" --pattern "toner-agent-*"
           sha256sum "Toner-Setup-$v.exe" "Toner-$v-x86_64.AppImage" toner-agent-* > SHA256SUMS.txt
           cat SHA256SUMS.txt
           gh release upload "${{ github.ref_name }}" SHA256SUMS.txt --clobber
