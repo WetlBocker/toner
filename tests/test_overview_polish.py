@@ -86,9 +86,9 @@ for wide in (1800, 1100, 900, 760, 640, 560, 420):
           and (words >= D.ATTENTION_WORDS or shown(narrow, 2) == ["more"]), (wide, seen[-1], words))
 by_width = [level for _w, level in sorted(seen, reverse=True)]
 check("a narrower list never shows more than a wider one", by_width == sorted(by_width), seen)
-narrow.resize(1100, 700); app.processEvents(); app.processEvents()
+narrow.resize(2600, 700); app.processEvents(); app.processEvents()      # wide enough for everything, then less and less room
 words, levels = D.ATTENTION_WORDS, []
-for need in range(0, 1200, 10):                              # less and less room beside "What is wrong", whatever the fonts
+for need in range(0, 2600, 10):                              # less and less room beside "What is wrong", whatever the fonts
     D.ATTENTION_WORDS = need
     narrow._fit_columns()
     levels.append(LEVELS.index((not tn.isColumnHidden(3), tuple(shown(narrow, 2)))))
