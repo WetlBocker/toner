@@ -766,8 +766,10 @@ class DashboardTab(QWidget):
             return max(sum(c.buttons[k].width() + 3 for k in keys if c.buttons.get(k) is not None) for c in cells) + 16   # plus margins
         levels = ((True, ("open", "run", "connect", "more")), (False, ("open", "run", "connect", "more")),
                   (False, ("open", "more")), (False, ("more",)))
-        room = t.viewport().width() - ATTENTION_WORDS - t.sizeHintForColumn(0) - t.sizeHintForColumn(1)
-        when = t.sizeHintForColumn(3)
+        hh = t.horizontalHeader()
+        fits = lambda c: max(t.sizeHintForColumn(c), hh.sectionSizeHint(c))   # as Qt sizes them: the hidden headings count too
+        room = t.viewport().width() - ATTENTION_WORDS - fits(0) - fits(1)
+        when = fits(3)
         for keep_when, keys in levels:
             if (when if keep_when else 0) + width(keys) <= room:
                 break

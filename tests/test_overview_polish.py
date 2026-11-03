@@ -85,7 +85,15 @@ for wide in (1800, 1100, 900, 760, 640, 560, 420):
     check(f"at {wide} wide the row keeps a button to act on, and room for what is wrong", not tn.isColumnHidden(4) and "more" in shown(narrow, 2)
           and (words >= D.ATTENTION_WORDS or shown(narrow, 2) == ["more"]), (wide, seen[-1], words))
 by_width = [level for _w, level in sorted(seen, reverse=True)]
-check("as the list narrows, the Checked time goes first, then Run checks and SSH, then Open", by_width == sorted(by_width) and len(set(by_width)) >= 3, seen)
+check("a narrower list never shows more than a wider one", by_width == sorted(by_width), seen)
+narrow.resize(1100, 700); app.processEvents(); app.processEvents()
+words, levels = D.ATTENTION_WORDS, []
+for need in range(0, 1200, 10):                              # less and less room beside "What is wrong", whatever the fonts
+    D.ATTENTION_WORDS = need
+    narrow._fit_columns()
+    levels.append(LEVELS.index((not tn.isColumnHidden(3), tuple(shown(narrow, 2)))))
+D.ATTENTION_WORDS = words; narrow._fit_columns()
+check("as room runs out, the Checked time goes first, then Run checks and SSH, then Open", [x for i, x in enumerate(levels) if i == 0 or x != levels[i - 1]] == [0, 1, 2, 3], levels)
 narrow.resize(1800, 700); app.processEvents(); app.processEvents()
 check("...and it all comes back", not tn.isColumnHidden(3) and shown(narrow, 2) == ["open", "run", "connect", "more"], shown(narrow, 2))
 narrow.close()
