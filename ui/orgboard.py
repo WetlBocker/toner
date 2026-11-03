@@ -3,7 +3,7 @@ read): one row per organization with its worst status and how many of its device
 attention first and the rest quiet below. A click or Enter on a row switches Toner to that organization; a box above finds one by
 name or code. Counts leave out devices put aside (acknowledged or snoozed), as Needs attention does."""
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QIcon, QKeySequence, QPixmap, QShortcut
+from PySide6.QtGui import QColor, QFontMetrics, QIcon, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
 
 from core import db, display, orgs
@@ -13,6 +13,7 @@ from ui.widgets import EmptyHint, StatusDelegate
 
 COLS = ["Organization", "Status", "Down", "Failing", "Warnings", "Devices", "Last run"]
 SHOWN = 12                                    # rows on show before the list scrolls
+NUMBERS = (2, 3, 4, 5)                        # Down, Failing, Warnings, Devices: as wide as their heading, so the names have the room
 RANK = Qt.ItemDataRole.UserRole + 1           # what a column sorts by (worst first in Status; numbers as numbers)
 OID = Qt.ItemDataRole.UserRole + 2            # the organization a row stands for (0: Global's own devices)
 
@@ -76,7 +77,7 @@ class OrgBoard(QWidget):
         hh = t.horizontalHeader()
         hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         for c in range(1, len(COLS)):
-            hh.setSectionResizeMode(c, QHeaderView.ResizeMode.ResizeToContents)
+            hh.setSectionResizeMode(c, QHeaderView.ResizeMode.Fixed if c in NUMBERS else QHeaderView.ResizeMode.ResizeToContents)
         t.setTextElideMode(Qt.TextElideMode.ElideRight)
         t.cellClicked.connect(lambda row, _col: self._open(row))
         for key in ("Return", "Enter"):
@@ -117,7 +118,7 @@ class OrgBoard(QWidget):
         t.setSortingEnabled(False)
         t.setRowCount(len(rows))
         for i, (oid, status, rank, down, failing, warned, n, at) in enumerate(rows):
-            quiet = rank <= 0
+            quiet = rank <= 1                                          # warnings only, OK or never checked: quiet
             cells = [(names[oid], None), (status, rank), (str(down), down), (str(failing), failing), (str(warned), warned), (str(n), n),
                      (display.ago(at) if at else "never", at or "")]
             for j, (text, key) in enumerate(cells):
@@ -139,11 +140,24 @@ class OrgBoard(QWidget):
         t.setSortingEnabled(True)
         need = sum(1 for r in rows if r[2] > 0)
         checked = all(r[2] >= 0 for r in rows)
+        self._fit_numbers()
         rh = t.verticalHeader().defaultSectionSize()
         t.setFixedHeight(t.horizontalHeader().sizeHint().height() + rh * max(1, min(len(rows), SHOWN)) + 2 * t.frameWidth() + 2)
         self.summary = ("" if not rows else f"· all {len(rows)} OK" if not need and checked
                         else f"· {need} of {len(rows)} need attention")
         self._filter()
+
+    def _fit_numbers(self):
+        """The number columns as wide as their bold heading and its padding (Qt leaves room for a sort arrow besides)."""
+        hh = self.table.horizontalHeader()
+        f = hh.font()
+        f.setBold(True)
+        fm = QFontMetrics(f)
+        pad = (theme.current() or {}).get("pad_header", "6px 8px").split()
+        side = int(pad[-1][:-2]) if pad and pad[-1].endswith("px") else 8
+        for c in NUMBERS:
+            text = max([COLS[c]] + [self.table.item(r, c).text() for r in range(self.table.rowCount()) if self.table.item(r, c)], key=fm.horizontalAdvance)
+            hh.resizeSection(c, fm.horizontalAdvance(text) + 2 * side + 6)
 
     def _filter(self):
         words = self.find.text().strip().lower()

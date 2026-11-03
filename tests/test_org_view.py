@@ -100,6 +100,13 @@ check("one row each, worst off first, then the quiet ones", [r[0] for r in rows]
 check("its columns", [b.table.horizontalHeaderItem(c).text() for c in range(7)] == ["Organization", "Status", "Down", "Failing", "Warnings", "Devices", "Last run"])
 check("status and counts per organization", rows[0][1:6] == ["ERROR", "1", "0", "0", "2"] and rows[1][1:6] == ["FAIL", "0", "1", "1", "2"]
       and rows[3][1:6] == ["OK", "0", "0", "0", "1"] and rows[0][6] == "just now", rows)
+from ui import orgboard
+fm = b.table.fontMetrics()
+check("the number columns are as narrow as their headings, so the names have the room", all(b.table.columnWidth(c) < 100 for c in orgboard.NUMBERS)
+      and b.table.columnWidth(0) >= fm.horizontalAdvance("Bolt Logistics (BOLT)"), [b.table.columnWidth(c) for c in range(7)])
+check("an organization with a failure stands out (bold); one with only warnings stays quiet, like the healthy ones",
+      b.table.item(0, 0).font().bold() and not b.table.item(2, 0).font().bold() and b.table.item(2, 0).text() == "Global"
+      and b.table.item(2, 0).foreground().color().name() == b.table.item(3, 0).foreground().color().name(), [b.table.item(i, 0).text() for i in range(4)])
 check("the title counts the ones that need attention", d.org_panel.count.text() == "\u00b7 3 of 4 need attention", d.org_panel.count.text())
 check("a row says where a click goes", b.table.item(0, 0).toolTip() == "Switch Toner to Bolt Logistics (BOLT)")
 b.find.setText("calm"); app.processEvents()
