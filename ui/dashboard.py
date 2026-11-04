@@ -692,7 +692,8 @@ class DashboardTab(QWidget):
         return self.rows[r] if 0 <= r < len(self.rows) and self.attention.selectionModel().isRowSelected(r) else None
 
     def _device(self, name):
-        return db.find_device(name)
+        """From the list the last refresh read (find_device reads every organization's file: once per row was seconds)."""
+        return getattr(self, "_devs", {}).get(name) or db.find_device(name)
 
     @staticmethod
     def _connect_kind(dev):
@@ -882,6 +883,7 @@ class DashboardTab(QWidget):
 
     def refresh(self, *_):
         devs = scope.keep(db.list_devices())
+        self._devs = {d["key"]: d for d in devs}
         enabled = [d for d in devs if d["enabled"]]
         health = db.device_health()
         known = {d["key"] for d in devs}

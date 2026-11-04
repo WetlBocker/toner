@@ -230,7 +230,7 @@ def org_rows():
 
 def _org_rows_kept():
     """The cached rows themselves, for reading only (org_rows hands out copies)."""
-    key, now = str(base_path()), time.monotonic()
+    key, now = os.environ.get("NETCHECK_DB", ""), time.monotonic()      # what decides base_path, without building a path each call
     if _orgs_cache["key"] != key or now - _orgs_cache["at"] > SETTINGS_TTL:
         try:
             c = sqlite3.connect(base_path(), timeout=15)

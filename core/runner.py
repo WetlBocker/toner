@@ -97,14 +97,26 @@ def snmp_extras(dev, thresholds, opts, have, on_check=None):
     return [r for r in rows if r.check != "reachability"]
 
 
+def _no_login(dev, opts):
+    """The device's own web, port, certificate, ping and throughput checks: they need no sign-in."""
+    return custom.run_network(dev, [c for c in custom.for_device(dev, opts.get("custom")) if c["kind"] in ("http", "tcp", "tls", "ping", "iperf")])
+
+
 def run_one(dev, thresholds, opts=None, on_check=None):
     """One device's results. on_check(device name, check) is called as each check's row is made (a progress line)."""
     opts = opts or db.runtime_options()
     opts = {**opts, "disabled": db.disabled_for(dev, opts.get("disabled", ()))}      # the device's own list of checks, if it has one
     pre = reachability(dev, opts) + stored_copy_note(dev)
     if not dev.get("vendor"):                # imported without one: nothing knows how to sign in, so only what needs no sign-in
-        return pre + [Result(dev["name"], "vendor", NA, "", NO_VENDOR)] + custom.run_network(
-            dev, [c for c in custom.for_device(dev, opts.get("custom")) if c["kind"] in ("http", "tcp", "tls", "ping", "iperf")])
+        return pre + [Result(dev["name"], "vendor", NA, "", NO_VENDOR)] + _no_login(dev, opts)
+    dead = next((r for r in pre if r.check == "reachability" and r.status == FAIL), None)
+    if dead and not dev.get("jump"):         # its port did not answer: a login would only wait out its timeout (and retry);
+        try:                                 # (a jump host is not probed)
+            resolve_host(dev["host"])
+            said = dead.message
+        except Exception as e:               # a name that does not resolve says so plainly
+            said = Driver.explain(e)
+        return pre + [Result(dev["name"], "connection", ERROR, "", said)] + _no_login(dev, opts)
     attempts = 1 + max(0, int(opts.get("retries", 0)))
     for attempt in range(1, attempts + 1):
         try:
@@ -139,8 +151,7 @@ def run_one(dev, thresholds, opts=None, on_check=None):
             else:
                 rows = pre + [Result(dev["name"], "connection", ERROR, "", f"{said}{tail}")]
             try:                                   # web, port, certificate and ping checks do not need the login
-                rows += custom.run_network(dev, [c for c in custom.for_device(dev, opts.get("custom"))
-                                                 if c["kind"] in ("http", "tcp", "tls", "ping", "iperf")])
+                rows += _no_login(dev, opts)
             except Exception:
                 quiet.ignored()
             return rows

@@ -153,6 +153,17 @@ class DnsFail:
     def __init__(self, *a): raise AssertionError("driver must not be built when DNS fails")
 R.DRIVERS["cisco"] = DnsFail
 res = run_one(dev("x", "cisco", host="no-such-host.invalid"), th, {"retries": 2, "retry_delay": 0}); check("DNS failure reported without retry", "DNS lookup failed" in row(res, "connection").message, res)
+class NoLogin:
+    built = 0
+    def __init__(self, *a): NoLogin.built += 1; raise TimeoutError("timed out")
+R.DRIVERS["cisco"] = NoLogin
+t0 = time.time()
+res = run_one(dev("dead", "cisco", host="192.0.2.1"), th, {"retries": 2, "retry_delay": 0, "ssh_timeout": 1})   # TEST-NET: nothing answers
+check("a device whose port did not answer is not logged in to (no timeout, no retries); the probe's words say why",
+      NoLogin.built == 0 and row(res, "reachability").status == "FAIL" and row(res, "connection").status == "ERROR"
+      and row(res, "connection").message == row(res, "reachability").message and time.time() - t0 < 5, res)
+res = run_one(dev("dead", "cisco", host="192.0.2.1", jump={"host": "10.9.9.9"}), th, {"retries": 0, "retry_delay": 0, "ssh_timeout": 1})
+check("...unless it is reached through a jump host, which the probe does not go through", NoLogin.built == 1, NoLogin.built)
 
 print("== run_all with per-device thresholds")
 seen_th = {}

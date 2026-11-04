@@ -1,4 +1,6 @@
-from PySide6.QtCore import QSize, Qt, QThread, QUrl, Signal
+import time
+
+from PySide6.QtCore import QSize, Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QFont, QKeySequence, QPalette, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QLabel, QMessageBox,
                                QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
@@ -553,13 +555,31 @@ class ResultsTab(QWidget):
             for r in batch:
                 r.device = db.qualified(r.device, r.org)
         self.results.extend(batch)
-        self.repopulate()
+        self._repopulate_soon()
         for name in {device_of(r.device) for r in batch} & set(self.last_ran):
             if name not in getattr(self, "_done_devices", set()):
                 self._done_devices = getattr(self, "_done_devices", set()) | {name}
                 self.device_done.emit(name)
         done = len({device_of(r.device) for r in self.results} & set(self.last_ran))
         self.progress.emit(min(done, len(self.last_ran) - 1), len(self.last_ran))     # the end is announced by done()
+
+    REDRAW = 0.3                     # while a run goes, the list is drawn again at most this often (seconds)
+
+    def _repopulate_soon(self):
+        """Draw the list again now, or once at the end of REDRAW when it was drawn just now: once per finished device made a
+        2,000-device run spend minutes redrawing (each redraw is the whole list)."""
+        wait = getattr(self, "_drawn_at", 0.0) + self.REDRAW - time.monotonic()
+        if wait <= 0:
+            self._redraw()
+        elif not getattr(self, "_redraw_due", False):
+            self._redraw_due = True
+            QTimer.singleShot(int(wait * 1000) + 1, self._redraw)
+
+    def _redraw(self):
+        self._redraw_due = False
+        self._drawn_at = time.monotonic()
+        if self._active:                 # (after the run, done() has drawn it)
+            self.repopulate()
 
     def done(self):
         self._active = False

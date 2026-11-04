@@ -82,7 +82,17 @@ class Hold:
 w.last_ran = ["a-dev", "b-dev"]; w.results = []; w._active = True; w.repopulate()
 check("while running, devices without results show Running...", [(t.text(0), t.text(2)) for t in tops()] == [("a-dev", "Running..."), ("b-dev", "Running...")])
 w.add([Result("b-dev", "cpu", "OK", "1%")])
+from PySide6.QtTest import QTest
+QTest.qWait(int(w.REDRAW * 1000) + 100)                  # the list is drawn again at most every REDRAW seconds during a run
 check("results appear as they arrive, in arrival order", [t.text(0) for t in tops()] == ["a-dev", "b-dev"] and tops()[1].text(2) == "OK" and tops()[0].text(2) == "Running...")
+drawn = []
+real_repopulate = w.repopulate
+w.repopulate = lambda: (drawn.append(1), real_repopulate())[1]
+for i in range(50):                                      # 50 devices finishing at once
+    w.add([Result("b-dev", f"c{i}", "OK", "1%")])
+QTest.qWait(int(w.REDRAW * 1000) + 100)
+w.repopulate = real_repopulate
+check("50 devices finishing together redraw the list once or twice, not 50 times", 1 <= len(drawn) <= 2 and tops()[1].childCount() >= 50, (len(drawn), tops()[1].childCount()))
 w._active = False; w.repopulate()
 check("a device that returned nothing says so after the run", tops()[-1].text(0) == "a-dev" and tops()[-1].text(2) == "No results", [(t.text(0), t.text(2)) for t in tops()])
 
