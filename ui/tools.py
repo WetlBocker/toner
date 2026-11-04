@@ -37,7 +37,7 @@ class DevicePicker(QComboBox):
         super().__init__()
         self.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.setMinimumContentsLength(20)
-        self.refresh()
+        self.refresh([])                         # filled by its tool's refresh (Tools fills every picker at once, from one read)
 
     @staticmethod
     def entries():

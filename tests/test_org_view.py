@@ -174,5 +174,16 @@ db.save_run([Result("core-sw1", "cpu", "OK", "5%")])
 d.refresh(); app.processEvents()
 check("nothing needs attention: no headings, every organization quiet, the title says so", not d.heads and d.org_panel.count.text() == "\u00b7 all 5 OK", d.org_panel.count.text())
 
+print("== other organizations' scheduled runs")
+refreshed = []
+real_refresh = d.refresh
+d.refresh = lambda *a: (refreshed.append(1), real_refresh())[1]
+for _ in range(10):                                      # ten organizations finish their scheduled checks together
+    w.on_background_run([], [])
+check("Global is not refreshed once per organization as each finishes", refreshed == [])
+QTest.qWait(w.GLOBAL_WAIT + 300)
+check("...but once, a moment after the first", refreshed == [1], refreshed)
+d.refresh = real_refresh
+
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

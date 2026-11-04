@@ -161,7 +161,7 @@ def pump(cond, n=300):
         if cond(): return True
     return False
 db.save_device(dev(name="behind", port=22, proxy_cfg=via(good)))
-diag = T.DiagnosticsTab()
+diag = T.DiagnosticsTab(); diag.picker.refresh()          # (a tool on its own is filled by refresh; Tools fills them all)
 check("Diagnostics: Through the proxy (TCP), unticked by default, Traceroute available", diag.via_proxy.text() == "Through the proxy (TCP)" and not diag.via_proxy.isChecked()
       and diag.buttons["Traceroute"].isEnabled())
 diag.picker.setCurrentIndex(next(i for i in range(diag.picker.count()) if (diag.picker.itemData(i) or {}).get("name") == "behind"))
@@ -175,7 +175,7 @@ check("and Traceroute stays off afterwards", not diag.buttons["Traceroute"].isEn
 diag.via_proxy.setChecked(False)
 check("unticked, Traceroute is back", diag.buttons["Traceroute"].isEnabled() and diag.buttons["Traceroute"].toolTip() == "")
 diag.shutdown()
-live = T2.LivePingTab()
+live = T2.LivePingTab(); live.picker.refresh()
 check("Live ping has the same checkbox, unticked", live.via_proxy.text() == "Through the proxy (TCP)" and not live.via_proxy.isChecked())
 live.picker.setCurrentIndex(next(i for i in range(live.picker.count()) if (live.picker.itemData(i) or {}).get("name") == "behind"))
 live.via_proxy.setChecked(True); before = len(good.log)

@@ -776,6 +776,14 @@ class Main(QMainWindow):
         """Another organization's scheduled checks or backups finished (stored already): alert, and refresh what Global shows."""
         if results:
             self.notifier.handle_run(results, ran, True)
+        if db.everything() and not getattr(self, "_global_due", False):
+            self._global_due = True                    # many organizations finishing together: one refresh, a moment after the first
+            QTimer.singleShot(self.GLOBAL_WAIT, self._refresh_global)
+
+    GLOBAL_WAIT = 3000                                 # ms
+
+    def _refresh_global(self):
+        self._global_due = False
         if db.everything():
             self.results.load_stored() if self.results.stored else None
             self.inventory.update_values()
