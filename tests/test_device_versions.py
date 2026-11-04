@@ -201,7 +201,7 @@ class Probe(Driver):
         self.found_software(self.VERSION, "packages.conf", "install")
         return [self.result("cpu", "OK", "5%")]
 real = runner.DRIVERS["cisco"]; runner.DRIVERS["cisco"] = Probe
-base_opts = {**db.runtime_options(), "retries": 0, "tls_sweep": False, "custom": [], "disabled": set()}
+base_opts = {**db.runtime_options(), "retries": 0, "tls_sweep": False, "custom": [], "disabled": {"cisco:reachability"}}   # (no port probe: 10.0.0.1 answers on some networks only, and a failed probe skips the login)
 res = runner.run_one(sw1, db.thresholds_for(sw1), base_opts)
 row = db.get_device(sw1["id"])
 check("a check run keeps what the driver read: version, image, mode (upper case) and when, on the device record", db.software_of(row)["version"] == "17.09.04a" and row["sw_image"] == "packages.conf" and row["sw_mode"] == "INSTALL"
