@@ -407,7 +407,8 @@ class ResultsTab(QWidget):
         bold.setBold(True)
         self._building = True
         self.table.setUpdatesEnabled(False)
-        self.table.clear()
+        self.table.invisibleRootItem().takeChildren()      # the old rows go to Python, which deletes them once: clear() deleted them behind its
+                                                           # back, and an item still referenced was deleted again later (a crash on Linux)
         for name in order:
             rows = sorted(groups[name], key=lambda r: (-SEVERITY.get(r.status, 0), r.status == "N/A", r.device, r.check))
             bad = [r for r in rows if is_problem(r.status)]
