@@ -571,12 +571,15 @@ class ResultsTab(QWidget):
         wait = getattr(self, "_drawn_at", 0.0) + self.REDRAW - time.monotonic()
         if wait <= 0:
             self._redraw()
-        elif not getattr(self, "_redraw_due", False):
-            self._redraw_due = True
-            QTimer.singleShot(int(wait * 1000) + 1, self._redraw)
+            return
+        if getattr(self, "_redraw_timer", None) is None:          # the list's own timer: it goes with the list (a pending
+            self._redraw_timer = QTimer(self)                      # QTimer.singleShot outliving it crashed on Linux)
+            self._redraw_timer.setSingleShot(True)
+            self._redraw_timer.timeout.connect(self._redraw)
+        if not self._redraw_timer.isActive():
+            self._redraw_timer.start(int(wait * 1000) + 1)
 
     def _redraw(self):
-        self._redraw_due = False
         self._drawn_at = time.monotonic()
         if self._active:                 # (after the run, done() has drawn it)
             self.repopulate()
