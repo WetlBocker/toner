@@ -338,7 +338,8 @@ calls[0] = 0
 dash.refresh(); app.processEvents()
 StatusDelegate.sizeHint = real
 rows = dash.attention.rowCount()
-check("the list has the failing devices", rows >= 60, rows)
+listed = sum(1 for n in dash.names if n) + sum(int(dash.attention.item(r, 0).text().split()[1]) for r in dash.mores)   # "Show 35 more"
+check("the list has the failing devices (the first ones, then a row for the rest)", listed >= 60, (rows, listed))
 check("refilling it measures its status column a few times per row, not every row per cell", calls[0] < rows * 6, (calls[0], rows))
 check("its columns still fit their contents", dash.attention.horizontalHeader().sectionResizeMode(0) == FIT
       and dash.attention.horizontalHeader().sectionResizeMode(2) == STRETCH)

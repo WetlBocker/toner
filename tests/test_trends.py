@@ -102,13 +102,13 @@ db.set_setting("trend_last", "")
 pdf = trends.generate_scheduled(now_real)
 check("with a window system it makes a PDF", pdf.endswith(".pdf") and open(pdf, "rb").read(5) == b"%PDF-" and os.path.getsize(pdf) > 1500, pdf)
 infos = []; QMessageBox.information = staticmethod(lambda *a, **k: infos.append(a[2]))
-from ui.reports_tab import ReportsTab
+from ui.history import HistoryTab
 import ui.settings as S
-tab = ReportsTab(lambda: [])
-check("the Reports tab has a Trend report button with the three periods", tab.trend_btn.text() == "Trend report" and [tab.trend_period.itemData(i) for i in range(3)] == [7, 30, 90])
+tab = HistoryTab()
+check("History has a Trend report button with the three periods", tab.trend_btn.text() == "Trend report" and [tab.trend_period.itemData(i) for i in range(3)] == [7, 30, 90])
 out = os.path.join(SP, "ui-trend.pdf"); QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (out, ""))
-import ui.reports_tab as RT
-RT.QDesktopServices.openUrl = staticmethod(lambda u: True)
+import ui.history as H
+H.QDesktopServices.openUrl = staticmethod(lambda u: True)
 tab.export_trend()
 check("it saves the chosen format (PDF here)", os.path.exists(out) and open(out, "rb").read(5) == b"%PDF-")
 out2 = os.path.join(SP, "ui-trend.csv"); QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (out2, "")); tab.export_trend()

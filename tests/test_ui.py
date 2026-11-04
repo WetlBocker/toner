@@ -40,7 +40,7 @@ print("== tab and save/revert")
 check("settings is a tab, no corner button", w.tabs.tabText(w.tabs.count() - 2) == "Settings" and w.tabs.tabText(w.tabs.count() - 1) == "About")
 check("11 categories listed", S.nav.count() >= 11 and "Notifications" in [S.nav.item(i).text() for i in range(S.nav.count())] and S.page_titles()[:3] == ["General", "Thresholds", "Checks"])
 g = P["General"]; g.workers.setValue(4); g.retention.setValue(30); g.scan_over.setValue(0); g.verify.setChecked(True)
-check("nothing is stored until Save", db.get_setting("workers") == 10)
+check("nothing is stored until Save", db.get_setting("workers") == db.DEFAULT_SETTINGS["workers"] == 25)
 S.save(); check("Save writes settings", db.get_setting("workers") == 4 and db.get_setting("retention_days") == 30 and db.get_setting("default_verify_ssl") is True)
 g.workers.setValue(9); S.reload(); check("Revert discards edits", g.workers.value() == 4)
 

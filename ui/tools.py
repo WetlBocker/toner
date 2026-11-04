@@ -39,16 +39,23 @@ class DevicePicker(QComboBox):
         self.setMinimumContentsLength(20)
         self.refresh()
 
-    def refresh(self):
+    @staticmethod
+    def entries():
+        """(label, device) for every device listed: read once by Tools and handed to each of its pickers."""
+        several = db.several()
+        out = []
+        for d in db.list_devices():
+            place = " / ".join(x for x in ((db.org_name(d["org"]) if several else ""), db.path_of(d)) if x)    # Global: whose it is
+            out.append((f"{d['name']}  —  {d['host']}" + (f"   [{place}]" if place else ""), d))
+        return out
+
+    def refresh(self, entries=None):
         cur = self.currentText()
         self.blockSignals(True)
         self.clear()
         self.addItem("(enter manually)", None)
-        several = db.several()
-        for d in db.list_devices():
-            place = " / ".join(x for x in ((db.org_name(d["org"]) if several else ""), db.path_of(d)) if x)    # Global: whose it is
-            where = f"   [{place}]" if place else ""
-            self.addItem(f"{d['name']}  —  {d['host']}{where}", d)
+        for label, d in (self.entries() if entries is None else entries):
+            self.addItem(label, d)
         i = self.findText(cur)
         self.setCurrentIndex(max(0, i))
         self.blockSignals(False)
@@ -961,8 +968,9 @@ class ToolsTab(QWidget):
         self._others = (self.runner, self.discovery, self.topology, self.apitest, self.firmware)
 
     def refresh(self):
+        entries = DevicePicker.entries()                  # once, not once per tool (each lists every device)
         for t in self._pickers:
-            t.picker.refresh()
+            t.picker.refresh(entries)
         for t in self._others:
             t.refresh()
 

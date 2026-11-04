@@ -23,6 +23,8 @@ from PySide6.QtWidgets import QSizePolicy
 
 ATTENTION_ROW = 36          # a row of Needs attention: room for its buttons
 ATTENTION_EMPTY = 120       # the list's height while it has nothing to show (the hint sits there)
+ATTENTION_PER_ORG = 25      # devices listed under an organization's heading before "Show 41 more" (the rest open on a click)
+ATTENTION_ALL = 50          # the same without headings (one organization, or none)
 ATTENTION_WORDS = 170       # the least "What is wrong" may have beside the row buttons; with less, the row gives up room (see _fit_columns)
 
 
@@ -323,6 +325,7 @@ class DashboardTab(QWidget):
         self.attention.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)  # (a narrow list hides its Actions instead)
         self.attention.viewport().installEventFilter(self)
         self.attention.doubleClicked.connect(self._open)
+        self.attention.cellClicked.connect(lambda r, _c: self._show_more(r) if r in self.mores else None)
         for key in ("Return", "Enter"):
             QShortcut(QKeySequence(key), self.attention, activated=self._open, context=Qt.ShortcutContext.WidgetShortcut)
         self.attention.setMinimumWidth(330)                            # "What is wrong" is the point of this table: never squeeze it away
@@ -331,6 +334,8 @@ class DashboardTab(QWidget):
         self.rows = []                                                   # (name, health, put-aside state or None) per row (None on a heading)
         self.heads = {}                                                  # row -> organization id, for the headings on Global
         self.folded = set()                                              # organizations whose devices are folded under their heading
+        self.mores = {}                                                  # row -> the group its "Show 41 more" opens (None: the whole list)
+        self.more_open = set()                                           # groups shown in full
         self.attention.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.attention.customContextMenuRequested.connect(self._attention_menu)
         self.attention.itemSelectionChanged.connect(self._attention_buttons)
@@ -618,10 +623,34 @@ class DashboardTab(QWidget):
 
     def _open(self, *_):
         r = self.attention.currentRow()
-        if r in self.heads:
+        if r in self.mores:
+            self._show_more(r)
+        elif r in self.heads:
             self._fold(self.heads[r])
         elif 0 <= r < len(self.names) and self.names[r]:
             self.open_device.emit(self.names[r])
+
+    def _show_more(self, row):
+        self.more_open.add(self.mores[row])
+        self.refresh()
+
+    def _cap(self, entries, grouped):
+        """At most ATTENTION_PER_ORG devices under each heading (ATTENTION_ALL without headings), worst first as listed, then a
+        ("more", group, how many) row for the rest, unless that group was opened in full."""
+        limit = ATTENTION_PER_ORG if grouped else ATTENTION_ALL
+        out, group, shown, rest = [], None, 0, 0
+        for e in entries + [("head", "end", None)]:
+            if e[0] == "head":
+                if rest:
+                    out.append(("more", group, rest))
+                group, shown, rest = e[1], 0, 0
+            elif shown < limit or group in self.more_open:
+                shown += 1
+            else:
+                rest += 1
+                continue
+            out.append(e)
+        return out[:-1]
 
     def _fold(self, oid):
         """Fold an organization's devices under its heading, or unfold them."""
@@ -918,10 +947,11 @@ class DashboardTab(QWidget):
         keep = self._current()[0] if self._current() else None
         was = self.names
         grouped = db.several()                                         # Global with organizations: each one's devices under its heading
-        entries = self._layout_rows(problems, aside) if grouped else [("dev", n, v) for n, v in problems]
+        entries = self._cap(self._layout_rows(problems, aside) if grouped else [("dev", n, v) for n, v in problems], grouped)
         self.names = [x if kind == "dev" else None for kind, x, _v in entries]
         self.rows = [(x, v, aside.get(x, (None,))[0]) if kind == "dev" else None for kind, x, v in entries]
         self.heads = {i: x for i, (kind, x, _v) in enumerate(entries) if kind == "head"}
+        self.mores = {i: x for i, (kind, x, _v) in enumerate(entries) if kind == "more"}
         self.attention.setRowCount(0)                                  # the list lets go of every row's widgets first: a heading's row can
         for old in getattr(self, "_placed", []):                       # become a device's, and it must not keep a deleted heading; then
             old.hide()                                                 # the old widgets go (Qt keeps them alive otherwise)
@@ -949,6 +979,15 @@ class DashboardTab(QWidget):
                     self.attention.setSpan(i, 0, 1, 4)
                     self.attention.setCellWidget(i, 0, head)
                     self.attention.setCellWidget(i, 4, cell)
+                    continue
+                if kind == "more":                                     # "Show 41 more": a click or Enter lists the rest of the group
+                    for j in range(5):
+                        item = QTableWidgetItem(f"Show {v} more" if j == 0 else "")
+                        item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                        item.setForeground(QColor((theme.current() or {}).get("accent", "#2563eb")))
+                        item.setToolTip(f"Show {v} more")
+                        self.attention.setItem(i, j, item)
+                    self.attention.setSpan(i, 0, 1, 5)
                     continue
                 since = db.down_since(name) if glance.is_down(v) else None
                 if since:                                              # Toner could not reach it: for how long, and why

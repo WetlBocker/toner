@@ -12,7 +12,8 @@ from ui.settings_base import Page, TrimSpin, compact_row, note
 INTRO = ("The Assistant answers questions about the organization you are looking at from Toner's own data: devices, check results, "
          "configuration backups (passwords masked), logs and what is on screen. It only reads, and runs show commands on devices only "
          "when you allow that below. It can search the internet for public information unless you switch that off below. One provider "
-         "and key serve the whole installation; conversations and their cost are kept per organization.")
+         "and key serve the whole installation; conversations and their cost are kept per organization. What it reads is sent to the "
+         "provider you choose below, to answer you.")
 RUN_NOTE = ("Off by default. When on, the Assistant may send commands that only look (show, display, get, dir, ping, traceroute; "
             "Get-… in PowerShell) to the devices the Command Runner can command, with the Command Runner's read-only block and no way "
             "past it. Every command is written to the audit log and to a session log under Tools > Session logs.")

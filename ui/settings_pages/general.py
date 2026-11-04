@@ -15,7 +15,7 @@ class GeneralPage(Page):
     def __init__(self):
         super().__init__()
         self.retention, self.ssh_logs = spin(1, 3650, " days"), spin(1, 3650, " days")
-        self.workers = spin(1, 50)
+        self.workers = spin(1, 100)
         self.ssh_port = spin(1, 65535)
         self.verify = QCheckBox("Verify SSL certificates on new devices by default")
         self.background = QCheckBox("Keep running in the system tray when the window is closed")

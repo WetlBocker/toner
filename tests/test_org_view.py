@@ -149,13 +149,30 @@ check("...and the list has let go of the old heading (no widget left in its firs
 t.resize(t.width() - 40, t.height()); t.viewport().repaint(); t.grab(); app.processEvents()
 check("the list still lays out and draws", t.rowCount() == len(d.names))
 
+print("== a long list")
+from ui import dashboard as D
+many = orgs.create("Many Sites", "MANY", "#795548")
+for i in range(30): dev(f"many-{i:02d}", many)
+with db.within(many):
+    db.save_run([Result(f"many-{i:02d}", "cpu", "FAIL", "99%") for i in range(30)])
+d.refresh(); app.processEvents()
+mine = [n for n in d.names if n and n.startswith("many-")]
+more = [r for r, g in d.mores.items() if g == many]
+check(f"an organization lists its worst {D.ATTENTION_PER_ORG} devices, then a row for the rest", len(mine) == D.ATTENTION_PER_ORG and len(more) == 1
+      and t.item(more[0], 0).text() == "Show 5 more" and t.columnSpan(more[0], 0) == 5, (len(mine), more))
+check("the badge still counts every device", "30 failing" in w.tabs.item_for(w.results).toolTip() or w.tabs._counts.get(w.tabs.indexOf(w.results), 0) >= 30)
+t.cellClicked.emit(more[0], 0); app.processEvents()
+check("a click on it lists them all, and it stays that way", len([n for n in d.names if n and n.startswith("many-")]) == 30 and not any(g == many for g in d.mores.values()))
+d.refresh(); app.processEvents()
+check("...after a refresh too", len([n for n in d.names if n and n.startswith("many-")]) == 30)
+
 print("== all well")
-for oid, names in ((acme, ("acme-fw", "acme-sw")), (bolt, ("bolt-core", "bolt-ap"))):
+for oid, names in ((acme, ("acme-fw", "acme-sw")), (bolt, ("bolt-core", "bolt-ap")), (many, [f"many-{i:02d}" for i in range(30)])):
     with db.within(oid):
         db.save_run([Result(n, "cpu", "OK", "5%") for n in names])
 db.save_run([Result("core-sw1", "cpu", "OK", "5%")])
 d.refresh(); app.processEvents()
-check("nothing needs attention: no headings, every organization quiet, the title says so", not d.heads and d.org_panel.count.text() == "\u00b7 all 4 OK", d.org_panel.count.text())
+check("nothing needs attention: no headings, every organization quiet, the title says so", not d.heads and d.org_panel.count.text() == "\u00b7 all 5 OK", d.org_panel.count.text())
 
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)
