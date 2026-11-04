@@ -467,24 +467,24 @@ class Main(QMainWindow):
             bits.append(f"{bad['WARN']} with warnings")
         if len(on) < len(devs):
             bits.append(f"{len(devs) - len(on)} disabled")
-        self.headers["inventory"].set_context("  ·  ".join(bits))
+        self.headers["inventory"].set_context(", ".join(bits))
         try:
             from core import backup
             mine = {d["key"] for d in devs}
             summ = {k: v for k, v in backup.summary().items() if k in mine}
             last = max((v.get("last") or "" for v in summ.values()), default="")
             n = sum(1 for v in summ.values() if v.get("versions"))
-            self.headers["configs"].set_context(f"{n} device{'s' if n != 1 else ''} backed up" + (f"  ·  last backup {display.ago(last)}" if last else ""))
+            self.headers["configs"].set_context(f"{n} device{'s' if n != 1 else ''} backed up" + (f", last backup {display.ago(last)}" if last else ""))
         except Exception:
             quiet.ignored()
         run = db.last_run()
-        self.headers["history"].set_context((f"Last run {display.ago(run['started_at'])}" if run else "No runs yet") + "  ·  reports (CSV, HTML, PDF) and the trend report")
+        self.headers["history"].set_context((f"Last run {display.ago(run['started_at'])}" if run else "No runs yet") + "; reports (CSV, HTML, PDF) and the trend report")
         self.headers["tools"].set_context("Troubleshooting, discovery, SNMP, file transfer and certificates")
         try:
             saved = len(sessions.list_sessions())
             live = self.sessions.count_open()
             opened = len(self.sessions.panes())
-            self.headers["sessions"].set_context(f"{saved} saved" + (f"  ·  {opened} open" if opened else "") + (f"  ·  {live} connected" if live else ""))
+            self.headers["sessions"].set_context(f"{saved} saved" + (f", {opened} open" if opened else "") + (f", {live} connected" if live else ""))
         except Exception:
             quiet.ignored()
         self.headers["automation"].set_context("Run Ansible playbooks on your devices. Write them in Tools > Playbook Editor.")

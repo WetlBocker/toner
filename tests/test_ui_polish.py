@@ -61,7 +61,7 @@ from ui.settings import SettingsTab, GROUPS
 st = SettingsTab(); st.resize(1100, 700); st.show(); settle()
 titles = st.page_titles()
 check("every page is in the list exactly once", sorted(titles) == sorted(p.title for p in st.pages) and len(titles) == len(set(titles)))
-check("they are grouped under headings in this order", [st.nav.item(r).text() for r in range(st.nav.count()) if st._index_of(r) is None] == [h.upper() for h, _ in GROUPS])
+check("they are grouped under headings in this order", [st.nav.item(r).text() for r in range(st.nav.count()) if st._index_of(r) is None] == [h for h, _ in GROUPS])
 check("the groups hold the pages you would look for", dict(GROUPS)["Alerts and reports"] == ["Notifications", "Reports", "Config backups"] and "Agents" in dict(GROUPS)["Connections"] and "Thresholds" in dict(GROUPS)["Monitoring"])
 check("headings cannot be selected", all(not (st.nav.item(r).flags() & Qt.ItemFlag.ItemIsSelectable) for r in range(st.nav.count()) if st._index_of(r) is None))
 check("rows have the same generous height as elsewhere, headings more", all(st.nav.item(r).sizeHint().height() == ITEM_HEIGHT for r in range(st.nav.count()) if st._index_of(r) is not None)
@@ -76,7 +76,7 @@ n = st.filter_pages("proxy")
 visible = [st.nav.item(r).text() for r in range(st.nav.count()) if not st.nav.isRowHidden(r) and st._index_of(r) is not None]
 check("searching keeps the pages that mention it, and moves to the first one", "Proxy" in visible and len(visible) < len(titles) and st.current_title() in visible, visible)
 heads_shown = [st.nav.item(r).text() for r in range(st.nav.count()) if not st.nav.isRowHidden(r) and st._index_of(r) is None]
-check("a heading with no page left is hidden too", len(heads_shown) < len(GROUPS) and "CONNECTIONS" in heads_shown, heads_shown)
+check("a heading with no page left is hidden too", len(heads_shown) < len(GROUPS) and "Connections" in heads_shown, heads_shown)
 check("the search looks inside pages, not only at their names", "Notifications" in [st.nav.item(r).text() for r in range(st.nav.count()) if (st.filter_pages("snooze") or True) and not st.nav.isRowHidden(r) and st._index_of(r) is not None])
 check("every word has to match", st.filter_pages("snooze zzzzqq") == 0)
 check("nothing matching shows an empty list rather than everything", all(st.nav.isRowHidden(r) for r in range(st.nav.count())))

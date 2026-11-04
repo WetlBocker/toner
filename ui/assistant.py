@@ -27,10 +27,10 @@ def fmt_tokens(n):
 
 
 def usage_line(tokens_in, tokens_out, cost, priced=True, searches=0):
-    """The line under each answer: '1,234 tokens in, 567 out, 2 searches · USD 0.02' (or 'no price known' for a model not in the table)."""
+    """The line under each answer: '1,234 tokens in, 567 out, 2 searches, USD 0.02' (or 'no price known' for a model not in the table)."""
     money = f"USD {cost:.2f}" if cost >= 0.005 else f"USD {cost:.4f}" if cost else "USD 0"
     n = int(searches or 0)
-    return f"{fmt_tokens(tokens_in)} tokens in, {fmt_tokens(tokens_out)} out" + (f", {n} search{'es' if n != 1 else ''}" if n else "") + "  ·  " \
+    return f"{fmt_tokens(tokens_in)} tokens in, {fmt_tokens(tokens_out)} out" + (f", {n} search{'es' if n != 1 else ''}" if n else "") + ", " \
         + (money if priced else "no price known for this model")
 
 
@@ -327,7 +327,7 @@ class AssistantPanel(QWidget):
 
     def show_model(self):
         s = AI.state()
-        self.model_line.setText(f"{AI.PROVIDERS[AI.provider_id()]['label']}  ·  {s.get('model') or AI.model_for()}" if s.get("connected") else "")
+        self.model_line.setText(f"{AI.PROVIDERS[AI.provider_id()]['label']}, {s.get('model') or AI.model_for()}" if s.get("connected") else "")
         self.mark.setPixmap(brandicons.provider_icon(AI.provider_id()).pixmap(QSize(*brandicons.mark_size(AI.provider_id(), 22))))
 
     # ---- the transcript
@@ -565,11 +565,11 @@ class AssistantOverviewPage(QWidget):
     def refresh(self):
         provider = AI.provider_id()
         s = AI.state()
-        self.provider.setText(f"<b>Provider:</b> {AI.PROVIDERS[provider]['label']}  ·  <b>Model:</b> {s.get('model') or AI.model_for(provider)}")
+        self.provider.setText(f"<b>Provider:</b> {AI.PROVIDERS[provider]['label']}&nbsp;&nbsp;&nbsp;&nbsp;<b>Model:</b> {s.get('model') or AI.model_for(provider)}")
         if s.get("connected") is True:
             self.connection.setText("<b>Connection:</b> connected")
         elif s.get("connected") is False:
-            self.connection.setText(f"<b>Connection:</b> not connected  ·  {s.get('text', '')}")
+            self.connection.setText(f"<b>Connection:</b> not connected, {s.get('text', '')}")
         elif not AI.has_key(provider):
             self.connection.setText("<b>Connection:</b> no API key yet. Add one under Settings > AI.")
         else:

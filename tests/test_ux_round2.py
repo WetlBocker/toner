@@ -138,7 +138,7 @@ for attr, title in w.HEADERS:
     h = w.headers[attr]
     check(f"{title} has the same header", h.title.text() == f"Global - {title}" and h.title.property("title") is True and getattr(w, attr).layout().itemAt(0).widget() is h)
 w.update_headers()
-check("the Inventory's says how the devices are doing", w.headers["inventory"].context.text() == "5 devices  ·  2 failing  ·  1 with warnings", w.headers["inventory"].context.text())
+check("the Inventory's says how the devices are doing", w.headers["inventory"].context.text() == "5 devices, 2 failing, 1 with warnings", w.headers["inventory"].context.text())
 check("Results has one too, with its summary as the context", r.header.title.text() == "Global - Results" and r.header.context is r.summary)
 
 print("== Inventory")

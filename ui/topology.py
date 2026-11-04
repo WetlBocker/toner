@@ -41,10 +41,10 @@ def _muted(text=""):
 
 
 def _heading(text):
-    lab = QLabel(text.upper())
+    lab = QLabel(text)
     lab.setProperty("muted", True)
     f = lab.font()
-    f.setPointSizeF(max(7.5, f.pointSizeF() - 1.5))
+    f.setPointSizeF(max(8.5, f.pointSizeF() - 1))
     f.setBold(True)
     f.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 108)
     lab.setFont(f)
@@ -280,7 +280,7 @@ class EdgeItem(QGraphicsItem):
         labels = ((self.link.get("a_port") or "", p1, p2), (self.link.get("b_port") or "", p2, p1))
         if self.layer == "l3":
             mid = (p1 + p2) / 2
-            text = self.link.get("protocol", "") + (f" AS {self.link['as']}" if self.link.get("as") else "") + (f" · {self.link['state']}" if self.link.get("state") else "")
+            text = self.link.get("protocol", "") + (f" AS {self.link['as']}" if self.link.get("as") else "") + (f", {self.link['state']}" if self.link.get("state") else "")
             labels = ((text, mid, mid),)
         p.setFont(self._mono)
         fm = p.fontMetrics()
@@ -567,7 +567,7 @@ class DetailCard(QFrame):
 
     def show_node(self, name, info, role, facts, links, actions):
         self.title.setText(db.label(name) if not info.get("group") else name.split(" » ", 1)[1])
-        self.role.setText(topology.ROLE_NAMES.get(role, "Device") + ("" if info.get("inventory") else "  ·  not in the inventory"))
+        self.role.setText(topology.ROLE_NAMES.get(role, "Device") + ("" if info.get("inventory") else ", not in the inventory"))
         self._facts(facts)
         self.links_head.show()
         self.links.show()
@@ -993,7 +993,7 @@ class TopologyTab(QWidget):
         if link.get("channel"):
             names = "  ⇄  ".join(x for x in (link.get("a_channel"), link.get("b_channel")) if x)
             n = link.get("count", 1)
-            sub = f"Port-Channel {names}  ·  {n} member{'s' if n != 1 else ''}"
+            sub = f"Port-Channel {names}, {n} member{'s' if n != 1 else ''}"
             facts = [(ap or "?", f"⇄  {bp or '?'}") for ap, bp in link.get("members", [])]
         elif "protocol" in link and "protocols" not in link:
             sub = f"{link.get('protocol', '')} adjacency"

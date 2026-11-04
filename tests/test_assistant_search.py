@@ -77,8 +77,8 @@ check("per search: Claude and OpenAI 1 cent, Gemini 3 and newer 1.4 cents, Gemin
       prices.search_rate("claude-opus-5-5") == 0.01 and prices.search_rate("gpt-6.1-sol") == 0.01 and prices.search_rate("o3") == 0.01 and prices.search_rate("gemini-3.8-flash") == 0.014
       and prices.search_rate("models/gemini-2.5-flash") == 0.035 and prices.search_rate("mystery") == 0.0)
 check("cost adds the searches; a model with no price still costs nothing", abs(prices.cost("claude-opus-5-5", 1_000_000, 0, 3) - 4.03) < 1e-9 and prices.cost("mystery", 10, 10, 5) == 0)
-check("the usage line counts searches, singular and plural, and stays as it was without any", UA.usage_line(1234, 456, 0.07, True, 2) == "1,234 tokens in, 456 out, 2 searches  ·  USD 0.07"
-      and UA.usage_line(10, 5, 0.01, True, 1) == "10 tokens in, 5 out, 1 search  ·  USD 0.01" and UA.usage_line(10, 5, 0.01) == "10 tokens in, 5 out  ·  USD 0.01")
+check("the usage line counts searches, singular and plural, and stays as it was without any", UA.usage_line(1234, 456, 0.07, True, 2) == "1,234 tokens in, 456 out, 2 searches, USD 0.07"
+      and UA.usage_line(10, 5, 0.01, True, 1) == "10 tokens in, 5 out, 1 search, USD 0.01" and UA.usage_line(10, 5, 0.01) == "10 tokens in, 5 out, USD 0.01")
 check("the Sources line: title and host, the host alone when there is no title", UA.sources_text([("Cisco Security Advisory", ADVISORY), ("", NVD)]) == "Sources: Cisco Security Advisory (sec.cloudapps.cisco.com), nvd.nist.gov (nvd.nist.gov)")
 
 print("== the turn loop")
@@ -135,8 +135,8 @@ panel.set_org(acme); settle()
 kinds = [k for k, _ in panel.entries]
 texts = [t for _, t in panel.entries]
 check("from the store: the answer, its Sources line, the usage line with the searches, then the late steps", kinds == ["user", "muted", "assistant", "sources", "muted", "user", "assistant", "sources", "muted", "muted", "muted", "user", "assistant", "muted"]
-      and texts[3] == "Sources: Cisco Security Advisory (sec.cloudapps.cisco.com)" and texts[4] == "1,000 tokens in, 100 out, 1 search  ·  USD 0.02"
-      and texts[8] == "1,000 tokens in, 100 out, 2 searches  ·  USD 0.03" and texts[9] == "Searched the web for CVE-2026-0235…", (kinds, texts))
+      and texts[3] == "Sources: Cisco Security Advisory (sec.cloudapps.cisco.com)" and texts[4] == "1,000 tokens in, 100 out, 1 search, USD 0.02"
+      and texts[8] == "1,000 tokens in, 100 out, 2 searches, USD 0.03" and texts[9] == "Searched the web for CVE-2026-0235…", (kinds, texts))
 check("the Sources are links that open outside Toner", panel.view.openExternalLinks() and 'href="https://sec.cloudapps.cisco.com' in panel.view.toHtml())
 panel.new_conversation(); AI.set_state(True, "Connected: Claude Opus 5.5.", "Claude Opus 5.5"); settle()
 UA.Worker.run = lambda self: agent.run_turn(self.conv_id, self.org, self.question, self.screen, lambda k, p: self.event.emit(k, p), self.cancel,

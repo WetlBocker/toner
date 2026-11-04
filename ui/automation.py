@@ -305,7 +305,7 @@ class PlaybooksPage(QWidget):
             bits = [f"{what} {'finished' if good else 'finished with problems'}", f"{res['seconds']:.0f} s"]
             if res["rows"]:
                 bits.insert(1, f"{sum(r['changed'] for r in res['rows'])} changed, {sum(r['failed'] + r['unreachable'] for r in res['rows'])} failed or unreachable")
-            self.status.setText("  ·  ".join(bits))
+            self.status.setText(", ".join(bits))
             self.status.setStyleSheet(f"color:{st.ink('OK' if good else 'FAIL')};")
         self._buttons()
         self.finished.emit()

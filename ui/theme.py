@@ -79,6 +79,15 @@ def _legacy_look(theme_or_dark, style=None):
     return dict(themes.DEFAULT_LOOK, theme=name, look=TERMINAL if style == "Ops console" else "Standard")
 
 
+def _reach(base, toward, grounds, need):
+    """`base` moved toward `toward` just far enough to read at `need` (WCAG contrast) on every ground; the theme's own colour when it does."""
+    for step in range(21):
+        c = themes.mix(base, toward, step / 20)
+        if min(themes.contrast(c, g) for g in grounds) >= need:
+            return c
+    return toward
+
+
 def tokens(look=None, ctx=None):
     """The colour, shape and type tokens for a look: {theme, look, panels, contrast, ...} (see themes.DEFAULT_LOOK). For old callers
     `tokens(dark: bool, style)` still works. ctx is what the interactive themes read (themes.resolve)."""
@@ -91,6 +100,13 @@ def tokens(look=None, ctx=None):
     # the selected row of a list or table: the accent mixed into the surface as one opaque colour (a see-through one is painted twice on a
     # table row and comes out too strong)
     t["select"] = themes.mix(t["surface"], t["accent"], 0.18 if dark else 0.11)
+    # colours that must read, whatever the theme: a field's edge 3:1, a focus ring 3:1, accent text 4.5:1 (on the panel and on its own tint),
+    # and the words on an accent button 4.5:1
+    t["edge"] = _reach(t["border"], t["text"], [t["input"], t["surface"]], 3.0)
+    t["ring"] = _reach(t["accent"], t["text"], [t["surface"], t["bg"]], 3.0)
+    t["accent_ink"] = _reach(t["accent"], t["text"], [t["surface"], themes.mix(t["surface"], t["accent"], 0.18 if dark else 0.12)], 4.5)
+    if themes.contrast(t["accent_text"], t["accent"]) < 4.5:
+        t["accent_text"] = max((t["accent_text"], t["text"], t["bg"]), key=lambda c: themes.contrast(c, t["accent"]))
     t["row_hover"] = themes.mix(t["surface"], t["hover"], 0.35)       # a row under the mouse: a third of the hover colour, so it never looks selected
     t["panel_edge"] = themes.mix(t["border"], "#000000" if dark else "#000000", 0.35) if t["panels"] == "Raised" else t["border"]
     t["card_border"] = t["border"]
@@ -159,7 +175,7 @@ QPushButton, QToolButton {
 QPushButton:hover, QToolButton:hover { background: %(hover)s; }
 QPushButton:pressed, QToolButton:pressed { background: %(surface2)s; }
 QPushButton:disabled, QToolButton:disabled { color: %(muted)s; background: transparent; }
-QPushButton:focus { border-color: %(accent)s; }
+QPushButton:focus { border-color: %(ring)s; }
 QPushButton[primary="true"], QPushButton:default {
     background: %(accent)s; color: %(accent_text)s; border: 1px solid %(accent)s;
 }
@@ -174,17 +190,17 @@ QPushButton[flat="true"], QPushButton[ghost="true"] { background: transparent; b
 QPushButton[ghost="true"]:hover { background: %(hover)s; color: %(text)s; }
 QPushButton[outline="true"] { background: transparent; }
 QToolButton[popupMode="2"] { padding-right: 26px; }
-QToolButton:focus, QPushButton[ghost="true"]:focus, QPushButton[flat="true"]:focus, QPushButton[outline="true"]:focus { border-color: %(accent)s; }
+QToolButton:focus, QPushButton[ghost="true"]:focus, QPushButton[flat="true"]:focus, QPushButton[outline="true"]:focus { border-color: %(ring)s; }
 QPushButton[primary="true"]:focus, QPushButton:default:focus { border: 2px solid %(text)s; padding: %(pad_ring)s; }
 QToolButton::menu-indicator { image: url(%(chev_down)s); subcontrol-origin: padding; subcontrol-position: center right; right: 8px; width: 12px; height: 12px; }
 
 /* ---- inputs ---- */
 QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox, QDoubleSpinBox, QComboBox, QAbstractSpinBox {
-    background: %(input_a)s; color: %(text)s; border: 1px solid %(border)s; border-radius: %(r_input)spx;
+    background: %(input_a)s; color: %(text)s; border: 1px solid %(edge)s; border-radius: %(r_input)spx;
     padding: %(pad_input)s; min-height: %(min_input)spx; selection-background-color: %(accent)s; selection-color: %(accent_text)s;
 }
 QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {
-    border: 1px solid %(accent)s;
+    border: 1px solid %(ring)s;
 }
 QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled, QComboBox:disabled { color: %(muted)s; background: %(bg)s; }
 QComboBox { padding-right: 26px; }
@@ -207,7 +223,7 @@ QCheckBox { spacing: 8px; }
 QCheckBox::indicator { width: %(check_px)spx; height: %(check_px)spx; border: 1.5px solid %(muted)s; border-radius: %(r_check)spx; background: %(input)s; }
 QCheckBox::indicator:hover { border-color: %(accent)s; }
 QCheckBox::indicator:checked { background: %(accent)s; border-color: %(accent)s; image: url(%(check)s); }
-QCheckBox::indicator:focus { border-color: %(accent)s; }
+QCheckBox::indicator:focus { border-color: %(ring)s; }
 QCheckBox::indicator:checked:focus { border-color: %(text)s; }
 QCheckBox::indicator:disabled { border-color: %(border)s; background: %(bg)s; }
 QRadioButton { spacing: 8px; }
@@ -224,7 +240,7 @@ QTreeView, QTableView, QListView, QTreeWidget, QTableWidget, QListWidget {
     background: %(surface_a)s; alternate-background-color: %(surface_a)s; border: 1px solid %(border)s; border-radius: %(r_list)spx;
     gridline-color: transparent; selection-background-color: %(select)s; selection-color: %(text)s; %(data_font)s
 }
-QTreeView:focus, QTableView:focus, QListView:focus { border-color: %(accent)s; }
+QTreeView:focus, QTableView:focus, QListView:focus { border-color: %(ring)s; }
 QTreeView::item, QTableView::item, QListView::item { padding: %(pad_cell)s; border: 0; }
 QTreeView::item, QTableView::item { padding: %(pad_row)s; border-bottom: 1px solid %(row_line)s; }
 QTreeView::item:hover, QTableView::item:hover, QListView::item:hover { background: %(row_hover)s; }
@@ -284,7 +300,7 @@ QDialog { background: %(bg)s; }
 QFrame[card="true"] { background: %(surface_a)s; border: 1px solid %(card_border)s; border-radius: %(r_card)spx; %(card_bottom)s }
 QFrame[card="true"] QLabel { background: transparent; border: 0; }
 QFrame[card="true"] QTableWidget, QFrame[card="true"] QTreeWidget { border: 1px solid transparent; border-radius: 0; background: transparent; }
-QFrame[card="true"] QTableWidget:focus, QFrame[card="true"] QTreeWidget:focus { border-color: %(accent)s; }
+QFrame[card="true"] QTableWidget:focus, QFrame[card="true"] QTreeWidget:focus { border-color: %(ring)s; }
 
 /* ---- the sidebar: the sections in groups, the current one in the accent with a bar on its left ---- */
 QWidget#sidebar { background: %(surface)s; border-right: 1px solid %(border)s; }
@@ -299,13 +315,13 @@ QPushButton#navFold:hover { background: %(hover)s; }
 QListWidget#nav { background: transparent; border: 0; border-radius: 0; %(nav_font)s }
 QListWidget#nav::item { padding: 0 10px; margin: 0; border: 0; border-left: 3px solid transparent; border-radius: %(r_nav)spx; color: %(text)s; background: transparent; }
 QListWidget#nav::item:hover { background: %(hover)s; }
-QListWidget#nav::item:selected { background: %(accent_soft)s; color: %(accent)s; border-left: 3px solid %(accent)s; font-weight: 600; }
-QListWidget#nav::item:selected:focus { border: 1px solid %(accent)s; border-left: 3px solid %(accent)s; padding: 0 9px; }
-QListWidget#nav::item:!enabled { color: %(muted)s; background: transparent; border: 0; letter-spacing: 1px; }
+QListWidget#nav::item:selected { background: %(accent_soft)s; color: %(accent_ink)s; border-left: 3px solid %(accent)s; font-weight: 600; }
+QListWidget#nav::item:selected:focus { border: 1px solid %(ring)s; border-left: 3px solid %(accent)s; padding: 0 9px; }
+QListWidget#nav::item:!enabled { color: %(muted)s; background: transparent; border: 0; }
 QListWidget#settingsNav { background: transparent; border: 0; border-right: 1px solid %(border)s; border-radius: 0; }
 QListWidget#settingsNav::item { padding: %(pad_nav)s; margin: %(margin_nav)s; border-radius: %(r_nav)spx; color: %(muted)s; }
-QListWidget#settingsNav::item:selected { background: %(accent_soft)s; color: %(accent)s; font-weight: 600; }
-QListWidget#settingsNav::item:selected:focus { border: 1px solid %(accent)s; }
+QListWidget#settingsNav::item:selected { background: %(accent_soft)s; color: %(accent_ink)s; font-weight: 600; }
+QListWidget#settingsNav::item:selected:focus { border: 1px solid %(ring)s; }
 QListWidget#settingsNav::item:hover { background: %(hover)s; color: %(text)s; }
 QFrame#statusChip { border-radius: %(r_chip)spx; }
 """ % t + (TERMINAL_QSS % t if t.get("terminal") else "")

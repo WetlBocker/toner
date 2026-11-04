@@ -180,7 +180,7 @@ p, res = go(req(method="GET", url=BASE + "/go"))
 check("redirects are followed, and the final URL is reported", res["status"] == 200 and res["url"].endswith("/landed") and hits[-1]["path"] == "/landed")
 p, res = go(req(url=BASE + "/teapot"))
 check("an error status is a reply, not an error", res["status"] == 418 and not res["error"] and A.status_text(res).startswith("418"), A.status_text(res))
-check("the status line has the code, reason, time and size", "  ·  " in A.status_text(res) and " ms  ·  " in A.status_text(res) and "bytes" in A.status_text(res), A.status_text(res))
+check("the status line has the code, reason, time and size", ", " in A.status_text(res) and " ms, " in A.status_text(res) and "bytes" in A.status_text(res), A.status_text(res))
 check("reply headers come back as pairs", ("X-Served-By", "fake") in res["headers"])
 
 print("== what is refused before sending")

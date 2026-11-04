@@ -188,8 +188,8 @@ from ui.tools import ToolsTab
 from ui import sshkeysui as U
 tools = ToolsTab()
 names = [tools.tabs.list.item(i).text() for i in range(tools.tabs.list.count())]
-check("Tools has a CRYPTO group (not Certificates) with TLS Certificates, OpenSSL and SSH Keys",
-      "CRYPTO" in names and "CERTIFICATES" not in names and names[names.index("CRYPTO") + 1:names.index("CRYPTO") + 4] == ["TLS Certificates", "OpenSSL", "SSH Keys"], names)
+check("Tools has a Crypto group (not Certificates) with TLS Certificates, OpenSSL and SSH Keys",
+      "Crypto" in names and "Certificates" not in names and names[names.index("Crypto") + 1:names.index("Crypto") + 4] == ["TLS Certificates", "OpenSSL", "SSH Keys"], names)
 page = tools.sshkeys
 check("three tabs", [page.tabs.tabText(i) for i in range(page.tabs.count())] == ["Make a key pair", "Read a key", "Put on a device"])
 def pump(w, secs=60):

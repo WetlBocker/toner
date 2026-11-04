@@ -410,12 +410,12 @@ class NavStack(QWidget):
             self._spacer = self.list.count() - 1
             self._headings.append(self._spacer)
             return self._spacer
-        item = QListWidgetItem(group.upper())
-        item.setData(Qt.ItemDataRole.UserRole, group.upper())
+        item = QListWidgetItem(group)
+        item.setData(Qt.ItemDataRole.UserRole, group)
         item.setFlags(Qt.ItemFlag.NoItemFlags)
         f = item.font()
         f.setBold(True)
-        f.setPointSizeF(max(8.0, f.pointSizeF() - 0.5))                # a group name reads as a heading, not a footnote
+        f.setPointSizeF(max(8.5, f.pointSizeF() - 0.5))                # a group name reads as a heading, not a footnote
         f.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 108)
         item.setFont(f)
         item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom)
@@ -608,11 +608,11 @@ class PageStack(QWidget):
             db.set_setting(self.key, not on)
 
     def addSection(self, title):
-        item = QListWidgetItem(title.upper())
+        item = QListWidgetItem(title)                                  # (sentence case, a step smaller: no tracked capitals)
         item.setFlags(Qt.ItemFlag.NoItemFlags)
         f = item.font()
         f.setBold(True)
-        f.setPointSizeF(max(7.0, f.pointSizeF() - 2))
+        f.setPointSizeF(max(8.5, f.pointSizeF() - 1))
         item.setFont(f)
         item.setSizeHint(QSize(0, HEADING_HEIGHT if self.list.count() else HEADING_HEIGHT - 10))    # air above each group, none above the first
         item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom)

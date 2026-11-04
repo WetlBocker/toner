@@ -84,7 +84,7 @@ class OrgBoard(QWidget):
             QShortcut(QKeySequence(key), t, activated=lambda: self._open(t.currentRow()), context=Qt.ShortcutContext.WidgetShortcut)
         self.hint = EmptyHint(t, "No organizations match", wrap=True)
         self.hint.hide()
-        self.summary = ""                    # "· 3 of 52 need attention" or "· all 52 OK", for the panel's title row
+        self.summary = ""                    # "3 of 52 need attention" or "all 52 OK", for the panel's title row
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(8)
@@ -143,8 +143,8 @@ class OrgBoard(QWidget):
         self._fit_numbers()
         rh = t.verticalHeader().defaultSectionSize()
         t.setFixedHeight(t.horizontalHeader().sizeHint().height() + rh * max(1, min(len(rows), SHOWN)) + 2 * t.frameWidth() + 2)
-        self.summary = ("" if not rows else f"· all {len(rows)} OK" if not need and checked
-                        else f"· {need} of {len(rows)} need attention")
+        self.summary = ("" if not rows else f"all {len(rows)} OK" if not need and checked
+                        else f"{need} of {len(rows)} need attention")
         self._filter()
 
     def _fit_numbers(self):

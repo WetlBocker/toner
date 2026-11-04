@@ -51,7 +51,7 @@ print("== the sidebar")
 w = A.Main(); w.resize(1400, 820); w.show(); app.processEvents()
 n = w.tabs
 heads = [n.list.item(r).text() for r in n._headings if r != n._spacer]
-check("the first group is Observability; Reports is no longer a section", heads == ["OBSERVABILITY", "NETWORK", "WORK"] and "Reports" not in [n.tabText(i) for i in range(n.count())], heads)
+check("the first group is Observability; Reports is no longer a section", heads == ["Observability", "Network", "Work"] and "Reports" not in [n.tabText(i) for i in range(n.count())], heads)
 check("the group names are set in a bigger type than before (no longer two points smaller than the page)",
       n.list.item(n._headings[0]).font().pointSizeF() >= QApplication.font().pointSizeF() - 0.6, n.list.item(n._headings[0]).font().pointSizeF())
 check("the section icons grew", nav.NAV_ICON >= 20 and n.list.iconSize().width() == nav.NAV_ICON)
@@ -323,7 +323,7 @@ check("the zoom buttons carry icons (their glyphs were cut off)", all(not x.icon
 check("the rail says what the tick does", tp.merge.text() == "Bundle Port-Channels")
 w.go("Tools"); w.tools.tabs.setCurrentWidget(tp); app.processEvents()
 tp.select_link(links[0], "l2"); app.processEvents()
-check("clicking a Port-Channel's line opens a card listing its members", tp.l2.card.isVisible() and tp.l2.card.role.text() == "Port-Channel Po1  ⇄  Po1  ·  2 members"
+check("clicking a Port-Channel's line opens a card listing its members", tp.l2.card.isVisible() and tp.l2.card.role.text() == "Port-Channel Po1  ⇄  Po1, 2 members"
       and tp.l2.card.grid.count() == 4, tp.l2.card.role.text())
 sc = QGraphicsScene()
 na, nb = TU.NodeItem("sw1", "switch", "", True, "sw1"), TU.NodeItem("sw2", "switch", "", True, "sw2")

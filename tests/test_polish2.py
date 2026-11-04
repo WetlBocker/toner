@@ -102,8 +102,8 @@ ss.search.setText("")
 w.go("Settings"); w.settings.select_page("General"); app.processEvents()
 gp = next(p for p in w.settings.pages if p.title == "General")
 from PySide6.QtWidgets import QLabel
-heads = [l.text() for l in gp.findChildren(QLabel) if l.text() in ("STORED DATA", "RUNNING", "DEVICES AND SCANS")]
-check("General is grouped under three headings, with the retention note under the retention boxes", heads == ["STORED DATA", "RUNNING", "DEVICES AND SCANS"] and any("older than this are deleted" in l.text() for l in gp.findChildren(QLabel)))
+heads = [l.text() for l in gp.findChildren(QLabel) if l.text() in ("Stored data", "Running", "Devices and scans")]
+check("General is grouped under three headings, with the retention note under the retention boxes", heads == ["Stored data", "Running", "Devices and scans"] and any("older than this are deleted" in l.text() for l in gp.findChildren(QLabel)))
 w.open_device_view(db.list_devices()[0]); app.processEvents()
 v = next(iter(w.views.values()))
 check("the device window has margins like the main window", v.layout().contentsMargins().left() >= 16 and v.layout().contentsMargins().top() >= 12)

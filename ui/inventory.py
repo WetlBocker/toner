@@ -930,7 +930,7 @@ class DetailsPane(QWidget):
         from ui import status as st
         plat = V.mode_label(dev["vendor"]) or (display.platform_name(dev.get("platform")) if dev.get("platform") else "")
         self.title.setText(dev["name"])
-        self.sub.setText(f"{display.vendor_name(dev['vendor'])} {plat}  \u00b7  {dev['host']}" + (f":{dev['port']}" if dev.get("port") else ""))
+        self.sub.setText(f"{display.vendor_name(dev['vendor'])} {plat}, {dev['host']}" + (f":{dev['port']}" if dev.get("port") else ""))
         from ui import brandicons
         self.mark.setPixmap(brandicons.vendor_icon(dev["vendor"]).pixmap(28, 28))
         self.mark.setToolTip(display.vendor_name(dev["vendor"]))

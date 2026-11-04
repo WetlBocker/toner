@@ -37,7 +37,7 @@ class PingPopup(QDialog):
         self.resize(420, 260)
         self.worker = None
         self.times = []
-        self.head = QLabel(f"<b>{name}</b>  ·  {host}" if name and name != host else f"<b>{host}</b>")
+        self.head = QLabel(f"<b>{name}</b> ({host})" if name and name != host else f"<b>{host}</b>")
         self.text = QPlainTextEdit()
         self.text.setReadOnly(True)
         self.result = QLabel("")

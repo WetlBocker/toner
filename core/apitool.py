@@ -563,7 +563,7 @@ def size_text(n):
 
 
 def status_text(result):
-    """The status line: '200 OK  ·  123 ms  ·  4.2 KB', or what went wrong."""
+    """The status line: '200 OK, 123 ms, 4.2 KB', or what went wrong."""
     if result.get("error"):
         return result["error"]
-    return f"{result['status']} {result.get('reason') or ''}".strip() + f"  ·  {result['ms']} ms  ·  {size_text(result['size'])}"
+    return f"{result['status']} {result.get('reason') or ''}".strip() + f", {result['ms']} ms, {size_text(result['size'])}"

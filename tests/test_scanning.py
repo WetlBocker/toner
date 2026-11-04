@@ -120,7 +120,7 @@ check("software version row FAIL (its worst advisory), naming the OS, version, r
       and by[A.SOFTWARE].message.startswith("IOS XE 17.9.4a, read 20") and by[A.SOFTWARE].message.endswith(", 3 advisories: 1 FAIL, 1 WARN"), by[A.SOFTWARE])
 check("the row names are worded, not title-cased, in exports too", A.SOFTWARE == "Software version" and A.KEV == "Known exploited (CISA)" and display.check_name(A.SOFTWARE) == A.SOFTWARE and display.check_name(A.KEV) == A.KEV)
 check("one row per advisory, worst first, with CVSS and EPSS and the fix", [r.check for r in rows[1:4]] == ["cisco-sa-iosxe-webui-privesc-j22SaA4z", "cisco-sa-dhcp-dos-abc", "cisco-sa-low-thing"]
-      and rows[1].status == "FAIL" and rows[1].value == "CVSS 10 · EPSS 94%" and rows[1].message == "Cisco IOS XE Software Web UI Privilege Escalation Vulnerability Fixed in 17.9.4a."
+      and rows[1].status == "FAIL" and rows[1].value == "CVSS 10, EPSS 94%" and rows[1].message == "Cisco IOS XE Software Web UI Privilege Escalation Vulnerability Fixed in 17.9.4a."
       and rows[2].status == "WARN" and rows[2].value == "CVSS 8.6" and rows[3].status == "OK" and rows[3].message == "Cisco IOS XE Information Disclosure", [(r.check, r.status, r.value, r.message) for r in rows])
 check("the CISA row fails, naming the exploited CVE", by[A.KEV].status == "FAIL" and by[A.KEV].message == "CVE-2023-20198 on CISA's known exploited list", by[A.KEV])
 check("no 'advisories' row when some were found", A.ADVISORIES not in by and len(rows) == 6)
@@ -128,7 +128,7 @@ rows = A.scan(db.find_device("old-rtr")); by = {r.check: r for r in rows}
 check("a version with nothing published: software OK (platform assumed), 'No known advisories', CISA OK", by[A.SOFTWARE].message.startswith("IOS 15.2(4)M7 (platform assumed from the version), read 20")
       and by[A.ADVISORIES].status == "OK" and by[A.ADVISORIES].message == A.NONE_FOUND and by[A.KEV].status == "OK" and by[A.KEV].message == A.NONE_KEV, [(r.check, r.status, r.message) for r in rows])
 rows = A.scan(db.find_device("edge-fw")); by = {r.check: r for r in rows}
-check("a Fortinet goes to NVD: one row per CVE, the first sentence as its title, WARN at 7.5", by["CVE-2024-1111"].status == "WARN" and by["CVE-2024-1111"].value == "CVSS 7.5 · EPSS 1%"
+check("a Fortinet goes to NVD: one row per CVE, the first sentence as its title, WARN at 7.5", by["CVE-2024-1111"].status == "WARN" and by["CVE-2024-1111"].value == "CVSS 7.5, EPSS 1%"
       and by["CVE-2024-1111"].message == "A heap-based buffer overflow in FortiOS SSL-VPN" and by[A.SOFTWARE].message.startswith("FortiOS 7.2.5, read 20")
       and by[A.SOFTWARE].status == "WARN" and by[A.SOFTWARE].message.endswith(", 1 advisory: 1 WARN"), [(r.check, r.status, r.value, r.message) for r in rows])
 pa = dev("pa", "paloalto", "11.1.4")
@@ -244,7 +244,7 @@ check("the PDF is landscape with clickable links to named destinations", b"/Medi
 out2 = os.path.join(SP, "scan.csv"); S.QFileDialog.getSaveFileName = lambda *a, **k: (out2, "")
 tab.export("CSV", "CSV (*.csv)", S.reports.to_csv, False)
 csv_text = open(out2, encoding="utf-8").read()
-check("...and CSV, one line per check with its result", csv_text.startswith("Device,Check,Status,Value,Message") and csv_text.count("\n") == 11 and "edge-fw,CVE-2024-1111,WARN,CVSS 7.5" in csv_text, csv_text)
+check("...and CSV, one line per check with its result", csv_text.startswith("Device,Check,Status,Value,Message") and csv_text.count("\n") == 11 and "edge-fw,CVE-2024-1111,WARN,\"CVSS 7.5, EPSS" in csv_text, csv_text)
 tab.results = []; tab.last_ran = []; tab.repopulate()
 check("the empty hint says Scan", tab.hint.isVisible() and tab.hint.head.text() == "No scans yet" and tab.hint.sub.text() == "Choose devices and press Scan")
 from ui.results import ResultsTab

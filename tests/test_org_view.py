@@ -107,7 +107,7 @@ check("the number columns are as narrow as their headings, so the names have the
 check("an organization with a failure stands out (bold); one with only warnings stays quiet, like the healthy ones",
       b.table.item(0, 0).font().bold() and not b.table.item(2, 0).font().bold() and b.table.item(2, 0).text() == "Global"
       and b.table.item(2, 0).foreground().color().name() == b.table.item(3, 0).foreground().color().name(), [b.table.item(i, 0).text() for i in range(4)])
-check("the title counts the ones that need attention", d.org_panel.count.text() == "\u00b7 3 of 4 need attention", d.org_panel.count.text())
+check("the title counts the ones that need attention", d.org_panel.count.text() == "3 of 4 need attention", d.org_panel.count.text())
 check("a row says where a click goes", b.table.item(0, 0).toolTip() == "Switch Toner to Bolt Logistics (BOLT)")
 b.find.setText("calm"); app.processEvents()
 check("the search box narrows the list by name or code", [b.table.isRowHidden(i) for i in range(4)] == [True, True, True, False] and not b.hint.isVisible())
@@ -172,7 +172,7 @@ for oid, names in ((acme, ("acme-fw", "acme-sw")), (bolt, ("bolt-core", "bolt-ap
         db.save_run([Result(n, "cpu", "OK", "5%") for n in names])
 db.save_run([Result("core-sw1", "cpu", "OK", "5%")])
 d.refresh(); app.processEvents()
-check("nothing needs attention: no headings, every organization quiet, the title says so", not d.heads and d.org_panel.count.text() == "\u00b7 all 5 OK", d.org_panel.count.text())
+check("nothing needs attention: no headings, every organization quiet, the title says so", not d.heads and d.org_panel.count.text() == "all 5 OK", d.org_panel.count.text())
 
 print("== other organizations' scheduled runs")
 refreshed = []

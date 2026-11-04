@@ -613,7 +613,7 @@ class FileBrowser(QWidget):
         if total:
             self.bar.setRange(0, 100)
             self.bar.setValue(int(done * 100 / total))
-            self.note.setText(f"{text}  ·  {human_size(done)} of {human_size(total)}  ·  {int(done * 100 / total)}%")
+            self.note.setText(f"{text}: {human_size(done)} of {human_size(total)} ({int(done * 100 / total)}%)")
         else:
             self.bar.setRange(0, 0)
 

@@ -38,7 +38,7 @@ check("the sections sit in a sidebar on the left, the page beside it", n.side.ma
       and n.side.height() >= w.height() - 60 and n.side.mapTo(w, QPoint(0, 0)).y() < 5)
 check("the page is centred, no wider than the content width", w.dashboard.width() <= nav.CONTENT_WIDTH)
 heads = [n.list.item(r).text() for r in n._headings if r != n._spacer]
-check("the sections are in groups: Observability, Network, Work, with Settings and About at the bottom", heads == ["OBSERVABILITY", "NETWORK", "WORK"]
+check("the sections are in groups: Observability, Network, Work, with Settings and About at the bottom", heads == ["Observability", "Network", "Work"]
       and n.row_of(n.indexOf(w.settings)) > n._spacer and n.row_of(n.indexOf(w.about)) == n.list.count() - 1, (heads, n._spacer))
 rows = {name: n.row_of(i) for i, name in enumerate(n._names)}
 check("History sits with Overview and Results, whatever its place in the order",

@@ -130,10 +130,10 @@ class ThemeGrid(QWidget):
 
     def _add_group(self, title, names, lay):
         if title:
-            head = QLabel(title.upper())
+            head = QLabel(title)
             head.setProperty("muted", True)
             hf = head.font()
-            hf.setPointSizeF(max(7.0, hf.pointSizeF() - 1.5))
+            hf.setPointSizeF(max(8.5, hf.pointSizeF() - 1))
             hf.setBold(True)
             head.setFont(hf)
             head.setContentsMargins(0, 8, 0, 0)

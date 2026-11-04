@@ -46,9 +46,8 @@ class Card(Panel):
         self.value.setFont(f)
         self.title = QLabel(title)
         self.title.setProperty("muted", True)
-        tf = self.title.font()                          # a semibold heading in capitals, as on Demarc's tiles
+        tf = self.title.font()                          # a semibold heading, sentence case
         tf.setWeight(QFont.Weight.DemiBold)
-        tf.setCapitalization(QFont.Capitalization.AllUppercase)
         self.title.setFont(tf)
         self.mark = QLabel()                            # the status icon before the heading (OK, WARN, FAIL cards)
         self.mark.setFixedSize(16, 16)
@@ -139,7 +138,7 @@ class BarList(QWidget):
         changed = rows != self.rows
         self.rows = rows
         self.setMinimumHeight(max(40, 30 * len(rows) + 8))
-        if changed and rows:
+        if changed and rows and motion.lively():                       # (bars growing in are decoration: Lively only)
             motion.stop(self._grow)
             self.grown = 0.0
             self._grow = motion.animate(self, 900, self._on_grow)
@@ -151,7 +150,7 @@ class BarList(QWidget):
 
     def replay(self):
         """Fill the bars again, the rows fading in one after another (when the Overview comes into view)."""
-        if not self.rows or not motion.enabled():
+        if not self.rows or not motion.lively():
             return
         motion.stop(self._grow)
         self.grown = 0.0
@@ -393,7 +392,7 @@ class DashboardTab(QWidget):
             lab = QLabel(title)
             lab.setStyleSheet("font-weight: 600;")
             row.addWidget(lab)
-            f.count = QLabel("")                                        # "· 3 devices" after the title, where a panel counts
+            f.count = QLabel("")                                        # "3 devices" after the title, where a panel counts
             f.count.setProperty("muted", True)
             row.addWidget(f.count)
             row.addStretch()
@@ -940,7 +939,7 @@ class DashboardTab(QWidget):
         self._update_start(devs, last)
         held = maintenance.devices_in_maintenance()
         client = scope.name()
-        self.when.setText((f"   {client}  ·" if client else "") + (f"   Last run {display.ago(last['started_at'])}" if last else "   No checks run yet")
+        self.when.setText((f"   {client}" if client else "") + (f"   Last run {display.ago(last['started_at'])}" if last else "   No checks run yet")
                           + (f"   |   {len(held)} device(s) in maintenance: alerts held" if held else ""))
 
         aside = acks.put_aside_devices(health)
@@ -986,7 +985,7 @@ class DashboardTab(QWidget):
                     for j in range(5):
                         item = QTableWidgetItem(f"Show {v} more" if j == 0 else "")
                         item.setFlags(Qt.ItemFlag.ItemIsEnabled)
-                        item.setForeground(QColor((theme.current() or {}).get("accent", "#2563eb")))
+                        item.setForeground(QColor((theme.current() or {}).get("accent_ink", "#2563eb")))
                         item.setToolTip(f"Show {v} more")
                         self.attention.setItem(i, j, item)
                     self.attention.setSpan(i, 0, 1, 5)
@@ -1021,7 +1020,7 @@ class DashboardTab(QWidget):
                     self.attention.selectRow(i)
         self._show_folds()
         self._fit_attention()
-        self.attention_panel.count.setText(f"\u00b7 {len(problems)} device{'s' if len(problems) != 1 else ''}" if problems else "")
+        self.attention_panel.count.setText(f"{len(problems)} device{'s' if len(problems) != 1 else ''}" if problems else "")
         open_ = [(n, v) for n, v in problems if n not in aside]
         failing = sum(1 for _n, v in open_ if v["status"] in ("FAIL", "ERROR"))
         warned = len(open_) - failing
@@ -1040,7 +1039,7 @@ class DashboardTab(QWidget):
         self._attention_buttons()
         self._paint_viewport()
         self.map.refresh(db.device_health())
-        self.map_summary.setText(f"\u00b7 {self.map.summary}" if self.map.summary else "")
+        self.map_summary.setText(self.map.summary)
         self.map_panel.setVisible(not grouped)
         self.org_panel.setVisible(grouped)
         if grouped:

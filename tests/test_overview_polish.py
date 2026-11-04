@@ -57,7 +57,7 @@ print("== Needs attention")
 t = d.attention
 check("the status chip comes first, then the device in bold, and there is no heading row", t.item(0, 0).text() == "ERROR" and t.item(0, 1).text() == "dist-sw2" and t.item(0, 1).font().bold()
       and not t.horizontalHeader().isVisible() and t.itemDelegateForColumn(0) is not None, (t.item(0, 0).text(), t.item(0, 1).text()))
-check("the title counts the devices", d.attention_panel.count.text() == "· 3 devices", d.attention_panel.count.text())
+check("the title counts the devices", d.attention_panel.count.text() == "3 devices", d.attention_panel.count.text())
 check("the list is as tall as its rows, so the panel ends under the last device", t.height() == 3 * D.ATTENTION_ROW + 2 * t.frameWidth() + 2 and t.height() < 160, t.height())
 b = d.row_actions(2)
 check("the row buttons are bordered, with a ... for acknowledge and snooze", b["open"].property("outline") and b["run"].property("outline") and b["connect"].text() == "SSH"

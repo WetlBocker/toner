@@ -281,11 +281,11 @@ class SettingsTab(QWidget):
             names = [n for n in names if n in by_title]
             if not names:
                 continue
-            h = QListWidgetItem(heading.upper())
+            h = QListWidgetItem(heading)
             h.setFlags(Qt.ItemFlag.NoItemFlags)
             f = h.font()
             f.setBold(True)
-            f.setPointSizeF(max(7.0, f.pointSizeF() - 2))
+            f.setPointSizeF(max(8.5, f.pointSizeF() - 1))
             h.setFont(f)
             h.setSizeHint(QSize(0, HEADING_HEIGHT if self.nav.count() else HEADING_HEIGHT - 10))
             h.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom)

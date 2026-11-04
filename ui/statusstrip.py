@@ -15,6 +15,8 @@ from core import assistant as AI
 from ui import status as st
 from ui import theme
 
+GAP = 10                                                 # px between the strip's parts, beside the layout's own spacing (not dots)
+
 
 class Part(QLabel):
     """A piece of the strip that opens its section or settings page when clicked."""
@@ -46,8 +48,8 @@ class StatusStrip(QWidget):
         self.probed.connect(self._on_probe)
         self.tunnel_done.connect(self._on_tunnel_done)
         self.run, self.schedule, self.backups, self.receiver, self.notify = Part(), Part(), Part(), Part(), Part()
-        self.ai, self.ai_dot = Part(), QLabel("·")                       # the Assistant's connection (Settings > AI); hidden while there is no key
-        self.ai_dot.setProperty("muted", True)
+        self.ai, self.ai_dot = Part(), QWidget()                       # the Assistant's connection (Settings > AI), and the space before it;
+        self.ai_dot.setFixedWidth(GAP)                                   # both hidden while there is no key
         from ui.panels import ShimmerBar
         self.live = QLabel("●")                                # a dot that blinks while checks run
         self.live.setProperty("muted", True)
@@ -66,9 +68,7 @@ class StatusStrip(QWidget):
         lay.addStretch()
         for i, w in enumerate((self.proxy, self.vault, self.schedule, self.backups, self.receiver, self.notify)):
             if i:
-                dot = QLabel("·")
-                dot.setProperty("muted", True)
-                lay.addWidget(dot)
+                lay.addSpacing(GAP)                                      # space between the parts, not dots
             lay.addWidget(w)
         lay.addWidget(self.ai_dot)
         lay.addWidget(self.ai)

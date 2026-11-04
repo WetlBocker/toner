@@ -1,7 +1,9 @@
-"""Motion: whether, and how much, things move. Settings > Appearance > Motion (Off, Subtle, Lively), and Windows' own
-"animation effects" switch, which turns everything off regardless. Every animation in Toner asks here, so one setting
+"""Motion: whether, and how much, things move. Settings > Appearance > Motion (Off, Subtle, Lively), and the system's own
+switch (Windows' "animation effects", GNOME's animations, macOS' Reduce motion), which turns everything off regardless. Every animation in Toner asks here, so one setting
 rules them all, and a test can hold them still."""
+import functools
 import os
+import subprocess
 import sys
 
 from PySide6.QtCore import QEasingCurve, QPoint, QRectF, Qt, QTimer, QVariantAnimation
@@ -12,10 +14,29 @@ LEVELS = ("Off", "Subtle", "Lively")
 _forced = None
 
 
+@functools.lru_cache(maxsize=1)
+def _desktop_says_still():
+    """GNOME's "enable-animations" off, or macOS' Reduce motion on. Read once: asking runs a program.
+    shortcut: a change made while Toner runs is seen at the next start; ask again if that ever matters."""
+    try:
+        if sys.platform == "darwin":
+            out = subprocess.run(["defaults", "read", "com.apple.universalaccess", "reduceMotion"], capture_output=True, text=True, timeout=2)
+            return out.stdout.strip() == "1"
+        if sys.platform.startswith("linux"):
+            out = subprocess.run(["gsettings", "get", "org.gnome.desktop.interface", "enable-animations"], capture_output=True, text=True, timeout=2)
+            return out.stdout.strip() == "false"
+    except (OSError, subprocess.SubprocessError):
+        pass                                                  # no such program here: nothing says to keep still
+    return False
+
+
 def system_allows():
-    """False when the system asks for no animation: Windows' "Animation effects" is off, or there is no screen (tests)."""
+    """False when the system asks for no animation (Windows' "Animation effects" off, GNOME's animations off, macOS' Reduce motion
+    on), or there is no screen (tests)."""
     if os.environ.get("QT_QPA_PLATFORM", "").lower() == "offscreen":
         return False
+    if sys.platform != "win32":
+        return not _desktop_says_still()
     if sys.platform == "win32":
         try:
             import ctypes
@@ -181,9 +202,9 @@ class Reveal(QGraphicsEffect):
 
 
 def reveal(widget, bands=None):
-    """Bring a list into view with its rows flying up and fading in (nothing when motion is off). `widget` is an item view, or any
-    widget with `bands()` giving its rows as (top, height)."""
-    if not enabled() or not widget.isVisible():
+    """Bring a list into view with its rows flying up and fading in: decoration, so only under Lively (Subtle keeps the motion that
+    shows a state). `widget` is an item view, or any widget with `bands()` giving its rows as (top, height)."""
+    if not lively() or not widget.isVisible():
         return None
     if isinstance(widget, QAbstractItemView):
         target, bands = widget.viewport(), (lambda: row_bands(widget))

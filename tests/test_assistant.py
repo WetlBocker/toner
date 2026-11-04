@@ -422,7 +422,7 @@ check("the turn finished", wait(lambda: not panel.running(), 15))
 settle()
 kinds = [k for k, _ in panel.entries]
 check("the transcript: the question, the step as it happened, the answer and a line with tokens and cost", kinds == ["user", "muted", "assistant", "muted"] and panel.entries[1][1] == "Reading what is on screen…"
-      and panel.entries[2][1].strip() == "You are looking at core-sw1, which is failing." and panel.entries[3][1] == "2,000 tokens in, 200 out  ·  USD 0.01", panel.entries)
+      and panel.entries[2][1].strip() == "You are looking at core-sw1, which is failing." and panel.entries[3][1] == "2,000 tokens in, 200 out, USD 0.01", panel.entries)
 screen_seen = made[0].seen[1][1][2]["content"][0]["content"]
 check("the tool got what was on screen when Send was pressed: Inventory in Acme with core-sw1 selected", '"section": "Inventory"' in screen_seen and '"organization": "Acme Charter Schools"' in screen_seen and "core-sw1" in screen_seen, screen_seen[:200])
 check("the conversation was created in Acme's file and the Automation/AI page lists it", panel.conv_id() is not None and panel.conv_id() in [r["id"] for r in store.list_conversations()] and panel.conv_id() in [r["id"] for r in w.automation.assistant_page.rows])
@@ -534,7 +534,7 @@ def real_check(done=None):
 AI.check_in_background = real_check
 w2 = A.Main(); w2.show(); settle()
 check("with a key stored, the window runs the test in the background and ends up connected", wait(lambda: AI.state()["connected"] is True and w2.ai_button.isVisible(), 10) and asked and asked[-1][0] == "claude" and w2.strip.ai.text() == "Assistant: connected"
-      and w2.assistant.model_line.text() == "Claude  ·  Claude Opus 5.5")
+      and w2.assistant.model_line.text() == "Claude, Claude Opus 5.5")
 w2.close()
 AI.set_key("claude", ""); AI._state.update(connected=None, text="", checked=False, model="")
 w3 = A.Main(); w3.show(); settle(); time.sleep(0.3); settle()

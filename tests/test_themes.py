@@ -98,6 +98,16 @@ from PySide6.QtWidgets import QApplication
 app = QApplication([])
 from ui import motion, theme
 check("with no screen (offscreen), nothing moves", not motion.system_allows() and motion.level() == "Off" and not motion.enabled())
+real_run, real_platform = motion.subprocess.run, motion.sys.platform
+said = lambda text: (lambda *a, **k: type("Out", (), {"stdout": text})())
+stills = []
+for platform, text in (("linux", "false\n"), ("linux", "true\n"), ("darwin", "1\n"), ("darwin", "0\n")):
+    motion.sys.platform, motion.subprocess.run = platform, said(text)
+    motion._desktop_says_still.cache_clear()
+    stills.append(motion._desktop_says_still())
+motion.sys.platform, motion.subprocess.run = real_platform, real_run
+motion._desktop_says_still.cache_clear()
+check("GNOME's animations off and macOS' Reduce motion on keep everything still; on, they do not", stills == [True, False, True, False], stills)
 got = []
 check("an animation with motion off lands on its end value at once", motion.animate(app, 300, got.append) is None and got == [1.0])
 motion.force("Lively")

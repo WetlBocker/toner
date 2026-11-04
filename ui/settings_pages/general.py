@@ -28,7 +28,7 @@ class GeneralPage(Page):
         for w in (self.ssh_logs, self.background, self.at_login):   # about this computer: an organization cannot change them
             w.setProperty("globalOnly", True)
         def heading(text):
-            title = QLabel(text.upper())
+            title = QLabel(text)
             title.setProperty("muted", True)
             title.setStyleSheet("font-weight: 600; padding-top: 10px;")
             self.form.addRow(title)
@@ -168,7 +168,7 @@ class ThresholdsPage(Page):
             keys = [k for k in keys if k in db.DEFAULT_THRESHOLDS]
             if not keys:
                 continue
-            title = QLabel(heading.upper())
+            title = QLabel(heading)
             title.setProperty("muted", True)
             title.setStyleSheet("font-weight: 600; padding-top: 10px;")
             self.form.addRow(title)

@@ -83,7 +83,7 @@ check("many devices still draw (the names go to the hover)", len(m.nodes) == 44 
 print("== on the Overview")
 w = A.Main(); w.resize(1300, 820); w.show(); app.processEvents(); w.go("Overview"); app.processEvents()
 d = w.dashboard
-check("the Overview has the map with its summary", d.map.nodes and d.map_summary.text().startswith("· ") and "down" in d.map_summary.text(), d.map_summary.text())
+check("the Overview has the map with its summary", d.map.nodes and not d.map_summary.text().startswith("\u00b7") and "down" in d.map_summary.text(), d.map_summary.text())
 d.run_started(["core-sw1", "edge-fw"]); d.set_progress(0, 2); app.processEvents()
 check("a run rings the devices it is on, and the button says so", d.map.checking == {"core-sw1", "edge-fw"} and d.run_btn.text() == "Checking…" and d.progress.isVisibleTo(d))
 d.device_done("core-sw1"); d.set_progress(1, 2)

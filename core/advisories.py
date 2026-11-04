@@ -374,7 +374,7 @@ def versions(dev):
         rows.append(row(ADVISORIES, OK, "", NONE_FOUND))
     for a, status in zip(found, statuses):
         best = max((scores.get(c, 0) for c in a["cves"]), default=0)
-        value = f"CVSS {a['cvss']:g}" + (f" · EPSS {best:.0%}" if best else "")
+        value = f"CVSS {a['cvss']:g}" + (f", EPSS {best:.0%}" if best else "")
         # the vendor's title (Cisco, Palo Alto), else CISA's name when exploited, else the first sentence NIST gives
         title = a.get("title") or next((exploited[c] for c in a["cves"] if exploited.get(c)), "") or a.get("summary", "")
         message = title + (f" Fixed in {', '.join(a['fixed'][:3])}." if a["fixed"] else "")
