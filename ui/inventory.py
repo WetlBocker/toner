@@ -20,6 +20,7 @@ from core.runner import run_one
 from ui.orgpick import OrgPicker
 from ui.panels import ProgressLine
 from ui.pingpop import ping_popup
+from ui.widgets import add_tools_menu
 from ui.toast import toast
 from ui import status as st
 from ui import motion
@@ -987,6 +988,7 @@ class InventoryTab(QWidget):
     open_details = Signal(dict)
     run_checks = Signal(list)                    # right-click > Run Checks: these devices (their keys), now
     scan_vulns = Signal(list)                    # right-click > Scan for vulnerabilities: these devices (their keys), on the Scanning section
+    tool_requested = Signal(str, dict)           # right-click > Open in Tools: 'ping' | 'mtr' | 'tls' | 'snmp', the device
     sessions_imported = Signal()                 # sessions from MobaXterm, PuTTY or SecureCRT were added (the Sessions list reloads)
     orgs_created = Signal()                      # an import made organizations from its folders (the switcher reloads)
     COLS = ["Name", "Vendor", "Platform", "Version", "Location", "Host", "Site", "Details", "Tags", "Status", "Last checked", "Organization"]
@@ -1948,6 +1950,7 @@ class InventoryTab(QWidget):
                 menu.addAction("Run Checks", lambda: self.run_checks.emit([d.get("key") or d["name"] for d in self.selected_devices()]))
             if len(devs) == 1 and not folders and devs[0].get("host"):
                 menu.addAction("Ping", lambda d=devs[0]: ping_popup(self, d["name"], d["host"]))
+                add_tools_menu(menu, devs[0], self.tool_requested.emit)
             if devs and can:
                 menu.addAction("Edit selected..." if len(devs) > 1 else "Edit tags, folder, profile...", self.bulk_edit)
                 menu.addAction("Detect vendors for selected...", self.detect_vendors)

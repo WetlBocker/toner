@@ -185,5 +185,21 @@ QTest.qWait(w.GLOBAL_WAIT + 300)
 check("...but once, a moment after the first", refreshed == [1], refreshed)
 d.refresh = real_refresh
 
+print("== Open in Tools, from a device's menu")
+with db.within(acme):
+    db.save_run([Result("acme-fw", "ha", "FAIL", "1/2", "Peer unit is not in sync")])
+d.refresh(); app.processEvents()
+r = d.names.index("acme-fw@@%d" % acme)
+t.selectRow(r)
+menu = d._menu_for_current()
+sub = next((a.menu() for a in menu.actions() if a.text() == "Open in Tools"), None)
+check("Needs attention's menu has Open in Tools, with the tools that take a device", sub is not None
+      and [a.text() for a in sub.actions()] == ["Live Ping", "Path Monitor (MTR)", "TLS Certificates", "SNMP"], [a.text() for a in menu.actions()])
+next(a for a in sub.actions() if a.text() == "TLS Certificates").trigger(); app.processEvents()
+check("...and one opens that tool with the device filled in", w.tabs.currentWidget() is w.tools and w.tools.tabs.currentWidget() is w.tools.tls
+      and w.tools.tls.host.text() == db.find_device("acme-fw@@%d" % acme)["host"], (w.tools.tabs.currentWidget(), w.tools.tls.host.text()))
+w.inventory.tool_requested.emit("mtr", db.find_device("acme-sw@@%d" % acme)); app.processEvents()
+check("Inventory's menu opens them the same way", w.tools.tabs.currentWidget() is w.tools.mtr)
+
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

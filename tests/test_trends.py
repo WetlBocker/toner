@@ -92,6 +92,19 @@ daemon = service.Daemon(log=lambda m: None)
 did = daemon.tick(now_real)
 check("the service makes it when it is due, on its own", ("trend report", os.path.join(folder, f"Toner-trend-{now_real:%Y-%m-%d}.html")) in did, did)
 check("and not again straight away", not any(x[0] == "trend report" for x in daemon.tick(now_real)))
+from core import orgs
+west = orgs.create("Acme / West", "WEST")
+quiet = orgs.create("Bolt", "BOLT")                       # no runs: no report
+with db.within(west):
+    run_at(now_real - timedelta(hours=2), [("west-sw", "cpu", "FAIL", "99%", "")])
+db.set_setting("trend_last", ""); db.set_setting("trend_per_org", True)
+trends.generate_scheduled(now_real)
+made = sorted(f for f in os.listdir(folder) if f.startswith("Toner-trend-") and not f.startswith(f"Toner-trend-{now_real:%Y}"))
+check("Global with 'Also one report per organization': one file each, named by its code, none without runs",
+      made == [f"Toner-trend-WEST-{now_real:%Y-%m-%d}.html"], made)
+check("...each from that organization's own runs (its one run, not Global's)", ": 1 run(s) over" in open(os.path.join(folder, made[0]), encoding="utf-8").read() if made else False)
+db.set_setting("trend_per_org", False)
+orgs.remove(west); orgs.remove(quiet)
 
 print("== in the program")
 from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
@@ -119,6 +132,7 @@ from ui import toast as _T
 check("with no runs yet it says so and writes nothing new", _T.history and "no runs" in _T.history[-1])
 page = S.ReportsPage(); page.load()
 check("Settings > Reports offers Off, every week, every month", [page.trend.itemData(i) for i in range(page.trend.count())] == ["", "weekly", "monthly"] and page.trend.currentData() == "weekly")
+check("\"Also one report per organization\" shows only in Global with organizations (there are none now)", page.per_org.text() == "Also one report per organization" and page.per_org.isHidden())
 page.folder.setText(""); page.trend.setCurrentIndex(page.trend.findData("monthly"))
 check("a schedule needs a folder to save into", page.validate() and "folder" in page.validate()[0])
 page.folder.setText(folder); check("with one it is fine", page.validate() == [])

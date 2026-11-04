@@ -197,5 +197,14 @@ def generate_scheduled(now=None):
         pdf = False
     path = stem + (".pdf" if pdf else ".html")
     (save_pdf if pdf else save_html)(data, path)
+    if db.get_setting("trend_per_org") and db.everything():            # Global: and one report per organization, from its own file
+        for o in db.org_rows():
+            if o["archived"]:
+                continue
+            with db.within(o["id"]):
+                part = compute(7 if db.get_setting("trend_schedule") == "weekly" else 30, now)
+            if part["runs"]:
+                name = o["code"] or str(o["id"])                      # (codes are letters, digits, - and _: safe in a file name)
+                (save_pdf if pdf else save_html)(part, os.path.join(folder, f"Toner-trend-{name}-{now:%Y-%m-%d}") + (".pdf" if pdf else ".html"))
     db.set_setting("trend_last", now.strftime(FMT))
     return path

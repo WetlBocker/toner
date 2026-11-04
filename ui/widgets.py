@@ -632,6 +632,17 @@ class MenuPlacer(QObject):
         return False
 
 
+TOOL_ACTIONS = (("ping", "Live Ping"), ("mtr", "Path Monitor (MTR)"), ("tls", "TLS Certificates"), ("snmp", "SNMP"))   # (Tools' names)
+
+
+def add_tools_menu(menu, dev, emit):
+    """A device's menu: "Open in Tools" with the tools that take a device; emit(tool key, device) opens one with it filled in."""
+    sub = menu.addMenu("Open in Tools")
+    for key, label in TOOL_ACTIONS:
+        sub.addAction(label, lambda k=key: emit(k, dev))
+    return sub
+
+
 class KeyboardAccess(QObject):
     """Every widget as it is first shown: Tab leaves a list that cannot be edited (Qt's tables move from cell to cell, so Tab
     never got out of Needs attention), a button that is only an icon is called by its tooltip, and a box is called by the

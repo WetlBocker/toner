@@ -283,6 +283,8 @@ class ReportsPage(Page):
         self.form.addRow("Default folder", row_of(self.folder, browse))
         self.form.addRow("", self.include_all)
         self.form.addRow("Trend report", self.trend)
+        self.per_org = QCheckBox("Also one report per organization")      # Global, with organizations: one file each beside it
+        self.form.addRow("", self.per_org)
 
     def browse(self):
         d = QFileDialog.getExistingDirectory(self, "Default report folder", self.folder.text())
@@ -295,6 +297,8 @@ class ReportsPage(Page):
         self.folder.setText(db.get_setting("report_folder"))
         self.include_all.setChecked(bool(db.get_setting("report_include_all")))
         self.trend.setCurrentIndex(max(0, self.trend.findData(db.get_setting("trend_schedule"))))
+        self.per_org.setChecked(bool(db.get_setting("trend_per_org")))
+        self.per_org.setVisible(db.home() == db.GLOBAL and bool(db.org_rows()))
 
     def validate(self):
         f = self.folder.text().strip()
@@ -310,3 +314,4 @@ class ReportsPage(Page):
         db.set_setting("report_folder", self.folder.text().strip())
         db.set_setting("report_include_all", self.include_all.isChecked())
         db.set_setting("trend_schedule", self.trend.currentData())
+        db.set_setting("trend_per_org", self.per_org.isChecked())

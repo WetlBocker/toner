@@ -9,7 +9,7 @@ import html
 
 from core import acks, audit, backup, db, display, fleet, maintenance, notify, reports, scope, vendors
 from ui import icons, theme
-from ui.widgets import EmptyHint, FlowLayout, RefreshButton, StatusDelegate, filling
+from ui.widgets import EmptyHint, FlowLayout, RefreshButton, StatusDelegate, add_tools_menu, filling
 from ui import status as st
 from ui import motion
 from ui import glance
@@ -258,7 +258,8 @@ class DashboardTab(QWidget):
     device_action = Signal(str, str)             # ("open" | "run" | "ssh" | "rdp", device name) from Needs attention
     attention_count = Signal(int, int, str)      # devices needing attention, how many of them fail, and that in words (the badge on Results)
     action = Signal(str)                  # a step of the getting-started card: add, scan, notify
-    open_org = Signal(int)                # Global: an organization's Open (or its row in Organizations) was used: switch Toner to it
+    open_org = Signal(int)
+    tool_requested = Signal(str, dict)    # Needs attention's menu > Open in Tools: 'ping' | 'mtr' | 'tls' | 'snmp', the device                # Global: an organization's Open (or its row in Organizations) was used: switch Toner to it
 
     PERIODS = [("Last 24 hours", 1), ("Last 7 days", 7), ("Last 30 days", 30)]
 
@@ -900,6 +901,7 @@ class DashboardTab(QWidget):
         if dev and dev.get("host"):
             from ui.pingpop import ping_popup
             m.addAction("Ping", lambda: ping_popup(self, dev["name"], dev["host"]))
+            add_tools_menu(m, dev, self.tool_requested.emit)
         m.addSeparator()
         if cur[2]:
             m.addAction("Undo (bring it back)", self._ack_clicked)

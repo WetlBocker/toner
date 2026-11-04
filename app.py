@@ -156,7 +156,9 @@ class Main(QMainWindow):
         self.inventory.orgs_created.connect(lambda: (self.refresh_orgs(), self.inventory.refresh(), self.settings.refresh_dynamic()))
         self.inventory.open_rdp_tab.connect(self.open_rdp_console)
         self.inventory.open_details.connect(self.open_device_view)
-        self.inventory.run_checks.connect(self.results.run_devices)        # right-click > Run Checks (progress in the status bar)
+        self.inventory.run_checks.connect(self.results.run_devices)
+        self.inventory.tool_requested.connect(self.open_tool)                # right-click > Open in Tools
+        self.dashboard.tool_requested.connect(self.open_tool)        # right-click > Run Checks (progress in the status bar)
         self.inventory.scan_vulns.connect(lambda keys: (self.go("Scanning"), self.scanning.run_devices(keys)))
         self.scanning.open_device.connect(self.open_device_by_name)
         self.inventory.open_agent_settings.connect(self.open_agent_settings)

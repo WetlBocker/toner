@@ -93,12 +93,13 @@ check("it only applies to devices whose address answers from here", runner.sweep
 class Quiet(Driver):
     def run(self): return [self.result("cpu", "OK", "1%")]
 drivers_real = runner.DRIVERS["cisco"]; runner.DRIVERS["cisco"] = Quiet
+reach_real, runner.reachability = runner.reachability, lambda d, o: []   # (a probe slow under load would skip the login: not what this tests)
 own = lambda rows: [r for r in rows if r.check != "reachability"]            # the TCP reachability row is tested in test_reach
 off = own(runner.run_one(box, th, {"tls_sweep": False, "retries": 0, "custom": []}))
 check("it adds nothing while the option is off", [r.check for r in off] == ["cpu"])
 on = own(runner.run_one(box, th, {"tls_sweep": True, "tls_sweep_ports": f"{port}", "retries": 0, "custom": []}))
 check("with it on, a run includes the certificate row beside the device's own checks", [r.check for r in on] == ["cpu", f"certificate :{port}"], [(r.check, r.status) for r in on])
-runner.DRIVERS["cisco"] = drivers_real
+runner.DRIVERS["cisco"] = drivers_real; runner.reachability = reach_real
 db.set_setting("tls_sweep", True); db.set_setting("tls_sweep_ports", "443, 8443")
 opts = db.runtime_options()
 check("the settings reach a run (Settings > Automation)", opts["tls_sweep"] is True and opts["tls_sweep_ports"] == "443, 8443")
