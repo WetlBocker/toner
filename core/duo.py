@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import json
+import re
 import threading
 import time
 import urllib.error
@@ -36,15 +37,45 @@ def sign(skey, date, method, host, path, query, body):
     return hmac.new(skey.encode(), canon.encode(), hashlib.sha512).hexdigest()
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *a, **k):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+_HOST = re.compile(r"[A-Za-z0-9.-]+")
+_HOST_PORT = re.compile(r"[A-Za-z0-9.-]+(:[0-9]{1,5})?")
+
+
+class _ReadTimeout(Exception):
+    pass
+
+
 def _call(cfg, method, path, params):
+    try:
+        return _call_(cfg, method, path, params)
+    except _ReadTimeout:
+        if path.endswith("auth_status"):
+            raise
+        raise Unavailable("Duo timed out") from None
+    except Unavailable:
+        raise
+    except Exception:
+        raise Unavailable("Duo request failed") from None
+
+
+def _call_(cfg, method, path, params):
     duo = cfg["duo"]
+    host, ikey = duo["host"], duo["ikey"]
+    if not isinstance(host, str) or not (_HOST_PORT if _TEST_ALLOW_HTTP else _HOST).fullmatch(host):
+        raise Unavailable("bad Duo host")
     skey = osstore.get("duo:" + cfg["id"])
     if not skey:
         raise Unavailable("no Duo secret key")
-    host, ikey = duo["host"], duo["ikey"]
     date = formatdate(usegmt=False)
     if method == "GET":
-        query, body = urllib.parse.urlencode(sorted(params.items()), quote_via=urllib.parse.quote), ""
+        query, body = "&".join(f"{urllib.parse.quote(k, safe='~')}={urllib.parse.quote(v, safe='~')}"
+                               for k, v in sorted(params.items())), ""
     else:
         query, body = "", json.dumps(params, separators=(",", ":"), sort_keys=True)
     sig = sign(skey.decode(), date, method, host, path, query, body)
@@ -53,11 +84,17 @@ def _call(cfg, method, path, params):
         "Date": date, "Content-Type": "application/json",
         "Authorization": "Basic " + base64.b64encode(f"{ikey}:{sig}".encode()).decode()})
     try:
-        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as r:
+        with _OPENER.open(req, timeout=REQUEST_TIMEOUT) as r:
+            if not 200 <= r.status < 300:
+                raise Unavailable("Duo answered oddly")
             out = json.loads(r.read())
-    except (urllib.error.URLError, OSError, ValueError):
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        # urllib wraps a timeout waiting for the reply in URLError; a connect timeout looks the same (then the poll just runs to its deadline)
+        if isinstance(e, TimeoutError) or isinstance(getattr(e, "reason", None), TimeoutError):
+            raise _ReadTimeout() from None
+        # (HTTPError is a URLError, so a 3xx or 4xx lands here)
         raise Unavailable("Duo could not be reached") from None
-    if out.get("stat") != "OK":
+    if not isinstance(out, dict) or out.get("stat") != "OK" or not isinstance(out.get("response"), dict):
         raise Unavailable("Duo refused the request")
     return out["response"]
 
@@ -68,7 +105,9 @@ def preauth(cfg, user):
 
 
 def push(cfg, user, cancel):
-    txid = _call(cfg, "POST", "/auth/v2/auth", {"username": user, "factor": "push", "device": "auto", "async": "1"})["txid"]
+    txid = _call(cfg, "POST", "/auth/v2/auth", {"username": user, "factor": "push", "device": "auto", "async": "1"}).get("txid")
+    if not isinstance(txid, str):
+        raise Unavailable("Duo gave no transaction")
     end = time.monotonic() + PUSH_SECONDS
     while time.monotonic() < end:
         if cancel.is_set():
@@ -78,6 +117,8 @@ def push(cfg, user, cancel):
         def go():
             try:
                 box.append(_call(cfg, "GET", "/auth/v2/auth_status", {"txid": txid}))
+            except _ReadTimeout:
+                box.append({"result": "waiting"})       # the long poll ran out; ask again until the deadline
             except Exception as e:
                 box.append(e)
         t = threading.Thread(target=go, daemon=True)
