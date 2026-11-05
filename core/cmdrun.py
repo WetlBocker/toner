@@ -332,6 +332,7 @@ def run_on_device(dev, commands, opts=None, read_timeout=60):
     """Run the commands on one device (one SSH session, or one PowerShell run). Returns {'device','ok','outputs':[(command, text)],'error','seconds'}."""
     start = time.time()
     dev = profiles.resolve(dev)
+    need_push([dev], commands)
     out = _blank(dev)
     kind = kind_of(dev)
     if not kind:
@@ -371,7 +372,15 @@ def _save_session(dev, buf):
         return None
 
 
+def need_push(devs, commands):
+    """Refuse, before connecting, when a role without "push" asks for a command that could change a device."""
+    from core import perms
+    if not perms.allowed("push") and (risky := risky_commands(devs, commands)):
+        raise perms.Denied(f"Your role can't run commands that change a device: {', '.join(risky)}")
+
+
 def run_many(devices, commands, workers=8, on_result=None, opts=None, cancel=None):
+    need_push([profiles.resolve(d) for d in devices], commands)
     results = []
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
         def one(d):

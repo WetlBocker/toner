@@ -861,7 +861,8 @@ def cleanup(dev, r, pick, src_password="", on_item=None, opts=None):
     """Delete what was ticked on one device (and only that), then read the free space again. `pick`: {'install': bool, 'files':
     [(fs, name, size)]}. on_item(item, status) as each one goes: item is 'install' or (fs, name); status 'Deleting...', 'Deleted' or
     'Failed: <reason>'. Every deletion is in the audit log. Returns {fs: free bytes} read afterwards."""
-    from core import audit, profiles
+    from core import audit, perms, profiles
+    perms.require("push")
     report = on_item or (lambda *_a: None)
     secrets = [src_password, profiles.secret(dev, "main") or ""]
     plat = platform_of(dev)
@@ -1069,7 +1070,8 @@ def transfer(dev, r, choice, src, vrf="management", on_step=None, cancel=None, p
     choice: {'name', 'size' (from the server), 'md5' (typed)}. on_step(step, (done, total) or None, detail).
     then(c, prompt, report): the step after a verified copy (the boot statement or install add), or None.
     Returns {'ok', 'stopped', 'detail'}."""
-    from core import audit, profiles
+    from core import audit, perms, profiles
+    perms.require("push")
     say = on_step or (lambda *_a: None)
     plat, name, size, typed = platform_of(dev), choice["name"], choice["size"], choice["md5"].strip().lower()
     secrets = [src.get("password") or "", profiles.secret(dev, "main") or ""]
@@ -1213,7 +1215,8 @@ def _install_add(dev, c, prompt, report, fs, name, secrets):
 def save_and_install(dev, r, name, secrets=(), on_step=None, opts=None):
     """After Verify was approved: sign in again, save the configuration (write memory, checked for [OK]) and run install add once
     more. Returns transfer()'s shape: {'ok', 'stopped', 'staged', 'detail', 'pending'}. Nothing here reloads or activates."""
-    from core import audit
+    from core import audit, perms
+    perms.require("push")
     say = on_step or (lambda *_a: None)
     fs = r["flashes"][0]["fs"]
     log = io.BytesIO()
@@ -1267,7 +1270,8 @@ def after_copy(dev, r, name, secrets=()):
     or variable and save the configuration, checked by reading it back. Returns True, the line saying what went wrong, or for
     install add a staging result (see _install_add).
     Every change has its audit line. Nothing here reloads, activates or commits."""
-    from core import audit
+    from core import audit, perms
+    perms.require("push")
     plat, fs = r["platform"], r["flashes"][0]["fs"]
 
     def then(c, prompt, report):

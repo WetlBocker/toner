@@ -10,11 +10,11 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComb
                                QStackedWidget, QStyledItemDelegate, QTableWidget, QTableWidgetItem, QTabWidget, QTreeWidget, QTreeWidgetItem,
                                QVBoxLayout, QWidget)
 
-from core import apitool as A, db, profiles
+from core import apitool as A, db, perms, profiles
 from ui import status as st, theme
 from ui.orgfield import SHARED_CHOICE, choice_file, org_choices, show_row
 from ui.tools2 import _muted, _primary, _table
-from ui.widgets import EmptyHint, flow, remember_sizes
+from ui.widgets import EmptyHint, flow, gate_push, remember_sizes
 
 ROLE = Qt.ItemDataRole.UserRole
 DOTS = "•" * 8
@@ -560,6 +560,8 @@ class ApiTesterTab(QWidget):
         self.copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(self.resp_body.toPlainText()))
         for w in (self.method, self.body_type, self.key_where, self.profile):
             w.currentIndexChanged.connect(self._mark)
+        self.method.currentTextChanged.connect(lambda _t: self._send_enabled(not self.running()))
+        self._send_enabled(True)
         for w in (self.url, self.basic_user, self.key_name, self.profile_key, self.token, self.basic_pw, self.key_value):
             w.textChanged.connect(self._mark)
         self.body.textChanged.connect(self._mark)
@@ -743,8 +745,15 @@ class ApiTesterTab(QWidget):
     def running(self):
         return bool(self.worker and self.worker.isRunning())
 
+    def _send_enabled(self, on):
+        """Send is off for a role without "push" while a method that can change a device is chosen (GET, HEAD and OPTIONS still go)."""
+        gate_push(self.send_btn, on, self.method.currentText().upper() not in ("GET", "HEAD", "OPTIONS"))
+
     def send_now(self):
         if self.running():
+            return
+        if not self.send_btn.isEnabled():                     # (Enter in the address box skips the disabled button)
+            self._say(perms.REASON, "FAIL")
             return
         s = self.state()
         try:
@@ -753,7 +762,7 @@ class ApiTesterTab(QWidget):
             self._say(str(e), "FAIL")
             return
         self._say("Sending...", None)
-        self.send_btn.setEnabled(False)
+        self._send_enabled(False)
         self.cancel_btn.setEnabled(True)
         self._sent = (s, prepared)
         self.worker = SendWorker(prepared)
@@ -766,7 +775,7 @@ class ApiTesterTab(QWidget):
             self._say("Cancelling...", None)
 
     def _done(self, result):
-        self.send_btn.setEnabled(True)
+        self._send_enabled(True)
         self.cancel_btn.setEnabled(False)
         s, prepared = self._sent
         self._result = result

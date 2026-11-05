@@ -406,6 +406,9 @@ def send(prepared, cancel=None):
     """Send it (on a worker thread) and read the reply. Returns {'status', 'reason', 'ms', 'size', 'headers', 'body', 'truncated',
     'error', 'url', 'cancelled'}: 'error' says what went wrong in plain words when nothing came back."""
     import requests
+    from core import perms
+    if prepared["method"].upper() not in ("GET", "HEAD", "OPTIONS"):
+        perms.require("push")
     out = {"status": 0, "reason": "", "ms": 0, "size": 0, "headers": [], "body": b"", "truncated": 0, "error": "", "url": prepared["url"],
            "cancelled": False}
     host = urlsplit(prepared["url"]).hostname or ""

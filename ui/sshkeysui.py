@@ -6,7 +6,8 @@ from PySide6.QtCore import QThread, Qt, Signal
 from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QLabel, QLineEdit,
                                QMessageBox, QPushButton, QSizePolicy, QSpinBox, QTabWidget, QVBoxLayout, QWidget)
 
-from core import audit, db, profiles, scp, sshkeys, vendors
+from core import audit, db, perms, profiles, scp, sshkeys, vendors
+from ui.widgets import gate_push
 from core import quiet
 from ui.opensslui import _Base, _secret, _text
 from ui.tools import DevicePicker, OutputBox, _row
@@ -328,12 +329,15 @@ class DeployWorker(QThread):
     def run(self):
         j, ok, client, extra = self.job, False, None, []
         try:
+            perms.require("push")                        # before connecting
             self.line.emit(f"Connecting to {j['host']}:{j['port']} as {j['user']}...")
             client, extra = scp.connect(j["host"], j["port"], j["user"], j["password"], j["dev"], j["hostkey_mode"], j["timeout"])
             result = sshkeys.add_to_device(client, j["line"], j["timeout"])
             self.line.emit(f"Added the key to {j['name']}'s ~/.ssh/authorized_keys." if result == "added"
                            else f"{j['name']} already has this key; nothing changed.")
             ok = True
+        except perms.Denied as e:
+            self.line.emit(str(e))
         except paramiko.BadHostKeyException:
             self.line.emit(f"HOST KEY CHANGED for {j['host']}. It does not match the key saved earlier: the device may have been "
                            "replaced or reset, or something is impersonating it. Nothing was changed. If the change is expected, "
@@ -386,6 +390,7 @@ class DeployKey(QWidget):
         self.go.clicked.connect(self.start)
         self.password.returnPressed.connect(self.start)
         self.picked()
+        gate_push(self.go)
 
     def offer(self, line):
         """A key just made or read: offered here unless one is already typed in."""
@@ -426,6 +431,9 @@ class DeployKey(QWidget):
     def start(self):
         if self.running():
             return
+        if not perms.allowed("push"):                    # (Enter in a box skips the disabled button)
+            self.out.line(perms.REASON)
+            return
         from core import nettools
         try:
             host = nettools.check_host(self.host.text())
@@ -442,18 +450,19 @@ class DeployKey(QWidget):
                "dev": profiles.resolve(dev) if dev else None, "line": " ".join(self.key.text().split()),
                "name": dev["name"] if dev else host, "hostkey_mode": db.get_setting("hostkey_mode"),
                "timeout": int(db.get_setting("ssh_timeout"))}
-        self.go.setEnabled(False)
+        gate_push(self.go, False)
         self.worker = DeployWorker(job)
         self.worker.line.connect(self.out.line)
         self.worker.finished_ok.connect(lambda ok, job=job: self._done(ok, job))
         self.worker.start()
 
     def _done(self, ok, job):
-        self.go.setEnabled(True)
+        gate_push(self.go)
         audit.log("ssh key added to device" + ("" if ok else " failed"), f"{job['name']}: {sshkeys.fingerprint(sshkeys.read(job['line'])['public'])}")
 
     def refresh(self):
         self.picker.refresh()
+        gate_push(self.go, not self.running())
 
     def shutdown(self):
         if self.running():

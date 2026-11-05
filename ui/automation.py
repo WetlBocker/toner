@@ -8,10 +8,10 @@ from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
                                QMessageBox, QPlainTextEdit, QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
-from core import ansible as AN, audit, db, scope
+from core import ansible as AN, audit, db, perms, scope
 from ui import status as st
 from ui.nav import PageStack
-from ui.widgets import EmptyHint, filling, flow, remember_sizes
+from ui.widgets import EmptyHint, filling, flow, gate_push, remember_sizes
 from ui.finder import FilterButton, SearchBox, device_sections, shown_devices
 from ui.assistant import AssistantOverviewPage
 
@@ -237,12 +237,13 @@ class PlaybooksPage(QWidget):
 
     def _mode_changed(self, on):
         self.go.setText("Run check" if on else "Run playbook")
-        self.go.setToolTip("Show what would change, and change nothing" if on else "Run the playbook for real: it can change the devices (asks first)")
+        self.go._base_tip = "Show what would change, and change nothing" if on else "Run the playbook for real: it can change the devices (asks first)"
+        self._buttons()
 
     def _buttons(self):
         busy = self.running()
         self.edit_btn.setEnabled(bool(self.selected()))
-        self.go.setEnabled(not busy)
+        gate_push(self.go, not busy)                      # a check or a run both go through ansible.run
         self.stop.setEnabled(busy)
 
     # ---- running
@@ -253,6 +254,9 @@ class PlaybooksPage(QWidget):
         """Run the chosen playbook on the ticked devices. A real run (not check mode) asks first, naming the playbook and the devices.
         `confirmed` skips the question (the tests answer it themselves through QMessageBox)."""
         if self.running():
+            return False
+        if not perms.allowed("push"):
+            self.status.setText(perms.REASON)
             return False
         name, devs = self.selected(), self.checked_devices()
         if not name:

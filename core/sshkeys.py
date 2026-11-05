@@ -446,6 +446,8 @@ def authorized_keys_command(line):
 def add_to_device(client, line, timeout=30):
     """Add the public key line over an open paramiko connection. Returns 'added' or 'present'; raises ValueError with what the
     device said when it could not."""
+    from core import perms
+    perms.require("push")
     chan = client.get_transport().open_session(timeout=timeout)
     chan.settimeout(timeout)
     chan.exec_command(authorized_keys_command(line))

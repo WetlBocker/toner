@@ -3,7 +3,7 @@ from PySide6.QtGui import QColor, QFont, QIcon, QIconEngine, QPainter, QPalette,
 from PySide6.QtWidgets import (QAbstractButton, QAbstractSpinBox, QApplication, QCheckBox, QComboBox, QHBoxLayout, QHeaderView, QLabel, QLayout, QLineEdit,
                                QAbstractItemView, QFormLayout, QMenu, QPushButton, QSizePolicy, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QToolButton,
                                QVBoxLayout, QWidget, QWidgetAction)
-from core import db, reports
+from core import db, perms, reports
 from ui import status as st, theme
 
 
@@ -700,3 +700,11 @@ def place_menu(menu, button):
     if limit is not None and below + h > limit and above - h >= ((screen.top() if screen else 0)):
         menu.move(menu.x(), above - h)
 
+
+def gate_push(btn, enabled=True, needed=True):
+    """Enable a button that writes to a device only when `enabled` and the role has "push"; the tooltip says why when it's the role."""
+    blocked = needed and not perms.allowed("push")
+    if not hasattr(btn, "_base_tip"):
+        btn._base_tip = btn.toolTip()
+    btn.setEnabled(enabled and not blocked)
+    btn.setToolTip(perms.REASON if blocked else btn._base_tip)

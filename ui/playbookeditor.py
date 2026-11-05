@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (QComboBox, QDialog, QDialogButtonBox, QFormLayout
 from core import ansible as AN, audit
 from ui import theme
 from ui import status as st
-from ui.widgets import EmptyHint, remember_sizes
+from ui.widgets import EmptyHint, gate_push, remember_sizes
 
 
 class YamlHighlighter(QSyntaxHighlighter):
@@ -308,8 +308,9 @@ class PlaybookEditorTab(QWidget):
         dirty = self.dirty()
         self.editor.setReadOnly(not have)
         self.title.setText((self.current + ("   (not saved)" if dirty else "")) if have else "Choose a playbook, or start a new one")
-        for b in (self.rename_btn, self.delete_btn, self.check_btn, self.run_btn):
+        for b in (self.rename_btn, self.delete_btn, self.check_btn):
             b.setEnabled(have)
+        gate_push(self.run_btn, have)                     # Run... opens Automation, whose Run button is gated the same way
         self.save_btn.setEnabled(dirty)
         self.revert_btn.setEnabled(dirty)
         self.check_btn.setEnabled(have and not self.checking())
@@ -458,7 +459,7 @@ class PlaybookEditorTab(QWidget):
         self._buttons()
 
     def _run(self):
-        if self.current and (not self.dirty() or self.save()):
+        if self.current and self.run_btn.isEnabled() and (not self.dirty() or self.save()):
             self.run_requested.emit(self.current)
 
     def shutdown(self):

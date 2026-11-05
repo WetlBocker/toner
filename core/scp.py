@@ -123,6 +123,8 @@ class Scp:
 
     # ---------------------------------------------------------------- upload
     def upload(self, local, remote, recursive=False, preserve=False):
+        from core import perms
+        perms.require("push")
         local = os.path.abspath(local)
         if os.path.isdir(local) and not recursive:
             raise ScpError(f"{local} is a folder: tick 'Include sub-folders' to send it")

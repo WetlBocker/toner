@@ -8,7 +8,8 @@ from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QHBoxLayout, 
                                QMessageBox, QProgressBar, QPushButton, QRadioButton, QSpinBox, QStackedWidget, QTableWidgetItem, QTreeWidget, QTreeWidgetItem,
                                QVBoxLayout, QWidget)
 
-from core import db, firmware as fw
+from core import db, firmware as fw, perms
+from ui.widgets import gate_push
 from core import quiet
 from ui.finder import FilterButton, SearchBox, device_sections, shown_devices
 from ui.tools import _row
@@ -646,7 +647,7 @@ class CleanupStep(QWidget):
 
     def start(self):
         work = self.chosen()
-        if not work or self.running() or not self.confirm(*fw.confirm_text(work)):
+        if not work or self.running() or not perms.allowed("push") or not self.confirm(*fw.confirm_text(work)):
             return
         for r, pick in work:                               # what was not confirmed can no longer be ticked
             for item in (["install"] if pick["install"] else []) + [(fs, n) for fs, n, _s in pick["files"]]:
@@ -680,7 +681,7 @@ class CleanupStep(QWidget):
         return self.job is not None and self.job.isRunning()
 
     def _sync(self):
-        self.delete.setEnabled(not self.running() and bool(self.chosen()))
+        gate_push(self.delete, not self.running() and bool(self.chosen()))
         self.changed.emit()
 
     def ready(self):
@@ -938,6 +939,7 @@ class TransferStep(QWidget):
         self.table.item(row, 1).setText(step)
         if step == fw.VERIFY:
             b = QPushButton(fw.VERIFY)
+            gate_push(b)
             b.clicked.connect(lambda _=False, k=key: self.verify(k))
             self.table.setCellWidget(row, 1, b)
         elif self.table.cellWidget(row, 1) is not None:
@@ -956,7 +958,7 @@ class TransferStep(QWidget):
     def verify(self, key):
         """Show what a save would write; on approval save the configuration and run install add again, off the window's thread."""
         o, job = self.outcomes().get(key), self.retries.get(key)
-        if not o or (job is not None and job.isRunning()):
+        if not o or not perms.allowed("push") or (job is not None and job.isRunning()):
             return
         r, choice = next((r, c) for r, c in self.work if r["key"] == key)
         if not self.ask_save(self.table.item(self.rows[key], 0).text(), o.get("pending") or []):
@@ -1128,7 +1130,7 @@ class FirmwareTab(QWidget):
         if i == 4:
             work = self.images.chosen()
             src, _files, vrf = self.server.chosen()
-            if not work or not self.confirm_transfer(*fw.transfer_text(work, src)):
+            if not work or not perms.allowed("push") or not self.confirm_transfer(*fw.transfer_text(work, src)):
                 return
             self.stack.setCurrentIndex(5)
             self.transfer.start(work, src, vrf, then=self.after_copy)
@@ -1207,7 +1209,7 @@ class FirmwareTab(QWidget):
         self.restart.setEnabled(not busy)
         self.back.setEnabled(0 < i < 5 and not busy)          # once copying has started there is no going back
         self.next.setText("Transfer" if i == 4 else "Next")
-        self.next.setEnabled(i + 1 < len(self.steps()) and step.ready() and not busy)
+        gate_push(self.next, i + 1 < len(self.steps()) and step.ready() and not busy, i == 4)         # Transfer writes to the devices
 
     def running(self):
         return self.server.busy() or self.check.running() or self.cleanup.running() or self.transfer.running()

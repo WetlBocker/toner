@@ -806,6 +806,9 @@ def prepare(spec):
 
 def run(spec, on_line, cancel=None, back=None):
     """Run a playbook and keep the result. Returns {'exit_code', 'rows', 'output', 'mode', 'seconds', 'run_id'}."""
+    from core import perms
+    if not spec.syntax_only:                       # the editor's syntax check reads the file and changes nothing
+        perms.require("push")
     prepare(spec)
     back = back or backend()
     inv, logins, names = build_inventory(spec.devices)

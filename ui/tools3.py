@@ -11,10 +11,11 @@ from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
                                QProgressBar, QPushButton, QSpinBox, QStackedWidget, QTableWidgetItem, QVBoxLayout, QWidget, QFrame)
 import paramiko
-from core import audit, db, fileserver, iperf, nettools, oui, profiles, proxy, scp, vendors, wifi, xcopy
+from core import audit, db, fileserver, iperf, nettools, oui, perms, profiles, proxy, scp, vendors, wifi, xcopy
 from core import quiet
 from ui import plots, theme
 from ui.tools import DevicePicker, OutputBox, Runner, _row, reset_button
+from ui.widgets import gate_push
 from ui.tools2 import _muted, _primary, _table
 from ui import status as st
 
@@ -685,6 +686,8 @@ class ScpWorker(QThread):
     def run(self):
         j, ok, client, extra = self.job, False, None, []
         try:
+            if j["upload"]:
+                perms.require("push")                    # before connecting
             self.line.emit(f"Connecting to {j['host']}:{j['port']} as {j['user']}...")
             client, extra = scp.connect(j["host"], j["port"], j["user"], j["password"], j["dev"], j["hostkey_mode"], j["timeout"])
             s = scp.Scp(client, progress=self._progress, cancel=self.cancel, timeout=j["timeout"])
@@ -699,6 +702,8 @@ class ScpWorker(QThread):
             self.summary = (files, nbytes)
         except scp.Cancelled:
             self.line.emit("Stopped.")
+        except perms.Denied as e:
+            self.line.emit(str(e))
         except paramiko.BadHostKeyException:
             self.line.emit(f"HOST KEY CHANGED for {j['host']}. It does not match the key saved earlier: the device may "
                            "have been replaced or reset, or something is impersonating it. Nothing was copied. If the "
@@ -797,6 +802,7 @@ class ScpTab(QWidget):
         self.remote_label.setText("To (on the device)" if up else "From (on the device)")
         self.file_btn.setVisible(up)
         self.overwrite.setVisible(not up)
+        gate_push(self.go, not self.running(), up)          # sending to a device changes it; getting from it does not
 
     def pick_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "File to send", self.local.text() or os.path.expanduser("~"))
@@ -814,7 +820,7 @@ class ScpTab(QWidget):
         return bool(self.worker and self.worker.isRunning())
 
     def _busy(self, on):
-        self.go.setEnabled(not on)
+        gate_push(self.go, not on, bool(self.direction.currentData()))
         self.stop.setEnabled(on)
         for w in (self.picker, self.host, self.port, self.user, self.password, self.direction, self.local, self.remote,
                   self.recursive, self.preserve, self.overwrite, self.file_btn, self.folder_btn):
@@ -830,6 +836,9 @@ class ScpTab(QWidget):
             return
         user, remote, local = self.user.text().strip(), self.remote.text().strip(), self.local.text().strip().strip('"')
         up = bool(self.direction.currentData())
+        if up and not perms.allowed("push"):             # (Enter in the password box skips the disabled button)
+            self.out.line(perms.REASON)
+            return
         problem = ("Enter a user name." if not user else "Enter the path on the device (for example flash:/image.bin)." if not remote
                    else "Choose the file or folder on this computer." if not local
                    else f"{local} does not exist." if up and not os.path.exists(local) else "")

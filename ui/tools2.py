@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComb
                                QGraphicsSimpleTextItem, QGraphicsView, QHBoxLayout, QLabel, QLineEdit, QListWidget,
                                QListWidgetItem, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QSpinBox,
                                QSplitter, QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget, QFrame)
-from core import audit, cmdrun, custom, db, discovery, listeners, nettools, oui, pinger, profiles, reach, reports, snmp
+from core import audit, cmdrun, custom, db, discovery, listeners, nettools, oui, perms, pinger, profiles, reach, reports, snmp
 from core import proxy, topology, vendors
 from ui import plots, theme
 from ui.tools import DevicePicker, OutputBox, _row, reset_button
@@ -728,6 +728,11 @@ class CommandRunnerTab(QWidget):
                 "You ticked " + " and ".join(cmdrun.KINDS[k] for k in sorted(kinds)) + ".\n\nEvery device gets the same commands, and each kind has its own: "
                 "a command line for network devices and firewalls, PowerShell for Windows. A command meant for one will fail on the other.\n\nRun anyway?") \
                 != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            cmdrun.need_push(devs, cmds)                       # the role's refusal, in core's words; read-only commands still run
+        except perms.Denied as e:
+            self.status.setText(str(e))
             return
         risky = cmdrun.risky_commands(devs, cmds)
         if risky and self.safe.isChecked():
