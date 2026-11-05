@@ -138,6 +138,8 @@ with **Lock** and **Sign out**. Change the
 time, add accounts, reset passwords or make a new recovery key in **Settings > Accounts and sign-in**. Copies that had a master password ask for it
 once, then it is gone.
 
+Every account has a role: Admin, Engineer or Tech. Admins can do everything. An admin chooses what Engineers and Techs can do in **Settings > Accounts and sign-in**: push changes to devices, see passwords in config backups, the AI assistant, each tool and each Settings page. A tool or the AI that a role can't use is hidden, an action it can't take is greyed out, and a Settings page it can't change shows read-only. Passwords in config backups are encrypted separately, so a role that can't see them really can't.
+
 On the command line, Toner asks for a username and password. The scheduled service (`cli service`) is off while sign-in is set up.
 
 ## The sections

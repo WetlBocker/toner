@@ -103,11 +103,11 @@ How the databases get encrypted is left to the builder. SQLCipher is one way, an
 
 ## Roles and permissions
 
-There are three starting roles *(my call)*. An admin can tick each permission on or off for each role:
+There are three starting roles *(my call)*. *(built in part 2)* An admin can tick each permission on or off for each role:
 
 - **Admin:** everything, including accounts, sign-in and directory settings, roles, and the recovery key.
 - **Engineer:** everything except managing accounts, roles and sign-in settings.
-- **Tech:** runs checks and uses the tools the admin leaves on. Can't push changes to devices, can't see config backups unmasked, and can't change settings except Appearance and Terminal.
+- **Tech:** runs checks and uses the tools the admin leaves on. Can't push changes to devices, can't see config backups unmasked, and can't change settings except Appearance and Terminal. *(built in part 2)*
 
 The permissions an admin can switch, per role:
 
@@ -121,8 +121,10 @@ A switched-off feature is hidden or disabled with a short reason. It doesn't fai
 
 **An honest limit.** Each tech's copy runs on their own laptop and holds the data key once they've signed in. So permissions stop mistakes and casual misuse, not someone set on taking the app apart. Two things narrow that gap:
 
-- *(my call)* The role and permission rules are signed by the admin. That catches anyone editing the rules by hand, but not someone who replaces the rules, the signature and the checking key all together. Nothing on a laptop the tech controls can stop that until the server exists.
-- *(my call)* Unmasked config backups are encrypted with a second key that's only sealed for roles allowed to see them. A tech's copy really can't show them.
+- *(my call; built in part 2)* The role and permission rules are signed by the admin. That catches anyone editing the rules by hand, but not someone who replaces the rules, the signature and the checking key all together. Nothing on a laptop the tech controls can stop that until the server exists.
+- *(my call; built in part 2)* Unmasked config backups are encrypted with a second key that's only sealed for roles allowed to see them. A tech's copy really can't show them.
+
+Built in part 2: Admin is fixed; Engineer starts with everything; Tech starts with push and unmasked backups off and every Settings page locked except Appearance and Terminal; new accounts start as Tech; the last Admin can't be demoted or removed.
 
 Real enforcement comes with the central server.
 

@@ -11,6 +11,8 @@ import core.updates as _U
 _U.SETUP = _U.WINDOWS_SETUP                      # (these are about the Windows installer; test_platforms covers the AppImage)
 import core.platforms as _P
 _P.WINDOWS, _P.MAC, _P.LINUX = True, False, False
+if sys.platform != 'win32':                    # (faking Windows makes the file lock ask for msvcrt, which Linux lacks)
+    import types; sys.modules['msvcrt'] = types.SimpleNamespace(locking=lambda *a: None, LK_NBLCK=1, LK_UNLCK=0)
 from core import audit, db, updates
 from core.version import VERSION, REPO
 db.init()

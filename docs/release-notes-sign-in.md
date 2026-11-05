@@ -14,6 +14,9 @@ Toner now asks people to sign in. Every copy's data is encrypted and opens only 
 - **Gone:** the vault's master password, **Change master password...** and **Remember on this computer**.
 - **Command line:** `cli run`, `cli backup` and the other commands ask for a username and password at the terminal.
   On Windows, run commands with TonerCli.exe.
+- Accounts now have a role: Admin, Engineer or Tech. Every account on an upgraded copy starts as an Admin.
+- An admin chooses what Engineers and Techs can do in **Settings > Accounts and sign-in**.
+- Passwords kept in config backups are now encrypted separately, and only roles allowed to see them can.
 
 ## What stops working
 
