@@ -249,4 +249,12 @@ D.open_with_password("admin", PW)
 check("portable copy opens", bytes(sqldb.current_key()) == key)
 D.close()
 
+# accounts() reads under the same file lock the writers take (a writer's os.replace fails on Windows under a reader)
+used = []
+real_lock = D._FileLock
+D._FileLock = lambda: (used.append(1), real_lock())[1]
+D.accounts()
+D._FileLock = real_lock
+check("accounts() takes the file lock", used == [1], used)
+
 print(f"\n{ok} passed, {bad} failed"); sys.exit(1 if bad else 0)

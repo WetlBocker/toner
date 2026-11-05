@@ -293,7 +293,7 @@ def remove(name):
 
 
 def accounts():
-    with _lock:
+    with _lock, _FileLock():  # (a writer's os.replace fails on Windows while this file is open)
         return sorted(({"name": n, "kind": a["kind"], "created": a["created"]} for n, a in _read()["accounts"].items()),
                       key=lambda a: a["name"].casefold())
 

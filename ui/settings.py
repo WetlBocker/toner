@@ -35,6 +35,7 @@ from ui.settings_pages.network import ProxyPage, AgentsPage, MaintenanceDialog, 
 from ui.settings_pages.ansible import AnsiblePage  # noqa: F401
 from ui.settings_pages.orgs import OrganizationsPage  # noqa: F401
 from ui.settings_pages.demarc import DemarcPage  # noqa: F401
+from ui.settings_pages.accounts import AccountsPage  # noqa: F401
 from ui.settings_pages.ai import AiPage  # noqa: F401
 from ui.settings_pages.scanning import ScanningPage  # noqa: F401
 
@@ -46,14 +47,14 @@ GROUPS = [("Monitoring", ["General", "Thresholds", "Checks", "Scanning", "Mainte
           ("Alerts and reports", ["Notifications", "Reports", "Config backups"]),
           ("Automation", ["Ansible", "AI"]),
           ("Look and feel", ["Appearance", "Terminal"]),
-          ("Security and data", ["Security", "Audit log", "Data and logs"]),
+          ("Security and data", ["Security", "Accounts and sign-in", "Audit log", "Data and logs"]),
           ("Organizations", ["Organizations"])]
 
 
 DIRTY = Qt.ItemDataRole.UserRole + 1          # on a list entry: the page has edits that are not saved yet
 
 # Pages about this computer or the whole program: an organization sees them, read-only, as "Managed by Global".
-GLOBAL_PAGES = {"Proxy", "Ansible", "AI", "Scanning", "Appearance", "Terminal", "Security", "Data and logs", "Demarc"}   # (Agents: only the receiver part)
+GLOBAL_PAGES = {"Proxy", "Ansible", "AI", "Scanning", "Appearance", "Terminal", "Security", "Accounts and sign-in", "Data and logs", "Demarc"}   # (Agents: only the receiver part)
 GLOBAL_ONLY_PAGES = {"Organizations"}               # shown in Global only
 
 # What an organization's own value of a setting is called on its page's "Reset to Global" line.
@@ -134,7 +135,7 @@ class SettingsTab(QWidget):
     def __init__(self):
         super().__init__()
         self.pages = [GeneralPage(), ThresholdsPage(), ChecksPage(), ConnectionsPage(), ProxyPage(), AgentsPage(), DemarcPage(),
-                      BackupsPage(), ScanningPage(), MaintenancePage(), NotificationsPage(), ProfilesPage(), AnsiblePage(), AiPage(), AppearancePage(), TerminalPage(), ReportsPage(), SecurityPage(),
+                      BackupsPage(), ScanningPage(), MaintenancePage(), NotificationsPage(), ProfilesPage(), AnsiblePage(), AiPage(), AppearancePage(), TerminalPage(), ReportsPage(), SecurityPage(), AccountsPage(),
                       AuditPage(), DataPage(self.reload), OrganizationsPage()]
         self.pages[-1].changed_orgs.connect(self.orgs_changed)
         self.pages[-2].reset_requested.connect(self.reset_requested)
