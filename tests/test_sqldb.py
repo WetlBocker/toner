@@ -1,3 +1,5 @@
+# Run directly (python tests/test_x.py) or all together (python tests/run_all.py). Each test builds its own
+# throw-away database and uses a fake credential store, so nothing on this computer is touched.
 # Every database opens through core/sqldb.py (SQLCipher): plain with no key, encrypted with one, and the conversion and export helpers.
 import os as _os, sys as _sys, tempfile as _tmp
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
@@ -8,6 +10,11 @@ SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\sqldb%d.db").replace
 import sqlite3
 from pathlib import Path
 from core import db, sqldb
+import keyring
+STORE = {}
+keyring.set_password = lambda s, u, p: STORE.__setitem__((s, u), p)
+keyring.get_password = lambda s, u: STORE.get((s, u))
+keyring.delete_password = lambda s, u: STORE.pop((s, u), None)
 
 ok = bad = 0
 def check(name, cond, extra=""):
@@ -34,9 +41,9 @@ c = sqldb.connect(e); c.execute("CREATE TABLE t (a)"); c.execute("INSERT INTO t 
 check("key: rows round-trip", c.execute("SELECT a FROM t").fetchall()[0][0] == 7); c.close()
 check("key: header not plain", head(e) != PLAIN)
 check("key: is_encrypted", sqldb.is_encrypted(e))
-sqldb.set_key(os.urandom(32))
+wrong_key = os.urandom(32); sqldb.set_key(wrong_key)
 try: sqldb.connect(e); wrong = False
-except sqldb.sqlite3.DatabaseError as ex: wrong = key.hex() not in str(ex)
+except sqldb.sqlite3.DatabaseError as ex: wrong = wrong_key.hex() not in str(ex) and key.hex() not in str(ex)
 check("wrong key: DatabaseError at connect, no key in message", wrong)
 sqldb.set_key(None)
 try: sqldb.connect(e).execute("SELECT count(*) FROM sqlite_master"); raised = False
@@ -63,6 +70,14 @@ check("export_copy: opens with the passphrase", n.execute("SELECT count(*) FROM 
 try: sqldb.connect(x).execute("SELECT count(*) FROM sqlite_master"); raised = False
 except sqldb.sqlite3.DatabaseError: raised = True
 check("export_copy: closed without it", raised)
+
+real = sqldb.sqlite3
+sqldb.sqlite3 = sqlite3                          # a build without SQLCipher: stdlib ignores PRAGMA key
+sqldb.set_key(key)
+try: sqldb.connect(D / "fallback.db"); refused = False
+except sqlite3.DatabaseError as ex: refused = key.hex() not in str(ex)
+finally: sqldb.sqlite3 = real; sqldb.set_key(None)
+check("keyed connect on a driver without SQLCipher refuses", refused)
 
 check("Error family caught", issubclass(sqldb.sqlite3.IntegrityError, sqldb.sqlite3.Error))
 check("NameTaken is an IntegrityError", issubclass(db.NameTaken, sqldb.sqlite3.IntegrityError))

@@ -3,10 +3,7 @@
 import os
 from pathlib import Path
 
-try:
-    import sqlcipher3.dbapi2 as sqlite3
-except ImportError:                                   # shortcut: plain sqlite3 only until sqlcipher3 is installed, then remove
-    import sqlite3
+import sqlcipher3.dbapi2 as sqlite3                   # no fallback: stdlib sqlite3 ignores PRAGMA key and would write plaintext
 
 _key = None
 _PLAIN = b"SQLite format 3\x00"
@@ -31,6 +28,8 @@ def connect(path, **kw):
     if _key is not None:
         try:
             c.execute('PRAGMA key = "%s"' % _raw(_key))
+            if c.execute("PRAGMA cipher_version").fetchone() is None:
+                raise sqlite3.DatabaseError("this SQLite driver has no SQLCipher: refusing to write an unencrypted database")
             c.execute("SELECT count(*) FROM sqlite_master").fetchone()
         except BaseException:
             c.close()
