@@ -107,7 +107,7 @@ There are three starting roles *(my call)*. *(built in part 2)* An admin can tic
 
 - **Admin:** everything, including accounts, sign-in and directory settings, roles, and the recovery key.
 - **Engineer:** everything except managing accounts, roles and sign-in settings.
-- **Tech:** runs checks and uses the tools the admin leaves on. Can't push changes to devices, can't see config backups unmasked, and can't change settings except Appearance and Terminal. *(built in part 2)*
+- **Tech:** runs checks and uses the tools the admin leaves on. Can't push changes to devices, can't see config backups unmasked, and can't change settings except Appearance and Terminal.
 
 The permissions an admin can switch, per role:
 
@@ -124,7 +124,7 @@ A switched-off feature is hidden or disabled with a short reason. It doesn't fai
 - *(my call; built in part 2)* The role and permission rules are signed by the admin. That catches anyone editing the rules by hand, but not someone who replaces the rules, the signature and the checking key all together. Nothing on a laptop the tech controls can stop that until the server exists.
 - *(my call; built in part 2)* Unmasked config backups are encrypted with a second key that's only sealed for roles allowed to see them. A tech's copy really can't show them.
 
-Built in part 2: Admin is fixed; Engineer starts with everything; Tech starts with push and unmasked backups off and every Settings page locked except Appearance and Terminal; new accounts start as Tech; the last Admin can't be demoted or removed.
+Built in part 2: Admin is fixed; Engineer starts with every switchable permission; Tech starts with push and unmasked backups off and every Settings page locked except Appearance and Terminal; new accounts start as Tech; the last Admin can't be demoted or removed.
 
 Real enforcement comes with the central server.
 
