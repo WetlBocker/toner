@@ -10,7 +10,7 @@ from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QInputDialog, QLabel, QLineEdit, QMessageBox,
                                QPushButton, QTableWidget, QTableWidgetItem, QWidget)
-from core import audit, db, display, legacyssh, nettools, passvault, sessionlog, vault
+from core import audit, db, display, legacyssh, nettools, passvault, session, sessionlog, vault
 from ui.settings_base import Page, compact_row, note, row_of
 from ui.toast import toast
 from ui.widgets import EmptyHint
@@ -38,16 +38,10 @@ class SecurityPage(Page):
             "with \"Incompatible ssh peer (no acceptable host key)\". They are tried last, so a device that offers anything "
             "newer still uses the newer one, as OpenSSH does with +ssh-rsa."))
 
-        self.change_master = QPushButton("Change master password...")      # the vault: these act right away
-        self.change_master.clicked.connect(self._change_master)
-        self.remember = QCheckBox("Remember on this computer")
-        self.remember.setProperty("notSetting", True)
-        self.remember.setToolTip("Toner and its scheduled service open the vault without asking.")
-        self.remember.toggled.connect(self._remember)
-        self.lock_now = QPushButton("Lock now")
+        self.lock_now = QPushButton("Lock now")                            # acts right away
         self.lock_now.clicked.connect(self._lock)
         self.lay.insertWidget(0, QLabel("<b>Vault</b>"))
-        self.lay.insertWidget(1, compact_row(self.change_master, self.remember, self.lock_now))
+        self.lay.insertWidget(1, compact_row(self.lock_now))
         from ui.vaultsettings import VaultSection
         self.vault = VaultSection()                                        # Store passwords in: Toner's vault or a password manager
         self.lay.insertWidget(2, self.vault)
@@ -86,35 +80,13 @@ class SecurityPage(Page):
         self.refresh()
 
     def show_vault(self):
-        self.remember.blockSignals(True)
-        self.remember.setChecked(passvault.remembered())
-        self.remember.blockSignals(False)
-        self.lock_now.setVisible(not passvault.remembered())
-
-    def _change_master(self):
-        from ui import vaultdlg
-        if vaultdlg.change_master(self):
-            toast(self, "Master password changed.")
-
-    def _remember(self, on):
-        try:
-            passvault.set_remembered(on)
-        except passvault.Locked:
-            pass
-        except passvault.NoKeyring:
-            from ui.vaultdlg import NO_KEYRING_TEXT
-            QMessageBox.information(self, "Remember on this computer", NO_KEYRING_TEXT)
-        audit.log("vault " + ("remembered on this computer" if on else "no longer remembered on this computer"))
-        self.show_vault()
+        self.lock_now.setEnabled(session.state() == "open" and session.user() is not None)    # (the recovery key has no password to unlock with)
 
     def _lock(self):
-        """Lock now: close the vault and ask for the master password again (Quit closes Toner)."""
-        from PySide6.QtWidgets import QApplication
-        from ui import vaultdlg
-        passvault.lock()
-        if not vaultdlg.UnlockDialog(self).exec():
-            win = self.window()
-            (win.quit_for_real if hasattr(win, "quit_for_real") else QApplication.quit)()
+        """Lock now: Toner asks for the password again (the data key stays open for scheduled work)."""
+        if self.lock_now.isEnabled():
+            session.lock()
+        self.show_vault()
 
     def refresh(self):
         self.show_vault()

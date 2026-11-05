@@ -1,7 +1,8 @@
 # Run directly (python tests/test_x.py) or all together (python tests/run_all.py). Each test builds its own
 # throw-away database; the vault here is a throw-away file beside it, and nothing is written to Windows Credential Manager.
-# Toner's vault: the encrypted file every password lives in, its master password, Remember on this computer, its windows,
-# Settings > Security, and importing passwords again to fill in sessions that have none.
+# Toner's vault: the encrypted file every password lives in, an older Toner's master password and Remember on this computer
+# (still read, for the upgrade), its windows, Settings > Security, and importing passwords again to fill in sessions that have none.
+# Opening it with the data key is in test_vault_datakey.py.
 import os as _os, sys as _sys, tempfile as _tmp
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
@@ -54,16 +55,9 @@ passvault.unlock("correct horse battery")
 check("the right one opens it with everything still there", passvault.get("edge-fw") == "s3cret-pw")
 check("remove says whether there was one", passvault.remove("edge-fw") and not passvault.remove("edge-fw") and passvault.get("edge-fw") is None)
 
-print("== changing the master password")
+print("== the master password can no longer be changed")
 passvault.put("edge-fw", "s3cret-pw")
-passvault.change_master("a brand new master pw")
-passvault.lock()
-try:
-    passvault.unlock("correct horse battery"); check("the old master password no longer opens it", False)
-except passvault.WrongPassword:
-    check("the old master password no longer opens it", True)
-passvault.unlock("a brand new master pw")
-check("the new one does, and the passwords are unchanged", passvault.get("edge-fw") == "s3cret-pw")
+check("there is no change_master or set_remembered any more", not hasattr(passvault, "change_master") and not hasattr(passvault, "set_remembered"))
 
 print("== Remember on this computer")
 if sys.platform != "win32":                       # Linux and macOS keep the remembered key in the system keyring: a stand-in
@@ -73,9 +67,11 @@ if sys.platform != "win32":                       # Linux and macOS keep the rem
         def get_password(self, s, u): return self.d.get((s, u))
         def delete_password(self, s, u): self.d.pop((s, u), None)
     _nk = _NativeKeyring(); passvault._native_keyring = lambda: _nk
+def remember():                                   # what an older Toner's Remember on this computer left beside the vault
+    open(passvault.key_path(), "wb").write(passvault._protect(passvault._key))
 check("not remembered: Toner cannot open it alone", not passvault.remembered() and (passvault.lock() or not passvault.unlock_remembered()))
-passvault.unlock("a brand new master pw")
-passvault.set_remembered(True)
+passvault.unlock("correct horse battery")
+remember()
 keyfile = open(passvault.key_path(), "rb").read()
 check("remembered: a key file beside the vault, protected by Windows (not the key itself)" if sys.platform == "win32" else
       "remembered: the key is in the system keyring, and the file beside the vault says so",
@@ -85,9 +81,9 @@ check("...so Toner (and its scheduled service) open it without asking", passvaul
 open(passvault.key_path(), "wb").write(b"not a windows-protected key")
 passvault.lock()
 check("a damaged or foreign key file just means asking for the master password", not passvault.unlock_remembered())
-passvault.unlock("a brand new master pw"); passvault.set_remembered(True)
-passvault.set_remembered(False)
-check("turning it off removes the key file", not passvault.key_path().exists() and not passvault.remembered())
+passvault.unlock("correct horse battery"); remember()
+passvault._forget_remembered()
+check("forgetting it removes the key file", not passvault.key_path().exists() and not passvault.remembered())
 
 print("== many at once, and two programs")
 writes = []
@@ -154,9 +150,7 @@ d.first.setText("short"); d.second.setText("short"); d.accept()
 check("too short is said", d.error.text() == "Use at least 12 characters.")
 d.first.setText("long enough pw"); d.second.setText("long enough pw"); d.accept()
 check("a good one is accepted", d.result() == 1 and d.master() == "long enough pw")
-c = vaultdlg.MasterDialog("change")
-check("Change master password has no first-start text and no tick box", c.windowTitle() == "Change master password"
-      and not c.remember.isVisibleTo(c) and sorted(b.text() for b in c.buttons.buttons()) == ["Cancel", "Change"])
+check("there is no Change master password window any more", not hasattr(vaultdlg, "change_master"))
 
 passvault.lock()
 u = vaultdlg.UnlockDialog()
@@ -164,7 +158,7 @@ check("Unlock Toner: the agreed words", u.windowTitle() == "Unlock Toner" and an
       and sorted(b.text() for b in u.buttons.buttons()) == ["Quit", "Unlock"])
 u.word.setText("nope nope nope"); u.accept()
 check("a wrong one says so and stays open", u.error.isVisibleTo(u) and u.error.text() == "That master password isn't right." and not passvault.is_open())
-u.word.setText("a brand new master pw"); u.accept()
+u.word.setText("correct horse battery"); u.accept()
 check("the right one opens the vault", u.result() == 1 and passvault.is_open())
 
 asked = []
@@ -188,24 +182,16 @@ check("an older Toner's password came along, quietly, and left Credential Manage
 passvault.lock()
 vaultdlg.UnlockDialog.exec = lambda self: 0
 check("next start, not remembered: Unlock is asked, and Quit stops Toner", passvault.remembered() or not vaultdlg.open_at_start())
-passvault.unlock("fresh master pw!"); passvault.set_remembered(True); passvault.lock()
+passvault.unlock("fresh master pw!"); remember(); passvault.lock()
 check("remembered: nothing is asked", vaultdlg.open_at_start() and passvault.is_open())
 
 print("== Settings > Security")
 import ui.settings_pages.security as SEC
 from ui import toast as T
 pg = SEC.SecurityPage(); pg.load()
-check("the Vault section: Change master password, Remember on this computer", pg.change_master.text() == "Change master password..."
-      and pg.remember.text() == "Remember on this computer" and pg.remember.isChecked())
-check("Lock now is offered only when it is not remembered", pg.lock_now.isHidden())
-pg.remember.setChecked(False)
-check("unticking forgets the key on this computer, right away", not passvault.remembered() and not pg.lock_now.isHidden())
-check("the tick box is not a setting waiting for Save", pg.remember.property("notSetting"))
+check("the Vault section: only Lock now, and not while nobody is signed in", pg.lock_now.text() == "Lock now" and not pg.lock_now.isEnabled()
+      and not hasattr(pg, "change_master") and not hasattr(pg, "remember"))
 check("the credentials table says the vault", pg.creds.horizontalHeaderItem(2).text() == "Stored in the vault")
-vaultdlg.UnlockDialog.exec = lambda self: (self.word.setText("fresh master pw!"), self.accept(), 1)[2]
-pg._lock()
-check("Lock now closes the vault and asks again", passvault.is_open())
-pg.remember.setChecked(True)
 
 print("== importing the passwords again fills in sessions that have none")
 from core import sessionimport as SI, sessions

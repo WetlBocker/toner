@@ -1,4 +1,5 @@
-"""The vault's windows: setting a master password (the first time, after Forgot it?, or Change master password) and unlocking."""
+"""The older vault's windows: setting a master password (the first time, or after Forgot it?) and unlocking. Signing in to
+Toner opens the vault now (core/session.py); these stay until the upgrade (which uses UnlockDialog) replaces the start."""
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox, QFormLayout, QLabel, QLineEdit, QMessageBox, QVBoxLayout)
 
@@ -21,12 +22,12 @@ def _wrapped(text, muted=False):
 
 
 class MasterDialog(QDialog):
-    """Choose a master password. mode: 'create' (the first time), 'reset' (Forgot it?: a new, empty vault) or 'change'."""
+    """Choose a master password. mode: 'create' (the first time) or 'reset' (Forgot it?: a new, empty vault)."""
 
     def __init__(self, mode="create", parent=None):
         super().__init__(parent)
         self.mode = mode
-        self.setWindowTitle("Change master password" if mode == "change" else "Set a master password")
+        self.setWindowTitle("Set a master password")
         self.setMinimumWidth(480)
         self.first, self.second = QLineEdit(), QLineEdit()
         for w in (self.first, self.second):
@@ -37,7 +38,7 @@ class MasterDialog(QDialog):
         self.error.setStyleSheet("color:#d32f2f;")
         self.error.hide()
         self.remember = QCheckBox(REMEMBER_TEXT)
-        self.remember.setChecked(passvault.remembered() if mode == "change" else True)
+        self.remember.setChecked(True)
         form = QFormLayout()
         form.setVerticalSpacing(10)
         form.setHorizontalSpacing(14)
@@ -46,26 +47,24 @@ class MasterDialog(QDialog):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(22, 20, 22, 18)
         lay.setSpacing(6)
-        if mode != "change":
-            lay.addWidget(_wrapped("Toner stores its passwords in its own encrypted vault. Choose a master password to lock it."))
-            lay.addSpacing(8)
+        lay.addWidget(_wrapped("Toner stores its passwords in its own encrypted vault. Choose a master password to lock it."))
+        lay.addSpacing(8)
         lay.addLayout(form)
         lay.addSpacing(12)
         lay.addWidget(QLabel("Password requirements:"))
         self.rule.setContentsMargins(12, 0, 0, 0)
         lay.addWidget(self.rule)
         lay.addWidget(self.error)
-        if mode != "change":
-            lay.addSpacing(10)
-            lay.addWidget(self.remember)
-            hint = _wrapped(REMEMBER_NOTE, muted=True)
-            hint.setContentsMargins(26, 0, 0, 0)
-            lay.addWidget(hint)
+        lay.addSpacing(10)
+        lay.addWidget(self.remember)
+        hint = _wrapped(REMEMBER_NOTE, muted=True)
+        hint.setContentsMargins(26, 0, 0, 0)
+        lay.addWidget(hint)
         lay.addSpacing(12)
         lay.addWidget(_wrapped(FORGOT_WARNING, muted=True))
         lay.addSpacing(10)
         self.buttons = QDialogButtonBox()
-        self.ok = self.buttons.addButton("Change" if mode == "change" else "Create vault", QDialogButtonBox.ButtonRole.AcceptRole)
+        self.ok = self.buttons.addButton("Create vault", QDialogButtonBox.ButtonRole.AcceptRole)
         self.ok.setProperty("primary", True)
         self.buttons.addButton("Quit" if mode == "create" else "Cancel", QDialogButtonBox.ButtonRole.RejectRole)
         self.buttons.accepted.connect(self.accept)
@@ -168,14 +167,3 @@ def open_at_start(parent=None):
         return True
     return bool(UnlockDialog(parent).exec())
 
-
-def change_master(parent=None):
-    """Settings > Security > Change master password..."""
-    dlg = MasterDialog("change", parent)
-    if not dlg.exec():
-        return False
-    passvault.change_master(dlg.master())
-    if passvault.remembered():
-        passvault.set_remembered(True)                    # (the remembered key is the same; nothing else to do)
-    audit.log("vault master password changed")
-    return True

@@ -2,7 +2,7 @@
 worker threads still need the database); it only hides the window until the password is entered again."""
 import threading
 
-from core import audit, datakey, db, passvault, quiet
+from core import audit, datakey, db, passvault, quiet, sqldb
 
 _lock = threading.RLock()
 _state, _user, _callbacks = "signed_out", None, []
@@ -31,7 +31,7 @@ def _notify(new):
 
 
 def _after_open():
-    """Seam for the vault: Task 6 opens it here with the data key."""
+    passvault.open_with(sqldb.current_key())
 
 
 def _opened(opener, action, who):
@@ -53,9 +53,13 @@ def _opened(opener, action, who):
 
 
 def _close():
-    passvault.lock()
-    db.release()
-    datakey.close()
+    try:
+        passvault.lock()
+    finally:
+        try:
+            db.release()
+        finally:
+            datakey.close()                  # always, even when a step before it failed
 
 
 def _stored_name(name):
@@ -102,11 +106,18 @@ def unlock(password):
 
 def sign_out():
     global _state, _user
-    with _lock:
-        was = _state
+    was = _state
+    try:
+        with _lock:
+            was = _state
+            try:
+                if was != "signed_out":
+                    audit.log("signed out")  # while the key is still open: the audit table is encrypted
+            finally:
+                try:
+                    _close()                 # also when "signed_out": datakey.create leaves the key open
+                finally:
+                    _state, _user = "signed_out", None
+    finally:
         if was != "signed_out":
-            audit.log("signed out")          # while the key is still open: the audit table is encrypted
-        _close()                             # also when "signed_out": datakey.create leaves the key open
-        _state, _user = "signed_out", None
-    if was != "signed_out":
-        _notify("signed_out")
+            _notify("signed_out")

@@ -2,10 +2,12 @@
 
 The vault replaced Windows Credential Manager, which holds only so many entries per Windows user (an import of thousands of sessions
 filled it, and then no program could save a credential). The file is sealed with AES-256-GCM under a random data key; that key is
-itself sealed with a key made from the master password (scrypt), so changing the master password only re-seals the data key.
+itself sealed with AES-GCM under Toner's data key (core/datakey.py), so signing in to Toner opens the vault (open_with).
 
-Remember on this computer keeps the data key protected by Windows (DPAPI, this Windows user only) in a file beside the vault, so
-Toner and its scheduled service open the vault without asking. Without it, Toner asks for the master password when it starts.
+An older Toner sealed that key with a master password (scrypt) and could remember it on this computer (DPAPI, or the system's
+keyring, with a "-key" file beside the vault). create, unlock and unlock_remembered still read and make such a vault, so the
+upgrade can open it and adopt() it: re-seal its key under the data key and delete the remembered copy. Nothing seals it under a
+master password again.
 
 Everything in Toner reaches the vault through `keyring` (install() makes the vault keyring's store), so the rest of the code is
 unchanged: keyring.get_password(db.SERVICE, name) reads the vault's entry `name`.
@@ -39,7 +41,7 @@ _pending = []                   # ...as (name, secret or None to remove), writte
 
 
 class Locked(RuntimeError):
-    """The vault has not been opened (no master password given, and it is not remembered on this computer)."""
+    """The vault has not been opened (nobody signed in), or it is an older master-password vault the upgrade has not adopted."""
 
 
 class WrongPassword(ValueError):
@@ -66,6 +68,14 @@ def is_open():
 
 def remembered():
     return key_path().exists()
+
+
+def uses_master():
+    """True for a vault still sealed by a master password (an older Toner's, not yet adopted)."""
+    try:
+        return _read_file()["kdf"].get("name") == "scrypt"
+    except FileNotFoundError:
+        return False
 
 
 def check_master(master):
@@ -120,6 +130,8 @@ def _wrap(master, key):
 
 def _unwrap(master, doc):
     kdf, raw = doc["kdf"], _unb64(doc["key"])
+    if kdf.get("name") != "scrypt":
+        raise Locked("The vault opens when you sign in to Toner.")
     try:
         return AESGCM(_kek(master, _unb64(kdf["salt"]), kdf)).decrypt(raw[:12], raw[12:], KEY_AAD)
     except InvalidTag:
@@ -160,7 +172,8 @@ def _fresh():
 
 # ---------------------------------------------------------------- opening and closing
 def create(master, remember=True, carry=None):
-    """A new, empty vault (replacing any that is there) locked with `master`, and opened. `carry`: {name: secret} to put in it.
+    """An older Toner's vault: new, empty (replacing any that is there), locked with `master`, and opened. Kept for the
+    upgrade and its tests; new vaults come from open_with. `carry`: {name: secret} to put in it.
     Returns False when it was to be remembered but this computer has no keyring for it (Linux or macOS), else True."""
     global _key, _data
     check_master(master)
@@ -170,15 +183,60 @@ def create(master, remember=True, carry=None):
         data = dict(carry or {})
         _write({"format": FORMAT, "version": 1, "kdf": kdf, "key": wrapped, "data": _seal(key, data)})
         _key, _data = key, data
-    try:
-        set_remembered(remember)
-    except NoKeyring:
-        return False
+    _forget_remembered()
+    if remember:
+        try:
+            with open(key_path(), "wb") as f:
+                f.write(_protect(key))
+        except NoKeyring:
+            return False
     return True
 
 
+def _wrap_with(datakey, key):
+    nonce = os.urandom(12)
+    return _b64(nonce + AESGCM(datakey).encrypt(nonce, key, KEY_AAD))
+
+
+def open_with(datakey):
+    """Open the vault with Toner's data key (at sign-in), making an empty one when there is none. Raises WrongPassword for
+    another key, and Locked for an older master-password vault (the upgrade adopts it first; it is never replaced here)."""
+    global _key, _data, _seen
+    with _lock, _FileLock():
+        if not exists():
+            key, data = os.urandom(32), {}
+            _write({"format": FORMAT, "version": 1, "kdf": {"name": "datakey"}, "key": _wrap_with(datakey, key),
+                    "data": _seal(key, data)})
+            _key, _data = key, data
+            return
+        doc = _read_file()
+        if doc["kdf"].get("name") != "datakey":
+            raise Locked("The vault still has an older Toner's master password: the upgrade has to open it first.")
+        raw = _unb64(doc["key"])
+        try:
+            key = AESGCM(datakey).decrypt(raw[:12], raw[12:], KEY_AAD)
+        except InvalidTag:
+            raise WrongPassword("The vault was sealed with another data key.") from None
+        _data, _key, _seen = _unseal(key, doc["data"]), key, _stat()
+    if remembered():
+        _forget_remembered()                              # an adopt that stopped before deleting the remembered copy
+
+
+def adopt(datakey):
+    """Re-seal the open (older, master-password) vault's own key under the data key, then delete the copy Remember on this
+    computer kept. The passwords in it stay as they are."""
+    with _lock, _FileLock():
+        if _key is None:
+            raise Locked("The vault is locked.")
+        doc = _read_file()
+        doc["kdf"], doc["key"] = {"name": "datakey"}, _wrap_with(datakey, _key)
+        _write(doc)
+    _forget_remembered()
+
+
 def unlock(master):
-    """Open the vault with the master password. Raises WrongPassword."""
+    """Open an older Toner's vault with its master password (the upgrade, before adopt). Raises WrongPassword, or Locked for
+    a vault that opens with the data key."""
     global _key, _data, _seen
     with _lock:
         doc = _read_file()
@@ -203,7 +261,7 @@ def unlock_remembered():
 
 
 def lock():
-    """Close the vault: nothing can be read until the master password is given again."""
+    """Close the vault: nothing can be read until it is opened again."""
     global _key, _data
     with _lock:
         _key, _data = None, None
@@ -213,36 +271,18 @@ class NoKeyring(RuntimeError):
     """Linux or macOS without a keyring Toner can use (no Secret Service running, say): the vault can't be remembered."""
 
 
-def set_remembered(on):
-    """Remember on this computer: keep the data key, protected for this user (Windows' DPAPI; the Keychain on macOS; the
-    Secret Service keyring on Linux), with a file beside the vault saying so (or forget it). Raises NoKeyring."""
-    if on:
-        if _key is None:
-            raise Locked("The vault is locked.")
-        with open(key_path(), "wb") as f:
-            f.write(_protect(_key))
-    else:
-        try:
-            with open(key_path(), "rb") as f:
-                if f.read().startswith(KEYRING_MARK):
-                    _native_keyring().delete_password(NATIVE_SERVICE, str(path()))
-        except Exception:
-            quiet.ignored()
-        try:
-            key_path().unlink()
-        except FileNotFoundError:
-            pass
-
-
-def change_master(master):
-    """Lock the vault with a new master password (the passwords in it stay as they are)."""
-    check_master(master)
-    with _lock, _FileLock():
-        if _key is None:
-            raise Locked("The vault is locked.")
-        doc = _read_file()
-        doc["kdf"], doc["key"] = _wrap(master, _key)
-        _write(doc)
+def _forget_remembered():
+    """Delete what Remember on this computer left: the key file and, on Linux and macOS, the key in the system's keyring."""
+    try:
+        with open(key_path(), "rb") as f:
+            if f.read().startswith(KEYRING_MARK):
+                _native_keyring().delete_password(NATIVE_SERVICE, str(path()))
+    except Exception:
+        quiet.ignored()
+    try:
+        key_path().unlink()
+    except FileNotFoundError:
+        pass
 
 
 # ---------------------------------------------------------------- the entries
