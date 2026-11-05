@@ -215,22 +215,32 @@ def open_with(datakey):
         raw = _unb64(doc["key"])
         try:
             key = AESGCM(datakey).decrypt(raw[:12], raw[12:], KEY_AAD)
+            data = _unseal(key, doc["data"])
         except InvalidTag:
             raise WrongPassword("The vault was sealed with another data key.") from None
-        _data, _key, _seen = _unseal(key, doc["data"]), key, _stat()
+        _data, _key, _seen = data, key, _stat()
     if remembered():
         _forget_remembered()                              # an adopt that stopped before deleting the remembered copy
 
 
 def adopt(datakey):
-    """Re-seal the open (older, master-password) vault's own key under the data key, then delete the copy Remember on this
-    computer kept. The passwords in it stay as they are."""
+    """Move the open (older, master-password) vault onto the data key: its passwords re-sealed under a new inner key, that
+    key sealed by the data key, in one write; then delete the copy Remember on this computer kept. A new inner key means
+    the old master password, a leftover remembered key or a backed-up -key file open nothing written from now on."""
+    global _key, _data
     with _lock, _FileLock():
         if _key is None:
             raise Locked("The vault is locked.")
         doc = _read_file()
-        doc["kdf"], doc["key"] = {"name": "datakey"}, _wrap_with(datakey, _key)
-        _write(doc)
+        try:
+            data = _unseal(_key, doc["data"])           # the file must still be the vault we opened (not made again since)
+        except InvalidTag:
+            raise Locked("The vault changed after it was opened: open it again, then try again.") from None
+        if _batch:
+            data = _data                                # changes still waiting in memory (they are in _data already)
+        key = os.urandom(32)
+        _write({**doc, "kdf": {"name": "datakey"}, "key": _wrap_with(datakey, key), "data": _seal(key, data)})
+        _key, _data = key, data
     _forget_remembered()
 
 

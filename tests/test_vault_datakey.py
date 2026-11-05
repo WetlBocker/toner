@@ -60,6 +60,48 @@ check("...and the system keyring has no copy left", not NATIVE)
 passvault.lock()
 check("unlock_remembered can no longer open it", not passvault.unlock_remembered())
 
+print("== adopt gives the vault a new inner key")
+os.remove(passvault.path()); passvault.lock()
+passvault.create("old master password!", remember=True, carry={"a": "1"})
+old_inner = passvault._key
+old_copy = passvault._unprotect(open(passvault.key_path(), "rb").read())      # the copy Remember on this computer kept
+check("the remembered copy is the inner key", old_copy == old_inner)
+passvault.adopt(k)
+from cryptography.exceptions import InvalidTag
+doc = json.load(open(passvault.path(), encoding="utf-8"))
+check("the inner key is new", passvault._key != old_inner)
+check("the old inner key (or a copy of the remembered key) no longer opens the data", raises(lambda: passvault._unseal(old_copy, doc["data"]), InvalidTag) is not None)
+passvault.lock(); passvault.open_with(k)
+check("the passwords are intact through open_with", passvault.get("a") == "1" and passvault.names() == ["a"])
+passvault.put("after", "x"); passvault.lock(); passvault.open_with(k)
+check("...and writes after adopt use the new key", passvault.get("after") == "x")
+
+print("== adopt refuses a vault made again by another process")
+os.remove(passvault.path()); passvault.lock()
+passvault.create("old master password!", remember=False, carry={"a": "1"})
+mine = (passvault._key, passvault._data)
+passvault.create("another master pw!!", remember=True, carry={"theirs": "2"})      # another Toner: Forgot it?, remembered
+passvault._key, passvault._data = mine
+file_before, keyfile_before = open(passvault.path(), "rb").read(), open(passvault.key_path(), "rb").read()
+e = raises(lambda: passvault.adopt(k), passvault.Locked)
+check("adopt raises the module's error", e is not None and k.hex() not in str(e), repr(e))
+check("...and leaves the file and the other process's -key file untouched", open(passvault.path(), "rb").read() == file_before
+      and open(passvault.key_path(), "rb").read() == keyfile_before)
+passvault.lock()
+check("the other process's vault still opens with its own master password", (passvault.unlock("another master pw!!") or True) and passvault.get("theirs") == "2")
+passvault._forget_remembered(); passvault.lock()
+
+print("== open_with on data sealed under another inner key")
+os.remove(passvault.path())
+passvault.open_with(k); passvault.lock()
+doc = json.load(open(passvault.path(), encoding="utf-8"))
+doc["data"] = passvault._seal(os.urandom(32), {"z": "9"})
+json.dump(doc, open(passvault.path(), "w", encoding="utf-8"))
+e = raises(lambda: passvault.open_with(k), Exception)
+check("raises WrongPassword, not a raw InvalidTag", isinstance(e, passvault.WrongPassword) and not passvault.is_open(), repr(e))
+os.remove(passvault.path())
+passvault.create("old master password!", remember=False, carry={"a": "1"}); passvault.adopt(k); passvault.lock()
+
 print("== a wrong key")
 e = raises(lambda: passvault.open_with(wrong), passvault.WrongPassword)
 check("open_with(wrong_key) raises WrongPassword", e is not None and not passvault.is_open())
