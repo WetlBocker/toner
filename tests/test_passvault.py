@@ -134,57 +134,6 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 app = QApplication.instance() or QApplication([])
 import app as A
 A.apply_look(app)
-from ui import vaultdlg
-d = vaultdlg.MasterDialog("create")
-labels = [w.text() for w in d.findChildren(vaultdlg.QLabel)]
-check("first start: the agreed text", "Toner stores its passwords in its own encrypted vault. Choose a master password to lock it." in labels, labels)
-check("the requirements are listed", "Password requirements:" in labels and d.rule.text() == "• At least 12 characters", d.rule.text())
-d.first.setText("long enough pw")
-check("...and ticked off once met", d.rule.text() == "✓ At least 12 characters")
-check("the fields, the tick box (on) and the buttons", d.remember.text() == "Remember on this computer" and vaultdlg.REMEMBER_NOTE in labels and d.remember.isChecked()
-      and [b.text() for b in d.buttons.buttons()] == ["Create vault", "Quit"] or sorted(b.text() for b in d.buttons.buttons()) == ["Create vault", "Quit"])
-check("the warning about forgetting it", vaultdlg.FORGOT_WARNING in labels)
-d.second.setText("something else"); d.accept()
-check("mismatched entries are said, and it stays open", d.error.isVisibleTo(d) and d.error.text() == "The two passwords don't match." and d.result() == 0)
-d.first.setText("short"); d.second.setText("short"); d.accept()
-check("too short is said", d.error.text() == "Use at least 12 characters.")
-d.first.setText("long enough pw"); d.second.setText("long enough pw"); d.accept()
-check("a good one is accepted", d.result() == 1 and d.master() == "long enough pw")
-check("there is no Change master password window any more", not hasattr(vaultdlg, "change_master"))
-
-passvault.lock()
-u = vaultdlg.UnlockDialog()
-check("Unlock Toner: the agreed words", u.windowTitle() == "Unlock Toner" and any(w.text() == "Enter the master password to open Toner's vault." for w in u.findChildren(vaultdlg.QLabel))
-      and sorted(b.text() for b in u.buttons.buttons()) == ["Quit", "Unlock"])
-u.word.setText("nope nope nope"); u.accept()
-check("a wrong one says so and stays open", u.error.isVisibleTo(u) and u.error.text() == "That master password isn't right." and not passvault.is_open())
-u.word.setText("correct horse battery"); u.accept()
-check("the right one opens the vault", u.result() == 1 and passvault.is_open())
-
-asked = []
-defaults = []
-QMessageBox.question = staticmethod(lambda *a, **k: asked.append(a[2]) or defaults.append(k.get("defaultButton")) or QMessageBox.StandardButton.Yes)
-vaultdlg.MasterDialog.exec = lambda self: (self.first.setText("fresh master pw!"), self.second.setText("fresh master pw!"), 1)[2]
-passvault.lock()
-u = vaultdlg.UnlockDialog(); u.forgot()
-check("Forgot it? asks first, in the agreed words", asked and asked[-1] == "Start a new, empty vault? Every saved password is lost. Devices, sessions and settings stay.", asked)
-check("and Enter answers No, as every saved password would go", defaults[-1:] == [QMessageBox.StandardButton.No], defaults)
-check("...then a new, empty vault with the new master password", u.reset_done and passvault.is_open() and passvault.names() == [])
-passvault.lock()
-check("which opens with it", (passvault.unlock("fresh master pw!") or True) and passvault.is_open())
-
-print("== the first start")
-os.remove(passvault.path()); passvault.lock()
-old.d.update({"core-sw": "old-pw"})
-check("with no vault, the master password is asked and the vault made", vaultdlg.open_at_start() and passvault.exists() and passvault.is_open())
-check("an older Toner's password came along, quietly, and left Credential Manager", passvault.get("core-sw") == "old-pw" and "core-sw" not in old.d
-      if sys.platform == "win32" else passvault.get("core-sw") is None and "core-sw" in old.d)
-passvault.lock()
-vaultdlg.UnlockDialog.exec = lambda self: 0
-check("next start, not remembered: Unlock is asked, and Quit stops Toner", passvault.remembered() or not vaultdlg.open_at_start())
-passvault.unlock("fresh master pw!"); remember(); passvault.lock()
-check("remembered: nothing is asked", vaultdlg.open_at_start() and passvault.is_open())
-
 print("== Settings > Security")
 import ui.settings_pages.security as SEC
 from ui import toast as T
@@ -193,6 +142,7 @@ check("the Vault section: only Lock now, and not while nobody is signed in", pg.
       and not hasattr(pg, "change_master") and not hasattr(pg, "remember"))
 check("the credentials table says the vault", pg.creds.horizontalHeaderItem(2).text() == "Stored in the vault")
 
+os.remove(passvault.path()); passvault.lock(); passvault.create("fresh master pw!", remember=False)     # a clean vault: earlier sections left old session passwords in it
 print("== importing the passwords again fills in sessions that have none")
 from core import sessionimport as SI, sessions
 keyring.set_keyring(old) if False else None
@@ -206,20 +156,5 @@ r = SI.save(found, {("ssh", "22", "admin", "10.1.1.1"): "pw-one", ("ssh", "22", 
 check("again with passwords: nothing new, the missing one filled in", r["added"] == 0 and r["existing"] == 2 and r["passwords"] == 1, r)
 check("sw1 has its password now, and remembers it", sessions.password(ids["sw1"]) == "pw-one" and sessions.get(ids["sw1"])["options"]["remember"])
 check("a password already saved is left alone", sessions.password(ids["sw2"]) == "kept-pw")
-print("== buttons fit their words in the Ops console look")
-from PySide6.QtGui import QFontMetrics
-from PySide6.QtWidgets import QPushButton
-db.set_setting("look", "Terminal"); db.set_setting("theme", "Midnight"); A.apply_look(app)
-import importlib; importlib.reload(vaultdlg)
-md, ud = vaultdlg.MasterDialog("create"), vaultdlg.UnlockDialog()
-for w in (md, ud):
-    w.show()
-app.processEvents()
-short = [(b.text(), b.width(), QFontMetrics(b.font()).horizontalAdvance(b.text())) for w in (md, ud) for b in w.findChildren(QPushButton)
-         if b.width() < QFontMetrics(b.font()).horizontalAdvance(b.text()) + 8]
-check("no button's text is cut off (a dialog's default button used to turn bold after it was sized)", not short, short)
-check("Create vault and Unlock are the bold, coloured ones", md.ok.font().bold() and md.ok.isDefault()
-      and any(b.text() == "Unlock" and b.font().bold() for b in ud.findChildren(QPushButton)))
-check("a default button that is not marked primary keeps its colour but not bold, so it fits", "QPushButton:default { font-weight" not in app.styleSheet())
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

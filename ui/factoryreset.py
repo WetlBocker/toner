@@ -14,7 +14,7 @@ def text():
     lines = ["This deletes everything Toner keeps on this computer and closes Toner:",
              "• every organization's devices, checks, results, history and config backups",
              "• saved sessions and session logs",
-             "• the vault with every saved password, token and SNMP community, and the master password remembered on this computer",
+             "• the vault with every saved password, token and SNMP community, every account, and netcheck.keys",
              "• settings, the audit log, saved host keys, the agent certificate, downloaded updates and the Ansible playbooks in "
              "Toner's data folder"]
     if platforms.LINUX:

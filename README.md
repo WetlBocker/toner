@@ -5,6 +5,7 @@ A Windows desktop tool for checking, documenting and troubleshooting a multi-ven
 ## Contents
 
 - [Get started](#get-started)
+- [Signing in](#signing-in)
 - [The sections](#the-sections)
 - [Supported devices and checks](#supported-devices-and-checks)
 - [Monitoring in detail](#monitoring-in-detail)
@@ -79,8 +80,6 @@ apt, pip (pipx) or npm, and the system asks for the administrator password in it
 - **Remote Desktop:** opens in FreeRDP in its own window. Toner asks for the password and hands it over without storing it. The
   tab inside Toner is Windows-only.
 - **"This computer" monitoring of Windows:** Windows-only. Agents and WinRM work the same.
-- **Remember on this computer:** keeps the vault's key in the system keyring (GNOME Keyring, KWallet). Without a keyring, Toner
-  asks for the master password at each start.
 - **The tray icon:** needs a desktop that shows tray icons. On GNOME, that's the AppIndicator extension.
 
 **The scheduled service with systemd.** To run scheduled checks without the window:
@@ -98,20 +97,18 @@ apt, pip (pipx) or npm, and the system asks for the administrator password in it
 2. Run `systemctl --user enable --now toner`.
 3. Run `loginctl enable-linger $USER` so it keeps running while you're signed out.
 
-The service can read saved passwords only when the vault is remembered on this computer.
+While sign-in is set up, the service is off (see [Signing in](#signing-in)). Scheduled checks and backups run while someone is
+signed in to Toner's window.
 
 **Your data stays on your computer.** The database is `%APPDATA%\NetCheck\netcheck.db` and the logs sit next to it. Passwords,
 tokens and SNMP communities are in Toner's own encrypted vault, `netcheck.vault` beside the database, never in the database itself.
-The vault is locked with a master password you choose the first time Toner starts (at least 12 characters; scrypt and AES-256-GCM).
-**Remember on this computer** lets Toner and its scheduled service open it without asking; without it, Toner asks at every start.
-Change the master password, turn remembering on or off, or lock it in **Settings > Security**. If the master password is forgotten
-and it is not remembered, **Forgot it?** starts a new, empty vault (devices, sessions and settings stay). **Settings > Data and logs
-> Export saved passwords** still writes them to a separate file with its own password, for another copy of Toner.
+The vault opens when someone signs in (see [Signing in](#signing-in)). **Settings > Data and logs
+> Export saved passwords** writes them to a separate file with its own password, for another copy of Toner.
 **Settings > Security > Store passwords in** keeps them in Bitwarden, Vaultwarden, Keeper or 1Password instead, one collection per
 organization, with Toner's vault as the copy. Removing an organization removes its collection and items there on the next round;
 **Remove collections of organizations that no longer exist...** lists any left behind from before and deletes the ones you tick.
 **Settings > Data and logs > Reset Toner to factory settings** deletes everything Toner keeps on this computer (every organization's
-data, the vault, logs, settings and what the system keyring remembered for Toner) and quits. Windows agents and Demarc are not
+data, the vault, the accounts, logs, settings and what the system keyring remembered for Toner) and quits. Windows agents and Demarc are not
 touched, but must be enrolled again. Type RESET to confirm.
 
 **Shortcuts:** **Ctrl+K** searches sections, tools, devices, Settings pages, limits, checks and actions. **Ctrl+1** to **Ctrl+9**
@@ -128,6 +125,20 @@ offers **Ping**, a small window that sends five echoes and shows each reply, wit
 with menus of tick boxes (Vendor, Location, Folder and Tag for devices; Status on Results; Type and Device on Sessions; Kind,
 Severity and Device on Listeners). Configs, Results, History, Command Runner, Playbooks and Topology have them; **Back up now**
 and **Run checks** act on the devices shown (all of them when nothing is typed or ticked).
+
+## Signing in
+
+Toner's data is encrypted and opens only when someone signs in. The first time Toner starts, it asks you to create the first admin
+account and shows a recovery key once. Save the key somewhere safe, like your password manager. It is the only way back in if every
+password is forgotten (**Use the recovery key** on the sign-in window). Keep `netcheck.keys` with Toner's data too. Without it the
+recovery key can't open anything.
+
+Toner locks after 15 minutes without use, or at once with **Ctrl+Shift+L**. Your name in the sidebar under Search opens a menu
+with **Lock** and **Sign out**. Change the
+time, add accounts, reset passwords or make a new recovery key in **Settings > Accounts and sign-in**. Copies that had a master password ask for it
+once, then it is gone.
+
+On the command line, Toner asks for a username and password. The scheduled service (`cli service`) is off while sign-in is set up.
 
 ## The sections
 
@@ -595,8 +606,10 @@ the conversation list; in Global it shows every organization's month side by sid
 wrapper. **Settings > General > Keep running in the system tray** does the same while the window is closed. The installed program
 does it without Python: `Toner.exe cli service`, `Toner.exe cli run --json` (output goes to the console, or to `toner-service.log`
 in the data folder when there is none). The service also runs the agent receiver when it is on, makes the scheduled trend report and
-watches the agent certificate. It uses the data folder of the account it runs as, and opens the vault only when it is remembered on this computer
-for that account, so run it as the account you set Toner up with.
+watches the agent certificate. It uses the data folder of the account it runs as.
+
+While sign-in is set up, `service` is refused and exits with code 3. The other commands ask for a username and password at the
+terminal (or take `--user`). Run from Task Scheduler with no terminal, they print **Sign in needs a terminal.** and exit with code 3.
 
 ## Charts
 
