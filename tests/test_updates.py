@@ -339,6 +339,22 @@ w.about.update_cleared.emit(); check("and it goes away again", "●" not in w.ta
 w.open_palette(); texts = [w.palette.list.item(i).text() for i in range(w.palette.list.count())] if hasattr(w.palette, "list") else []
 check("it is listed in the palette", any("Check for updates" in t for t in texts) or not texts, texts[:5])
 w.go("About"); check("Go to About works", w.tabs.currentWidget() is w.about)
+print("== once sign-in is set up, versions before it aren't offered")
+from core import datakey
+olds = [os.path.join(udir, f"Toner-Setup-{v}.exe") for v in ("1.14.0", "1.14.1", "1.15.0")]
+for p in olds:
+    open(p, "wb").write(b"x")
+check("before sign-in, every older kept version is listed", [i["version"] for i in updates.earlier(current="1.16.0")] == ["1.15.0", "1.14.1", "1.14.0"])
+real_exists = datakey.exists
+datakey.exists = lambda: True
+check("after: only versions after 1.14.1 (the last release without sign-in)", [i["version"] for i in updates.earlier(current="1.16.0")] == ["1.15.0"])
+sys.frozen = True; sys.executable = os.path.join(fake_dir, "Toner.exe")
+ab3.load()
+BEFORE = "Versions before sign-in can't open this data, so they aren't listed."
+check("the About page lists none of them and says why", not ab3.revert_btns and BEFORE in ab3.earlier_note.text(), (list(ab3.revert_btns), ab3.earlier_note.text()))
+datakey.exists = real_exists; del sys.frozen; sys.executable = saved_exe
+for p in olds:
+    os.remove(p)
 check("the installer closing Toner is wired to a real quit", "self.about.quit_requested.connect(self.quit_for_real)" in open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "app.py")).read())
 w.about.shutdown()
 

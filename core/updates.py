@@ -306,9 +306,17 @@ def installers():
     return sorted(out, key=lambda i: parse(i["version"]), reverse=True)
 
 
-def earlier(current=VERSION):
-    """The kept installers of versions older than this one: what Toner can go back to."""
-    return [i for i in installers() if is_newer(current, i["version"])]
+LAST_WITHOUT_SIGN_IN = "1.14.1"     # it and older versions can't open data encrypted at sign-in
+
+
+def earlier(current=VERSION, all_kept=False):
+    """The kept installers of versions older than this one: what Toner can go back to. Once sign-in is set up, only versions
+    that can open its encrypted data (all_kept: every one)."""
+    from core import datakey
+    items = [i for i in installers() if is_newer(current, i["version"])]
+    if all_kept or not datakey.exists():
+        return items
+    return [i for i in items if is_newer(i["version"], LAST_WITHOUT_SIGN_IN)]
 
 
 def prune(keep=KEEP, spare=()):

@@ -493,12 +493,14 @@ class AboutTab(QWidget):
                                       else "Going back to an earlier version needs a copy set up with the Toner installer.")
             return
         items = updates.earlier()
+        hidden = len(updates.earlier(all_kept=True)) > len(items)
+        before = " Versions before sign-in can't open this data, so they aren't listed." if hidden else ""
         if not items:
-            self.earlier_note.setText("No earlier versions are kept yet. After the next update, the version you have now can "
-                                      "be restored from here.")
+            self.earlier_note.setText(before.strip() or "No earlier versions are kept yet. After the next update, the version you "
+                                      "have now can be restored from here.")
             return
         self.earlier_note.setText(f"Toner keeps the {_FILE}s of the last {updates.KEEP} versions in its data folder, so you "
-                                  "can go back to one if an update causes trouble.")
+                                  "can go back to one if an update causes trouble." + before)
         for item in items:
             row = QHBoxLayout()
             row.addWidget(QLabel(f"Version {item['version']}   (downloaded {item['at']})"))
