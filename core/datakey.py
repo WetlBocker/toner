@@ -207,6 +207,26 @@ def _wait(over):
     return min(FIRST_WAIT * 2 ** min(over - 1, 5), MAX_WAIT)
 
 
+def _gate(doc, counter, now):
+    """Before a try, under the lock: cap a wait the clock going back stretched, then raise Throttled while one runs."""
+    if counter.get("until", 0) - now > MAX_WAIT:
+        counter["until"] = now + MAX_WAIT
+        _write(doc)
+    if now < counter.get("until", 0):
+        raise Throttled(math.ceil(counter["until"] - now))
+
+
+def _failed(doc, counter, now):
+    """After a wrong try, under the lock: count it and write; raises Throttled once past the free tries."""
+    counter["fails"] = counter.get("fails", 0) + 1
+    over = counter["fails"] - FREE_TRIES
+    if over > 0:
+        counter["until"] = now + _wait(over)
+    _write(doc)
+    if over > 0:
+        raise Throttled(_wait(over))
+
+
 def _attempt(name, secret):
     """(the payload of `name`'s seal (None: the recovery seal), the stored name, the failed tries counted before it). A Part 1
     seal gains its box key in the same write that clears the count. Every password try, for any name, real or not, counts against
@@ -217,11 +237,7 @@ def _attempt(name, secret):
         doc = _read()
         counter = doc["recovery"] if name is None else doc.setdefault("throttle", {"fails": 0, "until": 0})
         now = time.time()
-        if counter.get("until", 0) - now > MAX_WAIT:          # the clock went back: don't let that stretch the wait
-            counter["until"] = now + MAX_WAIT
-            _write(doc)
-        if now < counter.get("until", 0):
-            raise Throttled(math.ceil(counter["until"] - now))
+        _gate(doc, counter, now)
         key = None
         stored = None if name is None else _find(doc, name)
         rec = doc["recovery"] if name is None else doc["accounts"].get(stored)
@@ -236,13 +252,7 @@ def _attempt(name, secret):
         except InvalidTag:
             pass
         if key is None:
-            counter["fails"] = counter.get("fails", 0) + 1
-            over = counter["fails"] - FREE_TRIES
-            if over > 0:
-                counter["until"] = now + _wait(over)
-            _write(doc)
-            if over > 0:
-                raise Throttled(_wait(over))
+            _failed(doc, counter, now)
             raise WrongPassword(WRONG_RECOVERY if name is None else WRONG)
         fails = counter.get("fails", 0)
         if fails or counter.get("until") or upgrade:
