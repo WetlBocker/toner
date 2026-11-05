@@ -76,7 +76,18 @@ QMessageBox.warning = staticmethod(lambda *a, **k: msgs.append(a[2]) or QMessage
 page.table.selectRow(0)
 page.remove.click()
 check("own account refused", names() == ["Admin", "Bea"] and msgs == ["You can't remove the account you're signed in with."], msgs)
+def answer(text):
+    def run(self):
+        asked_remove.append(self.text())
+        [b for b in self.buttons() if b.text() == text][0].click()
+    return run
+asked_remove = []
 page.table.selectRow(1)
+QMessageBox.exec = answer("Cancel")
+page.remove.click()
+check("Cancel removes nothing, no audit row", names() == ["Admin", "Bea"] and "account removed" not in acts() and
+      asked_remove == ["Remove Bea? They won't be able to sign in to this copy of Toner."], asked_remove)
+QMessageBox.exec = answer("Remove")
 page.remove.click()
 check("other account removed", names() == ["Admin"] and rows() == ["Admin"] and "account removed" in acts())
 
@@ -112,6 +123,25 @@ except Exception:
 check("old key stops working", not old_works)
 datakey.close()
 datakey.open_with_recovery(shownkey[0]); datakey.close()
+session.sign_out(); session.sign_in("Admin", PW)
+
+# a closed key: nothing escapes, "Sign in first." is said
+A.AccountDialog.exec = fill("Cy", PW2)
+datakey.close()
+page.add.click()
+check("closed key: add says Sign in first.", shown["error"] == "Sign in first." and shown["result"] == 0, shown)
+page.table.selectRow(0)
+A.AccountDialog.exec = fill("Admin", PW3)
+page.reset.click()
+check("closed key: reset says Sign in first.", shown["error"] == "Sign in first.", shown)
+msgs.clear(); QMessageBox.exec = answer("Remove")
+page.table.selectRow(0); session_user = session.user
+session.user = lambda: None
+page.remove.click(); session.user = session_user
+check("closed key: remove says Sign in first.", msgs == ["Sign in first."], msgs)
+msgs.clear(); QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes)
+page.recovery.click()
+check("closed key: new recovery key says Sign in first.", msgs == ["Sign in first."], msgs)
 session.sign_out(); session.sign_in("Admin", PW)
 
 # idle minutes: the normal Settings save

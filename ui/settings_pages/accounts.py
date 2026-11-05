@@ -3,7 +3,7 @@
 from PySide6.QtWidgets import QAbstractItemView, QLabel, QMessageBox, QPushButton, QTableWidget, QTableWidgetItem
 
 from core import audit, datakey, db, passwords, session
-from ui.settings_base import Page, compact_row, spin
+from ui.settings_base import Page, compact_row, note, spin
 from ui.setupdlg import RecoveryDialog, _CardDialog
 from ui.signinwindow import MISMATCH, error_label, field, primary, say
 
@@ -42,7 +42,7 @@ class AccountDialog(_CardDialog):
         if not why:
             try:
                 (datakey.set_password if self.fixed else datakey.add_local)(name, pw)
-            except ValueError as e:                      # NameTaken and the rules, in datakey's words
+            except (ValueError, datakey.Locked) as e:    # NameTaken, the rules, "Sign in first.": in datakey's words
                 why = str(e)
         if why:
             say(self.error, why)
@@ -71,10 +71,11 @@ class AccountsPage(Page):
         self.recovery.clicked.connect(self._recovery)
         self.idle = spin(1, 240, " minutes without use")
         self.form.addRow("Lock after", self.idle)
-        self.lay.insertWidget(0, QLabel("<b>Accounts</b>  (these actions take effect immediately)"))
-        self.lay.insertWidget(1, self.table)
-        self.lay.insertWidget(2, compact_row(self.add, self.reset, self.remove))
-        self.lay.insertWidget(3, compact_row(self.recovery))
+        self.lay.insertWidget(0, QLabel("<b>Accounts</b>"))
+        self.lay.insertWidget(1, note("Changes to accounts take effect right away."))
+        self.lay.insertWidget(2, self.table)
+        self.lay.insertWidget(3, compact_row(self.add, self.reset, self.remove))
+        self.lay.insertWidget(4, compact_row(self.recovery))
 
     def load(self):
         self.idle.setValue(int(db.get_setting("signin_idle_minutes") or 15))
@@ -113,10 +114,17 @@ class AccountsPage(Page):
         if me and name.casefold() == me.casefold():
             QMessageBox.warning(self, self.title, OWN_ACCOUNT)
             return
+        box = QMessageBox(QMessageBox.Icon.Question, self.title, f"Remove {name}? They won't be able to sign in to this copy of Toner.", parent=self)
+        go = box.addButton("Remove", QMessageBox.ButtonRole.AcceptRole)
+        box.setDefaultButton(box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole))
+        box.exec()
+        if box.clickedButton() is not go:
+            return
         try:
             datakey.remove(name)
-        except datakey.LastAccount as e:
+        except (ValueError, datakey.Locked) as e:        # LastAccount, "Sign in first.", an account the file no longer has
             QMessageBox.warning(self, self.title, str(e))
+            self.refresh()
             return
         audit.log("account removed", name)
         self.refresh()
@@ -124,6 +132,10 @@ class AccountsPage(Page):
     def _recovery(self):
         if QMessageBox.question(self, self.title, NEW_KEY_ASK) != QMessageBox.StandardButton.Yes:
             return
-        key = datakey.new_recovery()
+        try:
+            key = datakey.new_recovery()
+        except datakey.Locked as e:
+            QMessageBox.warning(self, self.title, str(e))
+            return
         audit.log("recovery key replaced")
         RecoveryDialog(key, self).exec()
