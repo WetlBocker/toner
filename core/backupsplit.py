@@ -109,15 +109,18 @@ def _split(path, pub):
 
 
 def secrets_kept():
-    """True when any database keeps a backup's passwords under a backups key (roles' tripwire). Files not set up for it yet don't."""
+    """True when any database keeps a backup's passwords under a backups key (roles' tripwire). Files not set up for it yet don't;
+    a file that can't be read is passed over (it never stops sign-in); a locked one raises."""
     for p in databases():
-        c = _open(p)
         try:
-            if c.execute("SELECT 1 FROM config_backups WHERE secret <> '' LIMIT 1").fetchone():
-                return True
-        except sqldb.sqlite3.OperationalError as e:
-            if "no such" not in str(e):                  # no such table / column: an older file
+            c = _open(p)
+            try:
+                if c.execute("SELECT 1 FROM config_backups WHERE secret <> '' LIMIT 1").fetchone():
+                    return True
+            finally:
+                c.close()
+        except Exception as e:
+            if locked(e):
                 raise
-        finally:
-            c.close()
+            quiet.ignored()                              # no such table / column (an older file), or not a database at all
     return False

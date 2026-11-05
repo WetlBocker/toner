@@ -318,4 +318,27 @@ check("Part 1 file over a database that keeps secrets: tampered, not upgraded",
       roles.state() == "tampered" and db.get_setting("rules_key") == "" and not roles.holds("backups"), roles.state())
 session.sign_out()
 
+# ---------------------------------------------------------------- the tripwire passes over an organization file that isn't a database
+os.environ["NETCHECK_DB"] = SP + (r"\bsec2_%d.db").replace("\\", os.sep) % int(time.time())
+datakey.create("Admin9", PW)
+part1 = datakey.path().read_text(encoding="utf-8")
+db.init()
+acme2 = orgs.create("Acme Two", "AC2")
+junk = db.org_path(acme2).with_name("0.db")         # (looked at before Acme Two's 1.db)
+junk.write_bytes(b"this is not a database file " * 200)
+datakey.close()
+session.sign_in("Admin9", PW)
+check("Part 1 keys file and a non-database organization file: sign-in completes and upgrades",
+      roles.state() == "ok" and roles.holds("backups") and db.get_setting("rules_key") != "", roles.state())
+with db.within(acme2):
+    backup.store("o-sw", cfg(), mask=False)
+check("...a secret kept in Acme Two's file", any(r["secret"] for r in rows(db.org_path(acme2))))
+db.set_setting("rules_key", "")
+session.sign_out()
+datakey.path().write_text(part1, encoding="utf-8")
+session.sign_in("Admin9", PW)
+check("...and the tripwire still fires past the broken file: tampered, not upgraded",
+      roles.state() == "tampered" and db.get_setting("rules_key") == "" and not roles.holds("backups"), roles.state())
+session.sign_out()
+
 print(f"\n{ok} passed, {bad} failed"); sys.exit(1 if bad else 0)
