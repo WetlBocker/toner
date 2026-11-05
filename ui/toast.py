@@ -61,6 +61,9 @@ def toast(widget, text, problem=False):
     win = widget.window() if widget is not None else None
     if win is None:
         return None
+    from core import session
+    if session.state() == "locked":
+        return None                               # nothing shows over the lock screen (ui/lockscreen.py)
     t = win.findChild(Toast, "toast", Qt.FindChildOption.FindDirectChildrenOnly)
     if t is None:
         t = Toast(win)

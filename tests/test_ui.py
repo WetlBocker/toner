@@ -240,8 +240,12 @@ QFileDialog.getOpenFileName = staticmethod(lambda *a, **k: (path, "")); msgs.cle
 check("import applies, ignores the bad value, refreshes the pages", db.get_setting("workers") == 6 and "retries" in msgs[-1][1] and g.workers.value() == 6, msgs[-1])
 open(path, "w").write("[1,2]"); D.import_settings(); check("import of a wrong-shaped file is refused", "Could not read" in msgs[-1][1])
 bk = SP + (rf"\ui{stamp}\backup.db").replace("\\", os.sep); QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (bk, ""))
-D.backup(); import sqlite3 as sq; con = sq.connect(bk); n = con.execute("select count(*) from devices").fetchone()[0]; con.close()
-check("database backup is a valid copy", n == 3, n)
+BK_PW = "orchid lantern 4821"
+D._ask_password = lambda *a: BK_PW                      # the backup's password prompt (both times), without a modal
+msgs.clear(); D.backup()
+from core.sqldb import sqlite3 as sq
+con = sq.connect(bk); con.execute("PRAGMA key = '%s'" % BK_PW); n = con.execute("select count(*) from devices").fetchone()[0]; con.close()
+check("database backup is a valid copy, opened with its password", n == 3 and msgs and msgs[-1][0] == "info", (n, msgs[-1:]))
 db.save_run([Result("core", "cpu", "OK", "1%", numeric=1.0)]); D.clear_history()
 with db.connect() as c: left = c.execute("select count(*) from runs").fetchone()[0], c.execute("select count(*) from results").fetchone()[0], c.execute("select count(*) from devices").fetchone()[0]
 check("clear history empties runs+results, keeps devices", left == (0, 0, 3), left)

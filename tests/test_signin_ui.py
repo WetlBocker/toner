@@ -28,7 +28,7 @@ def check(name, cond, extra=""):
     if cond: ok += 1; print("  ok  ", name)
     else: bad += 1; print("  FAIL", name, extra)
 
-PW, PW2 = "violet staple orbit 42", "amber kettle meadow 77"
+PW, PW2, PW3 = "violet staple orbit 42", "amber kettle meadow 77", "copper willow harbor 58"
 KEY_PATTERN = re.compile(r"^([A-Z2-7]{4}-){7}[A-Z2-7]{4}$")
 
 from PySide6.QtCore import Qt
@@ -198,8 +198,42 @@ check("...and the data still to encrypt is left for app.main", lockdown.pending(
 session.sign_out()
 use("fresh")
 
+print("== the recovery reset after too many password tries")
+use("fresh")
+doc = datakey._read(); doc["throttle"] = {"fails": 9, "until": time.time() + 600}; datakey._write(doc)     # someone guessed for a while
+w = SignInWindow(); w.show()
+w.name.setText("Jordan"); w.next.click(); w.use_recovery.click(); w.recovery.setText(recovery); w.recovery_sign_in.click()
+w.new_pw.setText(PW3); w.confirm.setText(PW3); w.reset_ok.click()
+check("the recovery key's new password signs in at once (the wait is cleared)", w.result() == SignInWindow.DialogCode.Accepted
+      and session.user() == "Jordan" and datakey._read()["throttle"] == {"fails": 0, "until": 0})
+datakey.set_password("Jordan", PW2); session.sign_out()
+w = SignInWindow(); w.show()
+w.name.setText("Jordan"); w.next.click(); w.use_recovery.click(); w.recovery.setText(recovery); w.recovery_sign_in.click()
+session.sign_in = throttled                          # a wrong try from elsewhere started a wait between the two steps
+w.new_pw.setText(PW2); w.confirm.setText(PW2); w.reset_ok.click()
+session.sign_in = real_sign_in
+check("...and if a wait started anyway, the password step shows the countdown with the name filled in",
+      w.pages.currentWidget() is w.password_page and w.who.text() == "Jordan" and not w.sign_in.isEnabled()
+      and w.error.text() == "Too many tries. Wait 30 seconds, then try again." and session.state() == "signed_out", w.error.text())
+w.sign_in_wait.timer.stop(); w.sign_in.setEnabled(True)
+w.pw.setText(PW2); w.sign_in.click()
+check("...after which signing in works", w.result() == SignInWindow.DialogCode.Accepted and session.user() == "Jordan")
+session.sign_out()
+
+print("== passwords left in Windows Credential Manager move over at every start")
+from ui import signinwindow as SW
+left = {"cm-x": "9"}
+forgotten = []
+real_left, real_forget = passvault.left_in_credential_manager, passvault.forget_credential_manager
+passvault.left_in_credential_manager = lambda: dict(left)
+passvault.forget_credential_manager = lambda names: (forgotten.extend(names), [left.pop(n, None) for n in names])
+real_exec = SW.SignInWindow.exec
+SW.SignInWindow.exec = lambda self: (session.sign_in("Jordan", PW2), SignInWindow.DialogCode.Accepted)[1]
+check("the sign-in start carries them into the vault", A.sign_in_at_start() is True and passvault.get("cm-x") == "9" and forgotten == ["cm-x"])
+passvault.left_in_credential_manager, passvault.forget_credential_manager = real_left, real_forget
+SW.SignInWindow.exec = real_exec
+
 print("== the lock screen over Toner's window")
-session.sign_in("Jordan", PW2)
 db.init()
 A.apply_look(app)
 win = A.Main(); win.resize(1024, 700); win.show(); app.processEvents()
@@ -207,22 +241,53 @@ lock = win.lock_screen
 check("open: no lock screen, the idle timer runs", not lock.isVisible() and lock.idle.isActive())
 check("the user menu names who is signed in, then Lock and Sign out",
       [a.text() for a in win.user_menu.actions() if not a.isSeparator()] == ["Jordan", "Lock (Ctrl+Shift+L)", "Sign out"])
-win.lock_shortcut.activated.emit()
-check("Ctrl+Shift+L locks the session and covers the window", session.state() == "locked" and lock.isVisible() and lock.geometry() == win.rect())
+win.lock_shortcut.activated.emit(); app.processEvents()
+check("Ctrl+Shift+L locks the session and the lock sits over the window", session.state() == "locked" and lock.isVisible()
+      and lock.geometry() == win.geometry())
+check("the window is covered underneath too", lock.covers[win].isVisible() and lock.covers[win].geometry() == win.rect())
 check("the lock screen's words", lock.reason.text() == "Locked by Jordan." and lock.who.text() == "Jordan, local account" and lock.unlock.text() == "Unlock")
 check("the idle timer stops while locked", not lock.idle.isActive())
-check("what's under it can't be reached", not win.centralWidget().isEnabled() and not win.palette_shortcut.isEnabled())
+check("what's under it can't be reached: the lock is the newest modal", QApplication.activeModalWidget() is lock)
 win.hide(); win.show_window(); app.processEvents()
 check("the tray's Open Toner shows the lock screen", win.isVisible() and lock.isVisible())
 lock.pw.setText("wrong password 123"); lock.unlock.click()
 check("a wrong password says so", lock.error.text() == datakey.WRONG and session.state() == "locked")
 lock.pw.setText(PW2); lock.unlock.click()
-check("the right password uncovers the window", session.state() == "open" and not lock.isVisible() and win.centralWidget().isEnabled() and win.palette_shortcut.isEnabled())
+check("the right password uncovers the window", session.state() == "open" and not lock.isVisible() and not lock.covers
+      and QApplication.activeModalWidget() is None)
+
+print("== a dialog that was open when Toner locked")
+from PySide6.QtWidgets import QDialog, QLineEdit
+from PySide6.QtTest import QTest
+from ui.toast import Toast, toast
+for parent, kind in ((win, "inside the window"), (None, "on its own")):
+    d = QDialog(parent); d.setWindowModality(Qt.WindowModality.ApplicationModal); typed = QLineEdit(d); d.resize(400, 200); d.show(); app.processEvents()
+    typed.setText("half typed")
+    win.lock(); app.processEvents()
+    check(f"a modal dialog {kind}: the lock is above it and takes input", QApplication.activeModalWidget() is lock
+          and QApplication.focusWidget() is lock.pw, (QApplication.activeModalWidget(), QApplication.focusWidget()))
+    check("...the dialog stays open, covered", d.isVisible() and lock.covers[d].isVisible() and lock.covers[d].geometry() == d.rect())
+    QTest.keyClicks(lock.pw, PW2); QTest.keyClick(lock.pw, Qt.Key.Key_Return); app.processEvents()
+    check("...unlock gives it back with what was typed", session.state() == "open" and d.isVisible() and typed.text() == "half typed"
+          and QApplication.activeModalWidget() is d and not lock.covers)
+    d.close(); d.deleteLater(); app.processEvents()
+
+print("== what appears while locked")
+win.lock(); app.processEvents()
+check("a toast doesn't show over the lock", toast(win.inventory, "Saved") is None
+      and not any(t.isVisible() for t in win.findChildren(Toast)))
+late = QDialog(win); late.setWindowModality(Qt.WindowModality.ApplicationModal); QLineEdit("a device's details", late); late.show(); app.processEvents()
+check("a window opened while locked is covered, and the lock stays on top", late in lock.covers and lock.covers[late].isVisible()
+      and QApplication.activeModalWidget() is lock)
+session.unlock(PW2); app.processEvents()
+check("...and is there after unlocking", late.isVisible() and QApplication.activeModalWidget() is late)
+late.close(); late.deleteLater(); app.processEvents()
 
 print("== the idle timer")
 from ui import lockscreen
 check("15 minutes by default", db.get_setting("signin_idle_minutes") == 15)
-now = [1000.0]
+check("it counts wall-clock time, which goes on while the computer sleeps", lockscreen._now is time.time)
+now = [100000.0]
 lockscreen._now = lambda: now[0]
 lock.last = now[0]
 now[0] += 14 * 60; lock.check_idle()
@@ -232,8 +297,12 @@ from PySide6.QtCore import QEvent
 QApplication.sendEvent(win, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Shift, Qt.KeyboardModifier.NoModifier))
 now[0] += 2 * 60; lock.check_idle()
 check("a key press starts the wait again", session.state() == "open")
-now[0] += 15 * 60; lock.check_idle()
-check("after 15 minutes without use it locks", session.state() == "locked" and lock.isVisible())
+now[0] -= 3600; lock.check_idle()
+check("the clock going back starts the wait again too", session.state() == "open" and lock.last == now[0])
+now[0] += 14 * 60; lock.check_idle()
+check("...from then", session.state() == "open")
+now[0] += 3 * 3600; lock.check_idle()
+check("a jump forward past the limit (a sleep) locks", session.state() == "locked" and lock.isVisible())
 check("...and says so", lock.reason.text() == "Locked after 15 minutes without use.", lock.reason.text())
 session.unlock(PW2); app.processEvents()
 check("unlocking (from anywhere) hides it again", not lock.isVisible())

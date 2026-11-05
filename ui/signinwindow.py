@@ -277,6 +277,11 @@ class SignInWindow(QDialog):
             datakey.set_password(name, pw)
             session.sign_out()
             session.sign_in(name, pw)
+        except datakey.Throttled as e:                   # (Toner's service counted a wrong try meanwhile): sign in as usual
+            self.name.setText(name)
+            self._next()
+            self.sign_in_wait.start(e.seconds)
+            return
         except DAMAGED_ERRORS:
             say(self.reset_error, DAMAGED)
             return

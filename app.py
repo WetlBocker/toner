@@ -439,8 +439,8 @@ class Main(QMainWindow):
         from PySide6.QtCore import QPoint
         b.settle(self.body.mapTo(self, QPoint(max(0, x), min(max(0, y), max(0, self.body.height() - b.height())))))   # by rubber band after a drop
         b.raise_()
-        if getattr(self, "lock_screen", None) is not None and self.lock_screen.isVisible():
-            self.lock_screen.raise_()                  # the button never shows over the lock screen
+        if getattr(self, "lock_screen", None) is not None:
+            self.lock_screen.keep_covered()            # the button never shows over the lock's cover
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -1083,7 +1083,10 @@ def sign_in_at_start():
             return False
     elif SignInWindow().exec() != QDialog.DialogCode.Accepted:
         return False
-    return not lockdown.pending() or setupdlg.encrypt()
+    if lockdown.pending() and not setupdlg.encrypt():
+        return False
+    setupdlg.carry_credential_manager()            # (every start: a first start that stopped halfway left them there)
+    return True
 
 
 def main():

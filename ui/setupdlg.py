@@ -194,8 +194,7 @@ def encrypt(parent=None):
 def run_first_start(parent=None):
     """No keys file yet: make the first account, show its recovery key, move an older vault over, encrypt, and sign in.
     True once an account exists and the data is encrypted; False when the person quit."""
-    had_vault = passvault.exists()
-    master_vault = had_vault and passvault.uses_master()
+    master_vault = passvault.exists() and passvault.uses_master()
     account = AccountDialog(parent)
     if not account.exec():
         return False
@@ -208,11 +207,15 @@ def run_first_start(parent=None):
     finally:
         datakey.close()                                  # create left it open; signing in opens it again
     session.sign_in(account.name.text().strip(), account.pw.text())
-    if not had_vault:                                    # an older Toner kept its passwords in Windows Credential Manager
-        db.init()                                        # (finding their names reads the devices)
-        carry = passvault.left_in_credential_manager()
-        if carry:
-            passvault.put_many(carry)
-            passvault.forget_credential_manager(carry)
-            audit.log("vault created", f"{len(carry)} password(s) moved from Credential Manager")
     return True
+
+
+def carry_credential_manager():
+    """Passwords an older Toner kept in Windows Credential Manager move into the vault (signed in, data encrypted). Safe to run
+    again: each leaves Credential Manager only once it is in the vault, so a start that stopped halfway carries on."""
+    db.init()                                            # finding their names reads the devices
+    carry = passvault.left_in_credential_manager()
+    if carry:
+        passvault.put_many(carry)
+        passvault.forget_credential_manager(carry)
+        audit.log("passwords moved from Credential Manager", f"{len(carry)} password(s)")

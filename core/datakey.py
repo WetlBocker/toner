@@ -273,10 +273,13 @@ def add_local(name, password):
 
 
 def set_password(name, password):
+    """Also clears the password tries' wait: whoever sets a password has the key open (a password or the recovery key), and the
+    new password must work at once (the reset after a recovery-key sign-in signs in with it straight away)."""
     def reseal(doc):
         stored = _stored(doc, name)
         _check(password, stored)
         doc["accounts"][stored] = _account(stored, password, _key, doc["accounts"][stored].get("created"))
+        doc["throttle"] = {"fails": 0, "until": 0}
     _change(reseal)
 
 

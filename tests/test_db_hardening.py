@@ -3,7 +3,8 @@
 import os as _os, sys as _sys, tempfile as _tmp
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
-import os, sqlite3, sys, threading, time
+import os, sys, threading, time
+from core.sqldb import sqlite3          # Toner's own driver: a second SQLite library on the same file breaks POSIX locking
 SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\hard%d.db").replace("\\", os.sep) % int(time.time()); os.environ["APPDATA"] = SP
 from core import db
 ok = bad = 0

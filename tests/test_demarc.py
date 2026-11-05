@@ -17,7 +17,8 @@ keyring.set_password = lambda s, u, p: STORE.__setitem__((s, u), p)
 keyring.get_password = lambda s, u: STORE.get((s, u))
 keyring.delete_password = lambda s, u: STORE.pop((s, u), None)
 
-import gzip, hashlib, json, math, re, socket, sqlite3, ssl, threading
+import gzip, hashlib, json, math, re, socket, ssl, threading
+from core.sqldb import sqlite3          # Toner's own driver: a second SQLite library on the same file breaks POSIX locking
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from core import audit, db, demarc, extstore, orgs
