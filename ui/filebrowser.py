@@ -15,8 +15,8 @@ from PySide6.QtCore import QMimeData, QThread, Qt, QUrl, Signal
 from PySide6.QtGui import QDrag
 from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMessageBox,
                                QProgressBar, QPushButton, QSplitter, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
-from ui.widgets import remember_sizes
-from core import quiet
+from ui.widgets import gate_push, remember_sizes
+from core import perms, quiet
 
 MIME = "application/x-toner-files"            # a drag from one of the two lists: {"side": "local"|"remote", "paths": [...]}
 NOT_CONNECTED = "Connect the session to browse the device's files."
@@ -49,6 +49,8 @@ def when(ts):
 
 def plain(e):
     """The server's (or the system's) message in plain words."""
+    if isinstance(e, perms.Denied):                  # our own refusal, in its approved words
+        return str(e)
     text = str(e) or type(e).__name__
     low = text.lower()
     if isinstance(e, PermissionError) or "permission denied" in low:
@@ -165,9 +167,11 @@ class RemoteFs:
             return False
 
     def mkdir(self, path):
+        perms.require("push")                        # every write to the device is a push
         self.sftp.mkdir(path)
 
     def delete(self, path):
+        perms.require("push")
         try:
             mode = self.sftp.lstat(path).st_mode or 0
         except OSError as e:
@@ -280,6 +284,7 @@ def copy_file(worker, src_fs, src, dst_fs, dst, label, policy):
     worker.progress.emit(label, 0, 0)
     try:
         if isinstance(src_fs, LocalFs):
+            perms.require("push")
             worker.sftp.put(src, dst, callback=cb)
         else:
             worker.sftp.get(src, dst, callback=cb)
@@ -471,6 +476,12 @@ class Side(QWidget):
         any_ = bool(self.list.selectedItems())
         self.delete_btn.setEnabled(any_)
         self.action_btn.setEnabled(any_)
+        self.gate()
+
+    def gate(self):
+        """The buttons that write to the device (its New folder and Delete, and Upload on this computer's side) need "push"."""
+        for b in ((self.mkdir_btn, self.delete_btn) if self.side == "remote" else (self.action_btn,)):
+            gate_push(b, b.isEnabled())
 
     def set_alive(self, on):
         for b in (self.up_btn, self.refresh_btn, self.mkdir_btn, self.box):
@@ -479,6 +490,7 @@ class Side(QWidget):
             self.list.clear()
             self.delete_btn.setEnabled(False)
             self.action_btn.setEnabled(False)
+        self.gate()
 
 
 # =============================================================================== the panel
@@ -581,6 +593,7 @@ class FileBrowser(QWidget):
             s.action_btn.setEnabled(not on and bool(s.list.selectedItems()))
             s.delete_btn.setEnabled(not on and bool(s.list.selectedItems()))
             s.mkdir_btn.setEnabled(not on and (s.side == "local" or self.worker is not None))
+            s.gate()
         if on and label in ("Upload", "Download"):
             self.note.setText(f"{label}ing...")
 
@@ -661,6 +674,9 @@ class FileBrowser(QWidget):
 
     # ---- folders and deleting
     def new_folder(self, side):
+        if side != "local" and not perms.allowed("push"):
+            self.note.setText(perms.REASON)
+            return
         name, ok = QInputDialog.getText(self, "New folder", "Folder name:")
         name = name.strip()
         if not ok or not name:
@@ -680,6 +696,9 @@ class FileBrowser(QWidget):
         s = self.local if side == "local" else self.remote
         picked = s.list.entries()
         if not picked:
+            return
+        if side != "local" and not perms.allowed("push"):
+            self.note.setText(perms.REASON)
             return
         if len(picked) == 1:
             e = picked[0]
@@ -721,6 +740,9 @@ class FileBrowser(QWidget):
 
     def upload(self, paths, remote_folder):
         if not paths or self.busy:
+            return
+        if not perms.allowed("push"):                # (a drop skips the disabled button)
+            self.note.setText(perms.REASON)
             return
         local_fs = self.local_fs
 

@@ -130,6 +130,49 @@ def drive_ui(who, allowed):
     cmdrun.run_many = real_run_many
 
 
+class FakeSftp:
+    def __init__(self): self.calls = []
+    def mkdir(self, p): self.calls.append(("mkdir", p))
+    def remove(self, p): self.calls.append(("remove", p))
+    def rmdir(self, p): self.calls.append(("rmdir", p))
+    def lstat(self, p):
+        import types
+        return types.SimpleNamespace(st_mode=0o100644)
+    def put(self, src, dst, callback=None): self.calls.append(("put", dst))
+    def get(self, src, dst, callback=None): self.calls.append(("get", src))
+
+
+def drive_files(who, allowed):
+    """The file browser's SFTP writes: New folder, Delete and Upload on the device. Browsing and downloading stay open."""
+    import types
+    import ui.filebrowser as FB
+    sftp = FakeSftp(); rfs = FB.RemoteFs(sftp)
+    worker = types.SimpleNamespace(sftp=sftp, cancel=types.SimpleNamespace(is_set=lambda: False),
+                                   progress=types.SimpleNamespace(emit=lambda *a: None), ask=lambda *a: "replace")
+    local_file = SP + os.sep + "up.txt"; open(local_file, "w").write("x")
+    ops = {"mkdir": lambda: rfs.mkdir("/new"), "delete": lambda: rfs.delete("/old"),
+           "upload": lambda: FB.copy_file(worker, FB.LocalFs(), local_file, rfs, "/up.txt", "Uploading up.txt", {"replace_all": True})}
+    for n, fn in ops.items():
+        v, msg = verdict(fn)
+        check(f"{who}: file browser {n} " + ("allowed" if allowed else "denied"), (v == "passed") == allowed and (allowed or msg == TIP), (v, msg))
+    check(f"{who}: nothing reached the device" if not allowed else f"{who}: the device got all three",
+          (sftp.calls == []) if not allowed else {c[0] for c in sftp.calls} >= {"mkdir", "remove", "put"}, sftp.calls)
+    check(f"{who}: file browser download stays open", verdict(lambda: FB.copy_file(worker, rfs, "/a", FB.LocalFs(), SP + os.sep + "dl.txt", "d", {"replace_all": True}))[0] == "passed"
+          and ("get", "/a") in sftp.calls)
+    check(f"{who}: the message shown is the approved one", FB.plain(perms.Denied()) == TIP)
+    side_l, side_r = FB.Side("L", "local", "Upload", "tip"), FB.Side("R", "remote", "Download", "tip2")
+    for sd in (side_l, side_r):
+        sd.set_alive(True)
+        for b in (sd.delete_btn, sd.action_btn, sd.mkdir_btn):
+            b.setEnabled(True)
+        sd.gate()
+    for name, b in (("Upload", side_l.action_btn), ("device New folder", side_r.mkdir_btn), ("device Delete", side_r.delete_btn)):
+        check(f"{who}: file browser {name} " + ("enabled" if allowed else "disabled with the tooltip"),
+              (b.isEnabled() and b.toolTip() != TIP) if allowed else (not b.isEnabled() and b.toolTip() == TIP), (b.isEnabled(), b.toolTip()))
+    check(f"{who}: this computer's New folder and Delete, and Download, stay enabled",
+          all(b.isEnabled() and b.toolTip() != TIP for b in (side_l.mkdir_btn, side_l.delete_btn, side_r.action_btn)))
+
+
 # ---------------------------------------------------------------- sign-in off: nothing changes
 db.init()
 check("no keys file: sign-in off", not datakey.exists())
@@ -138,6 +181,7 @@ for n, fn in cases.items():
 for n, fn in reads.items():
     check(f"off: {n} not denied", verdict(fn)[0] == "passed")
 drive_ui("off", True)
+drive_files("off", True)
 os.environ["NETCHECK_DB"] = SP + os.sep + "pushp_keyed.db"                   # the off phase used a plain database; the keyed one starts fresh
 
 # ---------------------------------------------------------------- a Tech
@@ -162,6 +206,7 @@ for n, fn in reads.items():
     check(f"Tech: {n} not denied", verdict(fn)[0] == "passed")
 _r = cmdrun.run_on_device(DEV, ["show version"]); check("Tech: show version really runs", _r["ok"], _r)
 drive_ui("Tech", False)
+drive_files("Tech", False)
 
 # ---------------------------------------------------------------- an Engineer
 session.sign_out(); session.sign_in("Eng1", PW3)
@@ -169,5 +214,6 @@ check("Engineer: push is open", perms.allowed("push"))
 for n, fn in {**cases, **reads}.items():
     check(f"Engineer: {n} not denied", verdict(fn)[0] == "passed")
 drive_ui("Engineer", True)
+drive_files("Engineer", True)
 
 print(f"\n{ok} passed, {bad} failed"); sys.exit(1 if bad else 0)
