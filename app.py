@@ -9,7 +9,7 @@ from pathlib import Path
 from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence, QPainter, QPixmap, QShortcut
 from PySide6.QtWidgets import QApplication, QMainWindow, QMenu, QMessageBox, QSplitter, QSystemTrayIcon
-from core import agents, audit, checks, db, demarc, display, legacyssh, notify, paths, perms, reports, session, sessionlog, sessions, trends, trust, tunnel, updates
+from core import agents, audit, checks, db, demarc, display, legacyssh, notify, paths, perms, reports, roles, session, sessionlog, sessions, trends, trust, tunnel, updates
 from ui import theme
 from ui.about import AboutTab
 from ui.configs import ConfigsTab
@@ -315,9 +315,10 @@ class Main(QMainWindow):
         from ui.lockscreen import LockScreen
         self.lock_screen = LockScreen(self)             # last, so it is above everything else in the window
         self.apply_permissions()
+        roles.on_change(lambda: (self.apply_permissions(), self.settings.apply_role()))    # e.g. an Admin changing their own role
 
     def apply_permissions(self):
-        """Once the window is built (the role is fixed until the next sign-in; safe to call again): what the signed-in role may not use is
+        """Once the window is built, and again whenever the rules change (safe to call again): what the signed-in role may not use is
         hidden. Sessions follow tool:sessions. Automation/AI holds Ansible (tool:automation) and the Assistant's page (ai), so the section
         goes only when both are off."""
         self.tools.apply_permissions()
@@ -1116,7 +1117,7 @@ def sign_in_at_start():
     """The first start (a new install or an upgrade) or the sign-in window; then whatever is still plain gets encrypted (looked at
     every start: a session log left open last time, or a first start that stopped halfway). False: the person quit."""
     from PySide6.QtWidgets import QDialog
-    from core import datakey, lockdown, roles
+    from core import datakey, lockdown
     from ui import setupdlg
     from ui.signinwindow import SignInWindow
     if not datakey.exists():

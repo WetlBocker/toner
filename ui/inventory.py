@@ -1953,9 +1953,10 @@ class InventoryTab(QWidget):
                     menu.addAction("Open SSH session", self.open_in_ssh)
             if devs and not folders:
                 menu.addAction("Run Checks", lambda: self.run_checks.emit([d.get("key") or d["name"] for d in self.selected_devices()]))
-            if len(devs) == 1 and not folders and devs[0].get("host") and perms.allowed("tool:ping"):
-                menu.addAction("Ping", lambda d=devs[0]: ping_popup(self, d["name"], d["host"]))
-                add_tools_menu(menu, devs[0], self.tool_requested.emit)
+            if len(devs) == 1 and not folders and devs[0].get("host"):
+                if perms.allowed("tool:ping"):
+                    menu.addAction("Ping", lambda d=devs[0]: ping_popup(self, d["name"], d["host"]))
+                add_tools_menu(menu, devs[0], self.tool_requested.emit)     # each entry follows its own tool
             if devs and can:
                 menu.addAction("Edit selected..." if len(devs) > 1 else "Edit tags, folder, profile...", self.bulk_edit)
                 menu.addAction("Detect vendors for selected...", self.detect_vendors)

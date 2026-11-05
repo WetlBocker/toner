@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (QAbstractButton, QAbstractItemView, QAbstractSpin
                                QPlainTextEdit, QScrollArea, QSpinBox, QStackedWidget, QStyledItemDelegate, QTableWidget, QTextEdit, QTableWidgetItem, QTimeEdit,
                                QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 import ipaddress
-from core import agents, alerts, audit, checks, custom, db, display, maintenance, nettools, notify, perms, profiles, proxy, reports, sessionlog, trends, vault
+from core import agents, alerts, audit, checks, custom, db, display, maintenance, nettools, notify, perms, profiles, proxy, reports, roles, sessionlog, trends, vault
 from ui import terminal, theme
 from ui.snmpfields import SnmpFields
 from ui.widgets import GroupPicker
@@ -409,7 +409,9 @@ class SettingsTab(QWidget):
         return self._role_hidden(i) or (db.home() != db.GLOBAL and self.pages[i].title in GLOBAL_ONLY_PAGES)
 
     def _role_hidden(self, i):
-        return self.pages[i].title == "Accounts and sign-in" and not perms.is_admin()
+        """Accounts and sign-in is for Admins; while the rules don't check out everyone is a Tech, so it shows (with its banner,
+        its actions refused) or an Admin could never see why."""
+        return self.pages[i].title == "Accounts and sign-in" and not perms.is_admin() and roles.state() != "tampered"
 
     def _role_locked(self, i):
         t = self.pages[i].title

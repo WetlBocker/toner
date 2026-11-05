@@ -172,4 +172,63 @@ w.show_assistant(True)
 check("Engineer: the Assistant opens", w.ai_button.isVisibleTo(w) and w.assistant.isVisible())
 w.close()
 
+# ---------------------------------------------------------------- an Admin demotes themselves: the open window follows at once
+session.sign_out(); session.sign_in("Admin1", PW)
+datakey.add_local("Admin2", PW, role="Admin")
+w = build(); st = w.settings
+titles = [p.title for p in st.pages]
+sec = titles.index("Security")
+check("Admin before: Accounts and sign-in listed, Security open, SNMP listed", not st.nav.isRowHidden(page_row(st, "Accounts and sign-in"))
+      and sec not in st.locked and "SNMP" in tool_names(w))
+roles.set_role("Admin1", "Tech"); app.processEvents()
+st.select_page("Security"); app.processEvents()
+check("own demotion to Tech: Accounts and sign-in hidden, Security locked under the banner, SNMP gone (Tech's)",
+      st.nav.isRowHidden(page_row(st, "Accounts and sign-in")) and sec in st.locked and not st.pages[sec].isEnabled()
+      and st.role_lines[sec].isVisibleTo(st) and "SNMP" not in tool_names(w), (sorted(st.locked), tool_names(w)))
+w.close()
+session.sign_out(); session.sign_in("Admin2", PW)
+roles.set_role("Admin1", "Admin")
+
+# ---------------------------------------------------------------- Open in Tools follows each tool, not Ping's
+import ui.inventory as I
+from PySide6.QtWidgets import QMenu
+roles.set_permissions("Tech", {"tool:ping": False, "tool:snmp": True})
+db.save_device(dict(name="sw9", vendor="cisco", host="10.0.0.9", port=0, platform="cisco_ios", username="u", site="default", verify_ssl=0,
+                    ha_expected=0, enabled=1, location="", details="", folder_id=None, org=0))
+session.sign_out(); session.sign_in("Tech1", PW2)
+w = build(); inv = w.inventory; inv.refresh(); inv.expand_all(); app.processEvents()
+item = next(it for it in inv._all_items() if inv.kind_of(it)[0] == "device" and it.text(0) == "sw9")
+inv.table.clearSelection(); item.setSelected(True)
+captured = {}
+class FakeMenu(QMenu):
+    def exec(self, *a):
+        captured.update(actions=[x.text() for x in self.actions() if x.text()], menu=self)
+real_menu, I.QMenu = I.QMenu, FakeMenu
+try:
+    inv.show_menu(inv.table.visualItemRect(item).center())
+finally:
+    I.QMenu = real_menu
+sub = next((a.menu() for a in captured["menu"].actions() if a.text() == "Open in Tools"), None)
+check("ping off, SNMP on: no Ping, and Open in Tools lists SNMP",
+      "Ping" not in captured["actions"] and sub is not None and "SNMP" in [a.text() for a in sub.actions()], captured["actions"])
+w.close()
+
+# ---------------------------------------------------------------- rules changed outside Toner: an Admin still sees the page and its banner
+import json
+session.sign_out()
+good = datakey.path().read_text(encoding="utf-8")
+d = json.loads(good); d["accounts"]["Tech1"]["role"] = "Engineer"
+datakey.path().write_text(json.dumps(d), encoding="utf-8")
+session.sign_in("Admin1", PW)
+check("tampered: the rules don't check out", roles.state() == "tampered", roles.state())
+w = build(); st = w.settings
+check("tampered: an Admin still has Accounts and sign-in", "Accounts and sign-in" in st.page_titles()
+      and st.select_page("Accounts and sign-in") is True and st.current_title() == "Accounts and sign-in", st.page_titles())
+app.processEvents()
+page = st.pages[[p.title for p in st.pages].index("Accounts and sign-in")]
+check("...and its tamper banner", page.banner.isVisibleTo(st) and page.banner.text().startswith("The roles were changed outside Toner"))
+w.close()
+session.sign_out()
+datakey.path().write_text(good, encoding="utf-8")
+
 print(f"\n{ok} passed, {bad} failed"); sys.exit(1 if bad else 0)
