@@ -103,9 +103,22 @@ def _split(path, pub):
         with c:                                          # (secret IS NULL: an id deleted and used again meanwhile is another version)
             c.executemany("UPDATE config_backups SET secret='' WHERE id=? AND secret IS NULL", clean)
             c.executemany("UPDATE config_backups SET secret=?, body=?, size=? WHERE id=? AND secret IS NULL", moved)
+            _mask_findings(c)
         return whole
     finally:
         c.close()
+
+
+def _mask_findings(c):
+    """Hardening findings stored before they were masked quote config lines with their passwords: each quoted part (after ": ")
+    masked as hardening's _q masks it now. Runs with the file's split, so once (again only while a damaged version keeps the file
+    pending); masking again changes nothing."""
+    changed = []
+    for r in c.execute("SELECT id, message FROM scan_results WHERE check_name LIKE 'Hardening: %'").fetchall():
+        masked = ": ".join(backup.mask_secrets(part) for part in (r["message"] or "").split(": "))
+        if masked != (r["message"] or ""):
+            changed.append((masked, r["id"]))
+    c.executemany("UPDATE scan_results SET message=? WHERE id=?", changed)
 
 
 def secrets_kept():

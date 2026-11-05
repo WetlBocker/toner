@@ -73,6 +73,19 @@ check("sign-in off, mask=True: the body masked, not looked at yet (NULL: '' woul
       rows(DBS[0])[-1]["secret"] is None and SECRET not in body(rows(DBS[0])[-1]))
 m_body = rows(DBS[0])[-1]["body"]
 
+# hardening findings stored before findings were masked: they quote the password
+OLD_FINDING = "type 7 (reversible) secrets: username admin password 7 0822455D0A16"
+NEW_FINDING = "type 7 (reversible) secrets: username admin password <masked>"
+def findings(org):
+    with db.within(org), db.connect() as c:
+        return [r[0] for r in c.execute("SELECT message FROM scan_results ORDER BY id")]
+for org in (0, globex):
+    with db.within(org), db.connect() as c:
+        sid = c.execute("INSERT INTO scans(started_at) VALUES('2026-01-01 00:00:00')").lastrowid
+        c.executemany("INSERT INTO scan_results(scan_id, device, check_name, status, value, message) VALUES(?,?,?,?,?,?)",
+                      [(sid, "g-sw", "Hardening: Type 7 secrets", "WARN", "", OLD_FINDING),
+                       (sid, "g-sw", "Reachability", "OK", "", "password 7 is not a finding")])
+
 with db.within(globex), db.connect() as c:          # Globex's file as Toner kept it before this change: no secret column
     c.execute("DROP INDEX idx_backups_unchecked")
     c.execute("ALTER TABLE config_backups DROP COLUMN secret")
@@ -100,9 +113,11 @@ check("stopped after the first database: two still pending", len(backupsplit.pen
       (backupsplit.pending(), seen))
 backupsplit.run()
 check("run again: nothing pending", backupsplit.pending() == [])
-before = {p: rows(p) for p in DBS}
+check("old hardening findings are masked in every database, other checks untouched",
+      findings(0) == findings(globex) == [NEW_FINDING, "password 7 is not a finding"], (findings(0), findings(globex)))
+before = {p: rows(p) for p in DBS}, findings(0), findings(globex)
 backupsplit.run()
-check("a third run changes nothing", {p: rows(p) for p in DBS} == before)
+check("a third run changes nothing", ({p: rows(p) for p in DBS}, findings(0), findings(globex)) == before)
 m = [r for r in rows(DBS[0]) if r["device"] == "m-sw"]
 check("a masked version from before: marked looked at, its body untouched", len(m) == 1 and m[0]["secret"] == "" and m[0]["body"] == m_body, m)
 db.init()                                           # what the window does next: the migration finds the column there already
