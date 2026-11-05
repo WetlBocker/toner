@@ -112,57 +112,81 @@ check("add_local while closed is Locked", raises(lambda: D.add_local("bob", PW2)
 check("new_recovery while closed is Locked", raises(lambda: D.new_recovery(), D.Locked) is not None)
 D.open_with_password("admin", PW)
 
-# throttle, on a fake clock
+# throttle, on a fake clock: one counter for every password try, whatever the name
+BAD = "wrong password here 1"
+D.add_local("jsmith", PW2)
 real_time = time.time
 T = [real_time()]
 time.time = lambda: T[0]
 try:
-    msgs = [raises(lambda: D.open_with_password("admin", "wrong password here 1"), D.WrongPassword) for _ in range(5)]
-    check("five wrong: WrongPassword each", all(m is not None and str(m) == WRONG_MSG for m in msgs), msgs)
-    e = raises(lambda: D.open_with_password("admin", "wrong password here 1"), D.Throttled)
-    check("sixth: Throttled 30", e is not None and e.seconds == 30 and str(e) == "Too many tries. Wait 30 seconds, then try again.", e)
-    e = raises(lambda: D.check_password("admin", PW), D.Throttled)
-    check("while throttled even the right password is Throttled", e is not None and e.seconds == 30)
+    msgs = [raises(lambda: D.open_with_password("admin", BAD), D.WrongPassword) for _ in range(3)]
+    msgs += [raises(lambda: D.open_with_password("nobody", BAD), D.WrongPassword) for _ in range(2)]
+    check("five wrong across names (3 admin, 2 unknown): WrongPassword each", all(m is not None and str(m) == WRONG_MSG for m in msgs), msgs)
+    e = raises(lambda: D.open_with_password("jsmith", BAD), D.Throttled)
+    check("sixth, on a third name: Throttled 30", e is not None and e.seconds == 30 and str(e) == "Too many tries. Wait 30 seconds, then try again.", e)
+    kdf_calls = [0]
+    real_kek = D._kek
+    D._kek = lambda *a: (kdf_calls.__setitem__(0, kdf_calls[0] + 1), real_kek(*a))[1]
+    e1 = raises(lambda: D.open_with_password("nobody", PW), D.Throttled)
+    e2 = raises(lambda: D.open_with_password("admin", PW), D.Throttled)
+    e3 = raises(lambda: D.check_password("admin", PW), D.Throttled)
+    D._kek = real_kek
+    check("while throttled: unknown and real names (even the right password) all Throttled 30",
+          all(e is not None and e.seconds == 30 for e in (e1, e2, e3)), (e1, e2, e3))
+    check("a throttled try runs no scrypt", kdf_calls[0] == 0, kdf_calls)
     T[0] += 10
     e = raises(lambda: D.open_with_password("admin", PW), D.Throttled)
     check("remaining wait counts down", e is not None and e.seconds == 20, e and e.seconds)
     T[0] += 20
     waits = []
-    for _ in range(7):
-        e = raises(lambda: D.open_with_password("admin", "wrong password here 1"), D.Throttled)
+    for i in range(7):
+        e = raises(lambda: D.open_with_password(("admin", "nobody", "jsmith")[i % 3], BAD), D.Throttled)
         waits.append(e and e.seconds)
         T[0] += e.seconds if e else 0
-    check("doubles, capped at 900", waits == [60, 120, 240, 480, 900, 900, 900], waits)
+    check("doubles, capped at 900, across names", waits == [60, 120, 240, 480, 900, 900, 900], waits)
     D.close()
     D.open_with_password("admin", PW)                                    # the clock has moved past the last wait
     check("right password after the wait opens", D.is_open())
+    msgs = [raises(lambda: D.open_with_password(n, BAD), D.WrongPassword) for n in ("jsmith", "nobody", "admin", "x", "admin")]
+    check("the right password reset the shared count", all(m is not None for m in msgs))
+    D.open_with_password("admin", PW)
 
     # failure count persists across a reload
     for _ in range(6):
-        raises(lambda: D.open_with_password("admin", "wrong password here 1"), Exception)
+        raises(lambda: D.open_with_password("admin", BAD), Exception)
     D = importlib.reload(D)
     e = raises(lambda: D.open_with_password("admin", PW), D.Throttled)
     check("after reload still throttled", e is not None and e.seconds == 30, e)
     T[0] += 30
-    e = raises(lambda: D.open_with_password("admin", "wrong password here 1"), D.Throttled)
+    e = raises(lambda: D.open_with_password("nobody", BAD), D.Throttled)
     check("after reload the count is read back (next wrong is 60)", e is not None and e.seconds == 60, e)
     T[0] += 60
     D.open_with_password("admin", PW)
-    msgs = [raises(lambda: D.open_with_password("admin", "wrong password here 1"), D.WrongPassword) for _ in range(5)]
-    check("count reset by the right password", all(m is not None for m in msgs))
+
+    # a clock moved back can't stretch a wait past the cap
+    for _ in range(6):
+        raises(lambda: D.open_with_password("admin", BAD), Exception)
+    T[0] -= 100000
+    e = raises(lambda: D.open_with_password("admin", PW), D.Throttled)
+    check("clock back: wait capped at 900", e is not None and e.seconds == 900, e and e.seconds)
+    T[0] += 900
     D.open_with_password("admin", PW)
+    check("clock back: opens once the capped wait is over", D.is_open())
 
     # check_password: True/False, throttled the same way
     check("check_password right", D.check_password("Admin", PW) is True)
-    check("check_password wrong", D.check_password("admin", "wrong password here 1") is False)
+    check("check_password wrong", D.check_password("admin", BAD) is False)
     check("check_password unknown", D.check_password("nobody", PW) is False)
-    for _ in range(4):
-        D.check_password("admin", "wrong password here 1")
-    check("check_password sixth is Throttled", raises(lambda: D.check_password("admin", "wrong password here 1"), D.Throttled) is not None)
+    for _ in range(3):
+        D.check_password("jsmith", BAD)
+    check("check_password sixth is Throttled", raises(lambda: D.check_password("admin", BAD), D.Throttled) is not None)
+
+    # recovery has its own counter, both ways
+    D.close()
+    D.open_with_recovery(r2)
+    check("recovery opens while passwords are throttled", D.is_open())
     T[0] += 30
     check("check_password resets", D.check_password("admin", PW) is True)
-
-    # recovery has its own counter
     for _ in range(5):
         raises(lambda: D.open_with_recovery("AAAA-AAAA"), D.WrongPassword)
     e = raises(lambda: D.open_with_recovery("AAAA-AAAA"), D.Throttled)
@@ -185,12 +209,21 @@ def timed(fn):
     t = time.perf_counter(); fn(); return time.perf_counter() - t
 
 
-real = statistics.median(timed(lambda: D.check_password("admin", PW)) for _ in range(5))
-fake = statistics.median(timed(lambda: D.check_password("nobody", PW)) for _ in range(5))
+real, fake, wrong = [], [], []
+for _ in range(5):                          # reset between tries so the shared count never throttles
+    real.append(timed(lambda: D.check_password("admin", PW)))
+    fake.append(timed(lambda: D.check_password("nobody", PW)))
+    D.check_password("admin", PW)
+    wrong.append(timed(lambda: D.check_password("admin", BAD)))
+    D.check_password("admin", PW)
+real, fake, wrong = map(statistics.median, (real, fake, wrong))
 check("unknown name takes >= 80% of a real check", fake >= 0.8 * real, f"{fake:.3f} vs {real:.3f}")
-before = D.path().read_bytes()
+check("unknown name takes >= 80% of a wrong password on a real name", fake >= 0.8 * wrong, f"{fake:.3f} vs {wrong:.3f}")
+print(f"   timing medians: right {real:.3f}s, unknown {fake:.3f}s, wrong {wrong:.3f}s")
 D.check_password("nobody", PW)
-check("unknown name writes nothing", D.path().read_bytes() == before)
+check("unknown name adds no record", b"nobody" not in D.path().read_bytes() and [a["name"] for a in D.accounts()] == ["admin", "jsmith"])
+check("no per-account counters", all(set(a) == {"kind", "kdf", "key", "created"} for a in __import__("json").loads(D.path().read_text())["accounts"].values()))
+D.check_password("admin", PW)
 
 # no secret in the file in any form
 blob = D.path().read_bytes()

@@ -4,8 +4,9 @@ It is never stored as it is. netcheck.keys, beside netcheck.db, holds it sealed 
 password, then AES-GCM) and once under a recovery key shown when Toner is set up. Changing a password re-seals only that
 account's copy. Copying netcheck.db and netcheck.keys together moves everything; either one alone is useless.
 
-Wrong passwords are counted in the file, per account (and for the recovery key), so a restart doesn't reset the count: five are
-free, then each one makes the next try wait, 30 seconds and doubling up to 15 minutes.
+Wrong passwords are counted in the file, one count for every name (and one for the recovery key), so a restart doesn't reset
+it and the answers never show which names exist: five are free, then each one makes the next try wait, 30 seconds and
+doubling up to 15 minutes.
 """
 import base64
 import json
@@ -147,7 +148,7 @@ def _check(password, name):
 
 def _account(name, password, key, created=None):
     return {"kind": "local", **_seal(password, key, _aad(name), PASSWORD_KDF),
-            "created": created or datetime.now(timezone.utc).isoformat(timespec="seconds"), "fails": 0, "until": 0}
+            "created": created or datetime.now(timezone.utc).isoformat(timespec="seconds")}
 
 
 def _new_recovery(key):
@@ -162,34 +163,41 @@ def _wait(over):
 
 
 def _attempt(name, secret):
-    """The data key from `name`'s seal (None: the recovery seal). The failure count is read, changed and written under the file
-    lock, so two Toner processes can't race it. Raises Throttled while a wait runs (without checking), else WrongPassword."""
+    """The data key from `name`'s seal (None: the recovery seal). Every password try, for any name, real or not, counts against
+    one shared counter (per-name counts would show which names exist); the recovery key has its own. The count is read, changed
+    and written under the file lock, so two Toner processes can't race it. Raises Throttled while a wait runs (without
+    checking), else WrongPassword."""
     with _lock, _FileLock():
         doc = _read()
-        if name is None:
-            rec, aad, wrong = doc["recovery"], RECOVERY_AAD, WRONG_RECOVERY
-        else:
-            stored = _find(doc, name)
-            if stored is None:
-                _kek(secret, _DUMMY_SALT, PASSWORD_KDF)
-                raise WrongPassword(WRONG)
-            rec, aad, wrong = doc["accounts"][stored], _aad(stored), WRONG
+        counter = doc["recovery"] if name is None else doc.setdefault("throttle", {"fails": 0, "until": 0})
         now = time.time()
-        if now < rec.get("until", 0):
-            raise Throttled(math.ceil(rec["until"] - now))
+        if counter.get("until", 0) - now > MAX_WAIT:          # the clock went back: don't let that stretch the wait
+            counter["until"] = now + MAX_WAIT
+            _write(doc)
+        if now < counter.get("until", 0):
+            raise Throttled(math.ceil(counter["until"] - now))
+        key = None
+        stored = None if name is None else _find(doc, name)
         try:
-            key = _unseal(secret, rec, aad)
+            if name is None:
+                key = _unseal(secret, doc["recovery"], RECOVERY_AAD)
+            elif stored is None:
+                _kek(secret, _DUMMY_SALT, PASSWORD_KDF)       # an unknown name costs what a real check costs
+            else:
+                key = _unseal(secret, doc["accounts"][stored], _aad(stored))
         except InvalidTag:
-            rec["fails"] = rec.get("fails", 0) + 1
-            over = rec["fails"] - FREE_TRIES
+            pass
+        if key is None:
+            counter["fails"] = counter.get("fails", 0) + 1
+            over = counter["fails"] - FREE_TRIES
             if over > 0:
-                rec["until"] = now + _wait(over)
+                counter["until"] = now + _wait(over)
             _write(doc)
             if over > 0:
-                raise Throttled(_wait(over)) from None
-            raise WrongPassword(wrong) from None
-        if rec.get("fails") or rec.get("until"):
-            rec["fails"], rec["until"] = 0, 0
+                raise Throttled(_wait(over))
+            raise WrongPassword(WRONG_RECOVERY if name is None else WRONG)
+        if counter.get("fails") or counter.get("until"):
+            counter["fails"], counter["until"] = 0, 0
             _write(doc)
         return key
 
@@ -228,7 +236,8 @@ def create(name, password):
             raise FileExistsError("Toner's accounts are already set up.")    # a new key would orphan the data under the old one
         key = os.urandom(32)
         shown, recovery = _new_recovery(key)
-        _write({"format": FORMAT, "version": 1, "accounts": {name: _account(name, password, key)}, "recovery": recovery})
+        _write({"format": FORMAT, "version": 1, "accounts": {name: _account(name, password, key)}, "recovery": recovery,
+                "throttle": {"fails": 0, "until": 0}})
         _open(key)
     return shown
 
