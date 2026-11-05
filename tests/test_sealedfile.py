@@ -60,7 +60,7 @@ moved = d / "moved.txt"
 S.write_text(p, "abc"); moved.write_bytes(p.read_bytes())
 check("frame can't move to another file", raises(ValueError, S.read_bytes, moved))
 
-pl = d / "plain.txt"; pl.write_text("plain\n")
+pl = d / "plain.txt"; pl.write_bytes(b"plain\n")
 check("plain file reads as is", S.read_text(pl) == "plain\n" and not S.is_sealed(pl))
 check("appender refuses plain file", raises(S.Locked, S.Appender, pl))
 check("seal_existing seals plain", S.seal_existing(pl) is True and S.is_sealed(pl) and S.read_text(pl) == "plain\n")
