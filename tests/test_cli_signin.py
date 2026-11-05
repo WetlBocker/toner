@@ -28,10 +28,20 @@ def fake_getpass(prompt=""):
 fake_getpass.answer = PW
 getpass.getpass = fake_getpass
 
+class Terminal(io.StringIO):                         # stdin as a person at a terminal has it (the prompts themselves are faked)
+    def isatty(self): return True
+TERMINAL = Terminal()
+
 def call(*argv):
     out, err = io.StringIO(), io.StringIO()
-    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-        rc = cli.main(list(argv))
+    real_stdin = sys.stdin
+    if sys.stdin is not None:
+        sys.stdin = TERMINAL
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = cli.main(list(argv))
+    finally:
+        sys.stdin = real_stdin
     return rc, out.getvalue(), err.getvalue()
 
 SERVICE_MSG = "Toner's background service is off while sign-in is turned on. Scheduled checks and backups run while someone is signed in to Toner's window."
@@ -162,6 +172,12 @@ rc, out, err = call("status", "--user", "admin")
 check("--user given: the password isn't asked either (getpass would fight the shell for keys)",
       rc == 3 and err.strip() == "Sign in needs a terminal." and not asked and not datakey.is_open(), (rc, err, asked))
 sys.stdin = real_stdin
+print("== stdin from a pipe or a file (TonerCli.exe < x, Task Scheduler): getpass would wait on the console for keys")
+real_call_stdin, TERMINAL.isatty = TERMINAL.isatty, lambda: False
+asked.clear()
+rc, out, err = call("status", "--user", "admin")
+check("exit 3 and the message, nothing asked", rc == 3 and err.strip() == "Sign in needs a terminal." and not asked, (rc, err, asked))
+TERMINAL.isatty = real_call_stdin
 def lost(*a): raise RuntimeError("input(): lost sys.stdin")
 builtins.input = lost
 rc, out, err = call("status")

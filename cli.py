@@ -81,8 +81,8 @@ def main(argv=None, ready=None):
 def _sign_in(a):
     """None when signed in and ready to read; otherwise the exit code (3) after saying why on stderr."""
     try:
-        if sys.stdin is None:                  # Toner.exe is a window program with no input; TonerCli.exe has a console
-            raise EOFError
+        if sys.stdin is None or not sys.stdin.isatty():   # Toner.exe (a window program) has no stdin; piped or redirected
+            raise EOFError                                # input has no one typing, and getpass would wait on the console
         user = a.user or input("Username: ")
         password = getpass.getpass("Password: ")
     except (EOFError, RuntimeError):           # Task Scheduler, redirected input, or input() that "lost sys.stdin": nobody to ask
