@@ -440,6 +440,11 @@ def connect():
     return c
 
 
+def forget_wal():
+    """Files were swapped underneath (lockdown encrypts them): the next connection to each sets WAL again."""
+    _wal_set.clear()
+
+
 def release(org=None):
     """Close the main thread's kept connections, to one organization's file or to all of them: before a file is deleted or renamed
     (Windows refuses while it is open). Safe to call from any thread while nothing is reading."""

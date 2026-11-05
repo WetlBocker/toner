@@ -138,6 +138,24 @@ try: sqldb.connect(x).execute("SELECT count(*) FROM sqlite_master"); raised = Fa
 except sqldb.sqlite3.DatabaseError: raised = True
 check("export_copy: closed without it", raised)
 
+try: sqldb.set_key(key); e = sqldb.connect(D / "empty.db"); sqldb.export_copy(e, D / "emptyout.db", ""); refused = False
+except ValueError as ex: refused = True
+finally: sqldb.set_key(None)
+check("export_copy: an empty passphrase is refused and writes nothing", refused and not (D / "emptyout.db").exists())
+src = sqldb.connect(D / "srcfail.db"); src.execute("CREATE TABLE t(a)"); src.commit()
+try: sqldb.export_copy(src, D / "nodir" / "x.db", "correct horse battery"); raised = False
+except sqldb.sqlite3.Error: raised = True
+check("export_copy: a failed export raises the original error", raised)
+src.close()
+wf = D / "wal.db"; w = sqldb.sqlite3.connect(wf); w.execute("PRAGMA journal_mode = WAL"); w.execute("CREATE TABLE t(a)"); w.commit(); w.close()
+sqldb.encrypt_file(wf, key); sqldb.set_key(key)
+k = sqldb.connect(wf)
+check("encrypt_file: the encrypted file is in WAL mode", k.execute("PRAGMA journal_mode").fetchone()[0] == "wal")
+bk = D / "walbackup.db"; sqldb.export_copy(k, bk, "correct horse battery"); k.close(); sqldb.set_key(None)
+b = sqldb.connect(bk); b.execute("PRAGMA key = 'correct horse battery'")
+check("export_copy: the backup stays in DELETE mode", b.execute("PRAGMA journal_mode").fetchone()[0] == "delete"); b.close()
+check("export_copy: no -wal beside the backup", not Path(str(bk) + "-wal").exists())
+
 real = sqldb.sqlite3
 sqldb.sqlite3 = sqlite3                          # a build without SQLCipher: stdlib ignores PRAGMA key
 sqldb.set_key(key)

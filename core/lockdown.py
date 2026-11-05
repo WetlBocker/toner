@@ -61,3 +61,4 @@ def run(progress=None):
         encrypt(path)
         if progress:
             progress(done, len(steps))
+    db.forget_wal()                                       # the swapped files are set to WAL again on their next connection

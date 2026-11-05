@@ -71,6 +71,7 @@ def encrypt_file(path, key):
         c.execute("ATTACH DATABASE ? AS enc KEY ?", (str(tmp), _raw(key)))
         c.execute("SELECT sqlcipher_export('enc')")
         c.execute("PRAGMA enc.user_version = %d" % ver)   # sqlcipher_export does not copy it
+        c.execute("PRAGMA enc.journal_mode = WAL")        # nor the WAL setting, which Toner's readers-while-writing rely on
         c.execute("DETACH DATABASE enc")
         fd = os.open(tmp, os.O_RDWR)
         try:
@@ -95,11 +96,22 @@ def encrypt_file(path, key):
 
 
 def export_copy(src_conn, dest, passphrase):
-    """Write a copy of an open database encrypted with a passphrase (SQLCipher's own KDF), for a backup the owner can open elsewhere."""
+    """Write a copy of an open database encrypted with a passphrase (SQLCipher's own KDF), for a backup the owner can open elsewhere.
+    The copy is one portable file (DELETE journal mode). On any failure nothing is left at dest."""
+    if not passphrase:
+        raise ValueError("A backup needs a password.")   # SQLCipher treats an empty KEY as no encryption
     dest = Path(dest)
     dest.unlink(missing_ok=True)
-    src_conn.execute("ATTACH DATABASE ? AS exp KEY ?", (str(dest), passphrase))
     try:
-        src_conn.execute("SELECT sqlcipher_export('exp')")
-    finally:
-        src_conn.execute("DETACH DATABASE exp")
+        src_conn.execute("ATTACH DATABASE ? AS exp KEY ?", (str(dest), passphrase))
+        try:
+            src_conn.execute("SELECT sqlcipher_export('exp')")
+        finally:
+            try:
+                src_conn.execute("DETACH DATABASE exp")
+            except sqlite3.Error:
+                pass                                      # never hides the export's own error
+    except BaseException:
+        for suffix in ("", "-journal", "-wal", "-shm"):
+            dest.with_name(dest.name + suffix).unlink(missing_ok=True)
+        raise
