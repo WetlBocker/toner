@@ -21,11 +21,8 @@ def on_change(fn):
     _callbacks.append(fn)
 
 
-def _set(new, who=None):
-    """Change state under the lock, then tell the listeners outside it so they can call back in."""
-    global _state, _user
-    with _lock:
-        _state, _user = new, who
+def _notify(new):
+    """Tell the listeners after the lock is released, so one that waits on another thread calling into session can't deadlock."""
     for fn in list(_callbacks):
         try:
             fn(new)
@@ -37,13 +34,28 @@ def _after_open():
     """Seam for the vault: Task 6 opens it here with the data key."""
 
 
-def _opened(action, who):
-    _after_open()
+def _opened(opener, action, who):
+    """Open the key, then the rest; if any step fails, close what opened so the state and the key agree."""
+    global _state, _user
     with _lock:
-        global _state, _user
-        _state, _user = "open", who          # before the audit row, so it names the Toner user
-    audit.log(action)
-    _set("open", who)
+        if _state != "signed_out":
+            raise RuntimeError("Already signed in.")
+        try:
+            opener()
+            _after_open()
+            who = who() if callable(who) else who
+            _state, _user = "open", who          # before the audit row, so it names the Toner user
+        except BaseException:
+            _close()
+            raise
+        audit.log(action)
+    _notify("open")
+
+
+def _close():
+    passvault.lock()
+    db.release()
+    datakey.close()
 
 
 def _stored_name(name):
@@ -51,32 +63,27 @@ def _stored_name(name):
 
 
 def sign_in(name, password):
-    with _lock:
-        if _state != "signed_out":
-            raise RuntimeError("Already signed in.")
-        datakey.open_with_password(name, password)
-        _opened("signed in", _stored_name(name))
+    _opened(lambda: datakey.open_with_password(name, password), "signed in", lambda: _stored_name(name))
 
 
 def sign_in_recovery(recovery):
-    with _lock:
-        if _state != "signed_out":
-            raise RuntimeError("Already signed in.")
-        datakey.open_with_recovery(recovery)
-        _opened("signed in with the recovery key", None)
+    _opened(lambda: datakey.open_with_recovery(recovery), "signed in with the recovery key", None)
 
 
 def lock():
+    global _state
     with _lock:
         if _state != "open":
             raise RuntimeError("Toner isn't open.")
         if _user is None:
             raise RuntimeError("Signed in with the recovery key: there is no password to unlock with.")
         audit.log("locked")
-        _set("locked", _user)
+        _state = "locked"
+    _notify("locked")
 
 
 def unlock(password):
+    global _state
     with _lock:
         if _state != "locked":
             raise RuntimeError("Toner isn't locked.")
@@ -89,14 +96,17 @@ def unlock(password):
             audit.log("unlock failed")
             raise datakey.WrongPassword(datakey.WRONG)
         audit.log("unlocked")
-        _set("open", _user)
+        _state = "open"
+    _notify("open")
 
 
 def sign_out():
+    global _state, _user
     with _lock:
-        if _state != "signed_out":
+        was = _state
+        if was != "signed_out":
             audit.log("signed out")          # while the key is still open: the audit table is encrypted
-        passvault.lock()
-        db.release()
-        datakey.close()
-        _set("signed_out")
+        _close()                             # also when "signed_out": datakey.create leaves the key open
+        _state, _user = "signed_out", None
+    if was != "signed_out":
+        _notify("signed_out")

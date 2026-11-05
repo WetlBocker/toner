@@ -30,6 +30,12 @@ check("signed out closes the key", not datakey.is_open() and sqldb.current_key()
 
 seen = []
 session.on_change(seen.append)
+free = []
+def probe(state):          # callbacks must run with the lock released
+    r = []
+    t = threading.Thread(target=lambda: (r.append(session._lock.acquire(timeout=0.5)), r[0] and session._lock.release()))
+    t.start(); t.join(); free.append((state, r[0]))
+session.on_change(probe)
 session.on_change(lambda s: 1 / 0)          # a broken listener must not stop the others
 session.sign_in("admin", PW)
 check("open", session.state() == "open")
@@ -74,6 +80,17 @@ session.sign_in_recovery(recovery)
 check("recovery sign-in", session.state() == "open" and session.user() is None)
 check("recovery sign-in is audited", newest()["action"] == "signed in with the recovery key")
 session.sign_out()
+session.sign_in("admin", PW)
+session.lock(); session.unlock(PW); session.sign_out()
+check("callbacks ran with the lock released", [f[0] for f in free].count("open") >= 3 and {"locked", "signed_out"} <= {f[0] for f in free}
+      and all(f[1] for f in free), free)
+orig = session._after_open
+def boom(): raise OSError("vault failed")
+session._after_open = boom
+try: session.sign_in("admin", PW); check("failed sign-in raises", False)
+except OSError: check("failed sign-in raises", True)
+session._after_open = orig
+check("failed sign-in rolls back", session.state() == "signed_out" and not datakey.is_open() and sqldb.current_key() is None)
 session.sign_in("admin", PW)
 check("signed out is audited", [r["action"] for r in audit.recent(3)][:2] == ["signed in", "signed out"], audit.recent(3))
 
