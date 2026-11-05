@@ -11,6 +11,8 @@ _PLAIN = b"SQLite format 3\x00"
 
 def set_key(key):
     global _key
+    if key is not None and not (isinstance(key, (bytes, bytearray)) and len(key) == 32):
+        raise ValueError("The data key must be 32 bytes.")
     _key = key
 
 
