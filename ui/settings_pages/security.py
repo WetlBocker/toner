@@ -1,12 +1,13 @@
 """Settings pages: Security (host keys, passwords) and Data and logs."""
 
 import json
+import os
 import keyring
 from core import sqldb
 from core.sqldb import sqlite3
 from datetime import datetime
 
-from PySide6.QtCore import Qt, QUrl, Signal
+from PySide6.QtCore import QStandardPaths, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QInputDialog, QLabel, QLineEdit, QMessageBox,
                                QPushButton, QTableWidget, QTableWidgetItem, QWidget)
@@ -208,7 +209,8 @@ class DataPage(Page):
         if why:
             QMessageBox.warning(self, "Back up database", why)
             return
-        default = str(db.db_path().parent / f"toner-backup-{datetime.now():%Y-%m-%d}.db")
+        docs = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DocumentsLocation)
+        default = os.path.join(docs, f"toner-backup-{datetime.now():%Y-%m-%d}.db")    # not the data folder, which lockdown encrypts
         path, _ = QFileDialog.getSaveFileName(self, "Back up database", default, "SQLite database (*.db)")
         if not path:
             return

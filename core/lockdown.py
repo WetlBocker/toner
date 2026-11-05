@@ -3,10 +3,12 @@
 Each step stands on its own if Toner stops halfway (sqldb.encrypt_file swaps a database in whole, sealedfile a side file), and
 what is left is worked out from the files themselves, so running again after a crash carries on where it stopped.
 """
+import json
 import os
 import shutil
+from pathlib import Path
 
-from core import agents, datakey, db, demarc, nettools, platforms, sealedfile, service, sessionlog, sqldb
+from core import agents, datakey, db, demarc, fileserver, nettools, platforms, quiet, sealedfile, service, sessionlog, sqldb
 
 
 class Busy(RuntimeError):
@@ -20,16 +22,56 @@ def _has_data(p):
         return False
 
 
+def _index_path():
+    return db.base_path().with_suffix(".sealed")
+
+
+def _plain_side_files():
+    """The session logs (and known_hosts) with data that aren't sealed. One seen sealed before and unchanged since (the same size
+    and modified time) isn't opened again: thousands of logs, opened at every start, cost seconds. The index is only a cache
+    of what was seen, so a missing, damaged or stale one just means opening the files."""
+    try:
+        known = json.loads(_index_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        known = {}
+    files = []
+    with os.scandir(sessionlog.log_dir()) as it:
+        for e in it:
+            if e.is_file():
+                files.append((Path(e.path), e.stat()))   # (on Windows the listing carries the stat: no file is opened)
+    hosts = nettools.known_hosts_path()
+    if hosts.is_file():
+        files.append((hosts, hosts.stat()))
+    seen, plain = {}, []
+    for p, st in files:
+        if not st.st_size:
+            continue                                     # an empty file holds nothing, and is written encrypted from now on
+        sig = [st.st_size, st.st_mtime_ns]
+        if known.get(str(p)) == sig or sealedfile.is_sealed(p):
+            seen[str(p)] = sig
+        else:
+            plain.append(p)
+    if seen != known:
+        try:
+            sealedfile.replace_bytes(_index_path(), json.dumps(seen).encode("utf-8"))
+        except OSError:
+            quiet.ignored()                              # the next look opens them again
+    return sorted(plain)
+
+
 def _steps():
     """[(path, what encrypts it)] for everything still plain."""
     base = db.base_path()
     databases = sorted(base.with_name(base.stem + ".orgs").glob("*.db")) + [base, demarc.queue_path()]
+    databases += [p for p in sorted(base.parent.glob("*.db")) if p not in databases]   # backups an older Toner saved here, and the like
     steps = [(p, lambda p: sqldb.encrypt_file(p, sqldb.current_key())) for p in databases if _has_data(p) and not sqldb.is_encrypted(p)]
-    side = sorted(sessionlog.log_dir().iterdir()) + [nettools.known_hosts_path()]
-    steps += [(p, sealedfile.seal_existing) for p in side if _has_data(p) and not sealedfile.is_sealed(p)]
+    steps += [(p, sealedfile.seal_existing) for p in _plain_side_files()]
     key_file = agents.cert_dir() / "toner-agent.key"
     if key_file.exists() and not agents.key_is_encrypted(key_file):
         steps.append((key_file, agents.encrypt_key))
+    for sftp in (base.parent / "sftp_host_key", base.with_name(base.stem + ".orgs") / "sftp_host_key"):   # Global's, the organizations'
+        if _has_data(sftp) and not fileserver.host_key_is_encrypted(sftp):
+            steps.append((sftp, fileserver.encrypt_host_key))
     rdp = base.parent / "rdp"                             # where Toner used to leave .rdp files
     if rdp.exists():
         steps.append((rdp, shutil.rmtree))

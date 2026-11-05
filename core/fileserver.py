@@ -455,14 +455,52 @@ def _rate(nbytes, seconds):
 
 
 # =============================================================================== SFTP (paramiko)
+def _host_key_password():
+    """The host key's PEM password, derived from the data key (as the agent receiver's is); None while no data key is open."""
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+    from core import sqldb
+    key = sqldb.current_key()
+    return None if key is None else HKDF(hashes.SHA256(), 32, None, b"toner-sftp-key").derive(key)
+
+
+def host_key_is_encrypted(path):
+    with open(path, "rb") as f:
+        return b"-----BEGIN ENCRYPTED PRIVATE KEY-----" in f.read()
+
+
+def _write_host_key(path, key):
+    from cryptography.hazmat.primitives import serialization
+    from core import sealedfile
+    pw = _host_key_password()
+    if pw is None and sealedfile.keyed():
+        raise sealedfile.Locked("Sign in first.")            # sign-in is set up: never write the key plain
+    sealedfile.replace_bytes(path, key.key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                                                         serialization.BestAvailableEncryption(pw) if pw else serialization.NoEncryption()))
+
+
+def encrypt_host_key(path):
+    """Re-write a plain host key encrypted (core/lockdown.py). The same key, so clients see the same fingerprint."""
+    _write_host_key(path, load_host_key(path))
+
+
 def load_host_key(path):
-    """The server's identity. Created on first use and kept, so clients see the same fingerprint every time."""
+    """The server's identity. Created on first use and kept, so clients see the same fingerprint every time. Encrypted PEM once
+    sign-in is set up; reading that needs the data key open (else sealedfile.Locked)."""
     import paramiko
+    from cryptography.hazmat.primitives import serialization
+    from core import sealedfile
     if os.path.exists(path):
-        return paramiko.RSAKey.from_private_key_file(path)
+        pw = None
+        if host_key_is_encrypted(path):
+            pw = _host_key_password()
+            if pw is None:
+                raise sealedfile.Locked("Sign in first.")
+        with open(path, "rb") as f:
+            return paramiko.RSAKey(key=serialization.load_pem_private_key(f.read(), pw))
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     key = paramiko.RSAKey.generate(3072)
-    key.write_private_key_file(path)
+    _write_host_key(path, key)
     return key
 
 
