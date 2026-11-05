@@ -1036,21 +1036,27 @@ def run_cli(args):
     trust.install()
     from core import passvault
     passvault.install()                            # saved passwords come from Toner's vault...
-    passvault.unlock_remembered()                  # ...which opens by itself when it is remembered on this computer
-    try:
-        db.init()                                  # cli.main does this too; the move below needs the database first
-        tunnel.migrate()
-        legacyssh.apply()
-    except Exception:
-        quiet.ignored("cli.main reports a database problem in its own words")
-    try:
-        from core import extstore
-        if extstore.memory_only():                 # ...or only from the password manager: read them now, keep them in step
-            extstore.sync_once()
-            extstore.start()
-    except Exception:
-        log.exception("could not read the passwords from the password manager")
+    from core import datakey
+
+    def ready():
+        try:
+            db.init()                              # cli.main does this too; the move below needs the database first
+            tunnel.migrate()
+            legacyssh.apply()
+        except Exception:
+            quiet.ignored("cli.main reports a database problem in its own words")
+        try:
+            from core import extstore
+            if extstore.memory_only():             # ...or only from the password manager: read them now, keep them in step
+                extstore.sync_once()
+                extstore.start()
+        except Exception:
+            log.exception("could not read the passwords from the password manager")
     import cli
+    if datakey.exists():
+        return cli.main(args, ready)               # the vault opens through sign-in, so cli.main runs this after it
+    passvault.unlock_remembered()                  # ...which opens by itself when it is remembered on this computer
+    ready()
     return cli.main(args)
 
 

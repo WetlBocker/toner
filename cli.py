@@ -9,13 +9,16 @@
 Exit codes for `run` follow --fail-on (default: fail): 0 all good, 1 something at or above that level, 2 nothing to check.
 """
 import argparse
+import getpass
 import json
 import signal
 import sys
 
-from core import db, service
+from core import datakey, db, lockdown, service, session
 from drivers.base import SEVERITY
 
+SERVICE_OFF = ("Toner's background service is off while sign-in is turned on. "
+               "Scheduled checks and backups run while someone is signed in to Toner's window.")
 LEVEL = {"warn": 1, "fail": 2, "error": 3, "never": 99}
 
 
@@ -36,7 +39,7 @@ def _as_json(results):
                         "message": r.message, "numeric": r.numeric} for r in results], indent=2)
 
 
-def main(argv=None):
+def main(argv=None, ready=None):
     ap = argparse.ArgumentParser(prog="toner", description="Toner without a window.")
     sub = ap.add_subparsers(dest="cmd", required=True)
     for name in ("run", "backup"):
@@ -55,7 +58,40 @@ def main(argv=None):
     mt = sub.add_parser("metrics", help="serve /metrics from the stored results")
     mt.add_argument("--port", type=int, default=9108)
     mt.add_argument("--bind", default="127.0.0.1")
+    for p in sub.choices.values():
+        if p is not sv:
+            p.add_argument("--user", help="the Toner account to sign in with (asked for if left out)")
     a = ap.parse_args(argv)
+    if not datakey.exists():
+        return _run(a)
+    if a.cmd == "service":
+        print(SERVICE_OFF, file=sys.stderr)
+        return 3
+    try:
+        failed = _sign_in(a)
+        return failed if failed else _run(a, ready)
+    finally:
+        session.sign_out()
+
+
+def _sign_in(a):
+    """None when signed in and ready to read; otherwise the exit code (3) after saying why on stderr."""
+    try:
+        session.sign_in(a.user or input("Username: "), getpass.getpass("Password: "))
+        if lockdown.pending():                 # Toner's window finishes the upgrade; the command line never encrypts
+            print("Toner's data hasn't finished encrypting. Open Toner's window to finish, then try again.", file=sys.stderr)
+            return 3
+    except (datakey.WrongPassword, datakey.Throttled) as e:
+        print(e, file=sys.stderr)
+        return 3
+    except (ValueError, KeyError, AttributeError):          # includes JSONDecodeError: a damaged keys file
+        print("This file is damaged or was changed outside Toner.", file=sys.stderr)
+        return 3
+
+
+def _run(a, ready=None):
+    if ready:
+        ready()                                # the caller's own database work, which needs the vault open
     db.init()
 
     if a.cmd in ("run", "backup"):
