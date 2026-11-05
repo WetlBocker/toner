@@ -10,7 +10,7 @@ from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QInputDialog, QLabel, QLineEdit, QMessageBox,
                                QPushButton, QTableWidget, QTableWidgetItem, QWidget)
-from core import audit, db, display, legacyssh, nettools, passvault, session, sessionlog, vault
+from core import audit, db, passwords, display, legacyssh, nettools, passvault, session, sessionlog, vault
 from ui.settings_base import Page, compact_row, note, row_of
 from ui.toast import toast
 from ui.widgets import EmptyHint
@@ -194,18 +194,27 @@ class DataPage(Page):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(db.db_path().parent)))
 
     def backup(self):
+        first = self._ask_password("Back up database", "Choose a password to protect the backup (at least 12 characters). "
+                                   "You'll need it to open the backup, and it can't be recovered.")
+        if first is None:
+            return
+        if self._ask_password("Back up database", "Type it again:") != first:
+            QMessageBox.warning(self, "Back up database", "The two passwords were not the same. Nothing was saved.")
+            return
+        why = passwords.problem(first)
+        if why:
+            QMessageBox.warning(self, "Back up database", why)
+            return
         default = str(db.db_path().parent / f"toner-backup-{datetime.now():%Y-%m-%d}.db")
         path, _ = QFileDialog.getSaveFileName(self, "Back up database", default, "SQLite database (*.db)")
         if not path:
             return
         try:
-            with db.connect() as src, sqldb.connect(path) as dst:
-                src.backup(dst)                          # consistent copy even while the app is using it
-            dst.close()
+            with db.connect() as src:
+                sqldb.export_copy(src, path, first)      # consistent copy even while the app is using it
             QMessageBox.information(self, "Backup", f"Saved to {path}\n\nThe backup holds devices, history and "
-                                    "settings. Passwords and API tokens live in Toner's vault "
-                                    f"({passvault.path().name}) and are not included.")
-        except (OSError, sqlite3.Error) as e:
+                                    "settings. The backup is encrypted with the password you chose.")
+        except (OSError, ValueError, sqlite3.Error) as e:
             QMessageBox.warning(self, "Backup failed", str(e))
 
     def _ask_password(self, title, label):
