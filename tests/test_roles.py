@@ -225,6 +225,7 @@ d["accounts"]["Tech1"]["role"] = "Engineer"
 put(d)
 as_("Admin1", PW)
 check("tampered: an Admin can't save roles", raises(lambda: roles.set_permissions("Tech", {}), perms.Denied) is not None)
+check("stored_permissions: the stored values, not the Tech fallback while tampered", roles.stored_permissions("Engineer") == perms.DEFAULTS["Engineer"] and roles.permissions("Engineer") == perms.DEFAULTS["Tech"])
 old_key = db.get_setting("rules_key")
 as_(None)
 check("recovery sign-in on a tampered file: still tampered", roles.state() == "tampered")

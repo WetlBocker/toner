@@ -239,6 +239,14 @@ def permissions(role):
     return _perms_in(c.get("roles"), role)
 
 
+def stored_permissions(role):
+    """What the file stores for Engineer or Tech (defaults filling the gaps), even while tampered: what a repair would sign."""
+    try:
+        return _perms_in(datakey.read().get("roles"), role)
+    except (OSError, ValueError):
+        return _perms_in(None, role)
+
+
 def holds(kind):
     return kind in _held
 
