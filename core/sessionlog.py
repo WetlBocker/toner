@@ -10,7 +10,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from core import audit, db
+from core import audit, db, sealedfile
 from core import quiet
 
 _ESC = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b[()][A-Z0-9]|\x1b[=>78MDEHc]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
@@ -48,12 +48,14 @@ class SessionLog:
         for n in range(1, 1000):                    # never reuse a name: two sessions can start in one second
             self.path = folder / (f"{base}.log" if n == 1 else f"{base}_{n}.log")
             try:
-                self.file = open(self.path, "x", encoding="utf-8", newline="\n")
+                open(self.path, "x").close()        # claims the name; the writer below only adds to it
                 break
             except FileExistsError:
                 continue
         else:
             raise OSError("could not find a free log file name")
+        self.file = (sealedfile.Appender(self.path) if sealedfile.keyed()
+                     else open(self.path, "w", encoding="utf-8", newline="\n", buffering=1))   # line-buffered: each write lands, as an Appender's does
         self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
         self.pending, self.bytes, self.closed, self.failed = "", 0, False, False
         operator = audit.actor()
@@ -63,7 +65,6 @@ class SessionLog:
             f"# Device:   {device}\n# Host:     {host}:{port}\n# User:     {username}\n"
             f"# Operator: {operator}\n"
             "# Output only; hidden password prompts are not echoed by the device.\n#\n")
-        self.file.flush()
         with db.connect() as c:
             self.id = c.execute(
                 "INSERT INTO ssh_sessions(started_at, device, host, port, username, operator, log_path, kind) "
@@ -80,11 +81,10 @@ class SessionLog:
             self.pending += clean(self.decoder.decode(data))
             *lines, self.pending = self.pending.split("\n")
             ts = datetime.now().strftime("%H:%M:%S")
-            for line in lines:
-                self.file.write(f"[{ts}] {line}\n")
-            self.file.flush()
+            if lines:                                # one write: one sealed frame per chunk, not per line
+                self.file.write("".join(f"[{ts}] {line}\n" for line in lines))
             return True
-        except (OSError, ValueError):
+        except (OSError, ValueError, sealedfile.Locked):          # Locked: signed out mid-session
             self.failed = True
             return False
 
@@ -92,13 +92,15 @@ class SessionLog:
         if self.closed:
             return
         try:
-            if self.pending:
-                self.file.write(f"[{datetime.now():%H:%M:%S}] {self.pending}\n")
             secs = int((datetime.now() - self.started).total_seconds())
-            self.file.write(f"#\n# Ended:    {_now()}\n# Duration: {secs // 3600}h {secs % 3600 // 60}m {secs % 60}s\n"
+            self.file.write((f"[{datetime.now():%H:%M:%S}] {self.pending}\n" if self.pending else "")
+                            + f"#\n# Ended:    {_now()}\n# Duration: {secs // 3600}h {secs % 3600 // 60}m {secs % 60}s\n"
                             f"# Result:   {reason}\n")
-            self.file.close()
-        except (OSError, ValueError):
+        except (OSError, ValueError, sealedfile.Locked):
+            pass
+        try:
+            self.file.close()                       # even when the last write failed: an open handle blocks deleting the log
+        except OSError:
             pass
         self.closed = True
         try:

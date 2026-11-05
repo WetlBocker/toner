@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from core.netconn import connect as ConnectHandler      # netmiko's, with Toner's fixes for some devices (ASA)
 from core.netconn import any_mode
 
-from core import db, profiles, vendors, winmon
+from core import db, profiles, sealedfile, vendors, winmon
 from core import quiet
 
 # ---------------------------------------------------------------- which devices, and how
@@ -365,10 +365,9 @@ def _save_session(dev, buf):
         return None
     try:
         path = session_file(dev)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(data)
+        sealedfile.save_bytes(path, data)
         return path
-    except OSError:
+    except (OSError, sealedfile.Locked):
         return None
 
 

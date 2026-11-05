@@ -20,7 +20,7 @@ import threading
 import time
 from datetime import datetime
 
-from core import db, vendors
+from core import db, sealedfile, vendors
 from core import quiet
 
 # ---------------------------------------------------------------- which devices, and what their copy command can fetch from
@@ -633,11 +633,12 @@ def save_log(dev, buf, secrets, append=True):
         return None
     try:
         path = log_path(dev)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "a" if append else "w", encoding="utf-8") as fh:
-            fh.write(mask(data, secrets))
+        text = mask(data, secrets)
+        if append and path.exists():
+            text = sealedfile.read_text(path) + text
+        sealedfile.save_text(path, text)
         return path
-    except OSError:
+    except (OSError, ValueError, sealedfile.Locked):         # ValueError: the old log is damaged
         return None
 
 

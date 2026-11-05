@@ -12,7 +12,7 @@ import zlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
-from core import db
+from core import db, sealedfile
 from core.netconn import connect as ConnectHandler      # netmiko's, with Toner's fixes for some devices
 from drivers.base import Result, OK, WARN, ERROR
 from core import quiet
@@ -229,10 +229,9 @@ def _save_failed_session(dev, buf):
         return None
     try:
         path = session_file(dev)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(clean(data, mask=True), encoding="utf-8")
+        sealedfile.save_text(path, clean(data, mask=True))
         return path
-    except OSError:
+    except (OSError, sealedfile.Locked):
         return None
 
 

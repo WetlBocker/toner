@@ -24,7 +24,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 
-from core import audit, db, paths, tlsverify, winmon
+from core import audit, db, paths, sealedfile, sqldb, tlsverify, winmon
 from core.version import VERSION
 from core import quiet
 
@@ -39,6 +39,34 @@ def cert_dir():
     d = paths.data_dir() / "agent"
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def key_password():
+    """The receiver key's PEM password, derived from the data key; None while no data key is open (the key is then plain)."""
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+    key = sqldb.current_key()
+    return None if key is None else HKDF(hashes.SHA256(), 32, None, b"toner-agent-key").derive(key)
+
+
+def _key_pem(key):
+    from cryptography.hazmat.primitives import serialization
+    pw = key_password()
+    return key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                             serialization.BestAvailableEncryption(pw) if pw else serialization.NoEncryption())
+
+
+def key_is_encrypted(key_file):
+    with open(key_file, "rb") as f:
+        return b"-----BEGIN ENCRYPTED PRIVATE KEY-----" in f.read()
+
+
+def encrypt_key(key_file):
+    """Re-write a plain receiver key encrypted. The same key, so the certificate, and every agent that pins it, stay valid."""
+    from cryptography.hazmat.primitives import serialization
+    with open(key_file, "rb") as f:
+        key = serialization.load_pem_private_key(f.read(), None)
+    sealedfile.replace_bytes(key_file, _key_pem(key))
 
 
 def ensure_cert(renew=False):
@@ -61,8 +89,7 @@ def ensure_cert(renew=False):
                 .serial_number(x509.random_serial_number()).not_valid_before(now - timedelta(days=1))
                 .not_valid_after(now + timedelta(days=3650)).add_extension(x509.SubjectAlternativeName(names), False)
                 .sign(key, hashes.SHA256()))
-        key_file.write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
-                                               serialization.NoEncryption()))
+        sealedfile.replace_bytes(key_file, _key_pem(key))
         cert_file.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
     return str(cert_file), str(key_file)
 
@@ -617,7 +644,7 @@ class Receiver:
         cert, key = ensure_cert()
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ctx.minimum_version = ssl.TLSVersion.TLSv1_2
-        ctx.load_cert_chain(cert, key)
+        ctx.load_cert_chain(cert, key, password=key_password())
         try:
             ipaddress.ip_address(self.bind)
         except ValueError:

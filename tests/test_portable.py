@@ -29,9 +29,9 @@ check("the data folder is 'data' beside the program, and is created", str(paths.
 check("the database is in it", str(db.db_path()) == os.path.join(data, "netcheck.db"))
 db.init(); db.set_setting("report_org", "Portable Co"); db.save_device(dict(name="usb-sw", vendor="cisco", host="10.0.0.1", port=0, platform="", username="u", site="default", verify_ssl=0, ha_expected=0, enabled=1, location="", details="", folder_id=None))
 check("settings and devices are written there, not to %APPDATA%", os.path.exists(os.path.join(data, "netcheck.db")) and not os.path.exists(os.path.join(appdata, "netcheck.db")) and db.get_setting("report_org") == "Portable Co")
-check("session logs, saved host keys, the MAC list, downloaded updates and Remote Desktop files follow it",
+check("session logs, saved host keys, the MAC list and downloaded updates follow it; Remote Desktop files never go there",
       str(sessionlog.log_dir()).startswith(data) and str(nettools.known_hosts_path()).startswith(data) and str(oui.cache_path()).startswith(data) and str(updates.updates_dir()).startswith(data)
-      and str(sessions.rdp_path({"name": "x", "host": "h"})).startswith(data))
+      and not str(sessions.rdp_path({"name": "x", "host": "h"})).startswith(data))
 import app as A
 check("the app's data_dir is the same folder", str(A.data_dir()) == data)
 check("copying the whole folder takes everything: nothing was written to %APPDATA%", not os.listdir(appdata))

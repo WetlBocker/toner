@@ -1748,12 +1748,8 @@ class SessionsTab(QWidget):
         path = getattr(getattr(pane, "log", None), "path", None)
         if path:
             try:
-                from core import sessionlog
-                with open(path, "rb") as f:
-                    f.seek(0, 2)
-                    size = f.tell()
-                    f.seek(max(0, size - 20000))
-                    out["log"] = sessionlog.clean(f.read().decode("utf-8", "replace"))
-            except OSError:
+                from core import sealedfile, sessionlog
+                out["log"] = sessionlog.clean(sealedfile.read_bytes(path)[-20000:].decode("utf-8", "replace"))
+            except (OSError, ValueError, sealedfile.Locked):
                 pass
         return out

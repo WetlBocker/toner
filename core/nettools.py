@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 import paramiko
 from PySide6.QtCore import QThread, Signal
 from core import legacyssh  # noqa: F401  (ssh-rsa and SHA-1 key exchange for older devices; see Settings > Security)
-from core import quiet
+from core import quiet, sealedfile
 
 # ---------- input validation ----------
 # Targets must start with a letter or digit so they can never be read as a command-line option
@@ -215,16 +215,35 @@ def known_hosts_path():
     return db.base_path().parent / "known_hosts"
 
 
+def _read_host_keys(path, hk=None):
+    """paramiko's HostKeys.load, from text Toner reads itself: the file may be sealed, which paramiko can't open."""
+    hk = paramiko.HostKeys() if hk is None else hk
+    if not os.path.exists(path):
+        return hk
+    for lineno, line in enumerate(sealedfile.read_text(path).splitlines(), 1):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        try:
+            entry = paramiko.hostkeys.HostKeyEntry.from_line(line, lineno)
+        except paramiko.SSHException:
+            continue
+        if entry is not None:
+            for host in entry.hostnames:
+                hk.add(host, entry.key.get_name(), entry.key)
+    return hk
+
+
+def _write_host_keys(path, hk):
+    sealedfile.save_text(path, "".join(f"{host} {ktype} {key.get_base64()}\n" for host, keys in hk.items() for ktype, key in keys.items()))
+
+
 def list_host_keys():
     """[(host, key type, SHA256 fingerprint)] for every key Toner has saved."""
-    path = known_hosts_path()
     out = []
-    if path.exists():
-        hk = paramiko.HostKeys()
-        hk.load(str(path))
-        for host, keys in hk.items():
-            for ktype, key in keys.items():
-                out.append((host, ktype, key.fingerprint))
+    for host, keys in _read_host_keys(known_hosts_path()).items():
+        for ktype, key in keys.items():
+            out.append((host, ktype, key.fingerprint))
     return sorted(out)
 
 
@@ -233,14 +252,12 @@ def forget_host_key(host=None):
     path = known_hosts_path()
     if not path.exists():
         return
-    if host is None:
-        path.write_text("", encoding="utf-8")
-        return
-    hk = paramiko.HostKeys()
-    hk.load(str(path))
-    if host in hk:
-        del hk[host]
-        hk.save(str(path))
+    with _hostkeys_lock:
+        hk = paramiko.HostKeys() if host is None else _read_host_keys(path)
+        if host is None or host in hk:
+            if host is not None:
+                del hk[host]
+            _write_host_keys(path, hk)
 
 
 HOSTKEY_CHANGED = ("The device's SSH host key has changed. If it was replaced or reinstalled, forget its old key under Settings > Security, "
@@ -291,19 +308,21 @@ def _save_host_keys_merged(self, filename):
     the other's new key (the next run would save it again, but a change in between would go unnoticed). Under a lock, merge
     the client's keys into what the file holds now, then write."""
     with _hostkeys_lock:
-        merged = paramiko.HostKeys()
-        if os.path.exists(filename):
-            try:
-                merged.load(filename)
-            except Exception:
-                quiet.ignored()
+        merged = _read_host_keys(filename)          # unreadable (signed out, damaged): raise rather than write over every saved key
         for host, keys in self._host_keys.items():
             for ktype, key in keys.items():
                 merged.add(host, ktype, key)
-        merged.save(filename)
+        _write_host_keys(filename, merged)
+
+
+def _load_host_keys(self, filename):
+    """SSHClient.load_host_keys, through _read_host_keys (netmiko calls it with Toner's known_hosts)."""
+    self._host_keys_filename = filename
+    _read_host_keys(filename, self._host_keys)
 
 
 paramiko.SSHClient.save_host_keys = _save_host_keys_merged
+paramiko.SSHClient.load_host_keys = _load_host_keys
 
 
 # ---------- SSH session ----------

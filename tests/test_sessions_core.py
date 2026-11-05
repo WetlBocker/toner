@@ -133,7 +133,7 @@ _plat = (_P.WINDOWS, _P.MAC, _P.LINUX); _P.WINDOWS, _P.MAC, _P.LINUX = True, Fal
 sessions.subprocess.Popen = lambda args, **kw: launched.append(args)
 sessions.shutil.which = lambda n: r"C:\Windows\System32\mstsc.exe"
 p = sessions.launch_rdp({**s, "name": "Jump server / prod"})
-check("it starts mstsc with the generated file, named safely, under the data folder", launched[0][0].endswith("mstsc.exe") and launched[0][1] == str(p) and p.name == "Jump_server___prod.rdp" and p.parent == db.db_path().parent / "rdp" and p.read_text().startswith("full address:s:10.0.0.50"))
+check("it starts mstsc with the generated file, named safely, in a temporary folder of its own", launched[0][0].endswith("mstsc.exe") and launched[0][1] == str(p) and p.name == "Jump_server___prod.rdp" and db.db_path().parent not in p.parents and p.read_text().startswith("full address:s:10.0.0.50"))
 sessions.shutil.which = lambda n: None
 try: sessions.launch_rdp(s); check("no Remote Desktop client on this PC is explained", False)
 except OSError as e: check("no Remote Desktop client on this PC is explained", "mstsc.exe" in str(e))

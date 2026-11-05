@@ -8,7 +8,7 @@ from PySide6.QtGui import QDesktopServices, QFontDatabase
 from PySide6.QtWidgets import (QAbstractItemView, QApplication as _QApp, QCheckBox, QComboBox, QCompleter, QFileDialog, QGroupBox, QHBoxLayout, QLabel,
                                QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QSpinBox, QSplitter,
                                QTableWidget, QTableWidgetItem, QTabWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
-from core import db, jump, nettools, profiles, reach, sessionlog, snmp, vendors
+from core import db, jump, nettools, profiles, reach, sealedfile, sessionlog, snmp, vendors
 
 
 class OutputBox(QPlainTextEdit):
@@ -186,15 +186,13 @@ class LogsTab(QWidget):
         if not s:
             return
         try:
-            with open(s["log_path"], "rb") as f:
-                f.seek(0, 2)
-                size = f.tell()
-                f.seek(max(0, size - self.MAX_VIEW))
-                text = f.read().decode("utf-8", "replace")
+            raw = sealedfile.read_bytes(s["log_path"])
+            size = len(raw)
+            text = raw[-self.MAX_VIEW:].decode("utf-8", "replace")
             if size > self.MAX_VIEW:
                 text = f"[showing the last {self.MAX_VIEW // 1000} KB of {size // 1000} KB - open the file for all of it]\n" + text
             self.view.setPlainText(text)
-        except OSError as e:
+        except (OSError, ValueError, sealedfile.Locked) as e:
             self.view.setPlainText(f"The log file could not be opened: {e}\n{s['log_path']}")
 
 

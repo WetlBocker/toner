@@ -8,7 +8,10 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
+import threading
 from datetime import datetime
+from pathlib import Path
 
 import keyring
 
@@ -350,9 +353,9 @@ def freerdp_args(s, exe=""):
 
 
 def rdp_path(s):
-    d = db.base_path().parent / "rdp"
-    d.mkdir(parents=True, exist_ok=True)
-    return d / (re.sub(r"[^A-Za-z0-9._-]", "_", s.get("name") or s["host"])[:60] + ".rdp")
+    """A new temporary folder for one launch, never the data folder: the file names the host and the user, and the data folder
+    keeps nothing plain."""
+    return Path(tempfile.mkdtemp(prefix="toner-rdp-")) / (re.sub(r"[^A-Za-z0-9._-]", "_", s.get("name") or s["host"])[:60] + ".rdp")
 
 
 def launch_rdp(s, password=None):
@@ -382,7 +385,13 @@ def launch_rdp(s, password=None):
         return None
     path = rdp_path(s)
     path.write_text(rdp_file_text(s), encoding="utf-8")
-    subprocess.Popen([exe, str(path)], close_fds=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        subprocess.Popen([exe, str(path)], close_fds=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    finally:
+        # shortcut: a folder whose 60 s are not up when Toner quits stays in the temp folder; upgrade to a sweep at start if that matters.
+        gone = threading.Timer(60, shutil.rmtree, (path.parent,), {"ignore_errors": True})   # the client has read it by then
+        gone.daemon = True
+        gone.start()
     return path
 
 

@@ -13,7 +13,7 @@ import os
 import re
 from datetime import datetime
 
-from core import audit, backup, cmdrun, db, display, sessionlog
+from core import audit, backup, cmdrun, db, display, sealedfile, sessionlog
 from core import firmware as fw
 
 TEXT_LIMIT = 60_000            # characters of one backup or log handed over (the rest is said to be cut)
@@ -328,12 +328,10 @@ def read_session_log(args):
     if s is None:
         raise ToolError(f"No session log with id {sid}. Use list_session_logs to see them.")
     try:
-        with open(s["log_path"], "rb") as f:
-            f.seek(0, 2)
-            size = f.tell()
-            f.seek(max(0, size - TEXT_LIMIT))
-            text = sessionlog.clean(f.read().decode("utf-8", "replace"))
-    except OSError as e:
+        raw = sealedfile.read_bytes(s["log_path"])
+        size = len(raw)
+        text = sessionlog.clean(raw[-TEXT_LIMIT:].decode("utf-8", "replace"))
+    except (OSError, ValueError, sealedfile.Locked) as e:
         raise ToolError(f"The log file could not be opened: {e}") from None
     note = f"Showing the last {TEXT_LIMIT // 1000} KB of {size // 1000} KB." if size > TEXT_LIMIT else ""
     return {"session_id": sid, "device": s["device"], "host": f"{s['host']}:{s['port']}", "started": s["started_at"], "ended": s["ended_at"] or "",
