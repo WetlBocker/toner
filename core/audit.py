@@ -16,13 +16,15 @@ def actor():
 
 
 def log(action, detail="", who=None):
-    """Record one event. Never raises: an audit failure must not stop the thing being audited."""
+    """Record one event; True once written. Never raises: an audit failure must not stop the thing being audited."""
     try:
         with db.connect() as c:
             c.execute("INSERT INTO audit(at, actor, action, detail) VALUES(?,?,?,?)",
                       (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), who or actor(), action, str(detail)[:2000]))
+        return True
     except Exception:
         quiet.ignored()
+        return False
 
 
 def recent(limit=500, text=""):

@@ -38,8 +38,8 @@ DEFAULTS = {"Engineer": {k: True for k, _ in PERMISSIONS},
 
 def allowed(key):
     """With sign-in off, everything; signed out, nothing; else what the signed-in person's role allows (a keys file deleted
-    while someone is signed in is roles' "tampered", not sign-in off)."""
-    if session.state() == "signed_out":
+    while someone is signed in is roles' "tampered", not sign-in off). Signing out closes the key before the state says so."""
+    if session.state() == "signed_out" or not datakey.is_open():
         return not datakey.exists()
     return roles.permissions(roles.role_of(datakey.signed_in_name()))[key]
 
@@ -50,6 +50,6 @@ def require(key):
 
 
 def is_admin():
-    if session.state() == "signed_out":
+    if session.state() == "signed_out" or not datakey.is_open():
         return not datakey.exists()
     return roles.role_of(datakey.signed_in_name()) == "Admin"

@@ -15,7 +15,7 @@ keyring.delete_password = lambda s, u: STORE.pop((s, u), None)
 import base64, json
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
-from core import audit, datakey, db, envelope, perms, roles, session
+from core import audit, datakey, db, envelope, perms, roles, session, sqldb
 
 ok = bad = 0
 def check(name, cond, extra=""):
@@ -124,7 +124,10 @@ check("signed out: no role keys", not roles.holds("rules") and not roles.holds("
 as_("Old", PW5)
 check("Part 1 Admin: no grants yet, nothing raises", not roles.holds("backups") and not roles.holds("rules"))
 check("Part 1 Admin: gained a box key at sign-in", "box_pub" in doc()["accounts"]["Old"])
+check("Part 1 Admin: its box key not vouched for yet", doc().get("attested", {}).get("Old") is None)
 as_("Admin1", PW)                                       # another Admin's sign-in syncs the grants
+check("TOFU: the late box key is vouched for at the next sync", doc().get("attested", {}).get("Old") == doc()["accounts"]["Old"]["box_pub"]
+      and roles.state() == "ok")
 as_("Old", PW5)
 check("Part 1 Admin: holds both after another Admin synced", roles.holds("rules") and roles.holds("backups"))
 
@@ -223,6 +226,113 @@ check("repair: a new rules key", db.get_setting("rules_key") not in ("", old_key
 check("repair: signs what the file shows", roles.role_of("Tech1") == "Engineer" and roles.role_of("Admin1") == "Admin")
 as_("Admin1", PW)
 check("after the repair an Admin holds the new rules key", roles.state() == "ok" and roles.holds("rules") and roles.holds("backups"))
+
+# ---------------------------------------------------------------- box keys: only vouched-for ones get grants
+def b64(b):
+    return base64.b64encode(b).decode()
+
+def opened_by(private):
+    """True when any wrap in the file opens with this private box key."""
+    d = doc()
+    wraps = [(k, n, w) for n, g in d.get("grants", {}).items() for k, w in g.items()]
+    wraps += [(k, None, w) for k, w in d.get("recovery_grants", {}).items()]
+    for kind, name, w in wraps:
+        try:
+            envelope.unwrap(private, w, b"toner-role-key:" + kind.encode() + b":" + (name or "").encode())
+            return True
+        except Exception:
+            pass
+    return False
+
+roles.set_role("Tech1", "Tech")
+as_("Tech1", PW3)
+before = datakey.path().read_bytes()
+check("a Tech can't reset an Admin's password", raises(lambda: datakey.set_password("Admin2", "a brand new admin password 7"),
+                                                       perms.Denied) is not None and datakey.path().read_bytes() == before)
+check("a Tech can't replace the recovery key", raises(datakey.new_recovery, perms.Denied) is not None
+      and datakey.path().read_bytes() == before)
+session.sign_out()
+
+evil, evil_pub = envelope.new_box_key()
+d = doc(); d["accounts"]["Admin2"]["box_pub"] = b64(evil_pub); d["grants"].pop("Admin2", None); put(d)
+as_("Admin1", PW)
+check("an Admin's box_pub swapped by hand: no grant wrapped to it", roles.state() == "ok" and "Admin2" not in doc()["grants"]
+      and not opened_by(evil), doc()["grants"].keys())
+as_("Admin2", PW2)
+check("...and the real Admin2 holds nothing (its box key isn't the record's)", not roles.holds("rules") and not roles.holds("backups"))
+session.sign_out()
+swapped = datakey.path().read_text(encoding="utf-8")
+evil2, evil2_pub = envelope.new_box_key()
+d = doc(); d["recovery"]["box_pub"] = b64(evil2_pub); d["recovery_grants"] = {}; put(d)
+as_("Admin1", PW)
+check("the recovery box_pub swapped by hand: no grant wrapped to it", doc()["recovery_grants"] == {} and not opened_by(evil2))
+session.sign_out()
+d = doc(); d.pop("rules_sig"); put(d)
+as_(None)
+check("a recovery sign-in whose box key isn't the record's holds nothing", not roles.holds("rules") and not roles.holds("backups"))
+check("...and can't run the repair", raises(lambda: roles.set_permissions("Tech", {}), perms.Denied) is not None)
+session.sign_out()
+datakey.path().write_text(swapped, encoding="utf-8")
+d = doc(); d.pop("rules_sig"); put(d)
+as_(None)
+roles.set_permissions("Tech", {})
+check("a repair with Admin2's box_pub still swapped: ok, and still no grant to it",
+      roles.state() == "ok" and "Admin2" not in doc()["grants"] and not opened_by(evil), roles.state())
+as_("Admin1", PW)
+datakey.set_password("Admin2", PW2 + "y")
+as_("Admin2", PW2 + "y")
+check("an Admin's password reset vouches for the new box key", roles.holds("rules") and roles.holds("backups")
+      and doc().get("attested", {}).get("Admin2") == doc()["accounts"]["Admin2"]["box_pub"])
+datakey.set_password("Admin2", PW2)
+
+# ---------------------------------------------------------------- the repair after (d) keeps the backups key
+as_("Admin1", PW)
+orig_priv, orig_pub = roles.backups_private(), roles.backups_public()
+as_("Eng1", PW4)
+check("the Engineer holds the backups key", roles.backups_private() == orig_priv)
+session.sign_out()
+d = doc(); d["backups_pub"] = b64(envelope.new_box_key()[1]); put(d)
+as_(None)
+check("(d): the recovery key still holds the real backups key", roles.backups_private() == orig_priv)
+roles.set_permissions("Tech", {})
+check("repair after (d): ok, the original backups key back", roles.state() == "ok" and roles.backups_public() == orig_pub)
+as_("Eng1", PW4)
+check("repair after (d): the Engineer still holds the original backups key", roles.backups_private() == orig_priv)
+
+# ---------------------------------------------------------------- signing out: the key closes before the state says so
+as_("Tech1", PW3)
+datakey.close()                                         # the moment inside sign_out
+check("key closed, state not yet signed out: nothing allowed", session.state() == "open" and not perms.allowed("push")
+      and not perms.allowed("tool:snmp") and not perms.is_admin())
+session.sign_out()
+
+# ---------------------------------------------------------------- database errors
+as_("Admin1", PW)
+rows = tamper_rows()
+real_get = db.get_setting
+def locked(key):
+    if key == "rules_key":
+        raise sqldb.sqlite3.OperationalError("database is locked")
+    return real_get(key)
+db.get_setting = locked
+roles._invalidate()
+check("a locked database is an error, not a tampered file", raises(roles.state, sqldb.sqlite3.OperationalError) is not None)
+db.get_setting = real_get
+check("...and no audit row", tamper_rows() == rows and roles.state() == "ok")
+session.sign_out()
+d = doc(); d.pop("rules_sig"); put(d)
+real_log = audit.log
+audit.log = lambda *a, **k: False                       # the audit write fails
+as_("Admin1", PW)
+audit.log = real_log
+rows = tamper_rows()
+roles._cache = None
+check("a tamper row that didn't get written is written next time", roles.state() == "tampered" and tamper_rows() == rows + 1)
+roles._cache = None
+check("...once", roles.state() == "tampered" and tamper_rows() == rows + 1)
+session.sign_out()
+as_(None)
+roles.set_permissions("Tech", {})                       # put it right for what follows
 
 # ---------------------------------------------------------------- session wiring
 orig = roles.unlock

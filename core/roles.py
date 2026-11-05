@@ -1,10 +1,13 @@
 """Roles: every account is an Admin, an Engineer or a Tech, and an Admin chooses what Engineers and Techs may do.
 
-netcheck.keys holds the rules (each role's permissions and each account's role) signed with the rules key, whose fingerprint the
-database keeps (setting rules_key), so an edit made outside Toner shows. Two role keys are wrapped to the box key of each account
-that should hold them: the rules key (Ed25519, signs the rules) to Admins, the backups key (X25519, for passwords kept in config
-backups) to roles allowed "unmasked". The recovery key counts as an Admin. Rules that don't check out give everyone a Tech's
-permissions until someone signed in with the recovery key saves the roles again, under a new rules key.
+netcheck.keys holds the rules (each role's permissions, each account's role and the box key it is vouched to have, and the
+recovery key's) signed with the rules key, whose fingerprint the database keeps (setting rules_key), so an edit made outside Toner
+shows. Two role keys are wrapped to the box key of each account that should hold them: the rules key (Ed25519, signs the rules)
+to Admins, the backups key (X25519, for passwords kept in config backups) to roles allowed "unmasked". The recovery key counts as
+an Admin. A wrap goes only to a box key the rules vouch for ("attested"): whoever holds the rules key and made a box key (a new
+account, a password reset, a new recovery key) vouches for it; a Part 1 account that adds its own box key later is vouched for
+when it is first seen. Rules that don't check out give everyone a Tech's permissions until someone signed in with the recovery key
+saves the roles again, under a new rules key.
 
 Lock order: this module's lock, then datakey's. datakey's hook (_accounts_changed) runs under datakey's lock, so it never takes
 this one and never reads the file again.
@@ -22,7 +25,8 @@ from core import audit, datakey, db, envelope, quiet, sqldb
 ROLES = ("Admin", "Engineer", "Tech")
 KINDS = ("rules", "backups")
 LAST_ADMIN = "Toner needs at least one Admin."
-_PART2 = ("roles", "rules_pub", "rules_sig", "backups_pub", "grants", "recovery_grants")
+_PART2 = ("roles", "rules_pub", "rules_sig", "backups_pub", "grants", "recovery_grants", "attested", "recovery_attested")
+_NOT_READY = ("no such table", "file is not a database")    # a first start signs in before the database is encrypted and set up
 
 _lock = threading.RLock()
 _held = {}           # kind -> the private role key this sign-in holds
@@ -30,6 +34,7 @@ _cache = None        # what the file says, verified: {"state", "roles", "account
 _rk = None           # the rules_key setting, read once
 _audited = False     # "roles were changed outside Toner" written this sign-in
 _upgrade_due = False  # an Admin signed in to a Part 1 file: make the role keys once the database can be written
+_own_box = False     # this sign-in's box key is the one its record shows (else it holds nothing and can't repair)
 _callbacks = []
 
 
@@ -43,6 +48,7 @@ def _unb64(s):
 
 
 def _public(kind, private):
+    """The public half: Ed25519 for the rules key, X25519 for the backups key and box keys."""
     key = (Ed25519PrivateKey if kind == "rules" else X25519PrivateKey).from_private_bytes(private)
     return key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
 
@@ -59,32 +65,55 @@ def _admins(doc):
     return sum(r == "Admin" for r in _accounts(doc).values())
 
 
+def _attested(doc):
+    """The vouched-for box keys by account name (kept in the file, made a dict here)."""
+    att = doc.get("attested")
+    doc["attested"] = att = att if isinstance(att, dict) else {}
+    return att
+
+
 def _signed(doc):
-    return envelope.canonical({"roles": doc.get("roles"), "accounts": _accounts(doc), "backups_pub": doc.get("backups_pub")})
+    att = doc.get("attested") or {}
+    return envelope.canonical({"roles": doc.get("roles"),
+                               "accounts": {n: {"role": a.get("role", "Admin"), "box_pub": att.get(n)} for n, a in doc["accounts"].items()},
+                               "recovery_box_pub": doc.get("recovery_attested"), "backups_pub": doc.get("backups_pub")})
+
+
+def _sign(doc):
+    att = _attested(doc)
+    doc["attested"] = {n: att.get(n) for n in doc["accounts"]}
+    doc["roles"] = _clean_roles(doc.get("roles"))
+    doc["rules_sig"] = envelope.sign(_held["rules"], _signed(doc))
 
 
 def _rules_key():
-    """The rules_key setting; None while it can't be read: signed out, or a first start, which signs in before the database is
-    encrypted and set up."""
+    """The rules_key setting; None while it can't be read: signed out, or the database not set up yet. Any other database
+    error is raised: a passing lock must not make a signed file look tampered."""
     global _rk
     if _rk is None and datakey.is_open():
         try:
             _rk = db.get_setting("rules_key")
-        except sqldb.sqlite3.Error:
-            pass
+        except sqldb.sqlite3.Error as e:
+            if not any(s in str(e) for s in _NOT_READY):
+                raise
     return _rk
 
 
+def _verifies(doc, pub):
+    try:
+        return envelope.fingerprint(pub) == _rules_key() and envelope.verify(pub, _signed(doc), doc["rules_sig"])
+    except (KeyError, TypeError, ValueError, AttributeError):    # a field missing or mangled
+        return False
+
+
 def _state_of(doc):
-    rk = _rules_key()
-    if not rk:                                          # only a Part 1 file is unsigned; anything of Part 2's without the key is not
+    if not _rules_key():                                # only a Part 1 file is unsigned; anything of Part 2's without the key is not
         return "tampered" if any(k in doc for k in _PART2) else "unsigned"
     try:
         pub = _unb64(doc["rules_pub"])
-        good = envelope.fingerprint(pub) == rk and envelope.verify(pub, _signed(doc), doc["rules_sig"])
-    except (KeyError, TypeError, ValueError, AttributeError):    # a field missing or mangled
-        good = False
-    return "ok" if good else "tampered"
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return "tampered"
+    return "ok" if _verifies(doc, pub) else "tampered"
 
 
 def _clean_roles(stored):
@@ -123,8 +152,7 @@ def _load():
         if st == "ok":
             c.update(roles=doc.get("roles"), accounts=_accounts(doc), backups_pub=_unb64(doc["backups_pub"]))
         if st == "tampered" and datakey.is_open() and not _audited:
-            _audited = True
-            audit.log("roles were changed outside Toner", who=datakey.signed_in_name())
+            _audited = audit.log("roles were changed outside Toner", who=datakey.signed_in_name())
         if _rules_key() is not None:                    # else look again next time: the database may be ready by then
             _cache = c
         return c
@@ -190,12 +218,18 @@ def on_change(fn):
 
 # ---------------------------------------------------------------- grants
 def _sync(doc):
-    """Wrap each role key held to every box key that should have it (the recovery key's too), and drop grants that no longer
-    apply. The caller holds the rules key and has checked the rules."""
+    """Wrap each role key held to every vouched-for box key that should have it (the recovery key's too), drop grants that no
+    longer apply, and sign. A box key nobody has vouched for yet (a Part 1 account that added its own since) is vouched for now;
+    one that differs from what was vouched for gets nothing until an Admin resets that password. The caller holds the rules key
+    and has checked the rules."""
+    att = _attested(doc)
     old = doc.get("grants") if isinstance(doc.get("grants"), dict) else {}
     grants = {}
     for name, rec in doc["accounts"].items():
-        if "box_pub" not in rec:                        # a Part 1 account that hasn't signed in since: its first sign-in adds one
+        live = rec.get("box_pub")
+        if live and att.get(name) is None:
+            att[name] = live
+        if not live or att[name] != live:               # a Part 1 account not upgraded yet, or a box key swapped in by hand
             continue
         role = rec.get("role", "Admin")
         want = {"rules": role == "Admin", "backups": _perms_in(doc.get("roles"), role)["unmasked"]}
@@ -203,16 +237,22 @@ def _sync(doc):
         g = {k: v for k, v in mine.items() if want.get(k)}
         for kind in KINDS:
             if want[kind] and kind not in g and kind in _held:
-                g[kind] = envelope.wrap(_unb64(rec["box_pub"]), _held[kind], _aad(kind, name))
+                g[kind] = envelope.wrap(_unb64(live), _held[kind], _aad(kind, name))
         if g:
             grants[name] = g
     doc["grants"] = grants
+    live = doc["recovery"].get("box_pub")
+    if live and doc.get("recovery_attested") is None:
+        doc["recovery_attested"] = live
     old = doc.get("recovery_grants") if isinstance(doc.get("recovery_grants"), dict) else {}
-    rg = {k: v for k, v in old.items() if k in KINDS}
-    for kind in KINDS:
-        if kind not in rg and kind in _held and "box_pub" in doc["recovery"]:
-            rg[kind] = envelope.wrap(_unb64(doc["recovery"]["box_pub"]), _held[kind], _aad(kind, None))
+    rg = {}
+    if live and doc["recovery_attested"] == live:
+        rg = {k: v for k, v in old.items() if k in KINDS}
+        for kind in KINDS:
+            if kind not in rg and kind in _held:
+                rg[kind] = envelope.wrap(_unb64(live), _held[kind], _aad(kind, None))
     doc["recovery_grants"] = rg
+    _sign(doc)
 
 
 def sync_grants():
@@ -230,22 +270,32 @@ def sync_grants():
 def _accounts_changed(before, doc):
     """datakey's hook, inside its write that adds, removes or re-keys an account or the recovery key."""
     global _cache
+    from core import perms
+    me, holder = datakey.signed_in_name(), "rules" in _held
+    rekeyed = [n for n, a in doc["accounts"].items() if before["accounts"].get(n, {}).get("box_pub") != a.get("box_pub")]
+    recovery = before["recovery"].get("box_pub") != doc["recovery"].get("box_pub")
+    ok = _state_of(before) == "ok"
+    if ok and not holder and ([n for n in rekeyed if n != me] or (recovery and me is not None)):
+        raise perms.Denied()                            # only whoever holds the rules key may give someone else a box key
     grants = doc.get("grants")
     if isinstance(grants, dict):                        # a wrap to a box key that's gone can't be opened again
         for n in list(grants):
-            if n not in doc["accounts"] or before["accounts"].get(n, {}).get("box_pub") != doc["accounts"][n].get("box_pub"):
+            if n not in doc["accounts"] or n in rekeyed:
                 del grants[n]
-    if before["recovery"].get("box_pub") != doc["recovery"].get("box_pub"):
+    if recovery:
         doc.pop("recovery_grants", None)
     if _admins(before) and not _admins(doc):
         raise ValueError(LAST_ADMIN)
-    if _state_of(before) == "ok":                       # never re-sign rules that didn't check out: that would hide the edit
-        if _accounts(before) != _accounts(doc):
-            if "rules" not in _held:
-                raise datakey.Locked("Sign in first.")
-            doc["rules_sig"] = envelope.sign(_held["rules"], _signed(doc))
-        if "rules" in _held:
+    if ok:                                              # never re-sign rules that didn't check out: that would hide the edit
+        if holder:                                      # it made these box keys, so it vouches for them
+            att = _attested(doc)
+            for n in rekeyed:
+                att[n] = doc["accounts"][n].get("box_pub")
+            if recovery:
+                doc["recovery_attested"] = doc["recovery"].get("box_pub")
             _sync(doc)
+        elif _signed(before) != _signed(doc):
+            raise datakey.Locked("Sign in first.")
     _cache = None
 
 
@@ -259,10 +309,32 @@ def _trim():
         _held.pop("backups", None)
 
 
+def _field(doc, field):
+    """A public key the file holds, or None when it is missing or mangled."""
+    try:
+        return _unb64(doc[field])
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
+
+
+def _take(doc, kind, key):
+    """True when `key` is the role key the rules are about. The rules key: its fingerprint is rules_key. The backups key: it is
+    the file's backups_pub, or (on a file whose backups_pub was swapped) putting it back makes the rules verify, under whichever
+    rules_pub (the file's, or the one of the rules key held) has rules_key's fingerprint."""
+    pub = _public(kind, key)
+    rk = _rules_key()
+    if kind == "rules":
+        return envelope.fingerprint(pub) == rk if rk else pub == _field(doc, "rules_pub")
+    if pub == _field(doc, "backups_pub"):
+        return True
+    rules = [p for p in (_field(doc, "rules_pub"), "rules" in _held and _public("rules", _held["rules"])) if p]
+    return any(_verifies({**doc, "backups_pub": _b64(pub)}, p) for p in rules)
+
+
 def unlock():
     """After a sign-in: take this account's role keys. On a Part 1 file, whoever signs in first (everyone is an Admin) makes the
     role keys. A tampered file or a missing grant is not an error: this sign-in just holds less."""
-    global _audited, _upgrade_due
+    global _audited, _upgrade_due, _own_box
     with _lock:
         _held.clear()
         _invalidate()
@@ -270,16 +342,18 @@ def unlock():
         name, box = datakey.signed_in_name(), datakey.box_private()
         _rules_key()                                    # read the setting before taking datakey's lock
         doc = datakey.read()
-        for kind in KINDS:
+        rec = doc["recovery"] if name is None else doc["accounts"][name]
+        _own_box = box is not None and rec.get("box_pub") == _b64(_public("box", box))
+        for kind in KINDS if _own_box else ():         # rules first: the backups check may need it
             try:
                 g = doc["recovery_grants"] if name is None else doc["grants"][name]
                 key = envelope.unwrap(box, g[kind], _aad(kind, name))
-                if _public(kind, key) == _unb64(doc[kind + "_pub"]):     # a grant of some other key is no grant
+                if _take(doc, kind, key):               # a grant of some other key is no grant
                     _held[kind] = key
             except (KeyError, TypeError, ValueError, AttributeError, InvalidTag):
                 pass                                    # no grant yet, or one that doesn't open
         st = _state_of(doc)
-        if st == "unsigned" and (name is None or doc["accounts"][name].get("role", "Admin") == "Admin"):
+        if st == "unsigned" and (name is None or rec.get("role", "Admin") == "Admin"):
             _upgrade_due = True                         # done by _load, now or once the database is ready
         elif st == "ok" and "rules" in _held:
             sync_grants()
@@ -297,8 +371,9 @@ def _upgrade():
     def go(doc):
         if _state_of(doc) != "unsigned":                # someone else got there first
             return False
-        doc.update(roles={"Engineer": {}, "Tech": {}}, rules_pub=_b64(rules_pub), backups_pub=_b64(backups_pub))
-        doc["rules_sig"] = envelope.sign(rules, _signed(doc))
+        doc.update(roles={"Engineer": {}, "Tech": {}}, rules_pub=_b64(rules_pub), backups_pub=_b64(backups_pub),
+                   attested={n: a.get("box_pub") for n, a in doc["accounts"].items()},
+                   recovery_attested=doc["recovery"].get("box_pub"))
         _sync(doc)
         return True
     if datakey.edit(go):
@@ -310,11 +385,11 @@ def _upgrade():
 
 
 def close():
-    global _audited, _upgrade_due
+    global _audited, _upgrade_due, _own_box
     with _lock:
         _held.clear()
         _invalidate()
-        _audited = _upgrade_due = False
+        _audited = _upgrade_due = _own_box = False
 
 
 # ---------------------------------------------------------------- changing the rules
@@ -323,7 +398,7 @@ def _may_write(doc):
     from core import perms
     st = _state_of(doc)
     if st == "tampered":
-        if datakey.signed_in_name() is None:
+        if datakey.signed_in_name() is None and _own_box:
             return True
         raise perms.Denied()                            # everyone is a Tech until the recovery key puts it right
     if st != "ok" or "rules" not in _held:
@@ -336,13 +411,19 @@ def _resign(doc, repair):
     pub = None
     if repair:
         _held["rules"], pub = envelope.new_signing_key()
-        if "backups" not in _held:                      # shortcut: no held backups key to vouch for backups_pub, so a new one
-            _held["backups"] = envelope.new_box_key()[0]
         doc["rules_pub"] = _b64(pub)
-        doc["backups_pub"] = _b64(_public("backups", _held["backups"]))
-        doc["grants"], doc["recovery_grants"] = {}, {}  # wraps of the old rules key; _sync wraps both afresh
-    doc["roles"] = _clean_roles(doc.get("roles"))
-    doc["rules_sig"] = envelope.sign(_held["rules"], _signed(doc))
+        grants = doc.get("grants") if isinstance(doc.get("grants"), dict) else {}
+        rg = doc.get("recovery_grants") if isinstance(doc.get("recovery_grants"), dict) else {}
+        kept = [g for g in grants.values() if isinstance(g, dict) and "backups" in g] + (["backups"] if "backups" in rg else [])
+        if "backups" not in _held and not kept:         # nobody holds a backups key: a new one loses nothing
+            _held["backups"] = envelope.new_box_key()[0]
+        if "backups" in _held:                          # held and vouched for (unlock): it goes back in, and it alone is wrapped
+            doc["backups_pub"] = _b64(_public("backups", _held["backups"]))
+            doc["grants"], doc["recovery_grants"] = {}, {}
+        else:                                           # shortcut: unvouched backups_pub and its wraps kept rather than lost
+            doc["grants"] = {n: {"backups": g["backups"]} for n, g in grants.items() if isinstance(g, dict) and "backups" in g}
+            doc["recovery_grants"] = {"backups": rg["backups"]} if "backups" in rg else {}
+        doc["recovery_attested"] = doc["recovery"]["box_pub"]      # the recovery key showed it is this one (unlock)
     _sync(doc)
     return pub
 
