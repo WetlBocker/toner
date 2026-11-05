@@ -30,7 +30,7 @@ def raises(exc, fn, *a):
     return False
 
 d = Path(SP) / "sealtest"; d.mkdir(exist_ok=True)
-sqldb.set_key(os.urandom(32))
+KEY = os.urandom(32); sqldb.set_key(KEY)
 
 p = d / "a.txt"
 S.write_text(p, "abc")
@@ -52,6 +52,19 @@ check("appender plaintext hidden", b"one" not in q.read_bytes())
 # a crash mid-append leaves a short final frame; reading stops cleanly before it
 q.write_bytes(q.read_bytes() + b"\x00\x00\x00\x40abc")
 check("short final frame ignored", S.read_text(q) == "one\ntwo\nthree\n")
+
+for i, stub in enumerate((b"\x00", b"\x00\x00\x00", b"\x00\x00\x00\x40", b"\x00\x00\x00\x40abc")):
+    r = d / f"torn{i}.txt"
+    a = S.Appender(r); a.write("one\n"); a.close()
+    r.write_bytes(r.read_bytes() + stub)
+    a = S.Appender(r); a.write("two\n"); a.write("three\n"); a.close()
+    check(f"torn tail {i}: all good frames kept", S.read_text(r) == "one\ntwo\nthree\n")
+    check(f"torn tail {i}: stub gone", S._frames(r.read_bytes())[1] == len(r.read_bytes()))
+
+so = d / "signout.txt"
+a = S.Appender(so); a.write("one\n"); sqldb.set_key(None); before = so.read_bytes()
+check("write after sign-out is Locked", raises(S.Locked, a.write, "two\n") and so.read_bytes() == before)
+a.close(); sqldb.set_key(KEY)
 
 b = bytearray(p.read_bytes()); b[-1] ^= 1; p.write_bytes(bytes(b))
 check("tamper raises ValueError", raises(ValueError, S.read_bytes, p))

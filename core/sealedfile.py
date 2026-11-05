@@ -39,18 +39,25 @@ def is_sealed(path):
         return False
 
 
+def _frames(raw):
+    """Complete frames and the offset where they end; a crash mid-append leaves a short last frame after it."""
+    bodies, i = [], len(MAGIC)
+    while i + 4 <= len(raw):
+        n = struct.unpack(">I", raw[i:i + 4])[0]
+        if i + 4 + n > len(raw):
+            break
+        bodies.append(raw[i + 4:i + 4 + n])
+        i += 4 + n
+    return bodies, i
+
+
 def read_bytes(path):
     raw = Path(path).read_bytes()
     if not raw.startswith(MAGIC):
         return raw
     aead, aad = _aead(path)
-    out, i = [], len(MAGIC)
-    while i + 4 <= len(raw):
-        n = struct.unpack(">I", raw[i:i + 4])[0]
-        body = raw[i + 4:i + 4 + n]
-        if len(body) < n:
-            break  # a crash mid-append leaves a short last frame
-        i += 4 + n
+    out = []
+    for body in _frames(raw)[0]:
         try:
             out.append(aead.decrypt(body[:12], body[12:], aad))
         except (InvalidTag, ValueError):
@@ -88,8 +95,9 @@ def seal_existing(path):
 
 class Appender:
     def __init__(self, path):
-        self._aead, self._aad = _aead(path)
+        _aead(path)  # refuse early when signed out
         p = Path(path)
+        self._path = p
         if p.exists() and p.stat().st_size and not is_sealed(p):
             raise Locked("This file isn't sealed yet, so Toner won't add to it.")
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -97,9 +105,17 @@ class Appender:
         if self._f.tell() == 0:
             self._f.write(MAGIC)
             self._f.flush()
+        else:
+            # appending after a torn tail would hide or corrupt every later frame
+            end = _frames(p.read_bytes())[1]
+            if end < self._f.tell():
+                self._f.truncate(end)
+                self._f.flush()
+                os.fsync(self._f.fileno())
 
     def write(self, text):
-        self._f.write(_frame(self._aead, self._aad, text.encode("utf-8")))
+        aead, aad = _aead(self._path)  # read the key each time so signing out stops writes at once
+        self._f.write(_frame(aead, aad, text.encode("utf-8")))
         self._f.flush()
 
     def close(self):
