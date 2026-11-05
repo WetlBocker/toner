@@ -46,7 +46,8 @@ check("backup opens with the password", c.execute("SELECT count(*) FROM sqlite_m
 try: sqldb.sqlite3.connect(out).execute("SELECT count(*) FROM sqlite_master"); closed = False
 except sqldb.sqlite3.DatabaseError: closed = True
 check("backup is closed without it", closed)
-check("success says it is encrypted with the chosen password", any("The backup is encrypted with the password you chose." in m for m in shown))
+check("success says saved passwords are not included", any("Saved passwords stay in Toner's vault and aren't included." in m for m in shown))
+check("success says it is encrypted with the chosen password", any("encrypted with the password you chose." in m for m in shown))
 run(good, good + "x")
 check("different answers save nothing", not out.exists())
 run("short", "short")

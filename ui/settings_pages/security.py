@@ -194,7 +194,7 @@ class DataPage(Page):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(db.db_path().parent)))
 
     def backup(self):
-        first = self._ask_password("Back up database", "Choose a password to protect the backup (at least 12 characters). "
+        first = self._ask_password("Back up database", f"Choose a password to protect the backup (at least {passwords.MIN_LENGTH} characters). "
                                    "You'll need it to open the backup, and it can't be recovered.")
         if first is None:
             return
@@ -212,8 +212,8 @@ class DataPage(Page):
         try:
             with db.connect() as src:
                 sqldb.export_copy(src, path, first)      # consistent copy even while the app is using it
-            QMessageBox.information(self, "Backup", f"Saved to {path}\n\nThe backup holds devices, history and "
-                                    "settings. The backup is encrypted with the password you chose.")
+            QMessageBox.information(self, "Backup", f"Saved to {path}. The backup holds devices, history and settings, "
+                                    "encrypted with the password you chose. Saved passwords stay in Toner's vault and aren't included.")
         except (OSError, ValueError, sqlite3.Error) as e:
             QMessageBox.warning(self, "Backup failed", str(e))
 
