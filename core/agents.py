@@ -52,6 +52,8 @@ def key_password():
 def _key_pem(key):
     from cryptography.hazmat.primitives import serialization
     pw = key_password()
+    if pw is None and sealedfile.keyed():
+        raise sealedfile.Locked("Sign in first.")            # sign-in is set up: never write the key plain
     return key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
                              serialization.BestAvailableEncryption(pw) if pw else serialization.NoEncryption())
 

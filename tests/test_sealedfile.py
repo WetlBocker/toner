@@ -103,4 +103,27 @@ check("appender locked without key", raises(S.Locked, S.Appender, d / "y"))
 (d / "p3.txt").write_text("hi")
 check("plain read needs no key", S.read_text(d / "p3.txt") == "hi")
 
+# once sign-in is set up, a write with no key open (signed out, a worker outliving shutdown) raises: it never goes out plain
+from core import backup as B, cmdrun, datakey, sessionlog
+check("no keys file, no key: written plain as before", not S.keyed() and (S.save_text(d / "before.txt", "old") or True)
+      and (d / "before.txt").read_text() == "old")
+datakey.create("Admin", "correct horse battery 42"); datakey.close()
+check("keys file, no key open: keyed", S.keyed())
+check("save_text raises Locked instead of writing plain", raises(S.Locked, S.save_text, d / "after.txt", "secret")
+      and not (d / "after.txt").exists())
+logs = list(sessionlog.log_dir().iterdir()) if sessionlog.log_dir().exists() else []
+try:
+    sessionlog.SessionLog("sw1", "10.0.0.1", 22, "u"); log_err = None
+except Exception as e:
+    log_err = e
+check("a session log can't start: OSError (what its callers catch), and no plain file is left",
+      isinstance(log_err, OSError) and list(sessionlog.log_dir().iterdir()) == logs, repr(log_err))
+import io
+dev = {"name": "sw1"}
+check("a failed backup's session isn't written", B._save_failed_session(dev, io.BytesIO(b"secret config")) is None
+      and not B.session_file(dev).exists())
+check("nor a Command Runner session", cmdrun._save_session(dev, io.BytesIO(b"secret output")) is None and not cmdrun.session_file(dev).exists())
+from core import agents
+check("nor the agent receiver's key", raises(S.Locked, agents.ensure_cert, True) and not (agents.cert_dir() / "toner-agent.key").exists())
+
 print(f"\n{ok} passed, {bad} failed"); sys.exit(1 if bad else 0)

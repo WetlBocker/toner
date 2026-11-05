@@ -62,8 +62,12 @@ class SessionLog:
                 continue
         else:
             raise OSError("could not find a free log file name")
-        self.file = (sealedfile.Appender(self.path) if sealedfile.keyed()
-                     else open(self.path, "w", encoding="utf-8", newline="\n", buffering=1))   # line-buffered: each write lands, as an Appender's does
+        try:
+            self.file = (sealedfile.Appender(self.path) if sealedfile.keyed()
+                         else open(self.path, "w", encoding="utf-8", newline="\n", buffering=1))   # line-buffered: each write lands, as an Appender's does
+        except sealedfile.Locked as e:              # signed out: no log, and its callers already handle OSError
+            self.path.unlink(missing_ok=True)
+            raise OSError(str(e)) from None
         with _open_lock:
             _open.add(self.path)
         self.decoder = codecs.getincrementaldecoder("utf-8")("replace")

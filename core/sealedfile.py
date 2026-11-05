@@ -95,9 +95,11 @@ def write_bytes(path, data):
 
 
 def keyed():
-    """Whether side files are written sealed. Until a data key is open (no one has set up sign-in) Toner writes them plain, as it
-    always has; once one is, sealed. Readers take both, and core/lockdown.py seals what was written plain."""
-    return sqldb.current_key() is not None
+    """Whether side files are written sealed. Until sign-in is set up (no data key open, no netcheck.keys) Toner writes them plain,
+    as it always has; from then on, sealed, so a write with no key open (signed out, a worker outliving shutdown) raises Locked
+    rather than going out plain. Readers take both, and core/lockdown.py seals what was written plain."""
+    from core import datakey
+    return sqldb.current_key() is not None or datakey.exists()
 
 
 def save_bytes(path, data):
