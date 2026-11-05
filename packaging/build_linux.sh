@@ -13,6 +13,7 @@ python -m PyInstaller --noconfirm --clean --windowed --onedir --name Toner \
     --collect-submodules anthropic --collect-submodules openai --collect-submodules google.genai \
     --hidden-import PySide6.QtWebEngineWidgets --hidden-import PySide6.QtWebEngineCore --hidden-import PySide6.QtWebChannel \
     --add-data "$root/assets/echarts.min.js:assets" --add-data "$root/assets/chart.html:assets" \
+    --add-data "$root/core/data:core/data" \
     --distpath build/dist --workpath build/work --specpath build app.py
 
 # Qt pieces PyInstaller ships that Toner never uses (see build.ps1 for the list and why). QtQuick and QtQml stay for the
