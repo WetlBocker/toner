@@ -1,0 +1,107 @@
+<style>
+  .tn { --bg:#081420; --surface:#0b1b2b; --surface2:#12283d; --border:#223a52; --edge:#3d5a76; --text:#f4f8fb; --muted:#9fb3c6; --accent:#22d3ee; --accent-text:#0b1b2b; }
+  .tn-stage { background:var(--bg); color:var(--text); font-family:"Segoe UI", system-ui, sans-serif; font-size:14px; border-radius:8px; padding:28px 20px; min-height:440px; display:flex; align-items:center; justify-content:center; position:relative; overflow:hidden; }
+  .tn-card { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:26px 26px 22px; width:300px; box-sizing:border-box; position:relative; }
+  .tn-word { font-weight:600; font-size:15px; color:var(--accent); margin-bottom:14px; }
+  .tn-h { font-size:19px; font-weight:600; margin:0 0 4px; color:var(--text); }
+  .tn-sub { color:var(--muted); font-size:13px; margin:0 0 18px; }
+  .tn-lab { display:block; font-size:12.5px; color:var(--muted); margin:10px 0 4px; }
+  .tn-in { background:var(--bg); border:1px solid var(--edge); border-radius:6px; padding:8px 10px; color:var(--text); font-size:13.5px; }
+  .tn-in.ph { color:var(--muted); }
+  .tn-btn { background:var(--accent); color:var(--accent-text); border-radius:6px; padding:9px; text-align:center; font-weight:600; margin-top:16px; }
+  .tn-btn2 { background:var(--surface2); border:1px solid var(--edge); color:var(--text); border-radius:6px; padding:9px; text-align:center; font-weight:500; }
+  .tn-or { display:flex; align-items:center; gap:10px; color:var(--muted); font-size:12px; margin:16px 0 4px; }
+  .tn-or::before, .tn-or::after { content:""; flex:1; height:1px; background:var(--border); }
+  .tn-link { color:var(--accent); font-size:12.5px; margin-top:14px; }
+  .tn-ghost { position:absolute; inset:0; opacity:.22; padding:14px; display:grid; grid-template-columns:120px 1fr; gap:12px; }
+  .tn-ghost div { background:var(--surface2); border-radius:6px; }
+  .tn-veil { position:absolute; inset:0; background:rgba(8,20,32,.72); }
+  .tn-avatar { width:44px; height:44px; border-radius:50%; background:var(--surface2); border:1px solid var(--edge); display:flex; align-items:center; justify-content:center; font-weight:600; color:var(--accent); margin-bottom:12px; }
+  .tn-note { color:var(--muted); font-size:12px; margin-top:12px; line-height:1.4; }
+  .tn-steps { display:flex; gap:14px; align-items:center; }
+  .tn-arrow { color:var(--muted); font-size:20px; }
+  .tn-card.small { width:250px; padding:20px; }
+</style>
+
+<h2>How should signing in to Toner look?</h2>
+<p class="subtitle">Three layouts with the same sign-in methods: local, AD, LDAP and Entra. The wording is a first draft, so mark anything you'd change. Click the one that feels right.</p>
+
+<div class="options">
+
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>A small sign-in window, before Toner opens</h3>
+      <p>Microsoft sign-in on top, then a box to pick the account type. Nothing of Toner is visible until you're in.</p>
+      <div class="tn"><div class="tn-stage">
+        <div class="tn-card">
+          <div class="tn-word">Toner</div>
+          <p class="tn-h">Sign in</p>
+          <p class="tn-sub">Customer data stays locked until you do.</p>
+          <div class="tn-btn2">Sign in with Microsoft</div>
+          <div class="tn-or">or</div>
+          <span class="tn-lab">Account</span>
+          <div class="tn-in">Wetlesen IT (Active Directory) ▾</div>
+          <span class="tn-lab">Username</span>
+          <div class="tn-in ph">jsmith</div>
+          <span class="tn-lab">Password</span>
+          <div class="tn-in ph">••••••••••</div>
+          <div class="tn-btn">Sign in</div>
+        </div>
+      </div></div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>A lock screen over the Toner window</h3>
+      <p>Toner's window is open but hidden behind the lock. Coming back after it locks only asks for the password of whoever signed in last.</p>
+      <div class="tn"><div class="tn-stage">
+        <div class="tn-ghost"><div></div><div></div></div>
+        <div class="tn-veil"></div>
+        <div class="tn-card">
+          <div class="tn-avatar">JS</div>
+          <p class="tn-h">Toner is locked</p>
+          <p class="tn-sub">Locked after 15 minutes without use.</p>
+          <span class="tn-lab">Jordan Smith, Wetlesen IT (Active Directory)</span>
+          <div class="tn-in ph">Password</div>
+          <div class="tn-btn">Unlock</div>
+          <div class="tn-link">Sign in as someone else</div>
+        </div>
+      </div></div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Username first, then Toner picks the method</h3>
+      <p>Type your username or email address. Toner works out whether it's local, AD, LDAP or Entra, then asks for a password or opens Microsoft's sign-in page.</p>
+      <div class="tn"><div class="tn-stage">
+        <div class="tn-steps">
+          <div class="tn-card small">
+            <div class="tn-word">Toner</div>
+            <p class="tn-h">Sign in</p>
+            <span class="tn-lab">Username or email</span>
+            <div class="tn-in">jsmith@wetlesenit.com</div>
+            <div class="tn-btn">Next</div>
+          </div>
+          <div class="tn-arrow">›</div>
+          <div class="tn-card small">
+            <div class="tn-word">Toner</div>
+            <p class="tn-h">jsmith@wetlesenit.com</p>
+            <p class="tn-sub">Wetlesen IT (Active Directory)</p>
+            <span class="tn-lab">Password</span>
+            <div class="tn-in ph">••••••••••</div>
+            <div class="tn-btn">Sign in</div>
+            <div class="tn-link">Not you?</div>
+          </div>
+        </div>
+      </div></div>
+    </div>
+  </div>
+
+</div>
+
+<p class="subtitle" style="margin-top:18px">These can combine: for example, A or C for the first sign-in of the day and B when Toner locks itself.</p>

@@ -1,0 +1,58 @@
+<style>
+  .tn { --bg:#081420; --surface:#0b1b2b; --surface2:#12283d; --border:#223a52; --edge:#3d5a76; --text:#f4f8fb; --muted:#9fb3c6; --accent:#22d3ee; --accent-text:#0b1b2b; }
+  .tn-stage { background:var(--bg); color:var(--text); font-family:"Segoe UI", system-ui, sans-serif; font-size:14px; border-radius:8px; padding:28px 20px; display:flex; gap:14px; align-items:center; justify-content:center; flex-wrap:wrap; }
+  .tn-card { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:20px; width:250px; box-sizing:border-box; }
+  .tn-word { font-weight:600; font-size:15px; color:var(--accent); margin-bottom:14px; }
+  .tn-h { font-size:17px; font-weight:600; margin:0 0 4px; color:var(--text); }
+  .tn-sub { color:var(--muted); font-size:13px; margin:0 0 16px; line-height:1.4; }
+  .tn-lab { display:block; font-size:12.5px; color:var(--muted); margin:10px 0 4px; }
+  .tn-in { background:var(--bg); border:1px solid var(--edge); border-radius:6px; padding:8px 10px; color:var(--text); font-size:13.5px; }
+  .tn-code { display:flex; gap:6px; }
+  .tn-code div { flex:1; background:var(--bg); border:1px solid var(--edge); border-radius:6px; height:34px; display:flex; align-items:center; justify-content:center; font-size:17px; font-weight:600; }
+  .tn-btn { background:var(--accent); color:var(--accent-text); border-radius:6px; padding:9px; text-align:center; font-weight:600; margin-top:16px; }
+  .tn-link { color:var(--accent); font-size:12.5px; margin-top:12px; }
+  .tn-wait { display:flex; align-items:center; gap:10px; background:var(--surface2); border-radius:6px; padding:10px; font-size:13px; }
+  .tn-spin { width:16px; height:16px; border-radius:50%; border:2px solid var(--edge); border-top-color:var(--accent); flex:none; }
+  .tn-arrow { color:var(--muted); font-size:20px; }
+</style>
+
+<h2>The second step, after the password</h2>
+<p class="subtitle">In the same window as layout C. Only AD and LDAP accounts with the second step turned on see this; Entra uses Microsoft's own. Click to mark either screen if you want changes, then tell me in the terminal.</p>
+
+<div class="options" data-multiselect>
+  <div class="option" data-choice="code" onclick="toggleSelect(this)">
+    <div class="letter">1</div>
+    <div class="content">
+      <h3>A 6-digit code</h3>
+      <p>From an authenticator app.</p>
+      <div class="tn"><div class="tn-stage">
+        <div class="tn-card">
+          <div class="tn-word">Toner</div>
+          <p class="tn-h">Enter your code</p>
+          <p class="tn-sub">Open your authenticator app and type the 6-digit code for Toner.</p>
+          <div class="tn-code"><div>4</div><div>8</div><div>1</div><div></div><div></div><div></div></div>
+          <div class="tn-btn">Verify</div>
+          <div class="tn-link">Send a push to Duo instead</div>
+        </div>
+      </div></div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="push" onclick="toggleSelect(this)">
+    <div class="letter">2</div>
+    <div class="content">
+      <h3>An approved push</h3>
+      <p>Toner waits while you approve the request on your phone.</p>
+      <div class="tn"><div class="tn-stage">
+        <div class="tn-card">
+          <div class="tn-word">Toner</div>
+          <p class="tn-h">Approve on your phone</p>
+          <p class="tn-sub">We sent a sign-in request to Duo Mobile on your iPhone.</p>
+          <div class="tn-wait"><div class="tn-spin"></div>Waiting for approval</div>
+          <div class="tn-link">Enter a code instead</div>
+          <div class="tn-link">Cancel</div>
+        </div>
+      </div></div>
+    </div>
+  </div>
+</div>
