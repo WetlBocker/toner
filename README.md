@@ -610,6 +610,7 @@ watches the agent certificate. It uses the data folder of the account it runs as
 
 While sign-in is set up, `service` is refused and exits with code 3. The other commands ask for a username and password at the
 terminal (or take `--user`). Run from Task Scheduler with no terminal, they print **Sign in needs a terminal.** and exit with code 3.
+On Windows, run commands with TonerCli.exe.
 
 ## Charts
 

@@ -6,15 +6,23 @@ $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 if (-not $Version) { $Version = (python -c "from core.version import VERSION; print(VERSION)").Trim() }   # core\version.py is the one place the version lives
 
-python -m PyInstaller --noconfirm --clean --windowed --onedir --name Toner --icon "$root\assets\toner.ico" `
-    --collect-all netmiko --collect-all ntc_templates --collect-all pysnmp --hidden-import cli --hidden-import PySide6.QtAxContainer --collect-all pypsrp --collect-all spnego --collect-all sspilib `
-    --collect-submodules keyring.backends --collect-submodules paramiko --collect-all keeper_secrets_manager_core --collect-all sqlcipher3 `
-    --collect-submodules anthropic --collect-submodules openai --collect-submodules google.genai `
-    --hidden-import PySide6.QtWebEngineWidgets --hidden-import PySide6.QtWebEngineCore --hidden-import PySide6.QtWebChannel `
-    --add-data "$root\assets\echarts.min.js;assets" --add-data "$root\assets\chart.html;assets" `
-    --add-data "$root\core\data;core\data" `
-    --distpath build\dist --workpath build\work --specpath build app.py
+$common = @("--noconfirm", "--clean", "--onedir", "--icon", "$root\assets\toner.ico", "--paths", "$root",
+    "--collect-all", "netmiko", "--collect-all", "ntc_templates", "--collect-all", "pysnmp", "--hidden-import", "cli", "--hidden-import", "PySide6.QtAxContainer",
+    "--collect-all", "pypsrp", "--collect-all", "spnego", "--collect-all", "sspilib",
+    "--collect-submodules", "keyring.backends", "--collect-submodules", "paramiko", "--collect-all", "keeper_secrets_manager_core", "--collect-all", "sqlcipher3",
+    "--collect-submodules", "anthropic", "--collect-submodules", "openai", "--collect-submodules", "google.genai",
+    "--hidden-import", "PySide6.QtWebEngineWidgets", "--hidden-import", "PySide6.QtWebEngineCore", "--hidden-import", "PySide6.QtWebChannel",
+    "--add-data", "$root\assets\echarts.min.js;assets", "--add-data", "$root\assets\chart.html;assets",
+    "--add-data", "$root\core\data;core\data",
+    "--distpath", "build\dist", "--workpath", "build\work", "--specpath", "build")
+python -m PyInstaller @common --windowed --name Toner app.py
 if ($LASTEXITCODE) { throw "PyInstaller failed" }
+# TonerCli.exe: the same program as a console one, so its commands can ask for a password at the terminal (Toner.exe, a window
+# program, has no stdin). Built from the same modules, it runs from Toner's own _internal folder, so only the exe is kept.
+python -m PyInstaller @common --console --name TonerCli packaging\toner_cli.py
+if ($LASTEXITCODE) { throw "PyInstaller failed (TonerCli)" }
+Copy-Item build\dist\TonerCli\TonerCli.exe build\dist\Toner\ -Force
+Remove-Item -Recurse -Force build\dist\TonerCli
 
 # Qt pieces PyInstaller ships that Toner never uses: the virtual keyboard (and its input-context plugin), QtTest, the PDF
 # viewer (PDF reports are written with QPdfWriter, which is in QtGui) and Qt's own translation files (Toner is English only).

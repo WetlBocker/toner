@@ -40,6 +40,7 @@ Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription
 Name: "startup"; Description: "Start Toner when I sign in to Windows (waits in the tray if background running is turned on)"; GroupDescription: "Options:"; Flags: unchecked; Check: not IsPortable
 
 [Files]
+; The program folder holds TonerCli.exe beside Toner.exe (packaging\build.ps1 puts it there): the command line, with a console.
 Source: "..\build\dist\Toner\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\devices.example.*"; DestDir: "{app}\examples"; Flags: ignoreversion

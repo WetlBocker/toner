@@ -42,6 +42,11 @@ finally:
 out.close()
 check("its output goes to toner-service.log in the data folder", how == "log" and "service started" in path.read_text(encoding="utf-8"), how)
 check("the build includes the command line tool", "cli" in open(os.path.join(root, "packaging", "build.ps1")).read())
+build = open(os.path.join(root, "packaging", "build.ps1"), encoding="utf-8").read()
+check("...and TonerCli.exe, a console build of it, beside Toner.exe (Toner.exe has no stdin to sign in from)",
+      "--console --name TonerCli packaging\\toner_cli.py" in build and "Copy-Item build\\dist\\TonerCli\\TonerCli.exe build\\dist\\Toner\\" in build)
+entry = open(os.path.join(root, "packaging", "toner_cli.py"), encoding="utf-8").read()
+check("TonerCli.exe runs the same command line as Toner.exe cli", "app.run_cli(sys.argv[1:])" in entry)
 
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)
