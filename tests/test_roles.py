@@ -49,6 +49,10 @@ def as_(name, pw=None):
     else:
         session.sign_in(name, pw)
 
+def signed_ok():
+    """The database's copy of what was last signed is what the file's signature covers."""
+    return db.get_setting("rules_signed") == roles._signed(doc()).decode("utf-8")
+
 def tamper_rows():
     return sum(r["action"] == "roles were changed outside Toner" for r in audit.recent(5000))
 
@@ -83,6 +87,7 @@ check("signed out: nothing allowed", not perms.allowed("tool:snmp") and not perm
 
 as_("Admin1", PW)
 check("Admin's first sign-in: state ok", roles.state() == "ok", roles.state())
+check("rules_signed written at the upgrade", signed_ok())
 d = doc()
 check("rules_key is the rules_pub fingerprint",
       db.get_setting("rules_key") == envelope.fingerprint(base64.b64decode(d["rules_pub"])), db.get_setting("rules_key"))
@@ -96,6 +101,7 @@ check("Admin: every permission", all(perms.allowed(k) for k in KEYS) and perms.i
 datakey.add_local("Admin2", PW2, role="Admin")
 datakey.add_local("Tech1", PW3, role="Tech")
 datakey.add_local("Eng1", PW4, role="Engineer")
+check("rules_signed written when an account is added", signed_ok())
 check("adding accounts keeps the rules signed", roles.state() == "ok", roles.state())
 roles.sync_grants()
 as_("Admin2", PW2)
@@ -126,6 +132,7 @@ check("Part 1 Admin: no grants yet, nothing raises", not roles.holds("backups") 
 check("Part 1 Admin: gained a box key at sign-in", "box_pub" in doc()["accounts"]["Old"])
 check("Part 1 Admin: its box key not vouched for yet", doc().get("attested", {}).get("Old") is None)
 as_("Admin1", PW)                                       # another Admin's sign-in syncs the grants
+check("rules_signed written by the sync's re-sign", signed_ok())
 check("TOFU: the late box key is vouched for at the next sync", doc().get("attested", {}).get("Old") == doc()["accounts"]["Old"]["box_pub"]
       and roles.state() == "ok")
 as_("Old", PW5)
@@ -134,6 +141,7 @@ check("Part 1 Admin: holds both after another Admin synced", roles.holds("rules"
 # ---------------------------------------------------------------- unmasked for Techs
 as_("Admin1", PW)
 roles.set_permissions("Tech", {"unmasked": True})
+check("rules_signed written by set_permissions", signed_ok())
 row = audit.recent(1)[0]
 check("permission change audited", row["action"] == "role permissions changed" and row["detail"] == "Tech: See passwords in config backups on", row)
 check("Tech's permissions stored", roles.permissions("Tech")["unmasked"] and not roles.permissions("Tech")["push"])
@@ -150,6 +158,7 @@ check("set_permissions refuses an unknown key", raises(lambda: roles.set_permiss
 
 # ---------------------------------------------------------------- roles and the last Admin
 roles.set_role("Admin2", "Engineer")
+check("rules_signed written by set_role", signed_ok())
 row = audit.recent(1)[0]
 check("role change audited", row["action"] == "role changed" and row["detail"] == "Admin2: Admin to Engineer", row)
 check("role_of follows", roles.role_of("admin2") == "Engineer")
@@ -222,6 +231,7 @@ check("recovery sign-in on a tampered file: still tampered", roles.state() == "t
 check("the recovery key is still an Admin", roles.role_of(None) == "Admin")
 roles.set_permissions("Tech", {})
 check("repair: state ok", roles.state() == "ok", roles.state())
+check("rules_signed written by the repair", signed_ok())
 check("repair: a new rules key", db.get_setting("rules_key") not in ("", old_key))
 check("repair: signs what the file shows", roles.role_of("Tech1") == "Engineer" and roles.role_of("Admin1") == "Admin")
 as_("Admin1", PW)
@@ -284,6 +294,27 @@ as_("Admin2", PW2 + "y")
 check("an Admin's password reset vouches for the new box key", roles.holds("rules") and roles.holds("backups")
       and doc().get("attested", {}).get("Admin2") == doc()["accounts"]["Admin2"]["box_pub"])
 datakey.set_password("Admin2", PW2)
+check("rules_signed written by a password reset", signed_ok())
+
+# a repair takes the box keys from the database's copy of what was last signed, not from the tampered file
+session.sign_out()
+evil3, evil3_pub = envelope.new_box_key()
+d = doc(); d["accounts"]["Admin2"]["box_pub"] = d["attested"]["Admin2"] = b64(evil3_pub); d["grants"].pop("Admin2", None); put(d)
+as_(None)
+check("Admin2's box key and its attested value swapped: tampered", roles.state() == "tampered")
+roles.set_permissions("Tech", {})
+check("repair: the swapped key isn't attested and gets no grant", roles.state() == "ok" and doc()["attested"]["Admin2"] != b64(evil3_pub)
+      and "Admin2" not in doc()["grants"] and not opened_by(evil3) and signed_ok())
+as_("Admin1", PW)
+datakey.set_password("Admin2", PW2)                     # an Admin's reset puts Admin2 right
+session.sign_out()
+real = doc()["recovery_attested"]
+evil4, evil4_pub = envelope.new_box_key()
+d = doc(); d["recovery_attested"] = b64(evil4_pub); d["recovery_grants"] = {}; put(d)
+as_(None)
+roles.set_permissions("Tech", {})
+check("repair: the recovery key's attested value comes from the database", roles.state() == "ok"
+      and doc()["recovery_attested"] == real and not opened_by(evil4))
 
 # ---------------------------------------------------------------- the repair after (d) keeps the backups key
 as_("Admin1", PW)
@@ -298,6 +329,22 @@ roles.set_permissions("Tech", {})
 check("repair after (d): ok, the original backups key back", roles.state() == "ok" and roles.backups_public() == orig_pub)
 as_("Eng1", PW4)
 check("repair after (d): the Engineer still holds the original backups key", roles.backups_private() == orig_priv)
+session.sign_out()
+d = doc(); d["backups_pub"] = b64(envelope.new_box_key()[1]); d["accounts"]["Tech1"]["role"] = "Engineer"; put(d)
+as_(None)
+check("backups_pub swapped and a role edited: the recovery key can't vouch for its backups key", roles.backups_private() is None)
+roles.set_permissions("Tech", {})
+check("repair: backups_pub comes back from the database", roles.state() == "ok" and roles.backups_public() == orig_pub)
+as_("Eng1", PW4)
+check("...and the Engineer still holds the original backups key", roles.backups_private() == orig_priv)
+as_("Admin1", PW)
+roles.set_role("Tech1", "Tech")
+db.set_setting("rules_signed", "")                      # nothing kept (a copy from before this setting): the repair still works
+session.sign_out()
+d = doc(); d.pop("rules_sig"); put(d)
+as_(None)
+roles.set_permissions("Tech", {})
+check("repair with no rules_signed: falls back, ok", roles.state() == "ok" and roles.backups_public() == orig_pub and signed_ok())
 
 # ---------------------------------------------------------------- signing out: the key closes before the state says so
 as_("Tech1", PW3)

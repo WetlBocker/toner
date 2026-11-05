@@ -98,6 +98,7 @@ DEFAULT_SETTINGS = {
     "signin_idle_minutes": 15,                   # no mouse or key input this long locks Toner (ui/lockscreen.py); 0: never
     "credential_manager_carried": False,         # an older Toner's Credential Manager passwords are all in the vault (ui/setupdlg.py)
     "rules_key": "",                             # the fingerprint of the key that signs the roles in netcheck.keys (core/roles.py)
+    "rules_signed": "",                          # what that key last signed, for the recovery key's repair (core/roles.py)
     "ssh_legacy_algorithms": True,               # ssh-rsa and SHA-1 key exchange for older devices (core/legacyssh.py)
     # notifications
     "notify_enabled": False, "notify_channels": [], "notify_snooze_until": "",
@@ -146,7 +147,7 @@ DEFAULT_SETTINGS = {
 # the vault, so an imported channel would be broken).
 NOT_PORTABLE = {"vault_provider", "vault_config", "org_current", "window_geometry", "splitters", "inventory_details_hidden", "ansible_distro", "ansible_playbooks", "ansible_server", "ansible_server_device", "sidebar_collapsed", "sessions_list_hidden", "settings_list_hidden", "tools_list_hidden", "automation_list_hidden", "acks", "client_scope", "onboarding_done", "inventory_columns", "results_columns", "scanning_columns", "topology_last", "topology_prev", "topology_positions", "topology_top", "notify_channels", "notify_snooze_until", "inventory_expanded", "snippets", "fileserver", "iperf_path", "openssl_path",
                 "update_last_check", "update_skip", "update_pending", "sessions_expanded", "agent_enabled", "agent_enroll", "agent_bind",
-                "agent_address", "install_uid", "demarc", "assistant_button", "credential_manager_carried", "rules_key"}
+                "agent_address", "install_uid", "demarc", "assistant_button", "credential_manager_carried", "rules_key", "rules_signed"}
 
 DEVICE_FIELDS = ["name", "vendor", "host", "port", "platform", "username",
                  "site", "verify_ssl", "ha_expected", "enabled", "location", "details", "folder_id",
@@ -1125,7 +1126,7 @@ def ensure_folder_path(path):
 # ---------- settings ----------
 # Settings: Global's apply everywhere; an organization's file holds only the ones it changes (Settings > ... while it is picked).
 # These are about this computer or the whole program, so they are always read from and written to the Global file:
-GLOBAL_ONLY = {"credential_manager_carried", "rules_key", "window_geometry", "splitters", "sidebar_collapsed", "inventory_details_hidden", "sessions_list_hidden", "settings_list_hidden", "tools_list_hidden", "automation_list_hidden", "onboarding_done", "org_current",
+GLOBAL_ONLY = {"credential_manager_carried", "rules_key", "rules_signed", "window_geometry", "splitters", "sidebar_collapsed", "inventory_details_hidden", "sessions_list_hidden", "settings_list_hidden", "tools_list_hidden", "automation_list_hidden", "onboarding_done", "org_current",
                "theme", "look", "motion", "panels", "contrast", "custom_accent", "custom_base", "custom_tint", "panel_opacity", "vendor_icons_folder", "font_size", "color_preset", "status_colors",
                "term_font", "rdp_embedded", "term_font_size", "term_scrollback", "term_scheme", "term_syntax", "scan_enabled", "hardening_off", "paging_cmd",
                "hostkey_mode", "ssh_legacy_algorithms", "run_in_background", "metrics_port", "proxy", "ssh_tunnel",

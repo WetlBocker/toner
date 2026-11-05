@@ -13,6 +13,7 @@ Lock order: this module's lock, then datakey's. datakey's hook (_accounts_change
 this one and never reads the file again.
 """
 import base64
+import json
 import threading
 
 from cryptography.exceptions import InvalidTag
@@ -32,6 +33,7 @@ _lock = threading.RLock()
 _held = {}           # kind -> the private role key this sign-in holds
 _cache = None        # what the file says, verified: {"state", "roles", "accounts", "backups_pub"}
 _rk = None           # the rules_key setting, read once
+_rs = None           # the rules_signed setting: what was last signed, read once
 _audited = False     # "roles were changed outside Toner" written this sign-in
 _upgrade_due = False  # an Admin signed in to a Part 1 file: make the role keys once the database can be written
 _own_box = False     # this sign-in's box key is the one its record shows (else it holds nothing and can't repair)
@@ -83,20 +85,48 @@ def _sign(doc):
     att = _attested(doc)
     doc["attested"] = {n: att.get(n) for n in doc["accounts"]}
     doc["roles"] = _clean_roles(doc.get("roles"))
-    doc["rules_sig"] = envelope.sign(_held["rules"], _signed(doc))
+    payload = _signed(doc)
+    doc["rules_sig"] = envelope.sign(_held["rules"], payload)
+    _store_signed(payload.decode("utf-8"))
 
 
-def _rules_key():
-    """The rules_key setting; None while it can't be read: signed out, or the database not set up yet. Any other database
-    error is raised: a passing lock must not make a signed file look tampered."""
-    global _rk
-    if _rk is None and datakey.is_open():
+def _setting(key):
+    """A setting; None while it can't be read: signed out, or the database not set up yet. Any other database error is raised:
+    a passing lock must not make a signed file look tampered."""
+    if datakey.is_open():
         try:
-            _rk = db.get_setting("rules_key")
+            return db.get_setting(key)
         except sqldb.sqlite3.Error as e:
             if not any(s in str(e) for s in _NOT_READY):
                 raise
+    return None
+
+
+def _rules_key():
+    global _rk
+    if _rk is None:
+        _rk = _setting("rules_key")
     return _rk
+
+
+def _store_signed(payload):
+    """The database keeps what was last signed, so a repair takes the box keys and backups_pub from there, not from the
+    tampered file."""
+    global _rs
+    db.set_setting("rules_signed", payload)
+    _rs = payload
+
+
+def _last_signed():
+    """What was last signed (parsed), or None when there is none or it can't be read."""
+    global _rs
+    if _rs is None:
+        _rs = _setting("rules_signed")
+    try:
+        last = json.loads(_rs) if _rs else None
+        return last if isinstance(last.get("accounts"), dict) and isinstance(last.get("backups_pub"), str) else None
+    except (ValueError, AttributeError):
+        return None
 
 
 def _verifies(doc, pub):
@@ -159,8 +189,8 @@ def _load():
 
 
 def _invalidate():
-    global _cache, _rk
-    _cache = _rk = None
+    global _cache, _rk, _rs
+    _cache = _rk = _rs = None
 
 
 def _notify():
@@ -414,16 +444,24 @@ def _resign(doc, repair):
         doc["rules_pub"] = _b64(pub)
         grants = doc.get("grants") if isinstance(doc.get("grants"), dict) else {}
         rg = doc.get("recovery_grants") if isinstance(doc.get("recovery_grants"), dict) else {}
+        last = _last_signed()
+        if last:                                        # the box keys and backups_pub vouched for last, not the file's
+            doc["attested"] = {n: (last["accounts"].get(n) or {}).get("box_pub") for n in doc["accounts"]}
+            doc["recovery_attested"] = last.get("recovery_box_pub")
+            doc["backups_pub"] = last["backups_pub"]
+            if "backups" in _held and _b64(_public("backups", _held["backups"])) != last["backups_pub"]:
+                del _held["backups"]
         kept = [g for g in grants.values() if isinstance(g, dict) and "backups" in g] + (["backups"] if "backups" in rg else [])
-        if "backups" not in _held and not kept:         # nobody holds a backups key: a new one loses nothing
+        if "backups" not in _held and not kept and not last:     # nobody holds a backups key: a new one loses nothing
             _held["backups"] = envelope.new_box_key()[0]
         if "backups" in _held:                          # held and vouched for (unlock): it goes back in, and it alone is wrapped
             doc["backups_pub"] = _b64(_public("backups", _held["backups"]))
             doc["grants"], doc["recovery_grants"] = {}, {}
-        else:                                           # shortcut: unvouched backups_pub and its wraps kept rather than lost
+        else:                                           # its wraps kept rather than lost (shortcut: unvouched without `last`)
             doc["grants"] = {n: {"backups": g["backups"]} for n, g in grants.items() if isinstance(g, dict) and "backups" in g}
             doc["recovery_grants"] = {"backups": rg["backups"]} if "backups" in rg else {}
-        doc["recovery_attested"] = doc["recovery"]["box_pub"]      # the recovery key showed it is this one (unlock)
+        if not last:
+            doc["recovery_attested"] = doc["recovery"]["box_pub"]  # the recovery key showed it is this one (unlock)
     _sync(doc)
     return pub
 
