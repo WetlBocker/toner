@@ -171,12 +171,16 @@ check("Engineer without a grant: the approved sentence", backup.secrets_hidden_r
 from core import hardening
 session.sign_out()
 session.sign_in("Admin1", PW)
-backup.store("g-sw", cfg(extra="\n!\nservice password-encryption\nusername ops password 7 0822455D0A16"), mask=False)
+backup.store("g-sw", cfg(extra="\n!\nservice password-encryption\nusername ops password 7 0822455D0A16\nsnmp-server community Comm5ecret RW"),
+             mask=False)
 g_sw = [d for d in db.list_devices() if d["name"] == "g-sw"][0]
 def type7():
     return next((r.status, r.message) for r in hardening.scan(g_sw) if r.check == "Hardening: " + hardening.LABELS["type 7"])
 got = type7()
 check("masking off, an Admin: the type 7 password is judged", got[0] == "WARN" and got[1].startswith("type 7 (reversible) secrets: "), got)
+msgs = [r.message for r in hardening.scan(g_sw)]
+check("...and no finding quotes a secret (Ruling 17)", any("<masked>" in m for m in msgs)
+      and not any(v in m for m in msgs for v in (SECRET, "0822455D0A16", "TopEnableHash", "Comm5ecret")), msgs)
 session.sign_out()
 session.sign_in("Tech1", PW3)
 got = type7()

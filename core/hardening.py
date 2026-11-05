@@ -53,6 +53,12 @@ def _access_ports(lines):
     return [(h, b) for h, b in _blocks(lines, "interface ") if "switchport mode access" in b]
 
 
+def _q(line):
+    """A config line as a finding quotes it: masked as a stored backup is, since the rules may read the unmasked text and a
+    finding goes to results everyone can see (Ruling 17)."""
+    return backup.mask_secrets(line.strip())
+
+
 def _of(bad, every, what, first):
     return f"{len(bad)} of {len(every)} {what}: {first}"
 
@@ -62,7 +68,7 @@ def _of(bad, every, what, first):
 def telnet(lines, plat, masked):
     if plat == ASA:
         hits = _has(lines, r"telnet \d")
-        return f"{len(hits)} telnet line{'s' if len(hits) != 1 else ''} allow it: {hits[0]}" if hits else None
+        return f"{len(hits)} telnet line{'s' if len(hits) != 1 else ''} allow it: {_q(hits[0])}" if hits else None
     if plat == NXOS:
         return "feature telnet is on" if _has(lines, r"feature telnet$") else None
     bad = []
@@ -71,7 +77,7 @@ def telnet(lines, plat, masked):
         if not ti:
             bad.append(f"{head} has no transport input (the default allows telnet)")
         elif any(re.search(r"\b(telnet|all)\b", b) for b in ti):
-            bad.append(f"{head}: {ti[0]}")
+            bad.append(f"{head}: {_q(ti[0])}")
     return "; ".join(bad) or None
 
 
@@ -83,10 +89,10 @@ def snmp_community(lines, plat, masked):
     comm = _has(lines, r"snmp-server community ")
     rw = [l for l in comm if re.search(r"\bRW\b", l, re.I)]
     if rw:
-        return f"read-write community: {rw[0]}"
+        return f"read-write community: {_q(rw[0])}"
     weak = [l for l in comm if re.match(r"snmp-server community (public|private)\b", l, re.I)]
     if weak:
-        return f"well-known community: {weak[0]}"
+        return f"well-known community: {_q(weak[0])}"
     if _masked_snmp(comm):
         return ("na", f"{_n(comm, 'community', 'communities')}; whether one is public, private or read-write cannot be told, {MASKED}")
     return None
@@ -117,7 +123,7 @@ def type7(lines, plat, masked):
         return ("na", NOT_HERE)
     weak = _has(lines, r".*\b(password|key) 7 \S")
     if weak:
-        return f"type 7 (reversible) secrets: {weak[0].strip()}"
+        return f"type 7 (reversible) secrets: {_q(weak[0])}"
     if not _has(lines, r"service password-encryption$"):
         return "service password-encryption is off"
     return ("na", f"service password-encryption is on; whether type 7 secrets remain cannot be told, {MASKED}") if masked else None
@@ -135,14 +141,14 @@ def exec_timeout(lines, plat, masked):
         return ("na", NOT_HERE)
     if plat == ASA:
         ct = _has(lines, r"console timeout (\d+)")
-        return None if ct and not ct[0].endswith(" 0") else f"{ct[0] if ct else 'console timeout 0 (the default)'} never times out"
+        return None if ct and not ct[0].endswith(" 0") else f"{_q(ct[0]) if ct else 'console timeout 0 (the default)'} never times out"
     bad = []
     for head, body in _blocks(lines, "line "):
         if not head.startswith(("line con", "line vty", "line aux")):
             continue
         et = [b for b in body if b.startswith("exec-timeout")]
         if et and re.match(r"exec-timeout 0( 0)?$", et[0]):             # no line at all: the default, 10 minutes
-            bad.append(f"{head}: {et[0]} never times out")
+            bad.append(f"{head}: {_q(et[0])} never times out")
     return "; ".join(bad) or None
 
 
@@ -179,14 +185,14 @@ def snmp_acl(lines, plat, masked):
     if _masked_snmp(comm):
         return ("na", f"{_n(comm, 'community', 'communities')}; whether each has an access list cannot be told, {MASKED}")
     loose = [l for l in comm if not re.search(r"\b(RO|RW)\s+\S+\s*$", l, re.I)]
-    return f"{len(loose)} of {len(comm)} without an access list: {loose[0]}" if loose else None
+    return f"{len(loose)} of {len(comm)} without an access list: {_q(loose[0])}" if loose else None
 
 
 # ---- 1.11.3: the IOS XE hardening guide, the ASA best practices, the Catalyst and switch guides
 def access_class(lines, plat, masked):
     if plat == ASA:
         hits = _has(lines, r"(ssh|http) 0\.0\.0\.0 0\.0\.0\.0 ")
-        return f"management from anywhere: {hits[0]}" if hits else None
+        return f"management from anywhere: {_q(hits[0])}" if hits else None
     bad = [head for head, body in _blocks(lines, "line vty") if not _in(body, r"access-class \S+ in\b")]
     return f"no access-class on {', '.join(bad)}" if bad else None
 
@@ -212,7 +218,7 @@ def type5(lines, plat, masked):
         return ("na", NOT_HERE)
     weak = _has(lines, r".*\bsecret 5 \S")
     if weak:
-        return f"type 5 (MD5) secrets: {weak[0].strip()}"
+        return f"type 5 (MD5) secrets: {_q(weak[0])}"
     return ("na", f"whether type 5 secrets remain cannot be told, {MASKED}") if masked and _has(lines, r".*\bsecret <masked>") else None
 
 
@@ -349,7 +355,7 @@ def acl_any(lines, plat, masked):
     if plat != ASA:
         return ("na", NOT_HERE)
     hits = _has(lines, r"access-list \S+ (extended )?permit ip any[46]? any[46]?\s*$")
-    return f"{_n(hits, 'line permits', 'lines permit')} everything: {hits[0]}" if hits else None
+    return f"{_n(hits, 'line permits', 'lines permit')} everything: {_q(hits[0])}" if hits else None
 
 
 def threat_detection(lines, plat, masked):
@@ -366,7 +372,7 @@ def threat_detection(lines, plat, masked):
 def log_debug(lines, plat, masked):
     rx = r"logging server \S+ 7\b" if plat == NXOS else r"logging trap (debugging|7)$"
     hits = _has(lines, rx)
-    return f"{hits[0]} (level 7)" if hits else None
+    return f"{_q(hits[0])} (level 7)" if hits else None
 
 
 RULES = [
