@@ -29,6 +29,8 @@ def _fail(r, what):
 
 def create_token(dev, username, password, timeout=20):
     """(token as 'user@realm!name=secret', a note or ''). Raises ValueError with a reason a person can act on."""
+    from core import perms
+    perms.require("push")                            # it makes a token and sets an ACL on the host
     username, password = (username or "").strip(), password or ""
     if not username or not password:
         raise ValueError("Enter the administrator's user name and password.")

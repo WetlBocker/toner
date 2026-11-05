@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (QFrame, QSplitter, QAbstractItemView, QApplicatio
                                QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSizePolicy, QSpinBox, QStyle, QTabWidget,
                                QStackedWidget, QToolButton, QTreeWidget,
                                QTreeWidgetItem, QVBoxLayout, QWidget, QWidgetAction)
-from core import agents, audit, bulk, db, display, importer, nettools, orgs, profiles, proxy, scope, sessionimport, sessions, vendors, winmon
+from core import agents, audit, bulk, db, display, importer, nettools, orgs, perms, profiles, proxy, scope, sessionimport, sessions, vendors, winmon
 from ui import icons, theme
 from ui.agentfleet import AgentFleet
 from ui.columns import ColumnChooser
@@ -20,7 +20,7 @@ from core.runner import run_one
 from ui.orgpick import OrgPicker
 from ui.panels import ProgressLine
 from ui.pingpop import ping_popup
-from ui.widgets import add_tools_menu
+from ui.widgets import add_tools_menu, gate_push
 from ui.toast import toast
 from ui import status as st
 from ui import motion
@@ -383,6 +383,7 @@ class DeviceDialog(QDialog):
         self.access.setRowVisible(self.get_key, vendor in KEYS)
         if vendor in KEYS:
             self.get_key.setText(KEYS[vendor]["button"])
+        gate_push(self.get_key, True, vendor == "proxmox")          # Proxmox: the token and its ACL are made on the host
         self.access.setRowVisible(self.ha, info["ha"])
         self.access.setRowVisible(self.verify, info["kind"] == "api")
         self.access.setRowVisible(self.jump, info["kind"] == "ssh")
@@ -569,6 +570,9 @@ class DeviceDialog(QDialog):
         from ui.keydialog import KeyDialog, KEYS
         kind = self._vendor()
         if kind not in KEYS:
+            return
+        if kind == "proxmox" and not perms.allowed("push"):
+            QMessageBox.warning(self, "API key", perms.REASON)
             return
         dev = self.values()
         dev["name"] = dev["name"] or self.dev.get("name", "")

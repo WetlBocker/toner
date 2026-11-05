@@ -5,10 +5,10 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QComboBox, QDial
                                QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout)
 from ui.signin import SignInDialog
 
-from core import audit, profiles, winmon, winservices
+from core import audit, perms, profiles, winmon, winservices
 from ui import status as st
 from ui import theme
-from ui.widgets import filling
+from ui.widgets import filling, gate_push
 
 NAME = Qt.ItemDataRole.UserRole
 FILTERS = ["All services", "Running", "Stopped", "Automatic but not running"]
@@ -139,9 +139,9 @@ class ServicesDialog(QDialog):
         busy = self.busy
         can = winservices.can_control(self.live) and not busy
         states = self._chosen_states()
-        self.start_btn.setEnabled(can and bool(states - {"Running"}))
-        self.stop_btn.setEnabled(can and "Running" in states)
-        self.restart_btn.setEnabled(can and bool(states) and states <= {"Running"})          # a service that is not running has nothing to restart
+        gate_push(self.start_btn, can and bool(states - {"Running"}))
+        gate_push(self.stop_btn, can and "Running" in states)
+        gate_push(self.restart_btn, can and bool(states) and states <= {"Running"})          # a service that is not running has nothing to restart
         self.refresh_btn.setEnabled(not busy)
         self.signin_btn.setVisible(self._agent_only())
 
@@ -237,9 +237,11 @@ class ServicesDialog(QDialog):
         for text, act, btn in (("Start", "start", self.start_btn), ("Stop", "stop", self.stop_btn), ("Restart", "restart", self.restart_btn)):
             a = m.addAction(text, lambda act=act: self.act(act))
             a.setEnabled(btn.isEnabled())
+            a.setToolTip(btn.toolTip())
         m.addSeparator()
         sub = m.addMenu("Startup type")
-        sub.setEnabled(winservices.can_control(self.live) and not self.busy)
+        sub.setEnabled(winservices.can_control(self.live) and not self.busy and perms.allowed("push"))
+        sub.menuAction().setToolTip("" if perms.allowed("push") else perms.REASON)
         now = {winservices.startup_label(by_name[n]) for n in names if n in by_name}
         for key, (label, _word) in winservices.STARTUP.items():
             a = sub.addAction(label, lambda key=key: self.set_startup(key))
@@ -257,6 +259,9 @@ class ServicesDialog(QDialog):
     def set_startup(self, mode):
         names = self._chosen()
         if not names or not winservices.can_control(self.live) or self.busy:
+            return
+        if not perms.allowed("push"):
+            self.status.setText(perms.REASON)
             return
         label = winservices.STARTUP[mode][0]
         shown = {r["name"]: r["display"] or r["name"] for r in self.rows}
@@ -342,6 +347,9 @@ class ServicesDialog(QDialog):
     def act(self, action):
         names = self._chosen()
         if not names or not winservices.can_control(self.live) or self.busy:
+            return
+        if not perms.allowed("push"):
+            self.status.setText(perms.REASON)
             return
         verb = winservices.ACTIONS[action][0]
         shown = {r["name"]: r["display"] or r["name"] for r in self.rows}

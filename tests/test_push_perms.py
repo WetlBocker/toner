@@ -173,6 +173,59 @@ def drive_files(who, allowed):
           all(b.isEnabled() and b.toolTip() != TIP for b in (side_l.mkdir_btn, side_l.delete_btn, side_r.action_btn)))
 
 
+def drive_windows_and_proxmox(who, allowed):
+    """Windows Services start/stop/restart/startup type (this PC and WinRM) and the Proxmox token: pushes too."""
+    from core import pvekey, winmon, winservices as WS
+    sent = []
+    winmon.collect_local = lambda **k: sent.append(("local", k["script"])) or {"ok": True}
+    winmon.collect_winrm = lambda dev, pw, **k: sent.append(("winrm", k["script"])) or {"ok": True}
+    posted = []
+    requests.post = lambda *a, **k: posted.append(a) or (_ for _ in ()).throw(RuntimeError("no network in tests"))
+    for how in ("local", "winrm"):
+        dev = {"name": "pc", "vendor": "windows", "host": "10.0.0.15", "platform": how, "username": "u", "password": "p"}
+        for n, fn in {"control": lambda: WS.control(dev, "restart", "Spooler", "p"), "set_startup": lambda: WS.set_startup(dev, "manual", "Spooler", "p")}.items():
+            v, msg = verdict(fn)
+            check(f"{who}: services {n} ({how}) " + ("allowed" if allowed else "denied"), (v == "passed") == allowed and (allowed or msg == TIP), (v, msg))
+    check(f"{who}: services " + ("sent to the computer" if allowed else "nothing sent to the computer"), bool(sent) == allowed, sent)
+    v, msg = verdict(lambda: pvekey.create_token({"host": "10.0.0.9"}, "root@pam", "pw"))
+    check(f"{who}: Proxmox token " + ("allowed" if allowed else "denied"), (v == "passed") == allowed and (allowed or msg == TIP), (v, msg))
+    check(f"{who}: " + ("Proxmox sign-in attempted" if allowed else "nothing sent to Proxmox"), bool(posted) == allowed, posted)
+    # the windows
+    import ui.serviceswindow as SW
+    rows = [{"name": "Spooler", "display": "Print Spooler", "state": "Stopped", "start": "Auto", "delayed": False}]
+    WS.listing = lambda dev, password=None, timeout=45: (rows, "now")
+    win = {"id": None, "name": "pc", "vendor": "windows", "host": "10.0.0.15", "port": 0, "platform": "winrm", "username": "u", "password": "p", "winopts": "", "site": "default"}
+    d = SW.ServicesDialog(win); KEEP.append(d); d.show()
+    for _ in range(100):
+        app.processEvents(); time.sleep(0.02)
+        if d.table.rowCount(): break
+    d.table.selectRow(0); app.processEvents()
+    check(f"{who}: Services Start " + ("enabled" if allowed else "disabled with the tooltip"),
+          (d.start_btn.isEnabled() and d.start_btn.toolTip() != TIP) if allowed else (not d.start_btn.isEnabled() and d.start_btn.toolTip() == TIP), (d.start_btn.isEnabled(), d.start_btn.toolTip()))
+    from PySide6.QtCore import QPoint
+    m = d.build_menu(d.table.visualRect(d.table.model().index(0, 0)).center())
+    acts = {a.text(): a for a in m.actions() if a.text()}
+    sub = acts["Startup type"]
+    check(f"{who}: Services menu Start and Startup type " + ("enabled" if allowed else "disabled with the tooltip"),
+          (acts["Start"].isEnabled() and sub.isEnabled()) if allowed else (not acts["Start"].isEnabled() and not sub.isEnabled() and acts["Start"].toolTip() == TIP and sub.toolTip() == TIP))
+    QMessageBox.exec = lambda self: QMessageBox.StandardButton.No          # the confirmation is answered No: nothing is sent
+    sent.clear(); d.act("start")
+    check(f"{who}: Services handler " + ("goes on" if allowed else "says why and sends nothing"), (d.status.text() != TIP) if allowed else (d.status.text() == TIP and not sent), d.status.text())
+    d.busy = False
+    # the device dialog's button
+    import ui.inventory as I
+    dlg = I.DeviceDialog(); KEEP.append(dlg); dlg.show(); app.processEvents()
+    for vendor, gated in (("proxmox", True), ("paloalto", False)):
+        dlg.vendor.setCurrentIndex(dlg.vendor.findData(vendor)); app.processEvents()
+        b = dlg.get_key
+        want = gated and not allowed
+        check(f"{who}: {vendor} key button " + ("disabled with the tooltip" if want else "enabled"),
+              (not b.isEnabled() and b.toolTip() == TIP) if want else (b.isEnabled() and b.toolTip() != TIP), (b.isEnabled(), b.toolTip()))
+    from ui.keydialog import KeyDialog
+    kd = KeyDialog({"host": "10.0.0.9"}, "proxmox"); KEEP.append(kd); kd.accept()
+    check(f"{who}: key dialog " + ("asks for the sign-in" if allowed else "shows the approved message"), (kd.status.text() == TIP) != allowed and bool(kd.status.text()), kd.status.text())
+
+
 # ---------------------------------------------------------------- sign-in off: nothing changes
 db.init()
 check("no keys file: sign-in off", not datakey.exists())
@@ -182,6 +235,7 @@ for n, fn in reads.items():
     check(f"off: {n} not denied", verdict(fn)[0] == "passed")
 drive_ui("off", True)
 drive_files("off", True)
+drive_windows_and_proxmox("off", True)
 os.environ["NETCHECK_DB"] = SP + os.sep + "pushp_keyed.db"                   # the off phase used a plain database; the keyed one starts fresh
 
 # ---------------------------------------------------------------- a Tech
@@ -207,6 +261,7 @@ for n, fn in reads.items():
 _r = cmdrun.run_on_device(DEV, ["show version"]); check("Tech: show version really runs", _r["ok"], _r)
 drive_ui("Tech", False)
 drive_files("Tech", False)
+drive_windows_and_proxmox("Tech", False)
 
 # ---------------------------------------------------------------- an Engineer
 session.sign_out(); session.sign_in("Eng1", PW3)
@@ -215,5 +270,6 @@ for n, fn in {**cases, **reads}.items():
     check(f"Engineer: {n} not denied", verdict(fn)[0] == "passed")
 drive_ui("Engineer", True)
 drive_files("Engineer", True)
+drive_windows_and_proxmox("Engineer", True)
 
 print(f"\n{ok} passed, {bad} failed"); sys.exit(1 if bad else 0)

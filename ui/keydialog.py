@@ -2,7 +2,7 @@
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QApplication, QDialog, QDialogButtonBox, QFormLayout, QLabel, QLineEdit, QVBoxLayout)
 
-from core import panos, pvekey
+from core import panos, perms, pvekey
 from ui import status as st
 
 
@@ -56,7 +56,7 @@ class KeyDialog(QDialog):
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             self.key, self.note = self.spec["fetch"](self.dev, self.user.text(), self.password.text())
-        except ValueError as e:
+        except (ValueError, perms.Denied) as e:
             self.status.setText(str(e))
             return                                   # stay open: a wrong password can be typed again
         except Exception as e:

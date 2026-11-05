@@ -166,6 +166,8 @@ def startup_label(row):
 
 def set_startup(dev, mode, name, password=None, timeout=60):
     """Change a service's startup type to `mode` (a key of STARTUP). Returns {'ok', 'name', 'state', 'display', 'error', 'start', 'delayed'}."""
+    from core import perms
+    perms.require("push")                            # this computer and a computer over WinRM alike, before connecting
     how = winmon.transport(dev)
     script = startup_script(mode, name)
     if how == "local":
@@ -178,6 +180,8 @@ def set_startup(dev, mode, name, password=None, timeout=60):
 def control(dev, action, name, password=None, timeout=120):
     """Do `action` ('start', 'stop' or 'restart') to the service called `name`. Returns the answer: {'ok', 'name', 'state', 'display', 'error'}.
     Raises RuntimeError when the computer cannot be reached or commanded."""
+    from core import perms
+    perms.require("push")
     how = winmon.transport(dev)
     script = action_script(action, name)
     if how == "local":
