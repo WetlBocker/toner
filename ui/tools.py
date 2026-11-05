@@ -10,7 +10,7 @@ from PySide6.QtGui import QDesktopServices, QFontDatabase
 from PySide6.QtWidgets import (QAbstractItemView, QApplication as _QApp, QCheckBox, QComboBox, QCompleter, QFileDialog, QGroupBox, QHBoxLayout, QLabel,
                                QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QSpinBox, QSplitter,
                                QTableWidget, QTableWidgetItem, QTabWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
-from core import db, jump, nettools, profiles, reach, sealedfile, sessionlog, snmp, vendors
+from core import db, jump, nettools, perms, profiles, reach, sealedfile, sessionlog, snmp, vendors
 
 
 class OutputBox(QPlainTextEdit):
@@ -1002,6 +1002,24 @@ class ToolsTab(QWidget):
         lay.addWidget(self.tabs)
         self._pickers = (self.diag, self.scan, self.snmp, self.liveping, self.mtr, self.tls, self.iperf, self.scp, self.sshkeys)
         self._others = (self.runner, self.discovery, self.topology, self.apitest, self.firmware)
+        self._keys = {self.runner: "command-runner", self.apitest: "api-tester", self.diag: "ping", self.liveping: "live-ping",
+                      self.mtr: "path-monitor", self.scan: "port-scanner", self.iperf: "iperf", self.discovery: "find-devices",
+                      self.topology: "topology", self.wifi: "wifi", self.snmp: "snmp", self.listeners: "syslog", self.firmware: "firmware",
+                      self.tftp: "tftp", self.sftp: "sftp", self.ftp: "ftp", self.scp: "scp", self.xcopy: "copy-files", self.tls: "tls",
+                      self.openssl: "openssl", self.sshkeys: "ssh-keys", self.playbooks: "playbook-editor", self.maclookup: "mac-lookup",
+                      self.wol: "wol", self.subnet: "subnet"}
+        self.apply_permissions()
+
+    def tool_allowed(self, widget):
+        return perms.allowed("tool:" + self._keys[widget])
+
+    def apply_permissions(self):
+        """Each tool is in the list while the signed-in role allows it (safe to call again)."""
+        for w in self._keys:
+            self.tabs.setTabVisible(w, self.tool_allowed(w))
+
+    def any_allowed(self):
+        return any(self.tool_allowed(w) for w in self._keys)
 
     def refresh(self):
         entries = DevicePicker.entries()                  # once, not once per tool (each lists every device)
@@ -1012,6 +1030,8 @@ class ToolsTab(QWidget):
 
     def show_tool(self, widget, dev=None):
         """Open another tool (live ping, SNMP, ...) with a device's address filled in."""
+        if widget in self._keys and not self.tool_allowed(widget):
+            return
         self.refresh()
         self.tabs.setCurrentWidget(widget)
         if dev is not None and hasattr(widget, "picker"):
@@ -1023,6 +1043,8 @@ class ToolsTab(QWidget):
 
     def edit_playbook(self, name):
         """Open a playbook in the editor (Automation > Playbooks > Edit)."""
+        if not self.tool_allowed(self.playbooks):
+            return
         self.tabs.setCurrentWidget(self.playbooks)
         self.playbooks.refresh()
         self.playbooks.open_playbook(name)

@@ -7,9 +7,9 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QBoxLayout, QChe
                                QPushButton, QScrollArea, QTableWidget, QTableWidgetItem, QToolButton, QToolTip, QVBoxLayout, QWidget)
 import html
 
-from core import acks, audit, backup, db, display, fleet, maintenance, notify, reports, scope, vendors
+from core import acks, audit, backup, db, display, fleet, maintenance, notify, perms, reports, scope, vendors
 from ui import icons, theme
-from ui.widgets import EmptyHint, FlowLayout, RefreshButton, StatusDelegate, add_tools_menu, filling
+from ui.widgets import EmptyHint, FlowLayout, RefreshButton, StatusDelegate, add_tools_menu, can_connect, filling
 from ui import status as st
 from ui import motion
 from ui import glance
@@ -727,7 +727,8 @@ class DashboardTab(QWidget):
     @staticmethod
     def _connect_kind(dev):
         """'rdp', 'ssh' or '' for a device: what Connect opens."""
-        return ("rdp" if dev["vendor"] == "windows" else "ssh" if vendors.ssh_reachable(dev["vendor"]) else "") if dev else ""
+        kind = ("rdp" if dev["vendor"] == "windows" else "ssh" if vendors.ssh_reachable(dev["vendor"]) else "") if dev else ""
+        return kind if kind and can_connect(kind) else ""
 
     def _row_buttons(self, name, health=None):
         """Open, Run checks and SSH or Remote Desktop for one row, as small buttons in its Actions cell. A device Toner could not reach
@@ -743,7 +744,7 @@ class DashboardTab(QWidget):
         dev = self._device(name)
         kind = self._connect_kind(dev)
         down = glance.is_down(health) and bool(dev and dev.get("host"))
-        connect = ("Ping", "ping") if down else ({"rdp": "Remote Desktop", "ssh": "SSH"}.get(kind, ""), kind)
+        connect = (("Ping", "ping") if perms.allowed("tool:ping") else ("", "")) if down else ({"rdp": "Remote Desktop", "ssh": "SSH"}.get(kind, ""), kind)
         for key, caption, what in (("open", "Open", "open"), ("run", "" if down else "Run checks", "run"),
                                    ("connect", *connect), ("more", "\u00b7\u00b7\u00b7", "more")):
             if not caption:
@@ -899,7 +900,8 @@ class DashboardTab(QWidget):
             m.addAction(f"Open {'Remote Desktop' if kind == 'rdp' else 'SSH'}", lambda: self._device_act("connect"))
         if dev and dev.get("host"):
             from ui.pingpop import ping_popup
-            m.addAction("Ping", lambda: ping_popup(self, dev["name"], dev["host"]))
+            if perms.allowed("tool:ping"):
+                m.addAction("Ping", lambda: ping_popup(self, dev["name"], dev["host"]))
             add_tools_menu(m, dev, self.tool_requested.emit)
         m.addSeparator()
         if cur[2]:

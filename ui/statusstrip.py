@@ -10,7 +10,7 @@ from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QProgressBar, QWidget
 
-from core import agents, db, display, notify, proxy, tunnel
+from core import agents, db, display, notify, perms, proxy, tunnel
 from core import assistant as AI
 from ui import status as st
 from ui import theme
@@ -95,7 +95,7 @@ class StatusStrip(QWidget):
     def show_ai(self):
         """Assistant: connected / not connected, from the last check (startup, Test, Save); nothing while no key is stored."""
         s = AI.state()
-        on = s.get("connected")
+        on = s.get("connected") if perms.allowed("ai") else None
         self.ai.setVisible(on is not None)
         self.ai_dot.setVisible(on is not None)
         if on is None:

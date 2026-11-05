@@ -20,7 +20,7 @@ from core.runner import run_one
 from ui.orgpick import OrgPicker
 from ui.panels import ProgressLine
 from ui.pingpop import ping_popup
-from ui.widgets import add_tools_menu, gate_push
+from ui.widgets import add_tools_menu, can_connect, gate_push
 from ui.toast import toast
 from ui import status as st
 from ui import motion
@@ -946,7 +946,7 @@ class DetailsPane(QWidget):
             self.chip.setText(status)
             self.chip.setStyleSheet(st.chip_css(status))
         kind = "rdp" if dev["vendor"] == "windows" else "ssh" if V.ssh_reachable(dev["vendor"]) else ""
-        self.buttons["connect"].setVisible(bool(kind))
+        self.buttons["connect"].setVisible(bool(kind) and can_connect(kind))
         self.buttons["connect"].setText({"rdp": "Remote Desktop", "ssh": "SSH"}.get(kind, "Connect"))
         self.summary.set_device(dev)
 
@@ -1947,12 +1947,13 @@ class InventoryTab(QWidget):
                 if can:
                     menu.addAction("Edit...", self.edit)
                 if devs[0]["vendor"] == "windows":
-                    menu.addAction("Open Remote Desktop", self.open_rdp)
-                else:
+                    if can_connect("rdp"):
+                        menu.addAction("Open Remote Desktop", self.open_rdp)
+                elif can_connect("ssh"):
                     menu.addAction("Open SSH session", self.open_in_ssh)
             if devs and not folders:
                 menu.addAction("Run Checks", lambda: self.run_checks.emit([d.get("key") or d["name"] for d in self.selected_devices()]))
-            if len(devs) == 1 and not folders and devs[0].get("host"):
+            if len(devs) == 1 and not folders and devs[0].get("host") and perms.allowed("tool:ping"):
                 menu.addAction("Ping", lambda d=devs[0]: ping_popup(self, d["name"], d["host"]))
                 add_tools_menu(menu, devs[0], self.tool_requested.emit)
             if devs and can:

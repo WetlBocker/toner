@@ -11,11 +11,17 @@ from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QFileDialog, QFrame, QGr
                                QGridLayout, QHBoxLayout, QLabel, QListWidget, QMenu, QMessageBox, QPushButton, QScrollArea, QStackedWidget,
                                QTableWidgetItem, QVBoxLayout, QWidget)
 
-from core import db, topology
+from core import db, perms, topology
 from ui import icons, theme
 from ui import status as st
 from ui.finder import FilterButton, SearchBox, device_sections, shown_devices
 from ui.toast import toast
+
+
+def role_ok(label):
+    """A map action that opens a session or a ping is left out for a role that may not (tool:sessions, tool:ping)."""
+    key = {"SSH": "tool:sessions", "Open SSH session": "tool:sessions", "Ping": "tool:ping"}.get(label)
+    return key is None or perms.allowed(key)
 
 TILE = 40                                   # a tile's side
 ONE_WAY = "#E79B4B"                         # a link seen from one end only: dashed amber, as the legend says
@@ -1036,6 +1042,7 @@ class TopologyTab(QWidget):
             actions = [("Show each", lambda: self.endpoints.set("each"))]
         else:
             actions = [("Add to inventory...", lambda: self._add(name))]
+        actions = [a for a in actions if role_ok(a[0])]
         actions.append(("Take off the top tier" if pinned else "Put on the top tier", lambda: self.toggle_top(name, layer)))
         view.card.show_node(name, info, self.roles.get(name, info.get("role", "unknown")), [f for f in facts if f[1]], mine, actions)
         view._place()
@@ -1057,11 +1064,11 @@ class TopologyTab(QWidget):
         pinned = name in topology.top_tier(layer)
         tier = ("Take off the top tier" if pinned else "Put on the top tier", lambda: self.toggle_top(name, layer))
         if info.get("inventory"):
-            return [("Details...", lambda: self.open_device.emit(name)), ("Edit...", lambda: self.inventory_action.emit("edit", name)),
+            return [a for a in [("Details...", lambda: self.open_device.emit(name)), ("Edit...", lambda: self.inventory_action.emit("edit", name)),
                     ("Open SSH session", lambda: self.open_ssh.emit(name)), ("Run Checks", lambda: self.run_checks.emit([name])),
                     ("Scan for vulnerabilities", lambda: self.inventory_action.emit("scan", name)),
                     ("Edit tags, folder, profile...", lambda: self.inventory_action.emit("tags", name)), ("Ping", lambda: self.ping.emit(name)), tier,
-                    ("Delete...", lambda: self.inventory_action.emit("delete", name))]
+                    ("Delete...", lambda: self.inventory_action.emit("delete", name))] if role_ok(a[0])]
         if info.get("group"):
             return [("Show each", lambda: self.endpoints.set("each")), tier]
         return [("Add to inventory...", lambda: self._add(name)), tier]

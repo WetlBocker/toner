@@ -9,7 +9,7 @@ from pathlib import Path
 from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence, QPainter, QPixmap, QShortcut
 from PySide6.QtWidgets import QApplication, QMainWindow, QMenu, QMessageBox, QSplitter, QSystemTrayIcon
-from core import agents, audit, checks, db, demarc, display, legacyssh, notify, paths, reports, session, sessionlog, sessions, trends, trust, tunnel, updates
+from core import agents, audit, checks, db, demarc, display, legacyssh, notify, paths, perms, reports, session, sessionlog, sessions, trends, trust, tunnel, updates
 from ui import theme
 from ui.about import AboutTab
 from ui.configs import ConfigsTab
@@ -314,6 +314,22 @@ class Main(QMainWindow):
         self.lock_shortcut = QShortcut(QKeySequence("Ctrl+Shift+L"), self, activated=self.lock)
         from ui.lockscreen import LockScreen
         self.lock_screen = LockScreen(self)             # last, so it is above everything else in the window
+        self.apply_permissions()
+
+    def apply_permissions(self):
+        """Once the window is built (the role is fixed until the next sign-in; safe to call again): what the signed-in role may not use is
+        hidden. Sessions follow tool:sessions. Automation/AI holds Ansible (tool:automation) and the Assistant's page (ai), so the section
+        goes only when both are off."""
+        self.tools.apply_permissions()
+        self.automation.apply_permissions()
+        t, ai = self.tabs, perms.allowed("ai")
+        t.setTabVisible(self.tools, self.tools.any_allowed())
+        t.setTabVisible(self.sessions, perms.allowed("tool:sessions"))
+        t.setTabVisible(self.automation, perms.allowed("tool:automation") or ai)
+        if not ai:
+            self.show_assistant(False)
+            self.ai_button.hide()
+        self.strip.show_ai()
 
     # ---------- signing in (core/session.py)
     def lock(self):
@@ -336,7 +352,8 @@ class Main(QMainWindow):
         """The connection check finished (startup, Test, Save): the strip's words, and the side button only while connected."""
         self.strip.show_ai()
         self.ai_button.set_provider(AI.provider_id())
-        self.ai_button.setVisible(bool(connected))
+        connected = bool(connected) and perms.allowed("ai")
+        self.ai_button.setVisible(connected)
         if not connected and self.assistant.isVisible():
             self.show_assistant(False)
         self.assistant.show_model()
@@ -345,7 +362,7 @@ class Main(QMainWindow):
 
     def show_assistant(self, on=True):
         """Open the panel (the sections get narrower, never covered) or close it."""
-        on = bool(on)
+        on = bool(on) and perms.allowed("ai")
         if on == self.assistant.isVisible():
             return
         from ui import motion
@@ -412,6 +429,8 @@ class Main(QMainWindow):
 
     def open_assistant_conversation(self, conv_id, org):
         """Automation/AI > Assistant > Open: that conversation in the panel (its organization is picked first when it is another)."""
+        if not perms.allowed("ai"):
+            return
         if org != db.home():
             self.set_org(org)
         self.assistant.open_conversation(conv_id, org)
@@ -566,6 +585,8 @@ class Main(QMainWindow):
         self.tools.edit_playbook(name)
 
     def run_playbook(self, name):
+        if not perms.allowed("tool:automation"):
+            return
         self.go("Automation")
         self.automation.select_playbook(name)
 
@@ -666,6 +687,8 @@ class Main(QMainWindow):
 
     def open_rdp_console(self, dev):
         """Inventory > Open Remote Desktop, the device window and the palette: a Remote Desktop tab in Sessions (or Windows' own client, per Settings > Terminal)."""
+        if not perms.allowed("tool:rdp") or (sessions.use_embedded() and not perms.allowed("tool:sessions")):
+            return
         if sessions.use_embedded():
             self.tabs.setCurrentWidget(self.sessions)
             self.sessions.open_rdp_device(dev)
@@ -677,16 +700,20 @@ class Main(QMainWindow):
         """Right-click > Ping on a device anywhere: the small window that sends five echoes."""
         from ui.pingpop import ping_popup
         dev = db.find_device(key)
-        if dev and dev.get("host"):
+        if dev and dev.get("host") and perms.allowed("tool:ping"):
             ping_popup(self, dev["name"], dev["host"])
 
     def open_ssh_console(self, dev):
         """Inventory > right-click > Open SSH session, the device window and the palette: an SSH tab in Sessions."""
+        if not perms.allowed("tool:sessions"):
+            return
         self.tabs.setCurrentWidget(self.sessions)
         self.sessions.open_device(dev)
 
     def open_tool(self, name, dev):
         widget = {"ping": self.tools.liveping, "snmp": self.tools.snmp, "tls": self.tools.tls, "mtr": self.tools.mtr}[name]
+        if not self.tools.tool_allowed(widget):
+            return
         self.tabs.setCurrentWidget(self.tools)
         self.tools.show_tool(widget, dev)
         if name == "ping":                                   # asked to ping this device: start pinging it, not just fill in the box
@@ -743,38 +770,46 @@ class Main(QMainWindow):
 
     def open_palette(self):
         entries = []
+        can = perms.allowed
         for i in range(self.tabs.count()):
             name = self.tabs.tabText(i)
+            if not self.tabs.shown(i):
+                continue
             entries.append((f"Go to {name}", f"Ctrl+{i + 1}" if i < 9 else "", lambda i=i: self.tabs.setCurrentIndex(i)))
         entries += [("Run checks", "all enabled devices", lambda: (self.go("Results"), self.results.start())),
                     ("Back up configurations", "all enabled devices", lambda: (self.go("Configs"), self.configs.start())),
                     ("Check for updates", "About", lambda: (self.go("About"), self.about.check(True))),
-                    ("New session", "Sessions", lambda: (self.go("Sessions"), self.sessions.new_session())),
-                    ("Add a device", "", lambda: (self.go("Inventory"), self.inventory.add())),
-                    ("Scan the network for devices", "discovery", lambda: (self.go("Tools"), self.tools.tabs.setCurrentWidget(self.tools.discovery)))]
+                    ("Add a device", "", lambda: (self.go("Inventory"), self.inventory.add()))]
+        if can("tool:sessions"):
+            entries.append(("New session", "Sessions", lambda: (self.go("Sessions"), self.sessions.new_session())))
+        if can("tool:find-devices"):
+            entries.append(("Scan the network for devices", "discovery", lambda: (self.go("Tools"), self.tools.tabs.setCurrentWidget(self.tools.discovery))))
         for i in range(self.tools.tabs.count()):
+            if i in self.tools.tabs._off:
+                continue
             entries.append((f"Tool: {self.tools.tabs.tabText(i)}", "",
                             lambda i=i: (self.go("Tools"), self.tools.tabs.setCurrentIndex(i))))
         from ui import themes
         for other in themes.LOOKS:                        # the other looks (Soft, Sharp, Terminal...), as Settings > Appearance > Look
             if other != db.get_setting("look"):
                 entries.append((f"Look: {other}", "Settings > Appearance", lambda o=other: self.set_look(o)))
-        entries.append(("New playbook", "Tools > Playbook Editor", lambda: (self.go("Tools"), self.tools.playbooks.new_playbook())))
+        if can("tool:playbook-editor"):
+            entries.append(("New playbook", "Tools > Playbook Editor", lambda: (self.go("Tools"), self.tools.playbooks.new_playbook())))
         try:
             from core import ansible
-            for pb in ansible.list_playbooks():
+            for pb in ansible.list_playbooks() if can("tool:playbook-editor") else []:
                 entries.append((f"Playbook: {pb['name']}", "edit in Tools > Playbook Editor", lambda n=pb["name"]: self.edit_playbook(n)))
         except Exception:
             log.exception("could not list the playbooks for the search")
         whose = (lambda x: f"  ({db.org_name(x['org'])})") if db.several() else (lambda x: "")      # Global: whose it is
-        for s in sessions.list_sessions():
+        for s in sessions.list_sessions() if can("tool:sessions") else []:
             entries.append((f"Session: {s['name']}{whose(s)}", " - ".join(x for x in (sessions.NAMES[s["kind"]], sessions.path_of(s)) if x),
                             lambda s=s: (self.go("Sessions"), self.sessions.open_session(s["id"], s["org"]))))
         for d in db.list_devices():
             entries.append((f"Device: {d['name']}{whose(d)}", d["host"], lambda d=d: self.open_device_view(d)))
-            if d["vendor"] in ("cisco", "juniper", "arista", "hpe", "mikrotik"):
+            if d["vendor"] in ("cisco", "juniper", "arista", "hpe", "mikrotik") and can("tool:sessions"):
                 entries.append((f"SSH to {d['name']}", d["host"], lambda d=d: self.open_ssh_console(d)))
-            if d["vendor"] == "windows":
+            if d["vendor"] == "windows" and can("tool:rdp"):
                 entries.append((f"Remote Desktop to {d['name']}", d["host"], lambda d=d: self.open_rdp_console(d)))
         # found by typing, so they come after what the list shows first: sections, tools, sessions and devices
         for title in self.settings.page_titles():                       # any page of Settings by name

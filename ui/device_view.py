@@ -5,7 +5,7 @@ from PySide6.QtCore import QThread, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QFontDatabase
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QFormLayout, QHBoxLayout, QLabel, QMessageBox, QPlainTextEdit,
                                QPushButton, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
-from core import backup, db, display, profiles, sessions, snmp, vendors
+from core import backup, db, display, perms, profiles, sessions, snmp, vendors
 from core.runner import run_one
 from ui.configs import DiffHighlighter
 from ui.history import ChartStack
@@ -273,8 +273,10 @@ class DeviceView(QDialog):
         self.mark.setPixmap(brandicons.vendor_icon(d["vendor"]).pixmap(36, 36))
         self.mark.setToolTip(display.vendor_name(d["vendor"]))
         self.buttons["ssh"].setEnabled(vendors.ssh_reachable(d["vendor"]))
-        self.buttons["ssh"].setVisible(d["vendor"] != "windows")
-        self.buttons["rdp"].setVisible(d["vendor"] == "windows")
+        self.buttons["ssh"].setVisible(d["vendor"] != "windows" and perms.allowed("tool:sessions"))
+        self.buttons["rdp"].setVisible(d["vendor"] == "windows" and perms.allowed("tool:rdp"))
+        self.buttons["ping"].setVisible(perms.allowed("tool:ping"))
+        self.buttons["snmp"].setVisible(perms.allowed("tool:snmp"))
         self.buttons["services"].setVisible(d["vendor"] == "windows")
         self.buttons["services"].setToolTip("List the computer's services, and start, stop or restart them")
         self.buttons["backup"].setEnabled(backup.supported(d))

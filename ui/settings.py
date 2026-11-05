@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (QAbstractButton, QAbstractItemView, QAbstractSpin
                                QPlainTextEdit, QScrollArea, QSpinBox, QStackedWidget, QStyledItemDelegate, QTableWidget, QTextEdit, QTableWidgetItem, QTimeEdit,
                                QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 import ipaddress
-from core import agents, alerts, audit, checks, custom, db, display, maintenance, nettools, notify, profiles, proxy, reports, sessionlog, trends, vault
+from core import agents, alerts, audit, checks, custom, db, display, maintenance, nettools, notify, perms, profiles, proxy, reports, sessionlog, trends, vault
 from ui import terminal, theme
 from ui.snmpfields import SnmpFields
 from ui.widgets import GroupPicker
@@ -161,6 +161,8 @@ class SettingsTab(QWidget):
         self._dirty = {}                                     # page index -> it differs from that
         self.stack = QStackedWidget()
         self.managed = {}                                     # page index -> its "Managed by Global" line
+        self.role_lines = {}                                  # page index -> the line of a page the signed-in role may only view
+        self.locked = set()                                   # those pages (disabled; never saved)
         self.own_lines = {}                                   # page index -> the line listing the organization's own values
         self.page_keys = {}                                   # page index -> the settings the page shows (read while it loads)
         for i, p in enumerate(self.pages):
@@ -176,6 +178,11 @@ class SettingsTab(QWidget):
                 lab.setStyleSheet("font-weight:600; padding:6px 0;")
                 lab.hide()
                 hl.addWidget(lab)
+            role = self.role_lines[i] = QLabel("Your role can view this page but not change it.")
+            role.setProperty("banner", True)
+            role.setStyleSheet("font-weight:600; padding:6px 0;")
+            role.hide()
+            hl.addWidget(role)
             own = self.own_lines[i] = QLabel("")               # an organization's own values on this page, each with Reset to Global
             own.setWordWrap(True)
             own.setTextFormat(Qt.TextFormat.RichText)
@@ -309,14 +316,14 @@ class SettingsTab(QWidget):
 
     def page_titles(self):
         """The pages in the order the list shows them."""
-        return [self.nav.item(r).text() for r in range(self.nav.count()) if self._index_of(r) is not None]
+        return [self.nav.item(r).text() for r in range(self.nav.count()) if self._index_of(r) is not None and not self._role_hidden(self._index_of(r))]
 
     def select_page(self, title, tab=""):
         """Open a page by its name in the list. `tab` opens one of its tabs (Checks > Schedule)."""
         title, _, inline = title.partition("/")                          # "Checks/Schedule" works as well as ("Checks", "Schedule")
         tab = tab or inline
         for r in range(self.nav.count()):
-            if self._index_of(r) is not None and self.nav.item(r).text() == title:
+            if self._index_of(r) is not None and self.nav.item(r).text() == title and not self._role_hidden(self._index_of(r)):
                 self.search.clear() if self.nav.isRowHidden(r) else None
                 self.nav.setCurrentRow(r)
                 page = self.pages[self._index_of(r)]
@@ -398,16 +405,32 @@ class SettingsTab(QWidget):
                 return
 
     def _hidden(self, i):
-        """A page that does not apply where we are (Organizations, inside an organization)."""
-        return db.home() != db.GLOBAL and self.pages[i].title in GLOBAL_ONLY_PAGES
+        """A page that does not apply where we are (Organizations, inside an organization), or that the role may not see."""
+        return self._role_hidden(i) or (db.home() != db.GLOBAL and self.pages[i].title in GLOBAL_ONLY_PAGES)
+
+    def _role_hidden(self, i):
+        return self.pages[i].title == "Accounts and sign-in" and not perms.is_admin()
+
+    def _role_locked(self, i):
+        t = self.pages[i].title
+        return t in perms.SETTINGS_PAGES and not perms.allowed("settings:" + t)
+
+    def apply_role(self):
+        """The signed-in role: a page it may not change is read-only under one banner (replacing "Managed by Global"), and Accounts and
+        sign-in is for Admins. Safe to call again."""
+        self.apply_org()
 
     def apply_org(self):
         """Global or an organization: the line at the top, read-only pages managed by Global, and the Organizations page."""
         inside = db.home() != db.GLOBAL
         self.scope_note.setVisible(inside)
+        self.locked = {i for i in range(len(self.pages)) if self._role_locked(i)}
+        for i, lab in self.role_lines.items():
+            lab.setVisible(i in self.locked)
+            self.pages[i].setEnabled(i not in self.locked)
         for i, lab in self.managed.items():
-            lab.setVisible(inside)
-            self.pages[i].setEnabled(not inside)
+            lab.setVisible(inside and i not in self.locked)
+            self.pages[i].setEnabled(not inside and i not in self.locked)
         for p in self.pages:                                  # single settings about this computer on an organization's pages
             for w in p.findChildren(QWidget):
                 if w.property("globalOnly"):
@@ -482,6 +505,8 @@ class SettingsTab(QWidget):
         """[(page title, [(setting, stored value, value now)])] for every page whose settings differ from what was loaded or saved."""
         groups = []
         for i, p in enumerate(self.pages):
+            if i in self.locked:
+                continue
             rows = SD.changes(self.snaps.get(i, {}), SD.snapshot(p))
             if rows:
                 groups.append((p.title, rows))
@@ -490,6 +515,8 @@ class SettingsTab(QWidget):
     def _problems(self):
         problems, first_bad = [], None
         for i, p in enumerate(self.pages):
+            if i in self.locked:
+                continue
             found = p.validate()
             if found and first_bad is None:
                 first_bad = i
@@ -550,8 +577,9 @@ class SettingsTab(QWidget):
             self.select_page(self.pages[first_bad].title)
             QMessageBox.warning(self, "Cannot save", "Please fix:\n\n" + "\n".join(f"\u2022 {p}" for p in problems))
             return
-        for p in self.pages:
-            p.save()
+        for i, p in enumerate(self.pages):
+            if i not in self.locked:
+                p.save()
         audit.log("settings saved")
         self._dirty = {}
         self.rebase()

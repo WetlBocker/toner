@@ -149,6 +149,7 @@ class NavStack(QWidget):
         self._auto = False                         # folded because the window is narrow (not stored)
         self._collapsed = False
         self._badges = set()
+        self._off = set()                          # section indexes hidden for the signed-in role
         self._counts = {}                          # section index -> a number shown after its name (0 shows nothing)
         self._tones, self._words = {}, {}          # section index -> that number's colour ("FAIL" or "WARN"), and what it counts in words
         self._slide = None                         # the sidebar's width on its way between folded and open
@@ -356,7 +357,7 @@ class NavStack(QWidget):
         """The blank row before the bottom group takes whatever height is left, so Settings and About sit at the bottom."""
         if self._spacer is None:
             return
-        used = sum(self.list.sizeHintForRow(r) for r in range(self.list.count()) if r != self._spacer)
+        used = sum(self.list.sizeHintForRow(r) for r in range(self.list.count()) if r != self._spacer and not self.list.isRowHidden(r))
         free = self.list.viewport().height() - used - 2
         self.list.item(self._spacer).setSizeHint(QSize(0, max(6, free)))
 
@@ -389,6 +390,8 @@ class NavStack(QWidget):
         if row < 0 or row not in self._rows:
             return
         i = self._rows.index(row)
+        if i in self._off:
+            return
         was = self.stack.currentIndex()
         if self.leave_guard is not None and was >= 0 and was != i and not self.leave_guard(was, i):
             self.list.blockSignals(True)                   # stay where we were (unsaved settings, and the person chose to stay)
@@ -464,6 +467,33 @@ class NavStack(QWidget):
         if self.list.currentRow() < 0:
             self.list.setCurrentRow(self._rows[0])
 
+    def setTabVisible(self, widget, on):
+        """Show or hide a section (by its page) in the list; a group heading with no section left shows nothing. A hidden section
+        can't be selected, and leaving it moves to the first one shown."""
+        i = self.stack.indexOf(widget)
+        if i < 0:
+            return
+        (self._off.discard if on else self._off.add)(i)
+        self.list.setRowHidden(self._rows[i], not on)
+        head = None                                # a group heading shows while a section under it does
+        for r in range(self.list.count()):
+            if r in self._headings:
+                if head is not None:
+                    self.list.setRowHidden(head[0], not head[1])
+                head = None if r == self._spacer else [r, False]
+            elif head is not None and not self.list.isRowHidden(r):
+                head[1] = True
+        if head is not None:
+            self.list.setRowHidden(head[0], not head[1])
+        if not on and self.stack.currentIndex() == i:
+            first = next((j for j in range(len(self._rows)) if j not in self._off), None)
+            if first is not None:
+                self.list.setCurrentRow(self._rows[first])
+        self._place_spacer()
+
+    def shown(self, i):
+        return i not in self._off
+
     def row_of(self, i):
         """The list row of section i."""
         return self._rows[i]
@@ -538,11 +568,12 @@ class NavStack(QWidget):
 
     def setCurrentWidget(self, widget):
         i = self.stack.indexOf(widget)
-        if i >= 0:
+        if i >= 0 and i not in self._off:
             self.list.setCurrentRow(self._rows[i])
 
     def setCurrentIndex(self, i):
-        self.list.setCurrentRow(self._rows[i])
+        if i not in self._off:
+            self.list.setCurrentRow(self._rows[i])
 
 
 FOLD_WIDTH = 36                                 # what a folded page list leaves: its button
@@ -604,6 +635,7 @@ class PageStack(QWidget):
         self._rows = []                         # page index -> list row
         self._pages = []                        # the pages themselves (each is inside a scroll area in the stack)
         self._names = []
+        self._off = set()                       # page indexes hidden for the signed-in role
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(10)
@@ -658,10 +690,35 @@ class PageStack(QWidget):
     def _row_changed(self, row):
         if row in self._rows:
             i = self._rows.index(row)
+            if i in self._off:
+                return
             self.stack.setCurrentIndex(i)
             self.currentChanged.emit(i)
             if row > 0 and not (self.list.item(row - 1).flags() & Qt.ItemFlag.ItemIsSelectable):
                 self.list.scrollToItem(self.list.item(row - 1))      # the first page of a group keeps its heading in view
+
+    def setTabVisible(self, widget, on):
+        """Show or hide a page in the list (a section heading with nothing left under it hides too). A hidden page can't be selected."""
+        i = self.indexOf(widget)
+        if i < 0:
+            return
+        (self._off.discard if on else self._off.add)(i)
+        self.list.setRowHidden(self._rows[i], not on)
+        head = None
+        for r in range(self.list.count()):
+            if r in self._rows:
+                if head is not None and not self.list.isRowHidden(r):
+                    head[1] = True
+            else:
+                if head is not None:
+                    self.list.setRowHidden(head[0], not head[1])
+                head = [r, False]
+        if head is not None:
+            self.list.setRowHidden(head[0], not head[1])
+        if not on and self.stack.currentIndex() == i:
+            first = next((j for j in range(len(self._rows)) if j not in self._off), None)
+            if first is not None:
+                self.list.setCurrentRow(self._rows[first])
 
     def count(self):
         return len(self._pages)
@@ -678,8 +735,9 @@ class PageStack(QWidget):
 
     def setCurrentWidget(self, widget):
         i = self.indexOf(widget)
-        if i >= 0:
+        if i >= 0 and i not in self._off:
             self.list.setCurrentRow(self._rows[i])
 
     def setCurrentIndex(self, i):
-        self.list.setCurrentRow(self._rows[i])
+        if i not in self._off:
+            self.list.setCurrentRow(self._rows[i])

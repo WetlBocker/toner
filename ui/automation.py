@@ -448,6 +448,12 @@ class AutomationTab(QWidget):
         self.playbooks.settings_requested.connect(self.settings_requested.emit)
         self.playbooks.finished.connect(self.history.refresh)
 
+    def apply_permissions(self):
+        """Ansible's pages follow tool:automation, the Assistant's page follows ai (safe to call again)."""
+        for w in (self.playbooks, self.history):
+            self.pages.setTabVisible(w, perms.allowed("tool:automation"))
+        self.pages.setTabVisible(self.assistant_page, perms.allowed("ai"))
+
     def refresh(self):
         self.playbooks.refresh()
         self.assistant_page.refresh()

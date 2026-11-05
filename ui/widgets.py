@@ -637,10 +637,19 @@ TOOL_ACTIONS = (("ping", "Live Ping"), ("mtr", "Path Monitor (MTR)"), ("tls", "T
 
 def add_tools_menu(menu, dev, emit):
     """A device's menu: "Open in Tools" with the tools that take a device; emit(tool key, device) opens one with it filled in."""
+    keys = {"ping": "live-ping", "mtr": "path-monitor", "tls": "tls", "snmp": "snmp"}
+    shown = [(k, label) for k, label in TOOL_ACTIONS if perms.allowed("tool:" + keys[k])]
+    if not shown:
+        return None
     sub = menu.addMenu("Open in Tools")
-    for key, label in TOOL_ACTIONS:
+    for key, label in shown:
         sub.addAction(label, lambda k=key: emit(k, dev))
     return sub
+
+
+def can_connect(kind):
+    """Whether the signed-in role may open an SSH ('ssh') or Remote Desktop ('rdp') session."""
+    return perms.allowed("tool:rdp" if kind == "rdp" else "tool:sessions")
 
 
 class KeyboardAccess(QObject):
