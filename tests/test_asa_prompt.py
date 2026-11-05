@@ -240,11 +240,13 @@ mute = FakeAsa(never=True)
 dev2 = {**dev, "name": "fw-mute", "port": mute.port}
 STORE[("netcheck", "fw-mute")] = "Adm1n!pw"
 r = cmdrun.run_on_device(dev2, ["show version"], read_timeout=5)
-check("the error still says what netmiko saw, and where the session was written", not r["ok"] and "curpriv" in r["error"]
-      and str(cmdrun.session_file(dev2)) in r["error"], r["error"])
+check("the error still says what netmiko saw, and where to read the session", not r["ok"] and "curpriv" in r["error"]
+      and r["error"].endswith(" The session log is in Tools > Logs.") and str(cmdrun.session_file(dev2)) not in r["error"]
+      and cmdrun.session_file(dev2).exists(), r["error"])
 r = backup.backup_device(dev2)
-check("a backup that fails says what happened and where its session was written", r.status == "ERROR" and "curpriv" in r.message
-      and str(backup.session_file(dev2)) in r.message, r.message)
+check("a backup that fails says what happened and where to read its session", r.status == "ERROR" and "curpriv" in r.message
+      and r.message.endswith(". The session log is in Tools > Logs.") and str(backup.session_file(dev2)) not in r.message
+      and backup.session_file(dev2).exists(), r.message)
 netconn.AsaSSH.prompt_wait = 30
 
 print(f"\n{ok} passed, {bad} failed")

@@ -1,9 +1,11 @@
 import csv
+import os
 import threading
 from datetime import datetime
+from pathlib import Path
 
 import keyring
-from PySide6.QtCore import QObject, QProcess, QThread, Qt, QUrl, Signal
+from PySide6.QtCore import QObject, QProcess, QStandardPaths, QThread, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QFontDatabase
 from PySide6.QtWidgets import (QAbstractItemView, QApplication as _QApp, QCheckBox, QComboBox, QCompleter, QFileDialog, QGroupBox, QHBoxLayout, QLabel,
                                QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QSpinBox, QSplitter,
@@ -120,6 +122,7 @@ def _row(*widgets):
 class LogsTab(QWidget):
     COLS = ["Started", "Ended", "Duration", "Type", "Device", "Host", "User", "Result"]
     MAX_VIEW = 2_000_000
+    OTHER_LOGS = ("backup", "command-runner", "firmware")      # <kind>-<device>.log beside the session logs, one per device
 
     def __init__(self):
         super().__init__()
@@ -133,12 +136,15 @@ class LogsTab(QWidget):
         self.table.itemSelectionChanged.connect(self.show_log)
         self.view = OutputBox()
         refresh, folder = QPushButton("Refresh"), QPushButton("Open log folder")
+        save = QPushButton("Save a readable copy...")      # the files in the folder are sealed: this is how to read one elsewhere
         refresh.clicked.connect(self.refresh)
         folder.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(sessionlog.log_dir()))))
+        save.clicked.connect(self.save_copy)
         self.note = QLabel("")
         bar = QHBoxLayout()
         bar.addWidget(refresh)
         bar.addWidget(folder)
+        bar.addWidget(save)
         bar.addWidget(self.note, 1)
         split = QSplitter(Qt.Orientation.Vertical)
         split.addWidget(self.table)
@@ -158,14 +164,29 @@ class LogsTab(QWidget):
         secs = int((b - a).total_seconds())
         return f"{secs // 3600}h {secs % 3600 // 60}m {secs % 60}s"
 
+    def _other_logs(self):
+        """The backup, Command Runner and firmware logs, newest first, shaped like sessions (no host, user or end)."""
+        out = []
+        for p in sessionlog.log_dir().iterdir():
+            kind = next((k for k in self.OTHER_LOGS if p.name.startswith(k + "-") and p.suffix == ".log"), None)
+            if kind:
+                try:
+                    at = datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+                except OSError:
+                    continue
+                out.append({"id": "file:" + p.name, "log_path": str(p), "started_at": at, "kind": kind,
+                            "device": p.stem[len(kind) + 1:], "file": True})
+        return sorted(out, key=lambda s: s["started_at"], reverse=True)
+
     def refresh(self):
         keep = self.current_id()
-        self.sessions = sessionlog.list_sessions()
+        self.sessions = sessionlog.list_sessions() + self._other_logs()
         self.table.blockSignals(True)
         self.table.setRowCount(len(self.sessions))
         for i, s in enumerate(self.sessions):
-            vals = [s["started_at"], s["ended_at"] or "(open, or not closed cleanly)", self._duration(s),
-                    (s.get("kind") or "ssh").upper(), s["device"], f"{s['host']}:{s['port']}", s["username"], s["reason"] or ""]
+            vals = ([s["started_at"], "", "", s["kind"].replace("-", " ").upper(), s["device"], "", "", ""] if s.get("file") else
+                    [s["started_at"], s["ended_at"] or "(open, or not closed cleanly)", self._duration(s),
+                     (s.get("kind") or "ssh").upper(), s["device"], f"{s['host']}:{s['port']}", s["username"], s["reason"] or ""])
             for j, v in enumerate(vals):
                 self.table.setItem(i, j, QTableWidgetItem(str(v)))
             if s["id"] == keep:
@@ -190,10 +211,27 @@ class LogsTab(QWidget):
             size = len(raw)
             text = raw[-self.MAX_VIEW:].decode("utf-8", "replace")
             if size > self.MAX_VIEW:
-                text = f"[showing the last {self.MAX_VIEW // 1000} KB of {size // 1000} KB - open the file for all of it]\n" + text
+                text = f"[showing the last {self.MAX_VIEW // 1000} KB of {size // 1000} KB. Save a readable copy for all of it.]\n" + text
             self.view.setPlainText(text)
         except (OSError, ValueError, sealedfile.Locked) as e:
             self.view.setPlainText(f"The log file could not be opened: {e}\n{s['log_path']}")
+
+    def save_copy(self):
+        """The selected log, decrypted, to a file the person picks (Documents by default)."""
+        sid = self.current_id()
+        s = next((x for x in self.sessions if x["id"] == sid), None)
+        if not s:
+            return
+        docs = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DocumentsLocation)
+        path, _ = QFileDialog.getSaveFileName(self, "Save a readable copy", os.path.join(docs, Path(s["log_path"]).name))
+        if not path:
+            return
+        try:
+            data = sealedfile.read_bytes(s["log_path"])
+            with open(path, "wb") as f:
+                f.write(data)
+        except (OSError, ValueError, sealedfile.Locked) as e:
+            QMessageBox.warning(self, "Save a readable copy", f"The log file could not be opened: {e}")
 
 
 # ---------------------------------------------------------------- ping / traceroute / DNS

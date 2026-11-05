@@ -145,7 +145,7 @@ def fetch(dev, opts=None):
     except Exception as e:
         path = _save_failed_session(dev, drv.session_log)
         if path:
-            raise BackupError(f"{type(e).__name__}: {str(e)[:200]}. The session was written to {path}") from None
+            raise BackupError(f"{type(e).__name__}: {str(e)[:200]}. The session log is in Tools > Logs.") from None
         raise
 
 
