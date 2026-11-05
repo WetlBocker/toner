@@ -1,6 +1,6 @@
 """Directory client: binds to Active Directory or LDAP over TLS, reads a person's groups and state, maps groups to roles.
 No user-facing text lives here; exception messages are internal and never contain a password."""
-import ssl, uuid
+import re, ssl, uuid
 from dataclasses import dataclass
 
 import ldap3
@@ -20,6 +20,8 @@ LDAP_GROUP = "(|(objectClass=groupOfNames)(objectClass=groupOfUniqueNames)(objec
 class Unreachable(Exception): pass
 class BadCredentials(Exception): pass
 class InsecureConfig(ValueError): pass
+class Ambiguous(Exception): pass      # more than one group has that name
+class NotFound(Exception): pass       # no group has that name
 
 
 @dataclass(frozen=True)
@@ -55,19 +57,29 @@ def connect(cfg, who, password):
         raise BadCredentials("empty identity or password")
     down = None
     for host in cfg["servers"]:
-        try:
+        conn = None
+        try:      # auto_referrals off: ldap3 would follow an ldap:// referral in clear text with the same user and password
             conn = ldap3.Connection(_make_server(cfg, host), user=who, password=password, authentication=ldap3.SIMPLE,
-                                    client_strategy=_STRATEGY, receive_timeout=RECEIVE_TIMEOUT, raise_exceptions=True)
+                                    client_strategy=_STRATEGY, receive_timeout=RECEIVE_TIMEOUT, raise_exceptions=True, auto_referrals=False)
             conn.open()
-            if cfg["security"] == "starttls":
-                conn.start_tls()
+            if cfg["security"] == "starttls" and not (conn.start_tls() and conn.tls_started):
+                raise Unreachable(f"StartTLS failed on {host}")
             conn.bind()
             return conn
         except (lx.LDAPInvalidCredentialsResult, lx.LDAPBindError, lx.LDAPUserNameIsMandatoryError, lx.LDAPPasswordIsMandatoryError):
+            _close(conn)
             raise BadCredentials("bind refused") from None
-        except (lx.LDAPException, OSError):
+        except (lx.LDAPException, OSError, Unreachable):
+            _close(conn)
             down = Unreachable(f"cannot use {host}")
     raise down
+
+
+def _close(conn):
+    try:
+        if conn is not None: conn.unbind()
+    except Exception:
+        pass
 
 
 def _one(attrs, key, default=None):
@@ -88,57 +100,80 @@ def _first_rdn(dn):
 
 
 def _search(conn, base, flt, attrs, scope=ldap3.SUBTREE):
+    """The entries found. No such object is an empty list; any other non-success result (a referral, an error) is Unreachable."""
     try:
         conn.search(base, flt, search_scope=scope, attributes=attrs)
     except lx.LDAPNoSuchObjectResult:
         return []
+    if (conn.result or {}).get("result", 0) != 0:
+        raise Unreachable("search was not answered")
     return [e for e in conn.response or [] if e.get("type", "searchResEntry") == "searchResEntry"]
 
 
-def _groups(conn, cfg, dn, direct):
-    """CNs of every group the entry is in, through nested groups. direct: the entry's own memberOf DNs (AD)."""
+def _unescape(v):
+    v = re.sub(r"(?:\\[0-9a-fA-F]{2})+", lambda m: bytes.fromhex(m.group(0).replace("\\", "")).decode("utf-8", "replace"), v)
+    return re.sub(r"\\(.)", r"\1", v)
+
+
+def norm_dn(dn):
+    """A DN in a comparable form (case, escapes, spacing), or None when it is not a DN."""
+    try:
+        return tuple((a.strip().lower(), _unescape(v).strip().casefold(), sep) for a, v, sep in parse_dn(re.sub(r"\s*(?<!\\),\s*", ",", dn.strip())))
+    except (lx.LDAPInvalidDnError, ValueError, TypeError):
+        return None
+
+
+def _groups(conn, cfg, dn, direct, uid=None):
+    """DNs of every group the entry is in, through nested groups. direct: the entry's own memberOf DNs (AD). uid: for posixGroup memberUid."""
     ad = cfg["kind"] == "ad"
     esc = ldap3.utils.conv.escape_filter_chars
-    seen, todo = {}, list(direct)
-    if not ad:      # LDAP: groups naming the entry as a member
-        todo = [e["dn"] for e in _search(conn, cfg["base_dn"], f"(|(member={esc(dn)})(uniqueMember={esc(dn)}))", ["cn"])]
+
+    def parents(d, uid=None):
+        f = f"(member={esc(d)})(uniqueMember={esc(d)})" + (f"(memberUid={esc(uid)})" if uid else "")
+        return [e["dn"] for e in _search(conn, cfg["base_dn"], f"(&{LDAP_GROUP}(|{f}))", ["cn"])]
+
+    seen, todo = {}, list(direct) if ad else parents(dn, uid)
     while todo and len(seen) < _MAX_GROUPS:
         g = todo.pop()
-        if g.lower() in seen:
+        key = norm_dn(g) or g.lower()
+        if key in seen:
             continue
-        seen[g.lower()] = _first_rdn(g)
+        seen[key] = g
         if ad:
             for e in _search(conn, g, "(objectClass=*)", ["memberOf"], ldap3.BASE):
                 todo += list(e["attributes"].get("memberOf") or [])
         else:
-            f = esc(g)
-            todo += [e["dn"] for e in _search(conn, cfg["base_dn"], f"(|(member={f})(uniqueMember={f}))", ["cn"])]
+            todo += parents(g)
     return tuple(sorted(seen.values(), key=str.lower))
 
 
 def _user_from(conn, cfg, entry):
     a, dn, ad = entry["attributes"], entry["dn"], cfg["kind"] == "ad"
     first = (cfg.get("suffixes") or [""])[0]
+    uid = None
     if ad:
         name = str(_one(a, "userPrincipalName") or "").lower()
-        guid = _guid_text(_one(a, "objectGUID"))
+        raw = (entry.get("raw_attributes") or {}).get("objectGUID")
+        guid = _guid_text(raw[0] if raw else _one(a, "objectGUID"))
         enabled = not (int(_one(a, "userAccountControl", 0)) & 2)
     else:
-        uid = str(_one(a, "uid") or _first_rdn(dn)).lower()
-        name = f"{uid}@{first}" if first else uid
+        uid = str(_one(a, "uid") or _first_rdn(dn))
+        name = f"{uid.lower()}@{first}" if first else uid.lower()
         guid = _guid_text(_one(a, "entryUUID"))
         enabled = str(_one(a, "nsAccountLock", "false")).lower() != "true" and not _one(a, "pwdAccountLockedTime")
     display = str(_one(a, "displayName") or _one(a, "cn") or name)
-    return User(guid, name, display, _groups(conn, cfg, dn, a.get("memberOf") or []), enabled)
+    return User(guid, name, display, _groups(conn, cfg, dn, a.get("memberOf") or [], uid), enabled)
 
 
 _AD_ATTRS = ["objectGUID", "userPrincipalName", "displayName", "cn", "userAccountControl", "memberOf"]
 _LDAP_ATTRS = ["uid", "entryUUID", "displayName", "cn", "nsAccountLock", "pwdAccountLockedTime"]
 
 
-def _find(conn, cfg, flt):
-    attrs = _AD_ATTRS if cfg["kind"] == "ad" else _LDAP_ATTRS
-    found = _search(conn, cfg["base_dn"], flt, attrs)
+def _find(conn, cfg, base, flt, scope=ldap3.SUBTREE):
+    """The one user the search finds; None for none; BadCredentials for more than one (never guess which)."""
+    found = _search(conn, base, flt, _AD_ATTRS if cfg["kind"] == "ad" else _LDAP_ATTRS, scope)
+    if len(found) > 1:
+        raise BadCredentials("more than one entry")
     return _user_from(conn, cfg, found[0]) if found else None
 
 
@@ -154,9 +189,15 @@ def _split_login(cfg, login):
         short, who = login.split("@", 1)[0], login
     else:
         short, who = login, login
+    if not short.strip():
+        raise BadCredentials("empty user name")
     if cfg["kind"] == "ldap":
         who = f"uid={ldap3.utils.dn.escape_rdn(short)},{cfg['base_dn']}"
     return who, short
+
+
+def _who_am_i(conn):
+    return conn.extend.standard.who_am_i() or ""
 
 
 def sign_in(cfg, login, password, service_password=None):
@@ -165,11 +206,16 @@ def sign_in(cfg, login, password, service_password=None):
     conn = connect(cfg, who, password)
     try:
         esc = ldap3.utils.conv.escape_filter_chars
-        if cfg["kind"] == "ad":
-            flt = f"(&(objectClass=user)(|(userPrincipalName={esc(who)})(sAMAccountName={esc(short)})))"
+        if cfg["kind"] == "ad":      # ask the server who the bind is, so a look-alike name can't pick another entry
+            me = _who_am_i(conn)
+            if me.lower().startswith("dn:"):
+                user = _find(conn, cfg, me[3:], "(objectClass=user)", ldap3.BASE)
+            else:
+                sam = me[2:] if me.lower().startswith("u:") else me
+                sam = sam.split("\\", 1)[-1]
+                user = _find(conn, cfg, cfg["base_dn"], f"(&(objectClass=user)(sAMAccountName={esc(sam)}))") if sam else None
         else:
-            flt = f"(uid={esc(short)})"
-        user = _find(conn, cfg, flt)
+            user = _find(conn, cfg, who, "(objectClass=*)", ldap3.BASE)
     except lx.LDAPException:
         raise Unreachable("read failed") from None
     finally:
@@ -184,8 +230,8 @@ def look_up(cfg, guid, service_password):
     try:
         if cfg["kind"] == "ad":
             raw = "".join(f"\\{b:02x}" for b in uuid.UUID(guid).bytes_le)
-            return _find(conn, cfg, f"(&(objectClass=user)(objectGUID={raw}))")
-        return _find(conn, cfg, f"(entryUUID={ldap3.utils.conv.escape_filter_chars(guid)})")
+            return _find(conn, cfg, cfg["base_dn"], f"(&(objectClass=user)(objectGUID={raw}))")
+        return _find(conn, cfg, cfg["base_dn"], f"(entryUUID={ldap3.utils.conv.escape_filter_chars(guid)})")
     except lx.LDAPException:
         raise Unreachable("read failed") from None
     finally:
@@ -193,11 +239,35 @@ def look_up(cfg, guid, service_password):
 
 
 def role_for(cfg, groups):
-    have = {g.lower() for g in groups}
+    """The highest role whose group DN is among the person's group DNs (compared after normalising: case, escapes, spacing)."""
+    have = {n for n in map(norm_dn, groups) if n}
     for role in ROLE_ORDER:
-        if have & {g.lower() for g in cfg.get("groups", {}).get(role, [])}:
+        if have & {n for n in map(norm_dn, cfg.get("groups", {}).get(role, [])) if n}:
             return role
     return None
+
+
+def resolve_groups(cfg, names, service_password):
+    """{name: group DN}. A name is a CN or a DN. A CN is searched under base_dn; a DN is checked to be a group and kept as given."""
+    conn = connect(cfg, cfg["service_dn"], service_password)
+    gf = AD_GROUP if cfg["kind"] == "ad" else LDAP_GROUP
+    out = {}
+    try:
+        for name in names:
+            if norm_dn(name):
+                found = _search(conn, name, gf, ["cn"], ldap3.BASE)
+                if not found: raise NotFound(name)
+                out[name] = name
+            else:
+                found = _search(conn, cfg["base_dn"], f"(&{gf}(cn={ldap3.utils.conv.escape_filter_chars(name)}))", ["cn"])
+                if not found: raise NotFound(name)
+                if len(found) > 1: raise Ambiguous(name)
+                out[name] = found[0]["dn"]
+    except lx.LDAPException:
+        raise Unreachable("read failed") from None
+    finally:
+        conn.unbind()
+    return out
 
 
 def test(cfg, service_password):
