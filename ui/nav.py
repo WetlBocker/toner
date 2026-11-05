@@ -179,6 +179,12 @@ class NavStack(QWidget):
         self.quick.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self.quick.setMinimumHeight(36)
         self.quick.clicked.connect(self.search_requested)
+        self.user = QPushButton()                  # who is signed in: Lock and Sign out (set_user)
+        self.user.setProperty("ghost", True)
+        self.user.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self.user.setStyleSheet("text-align: left; padding: 6px 10px;")
+        self.user.hide()
+        self._user_name = ""
         self.list = QListWidget()                  # the sections, one under another, with their group names
         self.list.setObjectName("nav")
         self.list.setAccessibleName("Sections")
@@ -207,6 +213,7 @@ class NavStack(QWidget):
         col.addWidget(self.org_label)
         col.addWidget(self.org)
         col.addWidget(self.quick)
+        col.addWidget(self.user)
         col.addSpacing(2)
         col.addWidget(self.list, 1)
         self.stack = QStackedWidget()
@@ -228,6 +235,15 @@ class NavStack(QWidget):
         self.org.setVisible(False)
         self.org_label.setVisible(False)
         self._apply_mode()
+
+    def set_user(self, name, menu):
+        """The signed-in account at the top of the sidebar; clicking it opens `menu`."""
+        self._user_name = name
+        self.user.setMenu(menu)
+        self.user.setToolTip(name)
+        self.user.setAccessibleName(name)
+        self.user.setText("" if self._icons_only() else name)
+        self.user.show()
 
     # ---------- what the sidebar shows
     def collapsed(self):
@@ -308,6 +324,7 @@ class NavStack(QWidget):
         self.head.itemAt(3).changeSize(0 if icons_only else FOLD + 4, 0)
         self.head.invalidate()
         self.quick.setText("" if icons_only else "Search")
+        self.user.setText("" if icons_only else self._user_name)
         self.quick.setProperty("folded", icons_only)                   # the icon alone, in the middle of the button
         self.quick.style().unpolish(self.quick)
         self.quick.style().polish(self.quick)
@@ -499,6 +516,7 @@ class NavStack(QWidget):
                 item.setIcon(icons.icon(name, t.get("icon", t["muted"]), t["accent"]))
         self.fold.setIcon(icons.icon("panel", t.get("icon", t["muted"]), t["text"]))
         self.quick.setIcon(icons.icon("search", t.get("icon", t["muted"]), t["text"]))
+        self.user.setIcon(icons.icon("user", t.get("icon", t["muted"]), t["text"]))
         self.mark.restyle()
         self.backdrop.restyle()
         self._place_spacer()

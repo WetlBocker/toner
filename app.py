@@ -9,7 +9,7 @@ from pathlib import Path
 from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence, QPainter, QPixmap, QShortcut
 from PySide6.QtWidgets import QApplication, QMainWindow, QMenu, QMessageBox, QSplitter, QSystemTrayIcon
-from core import agents, audit, checks, db, demarc, display, legacyssh, notify, paths, reports, sessionlog, sessions, trends, trust, tunnel, updates
+from core import agents, audit, checks, db, demarc, display, legacyssh, notify, paths, reports, session, sessionlog, sessions, trends, trust, tunnel, updates
 from ui import theme
 from ui.about import AboutTab
 from ui.configs import ConfigsTab
@@ -92,6 +92,29 @@ def apply_look(app):
     return True
 
 
+def plain_look(app):
+    """The look before anyone signs in: the theme defaults, light or dark as the system is. Nothing is read from the database,
+    which stays encrypted until then."""
+    from datetime import datetime
+    from ui import themes
+    try:
+        dark = app.styleHints().colorScheme() == Qt.ColorScheme.Dark
+    except Exception:
+        dark = False
+    hour = datetime.now().hour
+    theme.apply(app, dict(themes.DEFAULT_LOOK), ctx=dict(system_dark=dark, hour=hour, period=themes.period(hour), worst=None,
+                                                          org_colour="", status=None))
+    app.setWindowIcon(app_icon())
+
+
+def restart():
+    """Start Toner again after Sign out, so nothing of the old session stays in memory: the same program and arguments (an
+    AppImage starts the AppImage; its mount goes when this process ends), without --minimized, as someone is about to sign in."""
+    from PySide6.QtCore import QProcess
+    args = sys.argv[1:] if getattr(sys, "frozen", False) else sys.argv
+    QProcess.startDetached(os.environ.get("APPIMAGE") or sys.executable, [a for a in args if a != "--minimized"])
+
+
 class Main(QMainWindow):
     ai_state_changed = Signal(object, str)          # the Assistant's connection was checked (on another thread): connected?, the sentence
 
@@ -101,6 +124,7 @@ class Main(QMainWindow):
         self.resize(1240, 760)
         self.setMinimumSize(900, 560)
         self._quitting = False
+        self._signing_out = False                        # Sign out: closing ends the process, and app.main starts Toner again
         self._told_about_tray = False
         self.views = {}                                  # open device windows by name
         self.dashboard = DashboardTab()
@@ -242,7 +266,7 @@ class Main(QMainWindow):
         self.scanning.progress.connect(self.strip.on_progress)
         self.results.run_finished.connect(self.strip.refresh)
         self.palette = CommandPalette(self)
-        QShortcut(QKeySequence("Ctrl+K"), self, activated=self.open_palette)
+        self.palette_shortcut = QShortcut(QKeySequence("Ctrl+K"), self, activated=self.open_palette)
         for i in range(min(9, tabs.count())):
             QShortcut(QKeySequence(f"Ctrl+{i + 1}"), self, activated=lambda i=i: tabs.setCurrentIndex(i))
         tabs.search_requested.connect(self.open_palette)
@@ -280,6 +304,32 @@ class Main(QMainWindow):
         self.housekeeping.start()
         QTimer.singleShot(5000, self.do_housekeeping)
         QTimer.singleShot(0, AI.check_in_background)   # the same test as Settings > AI > Test, when a key is stored
+        self.user_menu = QMenu(self)                    # who is signed in, Lock and Sign out
+        if session.user():
+            self.user_menu.addAction(session.user()).setEnabled(False)
+            self.user_menu.addSeparator()
+            self.user_menu.addAction("Lock (Ctrl+Shift+L)", self.lock)
+            self.user_menu.addAction("Sign out", self.sign_out)
+            tabs.set_user(session.user(), self.user_menu)
+        self.lock_shortcut = QShortcut(QKeySequence("Ctrl+Shift+L"), self, activated=self.lock)
+        from ui.lockscreen import LockScreen
+        self.lock_screen = LockScreen(self)             # last, so it is above everything else in the window
+
+    # ---------- signing in (core/session.py)
+    def lock(self):
+        """Ctrl+Shift+L: the lock screen covers the window until the password is entered (a recovery-key session can't lock)."""
+        if session.state() == "open" and session.user() is not None:
+            session.lock()
+
+    def sign_out(self):
+        """Sign out (the user menu, or Sign in as someone else): the usual questions before closing first; if one is refused, nothing
+        happens. Then the data key closes and Toner ends; app.main starts it again."""
+        self._signing_out = self._quitting = True
+        if not self.close():
+            self._signing_out = self._quitting = False
+            return
+        session.sign_out()
+        QApplication.quit()
 
     # ---------- the Assistant (core/assistant, ui/assistant.py)
     def _ai_state(self, connected, text):
@@ -389,6 +439,8 @@ class Main(QMainWindow):
         from PySide6.QtCore import QPoint
         b.settle(self.body.mapTo(self, QPoint(max(0, x), min(max(0, y), max(0, self.body.height() - b.height())))))   # by rubber band after a drop
         b.raise_()
+        if getattr(self, "lock_screen", None) is not None and self.lock_screen.isVisible():
+            self.lock_screen.raise_()                  # the button never shows over the lock screen
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -912,7 +964,7 @@ class Main(QMainWindow):
                                       "Use the tray icon to open Toner or quit.", QSystemTrayIcon.MessageIcon.Information, 6000)
             return
         if not self.tools.playbooks.leave():                 # an unsaved playbook: the person chose to keep editing
-            self._quitting = False
+            self._quitting = self._signing_out = False
             event.ignore()
             return
         from core import extstore, extvault
@@ -922,7 +974,7 @@ class Main(QMainWindow):
             text = (f"1 change hasn't reached {name} yet and will be lost if Toner closes. Close anyway?" if n == 1 else
                     f"{n} changes haven't reached {name} yet and will be lost if Toner closes. Close anyway?")
             if QMessageBox.question(self, "Toner", text) != QMessageBox.StandardButton.Yes:
-                self._quitting = False
+                self._quitting = self._signing_out = False
                 event.ignore()
                 return
         if self.settings.unsaved_count():
@@ -930,15 +982,15 @@ class Main(QMainWindow):
                 self.show_window()                           # quitting from the tray: show what the question is about
             self.go("Settings")
             if not self.settings.confirm_leave("closing Toner", reload=False):
-                self._quitting = False
+                self._quitting = self._signing_out = False
                 event.ignore()
                 return
         if self.automation.running() and QMessageBox.question(self, "A playbook is running", "Ansible is still running a playbook. Stop it and quit?") != QMessageBox.StandardButton.Yes:
-            self._quitting = False
+            self._quitting = self._signing_out = False
             event.ignore()
             return
         if self.tools.firmware.transferring() and not self.tools.firmware.ask_stop():
-            self._quitting = False
+            self._quitting = self._signing_out = False
             event.ignore()
             return
         for v in list(self.views.values()):
@@ -1019,10 +1071,43 @@ def watch_password_manager(win):
     QTimer.singleShot(1500, tell)
 
 
+def sign_in_at_start():
+    """The first start (a new install or an upgrade) or the sign-in window; then whatever is still plain gets encrypted (looked at
+    every start: a session log left open last time, or a first start that stopped halfway). False: the person quit."""
+    from PySide6.QtWidgets import QDialog
+    from core import datakey, lockdown
+    from ui import setupdlg
+    from ui.signinwindow import SignInWindow
+    if not datakey.exists():
+        if not setupdlg.run_first_start():
+            return False
+    elif SignInWindow().exec() != QDialog.DialogCode.Accepted:
+        return False
+    return not lockdown.pending() or setupdlg.encrypt()
+
+
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "cli":
         sys.exit(run_cli(sys.argv[2:]))
     setup_logging()
+    from ui import webchart
+    webchart.prepare_application()                 # the charts' QtWebEngine shares OpenGL contexts with the window
+    app = QApplication(sys.argv)
+    app.setQuitOnLastWindowClosed(True)
+    plain_look(app)                                # the saved look is in the database, encrypted until someone signs in
+    from ui.widgets import MenuPlacer
+    app._menu_placer = MenuPlacer(app)             # drop-down menus open upward when there is no room below
+    app.installEventFilter(app._menu_placer)
+    from ui.widgets import KeyboardAccess
+    app._keys = KeyboardAccess(app)                 # Tab gets out of lists; icon buttons and boxes have names for screen readers
+    app.installEventFilter(app._keys)
+    from ui import ipmenu
+    ipmenu.install(app)                            # right-click on a selected IP address anywhere: Ping and WHOIS Lookup
+    from core import passvault
+    passvault.install()                            # saved passwords live in Toner's vault, which signing in opens
+    if not sign_in_at_start():
+        session.sign_out()
+        sys.exit(0)
     db.init()
     trust.install()                                # web requests also trust what Windows trusts (HTTPS inspection)
     legacyssh.apply()                              # ssh-rsa and SHA-1 key exchange for older devices, unless turned off
@@ -1035,24 +1120,7 @@ def main():
         updates.prune()                            # keep the installers of the newest few versions, for going back
     except OSError:
         pass
-    from ui import webchart
-    webchart.prepare_application()                 # the charts' QtWebEngine shares OpenGL contexts with the window
-    app = QApplication(sys.argv)
-    app.setQuitOnLastWindowClosed(True)
     apply_look(app)
-    from ui.widgets import MenuPlacer
-    app._menu_placer = MenuPlacer(app)             # drop-down menus open upward when there is no room below
-    app.installEventFilter(app._menu_placer)
-    from ui.widgets import KeyboardAccess
-    app._keys = KeyboardAccess(app)                 # Tab gets out of lists; icon buttons and boxes have names for screen readers
-    app.installEventFilter(app._keys)
-    from ui import ipmenu
-    ipmenu.install(app)                            # right-click on a selected IP address anywhere: Ping and WHOIS Lookup
-    from core import passvault
-    from ui import vaultdlg
-    passvault.install()                            # saved passwords live in Toner's vault (no longer in Windows Credential Manager)
-    if not vaultdlg.open_at_start():               # set a master password the first time, else unlock (or it is remembered)
-        sys.exit(0)
     otpprompt.install()
     win = Main()
     if "--minimized" in sys.argv and win.background_mode():
@@ -1067,6 +1135,8 @@ def main():
     code = app.exec()
     tunnel.close_all()
     log.info("Toner stopped")
+    if win._signing_out:
+        restart()
     sys.exit(code)
 
 

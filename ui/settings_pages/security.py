@@ -19,6 +19,7 @@ from ui.widgets import EmptyHint
 # ------------------------------------------------------------------ Security
 class SecurityPage(Page):
     title = "Security"
+    session_changed = Signal()                  # (session callbacks may come from any thread: followed on this one)
 
     def __init__(self):
         super().__init__()
@@ -40,6 +41,8 @@ class SecurityPage(Page):
 
         self.lock_now = QPushButton("Lock now")                            # acts right away
         self.lock_now.clicked.connect(self._lock)
+        self.session_changed.connect(self.show_vault)
+        session.on_change(lambda _state: self.session_changed.emit())
         self.lay.insertWidget(0, QLabel("<b>Vault</b>"))
         self.lay.insertWidget(1, compact_row(self.lock_now))
         from ui.vaultsettings import VaultSection

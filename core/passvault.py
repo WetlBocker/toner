@@ -176,6 +176,9 @@ def create(master, remember=True, carry=None):
     upgrade and its tests; new vaults come from open_with. `carry`: {name: secret} to put in it.
     Returns False when it was to be remembered but this computer has no keyring for it (Linux or macOS), else True."""
     global _key, _data
+    from core import datakey
+    if datakey.exists():
+        raise FileExistsError("Toner's accounts are already set up.")    # it would replace the vault the data key opens
     check_master(master)
     with _lock, _FileLock():
         key = os.urandom(32)
@@ -235,7 +238,7 @@ def adopt(datakey):
         try:
             data = _unseal(_key, doc["data"])           # the file must still be the vault we opened (not made again since)
         except InvalidTag:
-            raise Locked("The vault changed after it was opened: open it again, then try again.") from None
+            raise Locked("The vault changed after it was opened. Open it again, then try again.") from None
         if _batch:
             data = _data                                # changes still waiting in memory (they are in _data already)
         key = os.urandom(32)

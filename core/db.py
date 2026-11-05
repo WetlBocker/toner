@@ -95,6 +95,7 @@ DEFAULT_SETTINGS = {
     "report_include_all": True,
     # security
     "hostkey_mode": "Trust on first use",
+    "signin_idle_minutes": 15,                   # no mouse or key input this long locks Toner (ui/lockscreen.py); 0: never
     "ssh_legacy_algorithms": True,               # ssh-rsa and SHA-1 key exchange for older devices (core/legacyssh.py)
     # notifications
     "notify_enabled": False, "notify_channels": [], "notify_snooze_until": "",
