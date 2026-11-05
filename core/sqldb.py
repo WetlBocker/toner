@@ -106,6 +106,8 @@ def export_copy(src_conn, dest, passphrase):
         src_conn.execute("ATTACH DATABASE ? AS exp KEY ?", (str(dest), passphrase))
         try:
             src_conn.execute("SELECT sqlcipher_export('exp')")
+            ver = src_conn.execute("PRAGMA main.user_version").fetchone()[0]
+            src_conn.execute("PRAGMA exp.user_version = %d" % ver)   # sqlcipher_export does not copy it
         finally:
             try:
                 src_conn.execute("DETACH DATABASE exp")

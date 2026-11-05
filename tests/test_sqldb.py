@@ -133,7 +133,8 @@ x = D / "export.db"
 sqldb.export_copy(c, x, "correct horse battery"); c.close()
 sqldb.set_key(None)
 n = sqldb.connect(x); n.execute("PRAGMA key = 'correct horse battery'")
-check("export_copy: opens with the passphrase", n.execute("SELECT count(*) FROM t").fetchone()[0] == 3); n.close()
+check("export_copy: opens with the passphrase", n.execute("SELECT count(*) FROM t").fetchone()[0] == 3)
+check("export_copy: user_version kept", n.execute("PRAGMA user_version").fetchone()[0] == 5); n.close()
 try: sqldb.connect(x).execute("SELECT count(*) FROM sqlite_master"); raised = False
 except sqldb.sqlite3.DatabaseError: raised = True
 check("export_copy: closed without it", raised)
