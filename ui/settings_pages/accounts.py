@@ -103,7 +103,7 @@ class AccountsPage(Page):
 
     def _reset(self):
         name = self._selected()
-        if name and (dlg := AccountDialog(name, self)).exec():
+        if name and AccountDialog(name, self).exec():
             audit.log("password reset", name)
 
     def _remove(self):

@@ -3,12 +3,13 @@ recovery-key sign-in an account gets a new password at once, and Toner is signed
 password to lock with). The card helpers here are shared with the first start (ui/setupdlg.py) and the lock screen."""
 from PySide6.QtCore import QObject, Qt, QTimer
 from PySide6.QtWidgets import (QComboBox, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QStackedWidget,
-                               QVBoxLayout, QWidget)
+                               QVBoxLayout)
 
-from core import datakey, passvault, passwords, session
+from core import audit, datakey, passvault, passwords, session
 from ui import theme
 
 DAMAGED = "This file is damaged or was changed outside Toner."
+VAULT_CHANGED = "The vault changed after it was opened. Open it again, then try again."
 # what a damaged or foreign netcheck.keys raises (JSONDecodeError is a ValueError); WrongPassword, also a ValueError, is caught first
 DAMAGED_ERRORS = (OSError, ValueError, KeyError, TypeError)
 RECOVERY_TEXT = "Enter the recovery key you saved when Toner was set up."
@@ -236,6 +237,8 @@ class SignInWindow(QDialog):
             wait.start(e.seconds)
         except datakey.WrongPassword as e:
             say(error, str(e))
+        except passvault.Locked:                         # the old vault was replaced while it was being moved over
+            say(error, VAULT_CHANGED)
         except (passvault.WrongPassword, *DAMAGED_ERRORS):
             say(error, DAMAGED)
         return False
@@ -244,7 +247,7 @@ class SignInWindow(QDialog):
         from ui import setupdlg
         opener()
         try:
-            return bool(setupdlg.OldVaultDialog(self).exec())
+            return setupdlg.adopt_old_vault(self)
         finally:
             datakey.close()
 
@@ -275,6 +278,7 @@ class SignInWindow(QDialog):
             return
         try:
             datakey.set_password(name, pw)
+            audit.log("password reset with the recovery key", name)
             session.sign_out()
             session.sign_in(name, pw)
         except datakey.Throttled as e:                   # (Toner's service counted a wrong try meanwhile): sign in as usual

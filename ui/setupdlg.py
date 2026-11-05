@@ -11,7 +11,8 @@ from PySide6.QtWidgets import QApplication, QCheckBox, QDialog, QHBoxLayout, QLa
 
 from core import audit, datakey, db, lockdown, passvault, passwords, session, sqldb
 from core.sqldb import sqlite3
-from ui.signinwindow import MISMATCH, brand, card, centred, error_label, field, heading, link, primary, say, words
+from ui.signinwindow import (DAMAGED, DAMAGED_ERRORS, MISMATCH, VAULT_CHANGED, brand, card, centred, error_label, field, heading, link,
+                             primary, say, words)
 
 TITLE = "Set up Toner"
 INTRO = "Create the first admin account. Toner's data stays encrypted until someone signs in."
@@ -133,11 +134,17 @@ class OldVaultDialog(_CardDialog):
     def accept(self):
         try:
             passvault.unlock(self.pw.text())
+            passvault.adopt(sqldb.current_key())
         except passvault.WrongPassword:
             say(self.error, WRONG_MASTER)
             self.pw.clear()
             return
-        passvault.adopt(sqldb.current_key())
+        except passvault.Locked:
+            say(self.error, VAULT_CHANGED)
+            return
+        except DAMAGED_ERRORS:
+            say(self.error, DAMAGED)
+            return
         super().accept()
 
     def _dont_know(self):
@@ -146,8 +153,24 @@ class OldVaultDialog(_CardDialog):
             return
         passvault.lock()
         old = passvault.path()
-        old.rename(old.with_name(f"{old.name}.old-{time.strftime('%Y%m%d-%H%M%S')}"))
+        try:
+            old.rename(old.with_name(f"{old.name}.old-{time.strftime('%Y%m%d-%H%M%S')}"))
+        except OSError:
+            say(self.error, DAMAGED)
+            return
         super().accept()
+
+
+def adopt_old_vault(parent=None):
+    """Move an older master-password vault onto the data key (which must be open). The key "Remember on this computer" kept opens
+    it with nothing asked; otherwise the master password, once. False when the person closed that dialog."""
+    if passvault.unlock_remembered():
+        try:
+            passvault.adopt(sqldb.current_key())
+            return True
+        except (passvault.Locked, *DAMAGED_ERRORS):      # changed or unwritable since it was read: the dialog says which
+            passvault.lock()
+    return bool(OldVaultDialog(parent).exec())
 
 
 class EncryptDialog(_CardDialog):
@@ -194,13 +217,16 @@ def encrypt(parent=None):
 def run_first_start(parent=None):
     """No keys file yet: make the first account, show its recovery key, move an older vault over, encrypt, and sign in.
     True once an account exists and the data is encrypted; False when the person quit."""
+    if datakey.missing():                                # a new key would never open what is there
+        QMessageBox.critical(parent, "Toner", datakey.MISSING)
+        return False
     master_vault = passvault.exists() and passvault.uses_master()
     account = AccountDialog(parent)
     if not account.exec():
         return False
     try:
         RecoveryDialog(account.recovery, parent).exec()
-        if master_vault and not OldVaultDialog(parent).exec():
+        if master_vault and not adopt_old_vault(parent):
             return False                                 # the next start's sign-in asks again (ui/signinwindow.py)
         if lockdown.pending() and not encrypt(parent):
             return False

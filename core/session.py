@@ -41,7 +41,7 @@ def _opened(opener, action, who):
         if _state != "signed_out":
             raise RuntimeError("Already signed in.")
         try:
-            opener()
+            fails = opener()
             _after_open()
             who = who() if callable(who) else who
             _state, _user = "open", who          # before the audit row, so it names the Toner user
@@ -49,6 +49,8 @@ def _opened(opener, action, who):
             _close()
             raise
         audit.log(action)
+        if fails:                                # counted in netcheck.keys; the audit table opens only now
+            audit.log(f"{fails} failed sign-in attempts since the last sign-in")
     _notify("open")
 
 

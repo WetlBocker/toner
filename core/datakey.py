@@ -30,6 +30,8 @@ FREE_TRIES, FIRST_WAIT, MAX_WAIT = 5, 30, 900
 _DUMMY_SALT = b"toner-datakey:no-such-account"     # an unknown name still runs scrypt, so timing doesn't tell names apart
 WRONG = "That username or password isn't right."
 WRONG_RECOVERY = "That recovery key isn't right."
+MISSING = ("Toner's data is encrypted, but netcheck.keys is missing from its data folder. Put netcheck.keys back next to netcheck.db, "
+           "then start Toner again.")
 
 _lock = threading.RLock()
 # shortcut: the key is immutable bytes, so close() drops it but can't zero the memory; upgrade if Python gains a wipeable buffer.
@@ -65,6 +67,19 @@ def path():
 
 def exists():
     return path().exists()
+
+
+def missing():
+    """True when there is no keys file but Toner's data is already encrypted (the database, or a vault on the data key): the key
+    is lost with the file, so a new one must never be made over it."""
+    if exists():
+        return False
+    from core import passvault
+    try:
+        adopted = passvault.exists() and not passvault.uses_master()
+    except (OSError, ValueError, KeyError):
+        adopted = False                                       # a damaged vault: the database decides
+    return sqldb.is_encrypted(db.base_path()) or adopted
 
 
 def is_open():
@@ -165,7 +180,7 @@ def _wait(over):
 
 
 def _attempt(name, secret):
-    """The data key from `name`'s seal (None: the recovery seal). Every password try, for any name, real or not, counts against
+    """(the data key from `name`'s seal (None: the recovery seal), the failed tries counted before it). Every password try, for any name, real or not, counts against
     one shared counter (per-name counts would show which names exist); the recovery key has its own. The count is read, changed
     and written under the file lock, so two Toner processes can't race it. Raises Throttled while a wait runs (without
     checking), else WrongPassword."""
@@ -198,10 +213,11 @@ def _attempt(name, secret):
             if over > 0:
                 raise Throttled(_wait(over))
             raise WrongPassword(WRONG_RECOVERY if name is None else WRONG)
-        if counter.get("fails") or counter.get("until"):
+        fails = counter.get("fails", 0)
+        if fails or counter.get("until"):
             counter["fails"], counter["until"] = 0, 0
             _write(doc)
-        return key
+        return key, fails
 
 
 def _open(key):
@@ -236,6 +252,8 @@ def create(name, password):
     with _lock, _FileLock():
         if exists():
             raise FileExistsError("Toner's accounts are already set up.")    # a new key would orphan the data under the old one
+        if missing():
+            raise FileExistsError(MISSING)
         key = os.urandom(32)
         shown, recovery = _new_recovery(key)
         _write({"format": FORMAT, "version": 1, "accounts": {name: _account(name, password, key)}, "recovery": recovery,
@@ -245,11 +263,17 @@ def create(name, password):
 
 
 def open_with_password(name, password):
-    _open(_attempt(_clean(name), password or ""))
+    """Opens the key; returns how many password tries failed (for any name) since the last one that worked."""
+    key, fails = _attempt(_clean(name), password or "")
+    _open(key)
+    return fails
 
 
 def open_with_recovery(recovery):
-    _open(_attempt(None, (recovery or "").upper().replace(" ", "").replace("-", "")))
+    """Opens the key; returns how many recovery-key tries failed since the last one that worked."""
+    key, fails = _attempt(None, (recovery or "").upper().replace(" ", "").replace("-", ""))
+    _open(key)
+    return fails
 
 
 def check_password(name, password):
