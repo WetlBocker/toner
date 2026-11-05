@@ -2,7 +2,8 @@
 
 import json
 import keyring
-import sqlite3
+from core import sqldb
+from core.sqldb import sqlite3
 from datetime import datetime
 
 from PySide6.QtCore import Qt, QUrl, Signal
@@ -226,7 +227,7 @@ class DataPage(Page):
         if not path:
             return
         try:
-            with db.connect() as src, sqlite3.connect(path) as dst:
+            with db.connect() as src, sqldb.connect(path) as dst:
                 src.backup(dst)                          # consistent copy even while the app is using it
             dst.close()
             QMessageBox.information(self, "Backup", f"Saved to {path}\n\nThe backup holds devices, history and "

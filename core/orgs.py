@@ -4,7 +4,7 @@ Global is the program's own file. It lists everything, holds the Global settings
 marked Shared, which every organization sees. Settings > Organizations creates, renames, archives and removes them; the sidebar
 switches between them. The pick is kept per computer."""
 import re
-import sqlite3
+from core.sqldb import sqlite3
 from datetime import datetime
 
 import keyring

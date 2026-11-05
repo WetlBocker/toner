@@ -2,7 +2,8 @@
 import json
 import os
 import re
-import sqlite3
+from core import sqldb
+from core.sqldb import sqlite3
 import threading
 import time
 from datetime import datetime, timedelta
@@ -233,7 +234,7 @@ def _org_rows_kept():
     key, now = os.environ.get("NETCHECK_DB", ""), time.monotonic()      # what decides base_path, without building a path each call
     if _orgs_cache["key"] != key or now - _orgs_cache["at"] > SETTINGS_TTL:
         try:
-            c = sqlite3.connect(base_path(), timeout=15)
+            c = sqldb.connect(base_path(), timeout=15)
             c.row_factory = sqlite3.Row
             try:
                 rows = [dict(r) for r in c.execute("SELECT * FROM orgs ORDER BY name COLLATE NOCASE")]
@@ -421,7 +422,7 @@ def connect():
                     _pool.pop(key, None)
     if target() and not p.exists():
         p.parent.mkdir(parents=True, exist_ok=True)
-    c = sqlite3.connect(p, timeout=15, factory=_Connection, check_same_thread=not main)
+    c = sqldb.connect(p, timeout=15, factory=_Connection, check_same_thread=not main)
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA foreign_keys = ON")
     c.execute("PRAGMA busy_timeout = 15000")

@@ -41,7 +41,8 @@ import logging
 import math
 import secrets
 import socket
-import sqlite3
+from core import sqldb
+from core.sqldb import sqlite3
 import ssl
 import threading
 import time
@@ -407,7 +408,7 @@ class Queue:
         self._made = False
 
     def connect(self):
-        c = sqlite3.connect(self.path, timeout=15)
+        c = sqldb.connect(self.path, timeout=15)
         c.execute("PRAGMA busy_timeout = 15000")
         if not self._made:
             try:
@@ -474,7 +475,7 @@ class Queue:
                 c.execute(f"DELETE FROM {t}")
             self.set(c, need_snapshot=True, **state)
         try:
-            c = sqlite3.connect(self.path, timeout=15)
+            c = sqldb.connect(self.path, timeout=15)
             c.execute("VACUUM")                            # give the space back
             c.close()
         except sqlite3.Error:

@@ -5,7 +5,7 @@ say so on the page; everything else waits for 'Save changes'."""
 import json
 import re
 import os
-import sqlite3
+from core.sqldb import sqlite3
 from datetime import datetime, timedelta
 
 import keyring

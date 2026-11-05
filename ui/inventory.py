@@ -1,5 +1,5 @@
 import json
-import sqlite3
+from core.sqldb import sqlite3
 
 import keyring
 from PySide6.QtCore import QPointF, QTimer, Qt, Signal

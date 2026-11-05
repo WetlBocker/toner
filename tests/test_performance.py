@@ -7,7 +7,8 @@ import os as _os, sys as _sys, tempfile as _tmp
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-import os, sys, time, sqlite3
+import os, sys, time
+from core.sqldb import sqlite3                       # the routed driver: its errors are what db.connect raises
 SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = os.path.join(SP, "perf%d.db" % int(time.time() * 1000)); os.environ["APPDATA"] = SP
 import keyring
 STORE = {}

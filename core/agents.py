@@ -18,7 +18,7 @@ import json
 import re
 import secrets
 import socket
-import sqlite3
+from core.sqldb import sqlite3
 import ssl
 import threading
 import time

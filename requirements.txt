@@ -19,3 +19,4 @@ keeper-secrets-manager-core>=17.3
 anthropic>=2.3,<3
 openai>=3.37,<4
 google-genai>=2.33,<3
+sqlcipher3-wheels>=0.5.7,<0.6

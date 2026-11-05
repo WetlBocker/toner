@@ -6,7 +6,7 @@ why. Folders keep their structure; for MobaXterm the root folder every bookmark 
 Nothing here writes anything until save() is called. Passwords go only to Toner's vault (sessions.set_password)."""
 import os
 import re
-import sqlite3
+from core.sqldb import sqlite3
 import xml.etree.ElementTree as ET
 from collections import Counter
 from dataclasses import dataclass, field
