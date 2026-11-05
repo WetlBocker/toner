@@ -472,7 +472,140 @@ put(d)
 session.sign_in_recovery(code)
 check("planted backups key: tampered, and not taken", roles.state() == "tampered" and roles.backups_private() != planted)
 roles.set_permissions("Tech", {})
-check("...nor after the repair with no copy", roles.state() == "ok" and roles.backups_private() != planted)
+check("...nor held by the repair's own sign-in (no copy kept)", roles.state() == "ok" and roles.backups_private() != planted)
+session.sign_out()
+
+# ---------------------------------------------------------------- a keys file put back from before a demotion
+def fresh(label):
+    global recovery
+    os.environ["NETCHECK_DB"] = SP + (r"\%s%d.db" % (label, int(time.time()))).replace("\\", os.sep)
+    recovery = datakey.create("Admin1", PW); db.init(); datakey.close()
+    session.sign_in("Admin1", PW)
+
+fresh("rollback")
+datakey.add_local("Bob", PW3, role="Admin")
+roles.sync_grants()
+as_("Bob", PW3)
+check("rollback: Bob as an Admin holds both role keys", roles.holds("rules") and roles.holds("backups"))
+saved = datakey.path().read_bytes()                     # Bob keeps a copy of netcheck.keys
+as_("Admin1", PW)
+roles.set_role("Bob", "Tech")
+demoted = datakey.path().read_bytes()
+rows = tamper_rows()
+session.sign_out()
+datakey.path().write_bytes(saved)                       # and puts it back: no crypto, no database
+as_("Bob", PW3)
+check("rollback: the older, validly signed file reads tampered", roles.state() == "tampered", roles.state())
+check("rollback: Bob is a Tech and holds nothing", roles.role_of("Bob") == "Tech" and not perms.is_admin()
+      and not roles.holds("rules") and not roles.holds("backups"))
+check("rollback: one audit row", tamper_rows() - rows == 1, tamper_rows() - rows)
+session.sign_out()
+datakey.path().write_bytes(demoted)
+
+# a write that fails never becomes a false tamper
+as_("Admin1", PW)
+key, signed = roles._held["rules"], db.get_setting("rules_signed")
+real_replace = os.replace
+def failing_replace(*a, **k):
+    raise OSError("disk full")
+os.replace = failing_replace
+try:
+    e = raises(lambda: roles.set_role("Bob", "Engineer"), OSError)
+finally:
+    os.replace = real_replace
+roles._invalidate()
+check("a failed write: the error is raised, the file and rules_signed untouched", e is not None and datakey.path().read_bytes() == demoted
+      and db.get_setting("rules_signed") == signed)
+check("...state ok, Bob still a Tech, the same rules key held", roles.state() == "ok" and roles.role_of("Bob") == "Tech"
+      and roles._held.get("rules") is key, roles.state())
+session.sign_out()
+d = doc(); d["accounts"]["Bob"]["role"] = "Admin"; put(d)
+as_(None)
+key, signed = roles._held.get("rules"), db.get_setting("rules_signed")
+os.replace = failing_replace
+try:
+    e = raises(lambda: roles.set_permissions("Tech", {}), OSError)
+finally:
+    os.replace = real_replace
+check("a repair whose write fails: no new rules key held, rules_signed untouched",
+      e is not None and roles._held.get("rules") is key and db.get_setting("rules_signed") == signed)
+roles.set_permissions("Tech", {})
+check("...and the repair works once the disk does", roles.state() == "ok" and signed_ok() and roles.role_of("Bob") == "Admin")
+session.sign_out()
+
+# ---------------------------------------------------------------- two Admin sign-ins in a row: the second writes nothing
+as_("Admin1", PW)
+mtime = datakey.path().stat().st_mtime_ns
+writes, real_set = [], db.set_setting
+db.set_setting = lambda key, value: (writes.append(key), real_set(key, value))[1]
+try:
+    as_("Admin1", PW)
+finally:
+    db.set_setting = real_set
+check("a second Admin sign-in with nothing changed writes neither the keys file nor rules_signed",
+      datakey.path().stat().st_mtime_ns == mtime and "rules_signed" not in writes and roles.state() == "ok", writes)
+session.sign_out()
+
+# ---------------------------------------------------------------- an account planted by hand gets no keys from the repair
+as_("Admin1", PW)
+d = doc()
+d["accounts"]["Ghost"] = datakey._account("Ghost", PW4, bytes(datakey._key), role="Admin")[0]
+session.sign_out()
+put(d)
+as_(None)
+check("a planted account: tampered", roles.state() == "tampered")
+roles.set_permissions("Tech", {})
+check("the repair attests nothing for it", roles.state() == "ok" and doc()["attested"]["Ghost"] == "" and "Ghost" not in doc()["grants"],
+      doc()["attested"].get("Ghost"))
+as_("Admin1", PW)                                       # an Admin's sync doesn't vouch for it either
+as_("Ghost", PW4)
+check("...and Ghost holds nothing", not roles.holds("rules") and not roles.holds("backups"))
+session.sign_out()
+
+# ---------------------------------------------------------------- the Global database deleted and the file reset to Part 1
+fresh("dbswap")
+datakey.add_local("Tech1", PW3, role="Tech")
+from core import backup, orgs
+acme = orgs.create("Acme", "ACME")
+with db.within(acme):
+    backup.store("a-sw", "hostname a-sw\ninterface Gi0/1\n", mask=True)
+session.sign_out()
+db.release()
+p = db.base_path()
+for suf in ("", "-wal", "-shm"):
+    q = p.with_name(p.name + suf)
+    if q.exists():
+        os.replace(q, str(q) + ".aside")
+d = doc()
+for k in roles._PART2:
+    d.pop(k, None)
+d["accounts"]["Tech1"]["role"] = "Admin"
+put(d)
+session.sign_in("Tech1", PW3)
+db.init()                                               # the window does this at start
+roles._invalidate()
+check("db swap: an organization file that kept backups trips the wire", roles.state() == "tampered" and not perms.is_admin()
+      and not roles.holds("rules") and not roles.holds("backups") and not perms.allowed("push"), roles.state())
+session.sign_out()
+
+# ---------------------------------------------------------------- a recovery key planted by a Tech is not the root of trust
+fresh("recswap")
+datakey.add_local("Tech1", PW3, role="Tech")
+as_("Admin1", PW)                                       # (the Admin's sync)
+rk = db.get_setting("rules_key")
+as_("Tech1", PW3)                                       # the Tech opens the data key with only their password
+shown, rec, _ = datakey._new_recovery(bytes(datakey._key))
+d = doc(); d["recovery"] = rec; put(d)
+session.sign_out()
+session.sign_in_recovery(shown)
+check("planted recovery seal: the rules still verify, it holds nothing", roles.state() == "ok" and not roles.holds("rules"))
+check("...set_role refused", raises(lambda: roles.set_role("Tech1", "Admin"), datakey.Locked) is not None and roles.role_of("Tech1") == "Tech")
+check("...a password reset refused", raises(lambda: datakey.set_password("Admin1", PW4), perms.Denied) is not None)
+check("...no re-key, no grants", db.get_setting("rules_key") == rk and not roles.holds("rules") and not roles.holds("backups"))
+as_("Admin1", PW)
+as_("Tech1", PW3)
+check("after the real Admin signs in, the Tech is still a Tech holding nothing", roles.role_of("Tech1") == "Tech"
+      and not roles.holds("backups") and not roles.holds("rules"))
 session.sign_out()
 
 print(f"\n{ok} passed, {bad} failed"); sys.exit(1 if bad else 0)

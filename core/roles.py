@@ -9,8 +9,8 @@ account, a password reset, a new recovery key) vouches for it; a Part 1 account 
 when it is first seen. Rules that don't check out give everyone a Tech's permissions until someone signed in with the recovery key
 saves the roles again, under a new rules key.
 
-Lock order: this module's lock, then datakey's. datakey's hook (_accounts_changed) runs under datakey's lock, so it never takes
-this one and never reads the file again.
+Lock order: this module's lock, then datakey's. datakey's hooks (_accounts_changed, _landed) run under datakey's lock, so they
+never take this one and never read the file again.
 """
 import base64
 import json
@@ -33,11 +33,13 @@ _lock = threading.RLock()
 _held = {}           # kind -> the private role key this sign-in holds
 _cache = None        # what the file says, verified: {"state", "roles", "accounts", "backups_pub"}
 _rk = None           # the rules_key setting, read once
-_rs = None           # the rules_signed setting: what was last signed, read once
 _sk = None           # some database keeps backup passwords under a backups key, looked at once (only while rules_key is empty)
 _audited = False     # "roles were changed outside Toner" written this sign-in
 _upgrade_due = False  # an Admin signed in to a Part 1 file: make the role keys once the database can be written
 _own_box = False     # this sign-in's box key is the one its record shows (else it holds nothing and can't repair)
+_root = False        # the recovery key, its own box key and the one last vouched for: the root of trust (repairs, re-keys)
+_pending = None      # what this change signed: kept as rules_signed once the keys file has landed (datakey's `written` hook)
+_was = None          # the role keys held before this change re-keyed: put back when its write fails
 _callbacks = []
 
 
@@ -83,12 +85,13 @@ def _signed(doc):
 
 
 def _sign(doc):
+    global _pending
     att = _attested(doc)
     doc["attested"] = {n: att.get(n) for n in doc["accounts"]}
     doc["roles"] = _clean_roles(doc.get("roles"))
     payload = _signed(doc)
     doc["rules_sig"] = envelope.sign(_held["rules"], payload)
-    _store_signed(payload.decode("utf-8"))
+    _pending = payload.decode("utf-8")              # kept as rules_signed once the file has landed (_landed)
 
 
 def _setting(key):
@@ -110,21 +113,38 @@ def _rules_key():
     return _rk
 
 
-def _store_signed(payload):
-    """The database keeps what was last signed, so a repair takes the box keys and backups_pub from there, not from the
-    tampered file."""
-    global _rs
-    db.set_setting("rules_signed", payload)
-    _rs = payload
+def _stored_signed():
+    """The rules_signed setting as stored: the database keeps what was last signed, so a repair takes the box keys and
+    backups_pub from there, not from the tampered file, and an older file put back doesn't match it. Read each time (through the
+    database's short cache): another Toner (the command line, the service) may have signed since."""
+    return _setting("rules_signed")
+
+
+def _landed(ok):
+    """datakey's hook after each change: once the keys file has landed, keep what it signed (when that is new); when the change
+    failed, keep nothing and hold the role keys held before it."""
+    global _pending, _was
+    payload, was, _pending, _was = _pending, _was, None, None
+    if not ok:
+        if was is not None:
+            _held.clear()
+            _held.update(was)
+    elif payload is not None and payload != _stored_signed():
+        db.set_setting("rules_signed", payload)
+
+
+def _keep_held():
+    """Before a change holds new role keys: note the ones held now, put back if its write fails."""
+    global _was
+    if _was is None:
+        _was = dict(_held)
 
 
 def _last_signed():
     """What was last signed (parsed), or None when there is none or it can't be read."""
-    global _rs
-    if _rs is None:
-        _rs = _setting("rules_signed")
+    rs = _stored_signed()
     try:
-        last = json.loads(_rs) if _rs else None
+        last = json.loads(rs) if rs else None
         return last if isinstance(last.get("accounts"), dict) and isinstance(last.get("backups_pub"), str) else None
     except (ValueError, AttributeError):
         return None
@@ -153,7 +173,10 @@ def _state_of(doc):
         pub = _unb64(doc["rules_pub"])
     except (KeyError, TypeError, ValueError, AttributeError):
         return "tampered"
-    return "ok" if _verifies(doc, pub) else "tampered"
+    if not _verifies(doc, pub):
+        return "tampered"
+    last = _stored_signed()                             # signed by the same key, but not what was signed last: an older file put back
+    return "tampered" if last and last != _signed(doc).decode("utf-8") else "ok"
 
 
 def _clean_roles(stored):
@@ -199,8 +222,8 @@ def _load():
 
 
 def _invalidate():
-    global _cache, _rk, _rs, _sk
-    _cache = _rk = _rs = _sk = None
+    global _cache, _rk, _sk
+    _cache = _rk = _sk = None
 
 
 def _notify():
@@ -319,8 +342,7 @@ def _accounts_changed(before, doc):
     """datakey's hook, inside its write that adds, removes or re-keys an account or the recovery key."""
     global _cache
     from core import perms
-    me, holder = datakey.signed_in_name(), "rules" in _held
-    root = me is None and _own_box                      # the recovery key, shown to be its record's: the root of trust
+    me, holder, root = datakey.signed_in_name(), "rules" in _held, _root
     rekeyed = [n for n, a in doc["accounts"].items() if before["accounts"].get(n, {}).get("box_pub") != a.get("box_pub")]
     recovery = before["recovery"].get("box_pub") != doc["recovery"].get("box_pub")
     ok = _state_of(before) == "ok"
@@ -387,16 +409,21 @@ def _take(doc, kind, key):
 def unlock():
     """After a sign-in: take this account's role keys. On a Part 1 file, whoever signs in first (everyone is an Admin) makes the
     role keys. A tampered file or a missing grant is not an error: this sign-in just holds less."""
-    global _audited, _upgrade_due, _own_box
+    global _audited, _upgrade_due, _own_box, _root
     with _lock:
         _held.clear()
         _invalidate()
         _audited = _upgrade_due = False
         name, box = datakey.signed_in_name(), datakey.box_private()
-        _rules_key()                                    # read the setting before taking datakey's lock
+        _rules_key()                                    # read the settings before taking datakey's lock
+        last = _last_signed()
         doc = datakey.read()
         rec = doc["recovery"] if name is None else doc["accounts"][name]
         _own_box = box is not None and rec.get("box_pub") == _b64(_public("box", box))
+        st = _state_of(doc)
+        # the recovery key last vouched for (none vouched for yet: a Part 1 one, trusted on first use)
+        att = last.get("recovery_box_pub") if last else doc.get("recovery_attested") if st == "ok" else None
+        _root = name is None and _own_box and (att is None or att == rec.get("box_pub"))
         for kind in KINDS if _own_box else ():         # rules first: the backups check may need it
             try:
                 g = doc["recovery_grants"] if name is None else doc["grants"][name]
@@ -405,7 +432,6 @@ def unlock():
                     _held[kind] = key
             except (KeyError, TypeError, ValueError, AttributeError, InvalidTag):
                 pass                                    # no grant yet, or one that doesn't open
-        st = _state_of(doc)
         if st == "unsigned" and (name is None or rec.get("role", "Admin") == "Admin"):
             _upgrade_due = True                         # done by _load, now or once the database is ready
         elif st == "ok" and "rules" in _held:
@@ -419,6 +445,7 @@ def _upgrade():
     _upgrade_due = False
     rules, rules_pub = envelope.new_signing_key()
     backups, backups_pub = envelope.new_box_key()
+    _keep_held()
     _held.update(rules=rules, backups=backups)
 
     def go(doc):
@@ -438,20 +465,21 @@ def _upgrade():
 
 
 def close():
-    global _audited, _upgrade_due, _own_box
+    global _audited, _upgrade_due, _own_box, _root
     with _lock:
         _held.clear()
         _invalidate()
-        _audited = _upgrade_due = _own_box = False
+        _audited = _upgrade_due = _own_box = _root = False
 
 
 # ---------------------------------------------------------------- changing the rules
 def _may_write(doc):
-    """True for the repair (a recovery sign-in on a tampered file); raises unless this sign-in may change the rules."""
+    """True when this change re-keys: the recovery key (the root of trust) repairing a tampered file, or changing a good one
+    while it holds no rules key (a Part 1 one). False for whoever holds the rules key on a good file; raises for anyone else."""
     from core import perms
     st = _state_of(doc)
-    if (st == "tampered" or (st == "ok" and "rules" not in _held)) and datakey.signed_in_name() is None and _own_box:
-        return True                                     # the recovery key, holding no rules key (a Part 1 one): re-keys as well
+    if (st == "tampered" or (st == "ok" and "rules" not in _held)) and _root:
+        return True
     if st == "tampered":
         raise perms.Denied()                            # everyone is a Tech until the recovery key puts it right
     if st != "ok" or "rules" not in _held:
@@ -462,14 +490,16 @@ def _may_write(doc):
 def _rekey(doc):
     """The recovery key's re-key (its repair of a tampered file, or its first change while it holds no rules key): a new rules
     key, with the box keys and backups_pub taken from what was last signed, not from the file. Returns the new public half.
-    shortcut: the new key is held before the write lands; a failed write leaves this sign-in signing with it, so "tampered"."""
+    The new key is held at once; a failed write puts back the keys held before (_landed)."""
+    _keep_held()
     _held["rules"], pub = envelope.new_signing_key()
     doc["rules_pub"] = _b64(pub)
     grants = doc.get("grants") if isinstance(doc.get("grants"), dict) else {}
     rg = doc.get("recovery_grants") if isinstance(doc.get("recovery_grants"), dict) else {}
     last = _last_signed()
     if last:                                            # the box keys and backups_pub vouched for last, not the file's
-        doc["attested"] = {n: (last["accounts"].get(n) or {}).get("box_pub") for n in doc["accounts"]}
+        old = last["accounts"]                          # (an account it never had: "", which first use never vouches for)
+        doc["attested"] = {n: (old[n] or {}).get("box_pub") if n in old else "" for n in doc["accounts"]}
         doc["recovery_attested"] = last.get("recovery_box_pub")
         doc["backups_pub"] = last["backups_pub"]
         if "backups" in _held and _b64(_public("backups", _held["backups"])) != last["backups_pub"]:
@@ -545,3 +575,4 @@ def set_permissions(role, changes):
 
 
 datakey.accounts_changed = _accounts_changed
+datakey.written = _landed

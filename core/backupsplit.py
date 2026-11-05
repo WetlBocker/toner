@@ -109,13 +109,14 @@ def _split(path, pub):
 
 
 def secrets_kept():
-    """True when any database keeps a backup's passwords under a backups key (roles' tripwire). Files not set up for it yet don't;
-    a file that can't be read is passed over (it never stops sign-in); a locked one raises."""
+    """True when any database has a backup looked at under a backups key (roles' tripwire): a secret kept, or '' (looked at,
+    nothing to keep), as only a signed copy writes. Files not set up for it yet don't; a file that can't be read is passed over (it
+    never stops sign-in); a locked one raises."""
     for p in databases():
         try:
             c = _open(p)
             try:
-                if c.execute("SELECT 1 FROM config_backups WHERE secret <> '' LIMIT 1").fetchone():
+                if c.execute("SELECT 1 FROM config_backups WHERE secret IS NOT NULL LIMIT 1").fetchone():
                     return True
             finally:
                 c.close()

@@ -44,6 +44,8 @@ _name = None      # the signed-in account's stored spelling; None for the recove
 # re-keys an account or the recovery key. It drops grants made for a box key that is gone, re-signs the rules, and may refuse. It
 # may return a function to run once the write has landed.
 accounts_changed = None
+# core/roles sets this too: fn(landed) after every change, True once its write has landed (or it changed nothing), False when it failed.
+written = None
 
 
 class WrongPassword(ValueError):
@@ -257,17 +259,27 @@ def _open(payload, name):
 
 def _change(fn, accounts=False):
     """Read, change and write the file under its lock, with the key open. `accounts`: fn changes the accounts or a box key, so
-    the roles hook sees the file before and after."""
+    the roles hook sees the file before and after. A change that leaves the file as it was writes nothing."""
     with _lock, _FileLock():
-        if _key is None:
-            raise Locked("Sign in first.")
-        doc = _read()
-        before = copy.deepcopy(doc) if accounts else None
-        result = fn(doc)
-        done = accounts_changed(before, doc) if accounts and accounts_changed is not None else None
-        _write(doc)
-        if done is not None:
-            done()
+        try:
+            if _key is None:
+                raise Locked("Sign in first.")
+            doc = _read()
+            before = copy.deepcopy(doc)
+            result = fn(doc)
+            done = accounts_changed(before, doc) if accounts and accounts_changed is not None else None
+            if doc != before:
+                _write(doc)
+        except BaseException:
+            if written is not None:
+                written(False)
+            raise
+        try:
+            if done is not None:
+                done()
+        finally:
+            if written is not None:
+                written(True)                       # the file has landed, whatever done() did
         return result
 
 

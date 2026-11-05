@@ -369,8 +369,9 @@ def store(device, text, mask=True, keep=None):
         return "unchanged", prev, 0, 0
     pub = roles.backups_public() if body != full else None
     # secret: the passwords, encrypted; '' when the body holds none (without a key too: rules that don't check out, so masked
-    # only); None for a body kept as read, which core/backupsplit.py looks at later
-    secret = None if kept else envelope.wrap(pub, _pack(full), aad(digest)) if pub else ""
+    # only); None before the rules are signed (sign-in off, or a Part 1 file no Admin has opened), which core/backupsplit.py looks
+    # at later: a '' there would trip roles' tripwire at the Admin's first sign-in
+    secret = None if roles.state() in ("off", "unsigned") else envelope.wrap(pub, _pack(full), aad(digest)) if pub else ""
     added = removed = 0
     if prev:
         _, added, removed = diff_lines(get_text(prev["id"]), body)

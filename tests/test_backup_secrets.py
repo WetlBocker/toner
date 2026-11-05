@@ -69,9 +69,8 @@ check("sign-in off: get_text(unmasked=True) is the body", SECRET in backup.get_t
 check("sign-in off: no reason to show", backup.secrets_hidden_reason(newest("g-sw")) is None)
 check("before sign-in, nothing to split (no backups key)", roles.backups_public() is None)
 backup.store("m-sw", cfg(), mask=True)
-check("sign-in off, mask=True: the body masked, marked looked at ('')", rows(DBS[0])[-1]["secret"] == "" and SECRET not in body(rows(DBS[0])[-1]))
-with db.connect() as c:                             # as a version stored before this change: not looked at yet
-    c.execute("UPDATE config_backups SET secret=NULL WHERE device='m-sw'")
+check("sign-in off, mask=True: the body masked, not looked at yet (NULL: '' would trip the roles tripwire at the first sign-in)",
+      rows(DBS[0])[-1]["secret"] is None and SECRET not in body(rows(DBS[0])[-1]))
 m_body = rows(DBS[0])[-1]["body"]
 
 with db.within(globex), db.connect() as c:          # Globex's file as Toner kept it before this change: no secret column
