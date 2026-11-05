@@ -222,7 +222,7 @@ check("unknown name takes >= 80% of a wrong password on a real name", fake >= 0.
 print(f"   timing medians: right {real:.3f}s, unknown {fake:.3f}s, wrong {wrong:.3f}s")
 D.check_password("nobody", PW)
 check("unknown name adds no record", b"nobody" not in D.path().read_bytes() and [a["name"] for a in D.accounts()] == ["admin", "jsmith"])
-check("no per-account counters", all(set(a) == {"kind", "kdf", "key", "created"} for a in __import__("json").loads(D.path().read_text())["accounts"].values()))
+check("no per-account counters", all(set(a) == {"kind", "kdf", "key", "created", "box_pub", "role"} for a in __import__("json").loads(D.path().read_text())["accounts"].values()))
 D.check_password("admin", PW)
 
 # no secret in the file in any form

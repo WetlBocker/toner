@@ -20,12 +20,13 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
-from core import db, passwords, sqldb
+from core import db, envelope, passwords, sqldb
 
 FORMAT = "toner-keys"
 PASSWORD_KDF = {"n": 2 ** 16, "r": 8, "p": 1}
 RECOVERY_KDF = {"n": 2 ** 14, "r": 8, "p": 1}
 RECOVERY_AAD = b"toner-datakey:recovery"
+ROLES = ("Admin", "Engineer", "Tech")
 FREE_TRIES, FIRST_WAIT, MAX_WAIT = 5, 30, 900
 _DUMMY_SALT = b"toner-datakey:no-such-account"     # an unknown name still runs scrypt, so timing doesn't tell names apart
 WRONG = "That username or password isn't right."
@@ -34,8 +35,10 @@ MISSING = ("Toner's data is encrypted, but netcheck.keys is missing from its dat
            "then start Toner again.")
 
 _lock = threading.RLock()
-# shortcut: the key is immutable bytes, so close() drops it but can't zero the memory; upgrade if Python gains a wipeable buffer.
+# shortcut: the keys are immutable bytes, so close() drops them but can't zero the memory; upgrade if Python gains a wipeable buffer.
 _key = None
+_box = None       # the signed-in account's (or the recovery key's) private box key
+_name = None      # the signed-in account's stored spelling; None for the recovery key
 
 
 class WrongPassword(ValueError):
@@ -106,9 +109,22 @@ def _seal(secret, key, aad, kdf):
 
 
 def _unseal(secret, rec, aad):
-    """The data key, or InvalidTag when the secret is wrong."""
+    """The payload (the data key, then the box private), or InvalidTag when the secret is wrong. A Part 1 seal (the data key
+    alone) gains a box key here, re-sealed in `rec` under the same KEK (so still one scrypt); the caller writes it."""
     kdf, raw = rec["kdf"], _unb64(rec["key"])
-    return AESGCM(_kek(secret, _unb64(kdf["salt"]), kdf)).decrypt(raw[:12], raw[12:], aad)
+    aes = AESGCM(_kek(secret, _unb64(kdf["salt"]), kdf))
+    payload = aes.decrypt(raw[:12], raw[12:], aad)
+    if len(payload) == 32:
+        private, public = envelope.new_box_key()
+        payload, nonce = payload + private, os.urandom(12)
+        rec["key"], rec["box_pub"] = _b64(nonce + aes.encrypt(nonce, payload, aad)), _b64(public)
+    return payload
+
+
+def _boxed(secret, key, aad, kdf):
+    """(a seal of the data key and a new box private, with its box_pub; that private)."""
+    private, public = envelope.new_box_key()
+    return {**_seal(secret, key + private, aad, kdf), "box_pub": _b64(public)}, private
 
 
 def _aad(name):
@@ -163,15 +179,20 @@ def _check(password, name):
         raise ValueError(p)
 
 
-def _account(name, password, key, created=None):
-    return {"kind": "local", **_seal(password, key, _aad(name), PASSWORD_KDF),
-            "created": created or datetime.now(timezone.utc).isoformat(timespec="seconds")}
+def _account(name, password, key, created=None, role="Admin"):
+    """(the record, its box private): always a new box key."""
+    if role not in ROLES:
+        raise ValueError("unknown role")
+    sealed, private = _boxed(password, key, _aad(name), PASSWORD_KDF)
+    return {"kind": "local", **sealed, "role": role,
+            "created": created or datetime.now(timezone.utc).isoformat(timespec="seconds")}, private
 
 
 def _new_recovery(key):
-    """(what to show, the seal): 160 random bits as 32 base32 characters in groups of four."""
+    """(what to show, the seal, its box private): 160 random bits as 32 base32 characters in groups of four."""
     code = base64.b32encode(os.urandom(20)).decode("ascii")
-    return "-".join(code[i:i + 4] for i in range(0, 32, 4)), {**_seal(code, key, RECOVERY_AAD, RECOVERY_KDF), "fails": 0, "until": 0}
+    sealed, private = _boxed(code, key, RECOVERY_AAD, RECOVERY_KDF)
+    return "-".join(code[i:i + 4] for i in range(0, 32, 4)), {**sealed, "fails": 0, "until": 0}, private
 
 
 def _wait(over):
@@ -180,7 +201,8 @@ def _wait(over):
 
 
 def _attempt(name, secret):
-    """(the data key from `name`'s seal (None: the recovery seal), the failed tries counted before it). Every password try, for any name, real or not, counts against
+    """(the payload of `name`'s seal (None: the recovery seal), the stored name, the failed tries counted before it). A Part 1
+    seal gains its box key in the same write that clears the count. Every password try, for any name, real or not, counts against
     one shared counter (per-name counts would show which names exist); the recovery key has its own. The count is read, changed
     and written under the file lock, so two Toner processes can't race it. Raises Throttled while a wait runs (without
     checking), else WrongPassword."""
@@ -195,13 +217,15 @@ def _attempt(name, secret):
             raise Throttled(math.ceil(counter["until"] - now))
         key = None
         stored = None if name is None else _find(doc, name)
+        rec = doc["recovery"] if name is None else doc["accounts"].get(stored)
+        upgrade = rec is not None and "box_pub" not in rec
         try:
             if name is None:
-                key = _unseal(secret, doc["recovery"], RECOVERY_AAD)
+                key = _unseal(secret, rec, RECOVERY_AAD)
             elif stored is None:
                 _kek(secret, _DUMMY_SALT, PASSWORD_KDF)       # an unknown name costs what a real check costs
             else:
-                key = _unseal(secret, doc["accounts"][stored], _aad(stored))
+                key = _unseal(secret, rec, _aad(stored))
         except InvalidTag:
             pass
         if key is None:
@@ -214,16 +238,16 @@ def _attempt(name, secret):
                 raise Throttled(_wait(over))
             raise WrongPassword(WRONG_RECOVERY if name is None else WRONG)
         fails = counter.get("fails", 0)
-        if fails or counter.get("until"):
+        if fails or counter.get("until") or upgrade:
             counter["fails"], counter["until"] = 0, 0
             _write(doc)
-        return key, fails
+        return key, stored, fails
 
 
-def _open(key):
-    global _key
-    sqldb.set_key(key)
-    _key = key
+def _open(payload, name):
+    global _key, _box, _name
+    sqldb.set_key(payload[:32])
+    _key, _box, _name = payload[:32], payload[32:], name
 
 
 def _change(fn):
@@ -255,24 +279,25 @@ def create(name, password):
         if missing():
             raise FileExistsError(MISSING)
         key = os.urandom(32)
-        shown, recovery = _new_recovery(key)
-        _write({"format": FORMAT, "version": 1, "accounts": {name: _account(name, password, key)}, "recovery": recovery,
+        shown, recovery, _ = _new_recovery(key)
+        account, private = _account(name, password, key)
+        _write({"format": FORMAT, "version": 1, "accounts": {name: account}, "recovery": recovery,
                 "throttle": {"fails": 0, "until": 0}})
-        _open(key)
+        _open(key + private, name)
     return shown
 
 
 def open_with_password(name, password):
     """Opens the key; returns how many password tries failed (for any name) since the last one that worked."""
-    key, fails = _attempt(_clean(name), password or "")
-    _open(key)
+    key, stored, fails = _attempt(_clean(name), password or "")
+    _open(key, stored)
     return fails
 
 
 def open_with_recovery(recovery):
     """Opens the key; returns how many recovery-key tries failed since the last one that worked."""
-    key, fails = _attempt(None, (recovery or "").upper().replace(" ", "").replace("-", ""))
-    _open(key)
+    key, _, fails = _attempt(None, (recovery or "").upper().replace(" ", "").replace("-", ""))
+    _open(key, None)
     return fails
 
 
@@ -285,26 +310,31 @@ def check_password(name, password):
         return False
 
 
-def add_local(name, password):
+def add_local(name, password, role="Admin"):
     name = _clean(name)
     _check(password, name)
 
     def add(doc):
         if _find(doc, name) is not None:
             raise NameTaken("That username is already taken.")
-        doc["accounts"][name] = _account(name, password, _key)
+        doc["accounts"][name] = _account(name, password, _key, role=role)[0]
     _change(add)
 
 
 def set_password(name, password):
     """Also clears the password tries' wait: whoever sets a password has the key open (a password or the recovery key), and the
     new password must work at once (the reset after a recovery-key sign-in signs in with it straight away)."""
+    global _box
     def reseal(doc):
         stored = _stored(doc, name)
         _check(password, stored)
-        doc["accounts"][stored] = _account(stored, password, _key, doc["accounts"][stored].get("created"))
+        old = doc["accounts"][stored]
+        doc["accounts"][stored], private = _account(stored, password, _key, old.get("created"), old.get("role", "Admin"))
         doc["throttle"] = {"fails": 0, "until": 0}
-    _change(reseal)
+        return stored, private
+    stored, private = _change(reseal)
+    if stored == _name:                 # your own password: hold the new box key (only once the write has landed)
+        _box = private
 
 
 def remove(name):
@@ -318,20 +348,48 @@ def remove(name):
 
 def accounts():
     with _lock, _FileLock():  # (a writer's os.replace fails on Windows while this file is open)
-        return sorted(({"name": n, "kind": a["kind"], "created": a["created"]} for n, a in _read()["accounts"].items()),
-                      key=lambda a: a["name"].casefold())
+        return sorted(({"name": n, "kind": a["kind"], "created": a["created"], "role": a.get("role", "Admin")}
+                       for n, a in _read()["accounts"].items()), key=lambda a: a["name"].casefold())
+
+
+def read():
+    """The whole file, freshly parsed under the lock (so a copy the caller may change)."""
+    with _lock, _FileLock():
+        return _read()
+
+
+edit = _change
+
+
+def box_private():
+    return _box
+
+
+def box_public(name):
+    """The account's public box key (None as the name: the recovery key's), or None for a Part 1 record."""
+    doc = read()
+    rec = doc["recovery"] if name is None else doc["accounts"][_stored(doc, name)]
+    return _unb64(rec["box_pub"]) if "box_pub" in rec else None
+
+
+def signed_in_name():
+    return _name
 
 
 def new_recovery():
     """Replace the recovery seal; the old recovery key stops working. Returns the new one to show once."""
+    global _box
     def swap(doc):
-        shown, doc["recovery"] = _new_recovery(_key)
-        return shown
-    return _change(swap)
+        shown, doc["recovery"], private = _new_recovery(_key)
+        return shown, private
+    shown, private = _change(swap)
+    if _name is None:                   # signed in with the recovery key: hold the new one's box key
+        _box = private
+    return shown
 
 
 def close():
-    global _key
+    global _key, _box, _name
     with _lock:
-        _key = None
+        _key = _box = _name = None
         sqldb.set_key(None)
