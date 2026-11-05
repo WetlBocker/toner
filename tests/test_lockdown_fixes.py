@@ -42,6 +42,10 @@ def plain_db(path, rows):
 print("== a plain copy, as an older Toner left it")
 backup, other = root / "toner-backup-2026-01-02.db", root / "notes.db"
 plain_db(backup, ["dev1", "dev2"]); plain_db(other, ["x"])
+damaged = root / "damaged.db"
+plain_db(damaged, ["y" * 3000 for _ in range(20)])
+damaged.write_bytes(damaged.read_bytes()[:6000])          # cut short: SQLite says it's malformed
+damaged_bytes = damaged.read_bytes()
 db.init()
 exported = root / "toner-backup-locked.db"
 with db.connect() as c:
@@ -66,6 +70,8 @@ lockdown.run()
 check("the backup is encrypted in place under the data key, rows and version intact", sqldb.is_encrypted(backup)
       and sqldb.connect(backup).execute("SELECT count(*), (SELECT user_version FROM pragma_user_version) FROM t").fetchone() == (2, 7))
 check("so is the other database", sqldb.is_encrypted(other))
+check("a damaged database someone left there doesn't stop it: it is sealed whole, nothing lost",
+      sealedfile.is_sealed(damaged) and sealedfile.read_bytes(damaged) == damaged_bytes)
 check("the passworded backup is untouched", exported.read_bytes() == exported_bytes)
 check("the SFTP key is encrypted PEM", b"ENCRYPTED PRIVATE KEY" in sftp.read_bytes())
 check("...and is the same identity (clients see the same fingerprint)", fileserver.fingerprint(fileserver.load_host_key(str(sftp))) == fp)
@@ -102,6 +108,8 @@ check("the index is a small file in the data folder", len(idx) == 1, idx)
 idx[0].write_text("{not json")
 opened.clear()
 check("a damaged index just means a full look", lockdown.pending() == [] and len([p for p in opened if p.parent == sessionlog.log_dir()]) == 39, len(opened))
+idx[0].write_text("[]")
+check("an index that isn't an object just means a full look", lockdown.pending() == [])
 idx[0].unlink(); opened.clear()
 check("so does a missing one", lockdown.pending() == [] and len([p for p in opened if p.parent == sessionlog.log_dir()]) == 39)
 sealedfile.is_sealed = real_is_sealed

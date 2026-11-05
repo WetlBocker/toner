@@ -34,6 +34,8 @@ def _plain_side_files():
         known = json.loads(_index_path().read_text(encoding="utf-8"))
     except (OSError, ValueError):
         known = {}
+    if not isinstance(known, dict):
+        known = {}
     files = []
     with os.scandir(sessionlog.log_dir()) as it:
         for e in it:
@@ -59,12 +61,27 @@ def _plain_side_files():
     return sorted(plain)
 
 
+def _encrypt_db(p):
+    sqldb.encrypt_file(p, sqldb.current_key())
+
+
+def _encrypt_foreign(p):
+    """A database someone left in the data folder. One SQLite can't read would stop Toner starting, every time: seal it whole."""
+    try:
+        _encrypt_db(p)
+    except sqldb.sqlite3.OperationalError:
+        raise                                            # in use: the person is asked to try again
+    except sqldb.sqlite3.DatabaseError:
+        sealedfile.seal_existing(p)
+
+
 def _steps():
     """[(path, what encrypts it)] for everything still plain."""
     base = db.base_path()
     databases = sorted(base.with_name(base.stem + ".orgs").glob("*.db")) + [base, demarc.queue_path()]
+    own = list(databases)
     databases += [p for p in sorted(base.parent.glob("*.db")) if p not in databases]   # backups an older Toner saved here, and the like
-    steps = [(p, lambda p: sqldb.encrypt_file(p, sqldb.current_key())) for p in databases if _has_data(p) and not sqldb.is_encrypted(p)]
+    steps = [(p, _encrypt_db if p in own else _encrypt_foreign) for p in databases if _has_data(p) and not sqldb.is_encrypted(p)]
     steps += [(p, sealedfile.seal_existing) for p in _plain_side_files()]
     key_file = agents.cert_dir() / "toner-agent.key"
     if key_file.exists() and not agents.key_is_encrypted(key_file):
