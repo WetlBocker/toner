@@ -73,6 +73,22 @@ moved = d / "moved.txt"
 S.write_text(p, "abc"); moved.write_bytes(p.read_bytes())
 check("frame can't move to another file", raises(ValueError, S.read_bytes, moved))
 
+import threading
+both, errors = d / "both.txt", []
+def writer(tag):
+    for i in range(40):
+        try: S.write_text(both, f"{tag}{i}")
+        except Exception as e: errors.append(repr(e))
+ts = [threading.Thread(target=writer, args=(t,)) for t in "ab"]
+[t.start() for t in ts]; [t.join() for t in ts]
+check("two threads writing one file don't collide", not errors and S.read_text(both) in ("a39", "b39"), str(errors[:2]))
+check("their temp files are gone", sorted(x.name for x in d.iterdir() if x.name.startswith("both")) == ["both.txt"])
+real_replace = S.os.replace
+S.os.replace = lambda *a: (_ for _ in ()).throw(OSError("disk full"))
+check("a failed write raises", raises(OSError, S.write_text, d / "fail.txt", "x"))
+S.os.replace = real_replace
+check("and leaves no temp file", not [x for x in d.iterdir() if "fail" in x.name])
+
 pl = d / "plain.txt"; pl.write_bytes(b"plain\n")
 check("plain file reads as is", S.read_text(pl) == "plain\n" and not S.is_sealed(pl))
 check("appender refuses plain file", raises(S.Locked, S.Appender, pl))

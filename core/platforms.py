@@ -74,6 +74,17 @@ class FileLock:
         self.f.close()
 
 
+def fsync_dir(folder):
+    """Make a rename or a new file in `folder` survive a power cut (POSIX keeps that in the folder; Windows needs nothing more)."""
+    if WINDOWS:
+        return
+    fd = os.open(folder, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def try_lock(path):
     """Hold a lock file for as long as this process keeps the returned file open (closing it lets the lock go), or None when
     another Toner process (the window, the service) holds it. For work only one of them should do: sending to Demarc, the schedule."""

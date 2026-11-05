@@ -118,6 +118,8 @@ def _write(doc):
         f.flush()
         os.fsync(f.fileno())
     os.replace(tmp, p)
+    from core.platforms import fsync_dir
+    fsync_dir(p.parent)
 
 
 def _FileLock():

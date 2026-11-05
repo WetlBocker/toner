@@ -62,6 +62,34 @@ sqldb.set_key(key)
 c = sqldb.connect(q)
 check("encrypt_file: same 3 rows", [r[0] for r in c.execute("SELECT a FROM t ORDER BY a")] == [1, 2, 3])
 check("encrypt_file: user_version kept", c.execute("PRAGMA user_version").fetchone()[0] == 5)
+
+# another connection holding the file: the checkpoint can't empty the WAL, so nothing may be deleted or replaced
+b = D / "busy.db"
+sqldb.set_key(None)
+w = sqldb.connect(b); w.execute("PRAGMA journal_mode = WAL"); w.execute("CREATE TABLE t (a)"); w.execute("INSERT INTO t VALUES (1)"); w.commit()
+r = sqldb.connect(b); r.execute("BEGIN"); r.execute("SELECT * FROM t").fetchall()
+w.execute("INSERT INTO t VALUES (2)"); w.commit()
+try: sqldb.encrypt_file(b, key); refused = False
+except sqldb.sqlite3.OperationalError as ex: refused = key.hex() not in str(ex)
+check("encrypt_file: busy checkpoint refuses", refused)
+check("encrypt_file: busy leaves the file, its WAL and no .encrypting", not sqldb.is_encrypted(b) and (D / "busy.db-wal").exists()
+      and not (D / "busy.db.encrypting").exists())
+r.rollback(); r.close(); w.close()
+check("encrypt_file: busy lost nothing", [x[0] for x in sqldb.connect(b).execute("SELECT a FROM t ORDER BY a")] == [1, 2])
+
+# a failure after the export (the swap) leaves no .encrypting behind
+f = D / "swap.db"
+c2 = sqldb.connect(f); c2.execute("CREATE TABLE t (a)"); c2.commit(); c2.close()
+real_replace = sqldb.os.replace
+def failing(*a): raise PermissionError("in use")
+sqldb.os.replace = failing
+try: sqldb.encrypt_file(f, key); swapped = True
+except PermissionError: swapped = False
+finally: sqldb.os.replace = real_replace
+check("encrypt_file: a failed swap raises, leaves the file plain and no .encrypting", not swapped and not sqldb.is_encrypted(f)
+      and not (D / "swap.db.encrypting").exists())
+sqldb.set_key(key)
+c = sqldb.connect(q)
 x = D / "export.db"
 sqldb.export_copy(c, x, "correct horse battery"); c.close()
 sqldb.set_key(None)

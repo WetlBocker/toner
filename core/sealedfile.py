@@ -4,6 +4,8 @@ Format: MAGIC, then frames of (4-byte big-endian length, 12-byte nonce, AES-GCM 
 """
 import os
 import struct
+import tempfile
+import threading
 from pathlib import Path
 
 from cryptography.exceptions import InvalidTag
@@ -12,6 +14,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from core import sqldb
 
 MAGIC = b"TONERSEAL1\n"
+_replace_lock = threading.Lock()
 
 
 class Locked(RuntimeError):
@@ -52,7 +55,8 @@ def _frames(raw):
 
 
 def read_bytes(path):
-    raw = Path(path).read_bytes()
+    with _replace_lock:                               # an open reader makes Windows refuse a swap (see replace_bytes)
+        raw = Path(path).read_bytes()
     if not raw.startswith(MAGIC):
         return raw
     aead, aad = _aead(path)
@@ -65,17 +69,47 @@ def read_bytes(path):
     return b"".join(out)
 
 
-def write_bytes(path, data):
+def replace_bytes(path, blob):
+    """Write `blob` to `path` in one step: a crash leaves the old file or the new one. The temp file is unique, so two threads
+    writing the same file (host keys saved from two SSH connections) never share one."""
     p = Path(path)
-    aead, aad = _aead(p)
-    blob = MAGIC + _frame(aead, aad, data)
     p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_name(p.name + ".tmp")
-    with open(tmp, "wb") as f:
-        f.write(blob)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, p)
+    fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=p.name + ".", suffix=".tmp")
+    try:
+        with open(fd, "wb") as f:
+            f.write(blob)
+            f.flush()
+            os.fsync(f.fileno())
+        # shortcut: one swap at a time within this process (Windows refuses two at once onto one file); another Toner process
+        # swapping the same file at that instant can still fail with an OSError the caller sees, upgrade to a FileLock if seen.
+        with _replace_lock:
+            os.replace(tmp, p)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def write_bytes(path, data):
+    aead, aad = _aead(path)
+    replace_bytes(path, MAGIC + _frame(aead, aad, data))
+
+
+def keyed():
+    """Whether side files are written sealed. Until a data key is open (no one has set up sign-in) Toner writes them plain, as it
+    always has; once one is, sealed. Readers take both, and core/lockdown.py seals what was written plain."""
+    return sqldb.current_key() is not None
+
+
+def save_bytes(path, data):
+    """write_bytes when a data key is open, else a plain file (see keyed)."""
+    if keyed():
+        write_bytes(path, data)
+    else:
+        replace_bytes(path, data)
+
+
+def save_text(path, text):
+    save_bytes(path, text.encode("utf-8"))
 
 
 def read_text(path):

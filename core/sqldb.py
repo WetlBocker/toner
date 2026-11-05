@@ -49,31 +49,35 @@ def is_encrypted(path):
 
 
 def encrypt_file(path, key):
-    """Replace a plain database file with an encrypted copy of itself (written beside it, then swapped in)."""
+    """Replace a plain database file with an encrypted copy of itself (written beside it, then swapped in). Raises, leaving the
+    plain file as it was, when another connection holds it."""
     path = Path(path)
     tmp = path.with_name(path.name + ".encrypting")
-    tmp.unlink(missing_ok=True)
-    c = sqlite3.connect(path)
+    tmp.unlink(missing_ok=True)                       # left by a crash: never trusted, made again
     try:
-        c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        ver = c.execute("PRAGMA user_version").fetchone()[0]
-        c.execute("ATTACH DATABASE ? AS enc KEY ?", (str(tmp), _raw(key)))
-        c.execute("SELECT sqlcipher_export('enc')")
-        c.execute("PRAGMA enc.user_version = %d" % ver)   # sqlcipher_export does not copy it
-        c.execute("DETACH DATABASE enc")
+        c = sqlite3.connect(path)
+        try:
+            busy = c.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0]
+            if busy:                                  # frames still in -wal: deleting it below would lose them
+                raise sqlite3.OperationalError(f"{path.name} is in use by another connection")
+            ver = c.execute("PRAGMA user_version").fetchone()[0]
+            c.execute("ATTACH DATABASE ? AS enc KEY ?", (str(tmp), _raw(key)))
+            c.execute("SELECT sqlcipher_export('enc')")
+            c.execute("PRAGMA enc.user_version = %d" % ver)   # sqlcipher_export does not copy it
+            c.execute("DETACH DATABASE enc")
+        finally:
+            c.close()
+        fd = os.open(tmp, os.O_RDWR)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        for suffix in ("-wal", "-shm"):
+            path.with_name(path.name + suffix).unlink(missing_ok=True)
+        os.replace(tmp, path)
     except BaseException:
-        c.close()
         tmp.unlink(missing_ok=True)
         raise
-    c.close()
-    fd = os.open(tmp, os.O_RDWR)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-    for suffix in ("-wal", "-shm"):
-        path.with_name(path.name + suffix).unlink(missing_ok=True)
-    os.replace(tmp, path)
 
 
 def export_copy(src_conn, dest, passphrase):
