@@ -5,7 +5,7 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import os, shutil, socket, struct, sys, threading, time
-SP = os.environ["SP"]
+SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = os.path.join(SP, "fsdb.db"); os.environ["APPDATA"] = SP; os.makedirs(SP, exist_ok=True)
 from core import fileserver as F, iperf
 ok = bad = 0
 def check(name, cond, extra=""):
