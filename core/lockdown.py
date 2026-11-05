@@ -55,7 +55,8 @@ def run(progress=None):
     finally:
         os.close(fd)
     platforms.fsync_dir(keys.parent)
-    steps = _steps()
+    writing = sessionlog.in_use()                         # sealing a log under an open session would cut it off: next run
+    steps = [s for s in _steps() if s[0] not in writing]
     for done, (path, encrypt) in enumerate(steps, 1):
         encrypt(path)
         if progress:

@@ -77,6 +77,45 @@ check("encrypt_file: busy leaves the file, its WAL and no .encrypting", not sqld
 r.rollback(); r.close(); w.close()
 check("encrypt_file: busy lost nothing", [x[0] for x in sqldb.connect(b).execute("SELECT a FROM t ORDER BY a")] == [1, 2])
 
+# a connection that is merely open (idle, nothing in the WAL for it), and one that keeps committing during the encrypt: on POSIX
+# the swap would leave either writing to the old file, so encrypt_file must refuse while any other connection has it open
+import threading
+def rows_of(path):
+    c = sqldb.connect(path)
+    try: return [x[0] for x in c.execute("SELECT a FROM t ORDER BY a")]
+    finally: c.close()
+i = D / "idle.db"
+w = sqldb.connect(i); w.execute("PRAGMA journal_mode = WAL"); w.execute("CREATE TABLE t (a)"); w.execute("INSERT INTO t VALUES (1)"); w.commit(); w.close()
+idle = sqldb.connect(i); idle.execute("SELECT * FROM t").fetchall()
+try: sqldb.encrypt_file(i, key); refused = False
+except sqldb.sqlite3.OperationalError as ex: refused = key.hex() not in str(ex)
+check("encrypt_file: an idle open connection refuses", refused and not sqldb.is_encrypted(i) and not (D / "idle.db.encrypting").exists())
+idle.execute("INSERT INTO t VALUES (2)"); idle.commit()
+check("encrypt_file: the idle connection still writes to the file everyone sees", rows_of(i) == [1, 2])
+idle.close()
+written, stop = [], threading.Event()
+busy_w = sqldb.connect(i, timeout=5, check_same_thread=False); busy_w.execute("SELECT 1").fetchall()
+def keep_writing():
+    n = 100
+    while not stop.is_set():
+        try:
+            busy_w.execute("INSERT INTO t VALUES (?)", (n,)); busy_w.commit(); written.append(n); n += 1
+        except sqldb.sqlite3.OperationalError:
+            busy_w.rollback()
+t = threading.Thread(target=keep_writing); t.start()
+while len(written) < 5: time.sleep(0.01)
+try: sqldb.encrypt_file(i, key); refused = False
+except sqldb.sqlite3.OperationalError: refused = True
+stop.set(); t.join(); busy_w.close()
+rows = rows_of(i)
+check("encrypt_file: a connection committing during the encrypt refuses, every row intact", refused and not sqldb.is_encrypted(i)
+      and rows == [1, 2] + written, f"{refused} {len(rows)} {len(written)}")
+sqldb.encrypt_file(i, key)
+sqldb.set_key(key)
+check("encrypt_file: once no one else has it open, it encrypts with every row", sqldb.is_encrypted(i)
+      and rows_of(i) == [1, 2] + written)
+sqldb.set_key(None)
+
 # a failure after the export (the swap) leaves no .encrypting behind
 f = D / "swap.db"
 c2 = sqldb.connect(f); c2.execute("CREATE TABLE t (a)"); c2.commit(); c2.close()

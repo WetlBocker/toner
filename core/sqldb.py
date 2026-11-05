@@ -54,19 +54,24 @@ def encrypt_file(path, key):
     path = Path(path)
     tmp = path.with_name(path.name + ".encrypting")
     tmp.unlink(missing_ok=True)                       # left by a crash: never trusted, made again
+    c = None
     try:
-        c = sqlite3.connect(path)
-        try:
-            busy = c.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0]
-            if busy:                                  # frames still in -wal: deleting it below would lose them
-                raise sqlite3.OperationalError(f"{path.name} is in use by another connection")
-            ver = c.execute("PRAGMA user_version").fetchone()[0]
-            c.execute("ATTACH DATABASE ? AS enc KEY ?", (str(tmp), _raw(key)))
-            c.execute("SELECT sqlcipher_export('enc')")
-            c.execute("PRAGMA enc.user_version = %d" % ver)   # sqlcipher_export does not copy it
-            c.execute("DETACH DATABASE enc")
-        finally:
-            c.close()
+        c = sqlite3.connect(path, timeout=1)
+        busy = c.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0]
+        try:                                          # SQLite leaves WAL only when no other connection has the file open
+            mode = None if busy else c.execute("PRAGMA journal_mode = DELETE").fetchone()[0]
+        except sqlite3.OperationalError:
+            mode = None
+        if mode != "delete":                          # another connection: on POSIX it would go on writing to the old file
+            raise sqlite3.OperationalError(f"{path.name} is in use by another connection")
+        c.execute("PRAGMA locking_mode = EXCLUSIVE")  # held from here to the swap: no one can write what the copy would miss
+        c.execute("BEGIN EXCLUSIVE")
+        c.commit()
+        ver = c.execute("PRAGMA user_version").fetchone()[0]
+        c.execute("ATTACH DATABASE ? AS enc KEY ?", (str(tmp), _raw(key)))
+        c.execute("SELECT sqlcipher_export('enc')")
+        c.execute("PRAGMA enc.user_version = %d" % ver)   # sqlcipher_export does not copy it
+        c.execute("DETACH DATABASE enc")
         fd = os.open(tmp, os.O_RDWR)
         try:
             os.fsync(fd)
@@ -74,8 +79,17 @@ def encrypt_file(path, key):
             os.close(fd)
         for suffix in ("-wal", "-shm"):
             path.with_name(path.name + suffix).unlink(missing_ok=True)
-        os.replace(tmp, path)
+        if os.name != "nt":
+            os.replace(tmp, path)                     # still holding the lock
+        c.close()
+        c = None
+        if os.name == "nt":
+            # shortcut: Windows can't replace a file this process has open, so the lock goes just before the swap; a process
+            # that opens, writes and closes it in that instant is lost (one still holding it makes the swap fail). Rare at sign-in.
+            os.replace(tmp, path)
     except BaseException:
+        if c is not None:
+            c.close()
         tmp.unlink(missing_ok=True)
         raise
 

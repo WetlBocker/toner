@@ -54,6 +54,7 @@ try:
 except datakey.Locked:
     check("no key open: refused", not any(sqldb.is_encrypted(p) for p in DBS))
 
+live = sessionlog.SessionLog("acme-rtr", "10.0.0.9", 22, "u"); live.write(b"rtr# first line\n")   # a session open through lockdown
 recovery = datakey.create("Admin", "correct horse battery 42")
 
 # ---------------------------------------------------------------- the service has the data open
@@ -113,6 +114,13 @@ try:
 except Exception as e:
     check("the receiver opens the encrypted key", False, repr(e))
 check("rdp/ is gone", not rdp.exists())
+check("a session log still being written is skipped: plain, and still pending", not sealedfile.is_sealed(live.path)
+      and lockdown.pending() == [Path(live.path)], str(lockdown.pending()))
+live.write(b"rtr# second line\n"); live.close("closed")
+lockdown.run()
+text = sealedfile.read_text(live.path)
+check("once it closes, the next run seals it with every line", sealedfile.is_sealed(live.path) and "first line" in text
+      and "second line" in text and "# Result:   closed" in text)
 check("nothing is pending", lockdown.pending() == [], str(lockdown.pending()))
 db.release()
 check("the devices are all there", sorted((d["name"], d["org"]) for d in db.list_devices()) == before)

@@ -7,6 +7,7 @@ password is never written anywhere.
 import codecs
 import os
 import re
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -15,6 +16,13 @@ from core import quiet
 
 _ESC = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b[()][A-Z0-9]|\x1b[=>78MDEHc]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
 _CTRL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+_open, _open_lock = set(), threading.Lock()
+
+
+def in_use():
+    """The log files a session in this process is still writing (core/lockdown.py leaves them until they close)."""
+    with _open_lock:
+        return set(_open)
 
 
 def log_dir() -> Path:
@@ -56,6 +64,8 @@ class SessionLog:
             raise OSError("could not find a free log file name")
         self.file = (sealedfile.Appender(self.path) if sealedfile.keyed()
                      else open(self.path, "w", encoding="utf-8", newline="\n", buffering=1))   # line-buffered: each write lands, as an Appender's does
+        with _open_lock:
+            _open.add(self.path)
         self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
         self.pending, self.bytes, self.closed, self.failed = "", 0, False, False
         operator = audit.actor()
@@ -102,6 +112,8 @@ class SessionLog:
             self.file.close()                       # even when the last write failed: an open handle blocks deleting the log
         except OSError:
             pass
+        with _open_lock:
+            _open.discard(self.path)
         self.closed = True
         try:
             with db.connect() as c:
