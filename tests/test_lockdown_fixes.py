@@ -108,7 +108,7 @@ sealedfile.is_sealed = real_is_sealed
 
 print("== new database backups default to Documents")
 from PySide6.QtCore import QStandardPaths
-from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
+from PySide6.QtWidgets import QApplication, QFileDialog
 app = QApplication.instance() or QApplication([])
 from core import session
 session.sign_out(); session.sign_in("Admin", "correct horse battery 42")
