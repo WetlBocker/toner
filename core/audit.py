@@ -8,8 +8,9 @@ from core import quiet
 
 
 def actor():
+    from core import session          # session imports this module
     try:
-        return getpass.getuser()
+        return session.user() or getpass.getuser()
     except Exception:
         return "unknown"
 

@@ -5,13 +5,12 @@ a password typed at a hidden prompt (e.g. 'enable'), so those never reach the lo
 password is never written anywhere.
 """
 import codecs
-import getpass
 import os
 import re
 from datetime import datetime
 from pathlib import Path
 
-from core import db
+from core import audit, db
 from core import quiet
 
 _ESC = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b[()][A-Z0-9]|\x1b[=>78MDEHc]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
@@ -57,7 +56,7 @@ class SessionLog:
             raise OSError("could not find a free log file name")
         self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
         self.pending, self.bytes, self.closed, self.failed = "", 0, False, False
-        operator = getpass.getuser()
+        operator = audit.actor()
         self.file.write(
             f"# Toner {kind.upper()} session log\n"
             f"# Started:  {self.started:%Y-%m-%d %H:%M:%S}\n"
