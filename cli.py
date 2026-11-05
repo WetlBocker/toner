@@ -14,11 +14,12 @@ import json
 import signal
 import sys
 
-from core import datakey, db, lockdown, service, session
+from core import datakey, db, lockdown, passvault, service, session
 from drivers.base import SEVERITY
 
 SERVICE_OFF = ("Toner's background service is off while sign-in is turned on. "
                "Scheduled checks and backups run while someone is signed in to Toner's window.")
+UNFINISHED = "Toner's data hasn't finished encrypting. Open Toner's window to finish, then try again."
 LEVEL = {"warn": 1, "fail": 2, "error": 3, "never": 99}
 
 
@@ -62,6 +63,9 @@ def main(argv=None, ready=None):
         if p is not sv:
             p.add_argument("--user", help="the Toner account to sign in with (asked for if left out)")
     a = ap.parse_args(argv)
+    if datakey.missing():
+        print(datakey.MISSING, file=sys.stderr)
+        return 3
     if not datakey.exists():
         return _run(a)
     if a.cmd == "service":
@@ -77,16 +81,21 @@ def main(argv=None, ready=None):
 def _sign_in(a):
     """None when signed in and ready to read; otherwise the exit code (3) after saying why on stderr."""
     try:
+        if sys.stdin is None:                  # Toner.exe is a window program with no input; TonerCli.exe has a console
+            raise EOFError
         user = a.user or input("Username: ")
         password = getpass.getpass("Password: ")
-    except EOFError:                           # Task Scheduler, redirected input: nobody to ask
+    except (EOFError, RuntimeError):           # Task Scheduler, redirected input, or input() that "lost sys.stdin": nobody to ask
         print("Sign in needs a terminal.", file=sys.stderr)
         return 3
     try:
         session.sign_in(user, password)
         if lockdown.pending():                 # Toner's window finishes the upgrade; the command line never encrypts
-            print("Toner's data hasn't finished encrypting. Open Toner's window to finish, then try again.", file=sys.stderr)
+            print(UNFINISHED, file=sys.stderr)
             return 3
+    except passvault.Locked:                   # the old vault hasn't moved over yet: the window's first start does that
+        print(UNFINISHED, file=sys.stderr)
+        return 3
     except (datakey.WrongPassword, datakey.Throttled) as e:
         print(e, file=sys.stderr)
         return 3

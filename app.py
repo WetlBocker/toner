@@ -1053,7 +1053,7 @@ def run_cli(args):
         except Exception:
             log.exception("could not read the passwords from the password manager")
     import cli
-    if datakey.exists():
+    if datakey.exists() or datakey.missing():
         return cli.main(args, ready)               # the vault opens through sign-in, so cli.main runs this after it
     passvault.unlock_remembered()                  # ...which opens by itself when it is remembered on this computer
     ready()

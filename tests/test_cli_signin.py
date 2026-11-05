@@ -150,6 +150,48 @@ rc, out, err = call("status", "--user", "admin")
 lockdown.pending = real_pending
 check("exit 3 and signed out", rc == 3 and err.strip() and session.state() == "signed_out", (rc, err))
 
+print("== no stdin at all (Toner.exe is a window program: it has none)")
+from core import passvault
+asked.clear()
+real_stdin = sys.stdin
+sys.stdin = None
+builtins.input = real_input                          # the real one raises RuntimeError("input(): lost sys.stdin")
+rc, out, err = call("status")
+check("no --user: exit 3 and the message, no traceback", rc == 3 and err.strip() == "Sign in needs a terminal." and not asked, (rc, err))
+rc, out, err = call("status", "--user", "admin")
+check("--user given: the password isn't asked either (getpass would fight the shell for keys)",
+      rc == 3 and err.strip() == "Sign in needs a terminal." and not asked and not datakey.is_open(), (rc, err, asked))
+sys.stdin = real_stdin
+def lost(*a): raise RuntimeError("input(): lost sys.stdin")
+builtins.input = lost
+rc, out, err = call("status")
+check("input() that lost sys.stdin: the same", rc == 3 and err.strip() == "Sign in needs a terminal.", (rc, err))
+builtins.input = lambda p="": "admin"
+
+print("== a copy whose old vault hasn't moved over yet (the upgrade stopped halfway)")
+keys, vault = datakey.path().read_bytes(), passvault.path().read_bytes()
+datakey.path().unlink()
+passvault.create("old master password!", remember=False, carry={"a": "1"}); passvault.lock()
+datakey.path().write_bytes(keys)
+rc, out, err = call("status", "--user", "admin")
+check("exit 3 with the unfinished-encrypting message, no traceback",
+      rc == 3 and err.strip() == "Toner's data hasn't finished encrypting. Open Toner's window to finish, then try again."
+      and session.state() == "signed_out" and not datakey.is_open(), (rc, err))
+passvault.path().write_bytes(vault)
+
+print("== encrypted data with netcheck.keys missing")
+MISSING = ("Toner's data is encrypted, but netcheck.keys is missing from its data folder. Put netcheck.keys back next to netcheck.db, "
+           "then start Toner again.")
+datakey.path().unlink()
+asked.clear()
+rc, out, err = call("status")
+check("exit 3 with the message, nothing asked, no key made", rc == 3 and err.strip() == MISSING and not asked and not datakey.exists(), (rc, err))
+import app as A
+A.console_streams = lambda: None
+rc = A.run_cli(["status"])
+check("Toner.exe cli: the same, and still no key", rc == 3 and not datakey.exists())
+datakey.path().write_bytes(keys)
+
 builtins.input = real_input
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)
