@@ -90,7 +90,7 @@ The vault already works this way: one data key, sealed by a key made from the ma
     - *(my call)* **A computer without a usable chip:** a TPM switched off, an old Mac, a Linux box without a TPM. There, the key is sealed by the operating system's protected store (DPAPI, the Keychain, Secret Service) plus a PIN of at least 8 characters, letters allowed, which is too many combinations to guess offline. The admin sees which kind each account on a copy has. With no protected store either (Linux without Secret Service, which `passvault.NoKeyring` already detects), it uses the 8-character PIN alone.
   - **Recovery key:** shown once when the copy is set up, kept by the admin. It opens the data and lets the admin reset any account. There is no other way back. If it's lost along with every password and PIN, the data on that copy is gone. The owner decided this.
 - **What's covered.** Everything in the data folder, with three exceptions *(my call)*:
-  - **`toner.log`:** written before anyone signs in, and it keeps no secrets.
+  - **The logs, `toner.log`, `toner-service.log` and `ssh-tunnel.log`:** written before anyone signs in, or by another program, and they keep no secrets. Also left plain are the public data Toner downloads: `oui.txt`, `ca-bundle.pem` and `updates/`.
   - **The Ansible playbook library:** WSL reads it straight from disk and people edit it in their own editor, so it should hold no secrets. Ansible's passwords come from the vault.
   - **The agent receiver's TLS key:** this one is encrypted like the rest, and unlocked when the receiver starts, which only happens while someone is signed in.
 - **Locked versus signed out.**
