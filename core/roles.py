@@ -302,10 +302,11 @@ def _accounts_changed(before, doc):
     global _cache
     from core import perms
     me, holder = datakey.signed_in_name(), "rules" in _held
+    root = me is None and _own_box                      # the recovery key, shown to be its record's: the root of trust
     rekeyed = [n for n, a in doc["accounts"].items() if before["accounts"].get(n, {}).get("box_pub") != a.get("box_pub")]
     recovery = before["recovery"].get("box_pub") != doc["recovery"].get("box_pub")
     ok = _state_of(before) == "ok"
-    if ok and not holder and ([n for n in rekeyed if n != me] or (recovery and me is not None)):
+    if ok and not holder and not root and ([n for n in rekeyed if n != me] or (recovery and me is not None)):
         raise perms.Denied()                            # only whoever holds the rules key may give someone else a box key
     grants = doc.get("grants")
     if isinstance(grants, dict):                        # a wrap to a box key that's gone can't be opened again
@@ -316,7 +317,12 @@ def _accounts_changed(before, doc):
         doc.pop("recovery_grants", None)
     if _admins(before) and not _admins(doc):
         raise ValueError(LAST_ADMIN)
+    done = None
     if ok:                                              # never re-sign rules that didn't check out: that would hide the edit
+        if not holder and root:                         # e.g. a Part 1 recovery key resetting the only Admin's password
+            pub = _rekey(doc)
+            doc["recovery_attested"] = doc["recovery"].get("box_pub")
+            holder, done = True, lambda: _written(pub)
         if holder:                                      # it made these box keys, so it vouches for them
             att = _attested(doc)
             for n in rekeyed:
@@ -327,6 +333,7 @@ def _accounts_changed(before, doc):
         elif _signed(before) != _signed(doc):
             raise datakey.Locked("Sign in first.")
     _cache = None
+    return done
 
 
 # ---------------------------------------------------------------- sign-in and sign-out
@@ -348,15 +355,13 @@ def _field(doc, field):
 
 
 def _take(doc, kind, key):
-    """True when `key` is the role key the rules are about. The rules key: its fingerprint is rules_key. The backups key: it is
-    the file's backups_pub, or (on a file whose backups_pub was swapped) putting it back makes the rules verify, under whichever
-    rules_pub (the file's, or the one of the rules key held) has rules_key's fingerprint."""
+    """True when `key` is the role key the rules are about. The rules key: its fingerprint is rules_key. The backups key: with
+    it as backups_pub (the file's, or put back where it was swapped) the rules verify, under whichever rules_pub (the file's, or
+    the one of the rules key held) has rules_key's fingerprint."""
     pub = _public(kind, key)
     rk = _rules_key()
     if kind == "rules":
         return envelope.fingerprint(pub) == rk if rk else pub == _field(doc, "rules_pub")
-    if pub == _field(doc, "backups_pub"):
-        return True
     rules = [p for p in (_field(doc, "rules_pub"), "rules" in _held and _public("rules", _held["rules"])) if p]
     return any(_verifies({**doc, "backups_pub": _b64(pub)}, p) for p in rules)
 
@@ -427,41 +432,47 @@ def _may_write(doc):
     """True for the repair (a recovery sign-in on a tampered file); raises unless this sign-in may change the rules."""
     from core import perms
     st = _state_of(doc)
+    if (st == "tampered" or (st == "ok" and "rules" not in _held)) and datakey.signed_in_name() is None and _own_box:
+        return True                                     # the recovery key, holding no rules key (a Part 1 one): re-keys as well
     if st == "tampered":
-        if datakey.signed_in_name() is None and _own_box:
-            return True
         raise perms.Denied()                            # everyone is a Tech until the recovery key puts it right
     if st != "ok" or "rules" not in _held:
         raise datakey.Locked("Sign in first.")
     return False
 
 
+def _rekey(doc):
+    """The recovery key's re-key (its repair of a tampered file, or its first change while it holds no rules key): a new rules
+    key, with the box keys and backups_pub taken from what was last signed, not from the file. Returns the new public half.
+    shortcut: the new key is held before the write lands; a failed write leaves this sign-in signing with it, so "tampered"."""
+    _held["rules"], pub = envelope.new_signing_key()
+    doc["rules_pub"] = _b64(pub)
+    grants = doc.get("grants") if isinstance(doc.get("grants"), dict) else {}
+    rg = doc.get("recovery_grants") if isinstance(doc.get("recovery_grants"), dict) else {}
+    last = _last_signed()
+    if last:                                            # the box keys and backups_pub vouched for last, not the file's
+        doc["attested"] = {n: (last["accounts"].get(n) or {}).get("box_pub") for n in doc["accounts"]}
+        doc["recovery_attested"] = last.get("recovery_box_pub")
+        doc["backups_pub"] = last["backups_pub"]
+        if "backups" in _held and _b64(_public("backups", _held["backups"])) != last["backups_pub"]:
+            del _held["backups"]
+    kept = [g for g in grants.values() if isinstance(g, dict) and "backups" in g] + (["backups"] if "backups" in rg else [])
+    if "backups" not in _held and not kept:             # nobody holds the backups key any more: a new one loses nothing
+        _held["backups"] = envelope.new_box_key()[0]
+    if "backups" in _held:                              # held and vouched for (unlock): it goes back in, and it alone is wrapped
+        doc["backups_pub"] = _b64(_public("backups", _held["backups"]))
+        doc["grants"], doc["recovery_grants"] = {}, {}
+    else:                                               # its wraps kept rather than lost (shortcut: unvouched without `last`)
+        doc["grants"] = {n: {"backups": g["backups"]} for n, g in grants.items() if isinstance(g, dict) and "backups" in g}
+        doc["recovery_grants"] = {"backups": rg["backups"]} if "backups" in rg else {}
+    if not last:
+        doc["recovery_attested"] = doc["recovery"]["box_pub"]      # the recovery key showed it is this one (unlock)
+    return pub
+
+
 def _resign(doc, repair):
-    """Sign the rules and sync the grants; the repair first makes a new rules key, returning its public half."""
-    pub = None
-    if repair:
-        _held["rules"], pub = envelope.new_signing_key()
-        doc["rules_pub"] = _b64(pub)
-        grants = doc.get("grants") if isinstance(doc.get("grants"), dict) else {}
-        rg = doc.get("recovery_grants") if isinstance(doc.get("recovery_grants"), dict) else {}
-        last = _last_signed()
-        if last:                                        # the box keys and backups_pub vouched for last, not the file's
-            doc["attested"] = {n: (last["accounts"].get(n) or {}).get("box_pub") for n in doc["accounts"]}
-            doc["recovery_attested"] = last.get("recovery_box_pub")
-            doc["backups_pub"] = last["backups_pub"]
-            if "backups" in _held and _b64(_public("backups", _held["backups"])) != last["backups_pub"]:
-                del _held["backups"]
-        kept = [g for g in grants.values() if isinstance(g, dict) and "backups" in g] + (["backups"] if "backups" in rg else [])
-        if "backups" not in _held and not kept and not last:     # nobody holds a backups key: a new one loses nothing
-            _held["backups"] = envelope.new_box_key()[0]
-        if "backups" in _held:                          # held and vouched for (unlock): it goes back in, and it alone is wrapped
-            doc["backups_pub"] = _b64(_public("backups", _held["backups"]))
-            doc["grants"], doc["recovery_grants"] = {}, {}
-        else:                                           # its wraps kept rather than lost (shortcut: unvouched without `last`)
-            doc["grants"] = {n: {"backups": g["backups"]} for n, g in grants.items() if isinstance(g, dict) and "backups" in g}
-            doc["recovery_grants"] = {"backups": rg["backups"]} if "backups" in rg else {}
-        if not last:
-            doc["recovery_attested"] = doc["recovery"]["box_pub"]  # the recovery key showed it is this one (unlock)
+    """Sign the rules and sync the grants; the recovery key's re-key first, returning the new rules key's public half."""
+    pub = _rekey(doc) if repair else None
     _sync(doc)
     return pub
 

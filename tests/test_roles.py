@@ -420,4 +420,58 @@ check("once it is ready the Admin's role keys are made", roles.state() == "ok" a
       roles.state())
 session.sign_out()
 
+# ---------------------------------------------------------------- a Part 1 recovery key resets the only Admin's password
+def seal1(secret, payload, aad, kdf):
+    """A seal written the way Part 1 wrote it: the data key alone, no box key."""
+    salt, nonce = os.urandom(16), os.urandom(12)
+    k = Scrypt(salt=salt, length=32, n=kdf["n"], r=kdf["r"], p=kdf["p"]).derive(secret.encode())
+    return {"kdf": {"name": "scrypt", "salt": b64(salt), **kdf}, "key": b64(nonce + AESGCM(k).encrypt(nonce, payload, aad))}
+
+os.environ["NETCHECK_DB"] = SP + (r"\part1rec%d.db").replace("\\", os.sep) % int(time.time())
+datakey.create("Solo", PW)
+db.init()
+code = "B" * 32
+d = doc()
+d["accounts"] = {"Solo": part1_record("Solo", PW, bytes(datakey._key))}
+d["recovery"] = {**seal1(code, bytes(datakey._key), datakey.RECOVERY_AAD, datakey.RECOVERY_KDF), "fails": 0, "until": 0}
+put(d)
+session.sign_out()
+check("hand-built Part 1 file: no box keys, no roles", all("box_pub" not in r and "role" not in r for r in (doc()["accounts"]["Solo"], doc()["recovery"])))
+session.sign_in("Solo", PW)
+check("Part 1 file with a Part 1 recovery key: upgraded by its Admin", roles.state() == "ok" and roles.holds("rules") and roles.holds("backups")
+      and doc()["recovery_grants"] == {} and doc()["recovery_attested"] is None)
+datakey.add_local("Tek", PW3, role="Tech")
+session.sign_out()
+session.sign_in_recovery(code)
+check("the Part 1 recovery key's first sign-in: no grants yet", roles.state() == "ok" and not roles.holds("rules"))
+e = raises(lambda: datakey.set_password("Solo", PW2), Exception)
+check("...but it can reset the only Admin's password", e is None and roles.state() == "ok" and roles.holds("rules"), e)
+check("...vouching for the new box key and its own", doc()["attested"]["Solo"] == doc()["accounts"]["Solo"]["box_pub"]
+      and doc()["recovery_attested"] == doc()["recovery"]["box_pub"] and signed_ok())
+session.sign_out()
+session.sign_in("Solo", PW2)
+check("the reset Admin holds the rules key and the backups key", roles.holds("rules") and roles.holds("backups"))
+session.sign_out()
+session.sign_in_recovery(code)
+check("the recovery key holds the rules key now", roles.state() == "ok" and roles.holds("rules") and roles.holds("backups"))
+session.sign_out()
+session.sign_in("Tek", PW3)
+check("a Tech still can't reset an Admin", raises(lambda: datakey.set_password("Solo", PW4), perms.Denied) is not None)
+session.sign_out()
+
+# a backups key planted for the recovery key is refused, also where the database keeps no copy of the rules
+session.sign_in("Solo", PW2)
+db.set_setting("rules_signed", "")
+session.sign_out()
+planted, planted_pub = envelope.new_box_key()
+d = doc()
+d["backups_pub"] = b64(planted_pub)
+d["recovery_grants"]["backups"] = envelope.wrap(base64.b64decode(d["recovery"]["box_pub"]), planted, b"toner-role-key:backups:")
+put(d)
+session.sign_in_recovery(code)
+check("planted backups key: tampered, and not taken", roles.state() == "tampered" and roles.backups_private() != planted)
+roles.set_permissions("Tech", {})
+check("...nor after the repair with no copy", roles.state() == "ok" and roles.backups_private() != planted)
+session.sign_out()
+
 print(f"\n{ok} passed, {bad} failed"); sys.exit(1 if bad else 0)

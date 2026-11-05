@@ -5,7 +5,7 @@ from PySide6.QtCore import QObject, Qt, QTimer
 from PySide6.QtWidgets import (QComboBox, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QStackedWidget,
                                QVBoxLayout)
 
-from core import audit, datakey, passvault, passwords, session
+from core import audit, datakey, passvault, passwords, perms, session
 from ui import theme
 
 DAMAGED = "This file is damaged or was changed outside Toner."
@@ -285,6 +285,9 @@ class SignInWindow(QDialog):
             self.name.setText(name)
             self._next()
             self.sign_in_wait.start(e.seconds)
+            return
+        except perms.Denied as e:                       # (a PermissionError, so an OSError: not "damaged")
+            say(self.reset_error, str(e))
             return
         except DAMAGED_ERRORS:
             say(self.reset_error, DAMAGED)

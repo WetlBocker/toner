@@ -41,7 +41,8 @@ _key = None
 _box = None       # the signed-in account's (or the recovery key's) private box key
 _name = None      # the signed-in account's stored spelling; None for the recovery key
 # core/roles sets this (it reads this module, so this one can't import it): fn(before, after) inside each write that adds, removes or
-# re-keys an account or the recovery key. It drops grants made for a box key that is gone, re-signs the rules, and may refuse.
+# re-keys an account or the recovery key. It drops grants made for a box key that is gone, re-signs the rules, and may refuse. It
+# may return a function to run once the write has landed.
 accounts_changed = None
 
 
@@ -263,9 +264,10 @@ def _change(fn, accounts=False):
         doc = _read()
         before = copy.deepcopy(doc) if accounts else None
         result = fn(doc)
-        if accounts and accounts_changed is not None:
-            accounts_changed(before, doc)
+        done = accounts_changed(before, doc) if accounts and accounts_changed is not None else None
         _write(doc)
+        if done is not None:
+            done()
         return result
 
 
