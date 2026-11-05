@@ -9,6 +9,7 @@ it and the answers never show which names exist: five are free, then each one ma
 doubling up to 15 minutes.
 """
 import base64
+import copy
 import json
 import math
 import os
@@ -39,6 +40,9 @@ _lock = threading.RLock()
 _key = None
 _box = None       # the signed-in account's (or the recovery key's) private box key
 _name = None      # the signed-in account's stored spelling; None for the recovery key
+# core/roles sets this (it reads this module, so this one can't import it): fn(before, after) inside each write that adds, removes or
+# re-keys an account or the recovery key. It drops grants made for a box key that is gone, re-signs the rules, and may refuse.
+accounts_changed = None
 
 
 class WrongPassword(ValueError):
@@ -250,13 +254,17 @@ def _open(payload, name):
     _key, _box, _name = payload[:32], payload[32:], name
 
 
-def _change(fn):
-    """Read, change and write the file under its lock, with the key open."""
+def _change(fn, accounts=False):
+    """Read, change and write the file under its lock, with the key open. `accounts`: fn changes the accounts or a box key, so
+    the roles hook sees the file before and after."""
     with _lock, _FileLock():
         if _key is None:
             raise Locked("Sign in first.")
         doc = _read()
+        before = copy.deepcopy(doc) if accounts else None
         result = fn(doc)
+        if accounts and accounts_changed is not None:
+            accounts_changed(before, doc)
         _write(doc)
         return result
 
@@ -318,7 +326,7 @@ def add_local(name, password, role="Admin"):
         if _find(doc, name) is not None:
             raise NameTaken("That username is already taken.")
         doc["accounts"][name] = _account(name, password, _key, role=role)[0]
-    _change(add)
+    _change(add, accounts=True)
 
 
 def set_password(name, password):
@@ -332,7 +340,7 @@ def set_password(name, password):
         doc["accounts"][stored], private = _account(stored, password, _key, old.get("created"), old.get("role", "Admin"))
         doc["throttle"] = {"fails": 0, "until": 0}
         return stored, private
-    stored, private = _change(reseal)
+    stored, private = _change(reseal, accounts=True)
     if stored == _name:                 # your own password: hold the new box key (only once the write has landed)
         _box = private
 
@@ -343,7 +351,7 @@ def remove(name):
         if len(doc["accounts"]) == 1:
             raise LastAccount("Toner needs at least one account.")
         del doc["accounts"][stored]
-    _change(drop)
+    _change(drop, accounts=True)
 
 
 def accounts():
@@ -382,7 +390,7 @@ def new_recovery():
     def swap(doc):
         shown, doc["recovery"], private = _new_recovery(_key)
         return shown, private
-    shown, private = _change(swap)
+    shown, private = _change(swap, accounts=True)
     if _name is None:                   # signed in with the recovery key: hold the new one's box key
         _box = private
     return shown

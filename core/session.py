@@ -2,7 +2,7 @@
 worker threads still need the database); it only hides the window until the password is entered again."""
 import threading
 
-from core import audit, datakey, db, passvault, quiet, sqldb
+from core import audit, datakey, db, passvault, quiet, roles, sqldb
 
 _lock = threading.RLock()
 _state, _user, _callbacks = "signed_out", None, []
@@ -43,6 +43,7 @@ def _opened(opener, action, who):
         try:
             fails = opener()
             _after_open()
+            roles.unlock()                       # inside the rollback: anything it raises closes what opened
             who = who() if callable(who) else who
             _state, _user = "open", who          # before the audit row, so it names the Toner user
         except BaseException:
@@ -61,7 +62,10 @@ def _close():
         try:
             db.release()
         finally:
-            datakey.close()                  # always, even when a step before it failed
+            try:
+                roles.close()
+            finally:
+                datakey.close()              # always, even when a step before it failed
 
 
 def _stored_name(name):

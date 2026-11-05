@@ -1,5 +1,7 @@
 """The permission catalogue: what an Admin can switch on or off for Engineers and Techs, and each role's defaults.
-Data only; import nothing from ui/ (core is imported headless by the CLI). Admin is fixed at everything and isn't listed."""
+Import nothing from ui/ (core is imported headless by the CLI). Admin is fixed at everything and isn't listed.
+The checks (allowed, require, is_admin) ask core/roles, which imports this module only inside its functions."""
+from core import datakey, roles, session
 
 REASON = "Your role doesn't allow this. Ask an admin."
 
@@ -32,3 +34,22 @@ PERMISSIONS = [("push", "Push changes to devices"), ("unmasked", "See passwords 
 DEFAULTS = {"Engineer": {k: True for k, _ in PERMISSIONS},
             "Tech": {k: not (k in ("push", "unmasked") or (k.startswith("settings:") and k not in ("settings:Appearance", "settings:Terminal")))
                      for k, _ in PERMISSIONS}}
+
+
+def allowed(key):
+    """With sign-in off, everything; signed out, nothing; else what the signed-in person's role allows (a keys file deleted
+    while someone is signed in is roles' "tampered", not sign-in off)."""
+    if session.state() == "signed_out":
+        return not datakey.exists()
+    return roles.permissions(roles.role_of(datakey.signed_in_name()))[key]
+
+
+def require(key):
+    if not allowed(key):
+        raise Denied()
+
+
+def is_admin():
+    if session.state() == "signed_out":
+        return not datakey.exists()
+    return roles.role_of(datakey.signed_in_name()) == "Admin"
