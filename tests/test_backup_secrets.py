@@ -167,6 +167,21 @@ roles._held.pop("backups")                          # the permission, but no gra
 check("Engineer without a grant: masked text", SECRET not in backup.get_text(trow["id"], unmasked=True))
 check("Engineer without a grant: the approved sentence", backup.secrets_hidden_reason(newest("g-sw")) == HIDDEN_GRANT)
 
+# ---------------------------------------------------------------- hardening reads what this sign-in may see (Ruling 15)
+from core import hardening
+session.sign_out()
+session.sign_in("Admin1", PW)
+backup.store("g-sw", cfg(extra="\n!\nservice password-encryption\nusername ops password 7 0822455D0A16"), mask=False)
+g_sw = [d for d in db.list_devices() if d["name"] == "g-sw"][0]
+def type7():
+    return next((r.status, r.message) for r in hardening.scan(g_sw) if r.check == "Hardening: " + hardening.LABELS["type 7"])
+got = type7()
+check("masking off, an Admin: the type 7 password is judged", got[0] == "WARN" and got[1].startswith("type 7 (reversible) secrets: "), got)
+session.sign_out()
+session.sign_in("Tech1", PW3)
+got = type7()
+check("a Tech: the masked result", got == ("N/A", f"service password-encryption is on; whether type 7 secrets remain cannot be told, {hardening.MASKED}"), got)
+
 # ---------------------------------------------------------------- where it runs: the window's sign-in, and the command line's
 def unsplit():
     """Put an unmasked body back in Globex's file, as a copy restored from before sign-in would have it."""

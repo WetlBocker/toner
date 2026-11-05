@@ -154,6 +154,17 @@ rc, out, err = call("metrics", "--user", "admin")
 service.MetricsServer = real_srv
 check("signed in while serving, then signed out", rc == 0 and state_while == ["open", "open"] and session.state() == "signed_out", (rc, state_while, err))
 
+print("== moving old backup passwords behind the backups key finds a database locked")
+from core import backupsplit, sqldb
+def locked_split(progress=None):
+    raise sqldb.sqlite3.OperationalError("database is locked")
+backupsplit.run, real_split = locked_split, backupsplit.run
+rc, out, err = call("status", "--user", "admin")
+backupsplit.run = real_split
+check("exit 3 with the service message, no traceback, signed out",
+      rc == 3 and err.strip() == "Toner's service is using the data. Stop it, then try again." and "Traceback" not in err
+      and session.state() == "signed_out", (rc, err))
+
 print("== a copy that has not finished encrypting")
 lockdown.pending, real_pending = (lambda: ["x.db"]), lockdown.pending
 rc, out, err = call("status", "--user", "admin")

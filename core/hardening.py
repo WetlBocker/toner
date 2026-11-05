@@ -463,7 +463,7 @@ def scan(dev):
     latest = backup.latest(dev.get("key") or name)
     if not latest:
         return [row(PREFIX.rstrip(": "), NA, NO_BACKUP)]
-    text = backup.get_text(latest["id"], latest.get("org"))
+    text = backup.get_text(latest["id"], latest.get("org"), unmasked=True)     # the password rules, for whoever may see them
     taken = (latest.get("taken_at") or "")[:16]
     try:
         found = findings(text, dev.get("platform") or "", off, group[0])
