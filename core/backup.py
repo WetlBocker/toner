@@ -1,7 +1,8 @@
 """Configuration backups: fetch each device's configuration, keep the versions that differ, show what changed.
 
-Stored text is cleaned first: volatile lines (timestamps, byte counts) are dropped so only real changes count, and
-(by default) passwords, keys and SNMP communities are masked, because the database file is not encrypted.
+Stored text is cleaned first: volatile lines (timestamps, byte counts) are dropped so only real changes count. The body always
+has passwords, keys and SNMP communities masked; with masking turned off they are kept in `secret`, encrypted to the backups key
+(core/roles.py), which only roles allowed to see them hold. With sign-in off there is no such key: the body is kept as it was read.
 """
 from core import proxy
 import difflib
@@ -12,12 +13,16 @@ import zlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
-from core import db, sealedfile
+from cryptography.exceptions import InvalidTag
+
+from core import db, envelope, perms, roles, sealedfile
 from core.netconn import connect as ConnectHandler      # netmiko's, with Toner's fixes for some devices
 from drivers.base import Result, OK, WARN, ERROR
 from core import quiet
 
 CHECK_NAME = "config backup"
+HIDDEN_FOR_ROLE = "Passwords are hidden for your role."
+HIDDEN_UNTIL_ADMIN = "An admin needs to sign in to this copy once before you can see passwords in backups."
 
 # platform / vendor -> command run over SSH to print the whole configuration
 SSH_COMMANDS = {
@@ -109,10 +114,14 @@ def clean(text, mask=True):
             continue
         out.append(line)
     body = "\n".join(out).strip("\n")
-    if mask:
-        for rx, repl in MASKS:
-            body = rx.sub(repl, body)
-    return body + "\n"
+    return (mask_secrets(body) if mask else body) + "\n"
+
+
+def mask_secrets(text):
+    """`text` with its passwords, keys and SNMP communities masked (clean's last step)."""
+    for rx, repl in MASKS:
+        text = rx.sub(repl, text)
+    return text
 
 
 def sha(text):
@@ -240,12 +249,34 @@ def _pack(text):
     return zlib.compress(text.encode("utf-8", "replace"), 6)
 
 
-def get_text(backup_id, org=None):
-    """A stored configuration. `org`: the organization whose file the version is in (a row from list_backups or search says)."""
+def aad(digest):
+    """What a version's secret is bound to: its sha, so it opens in whichever organization's file the version is moved to."""
+    return b"toner-backup:" + digest.encode("ascii")
+
+
+def get_text(backup_id, org=None, unmasked=False):
+    """A stored configuration. `org`: the organization whose file the version is in (a row from list_backups or search says).
+    unmasked: with the passwords, when the version keeps them and this sign-in may see them; else (or when they don't open) masked."""
     with db.within(org):
         with db.connect() as c:
-            row = c.execute("SELECT body FROM config_backups WHERE id=?", (backup_id,)).fetchone()
-    return zlib.decompress(row["body"]).decode("utf-8", "replace") if row else ""
+            row = c.execute("SELECT body, sha, secret FROM config_backups WHERE id=?", (backup_id,)).fetchone()
+    if not row:
+        return ""
+    if unmasked and row["secret"] and perms.allowed("unmasked") and roles.holds("backups"):
+        try:
+            return zlib.decompress(envelope.unwrap(roles.backups_private(), row["secret"], aad(row["sha"]))).decode("utf-8", "replace")
+        except (InvalidTag, ValueError, TypeError, AttributeError, zlib.error):
+            quiet.ignored()                              # the masked body, as for anyone who can't open it
+    return zlib.decompress(row["body"]).decode("utf-8", "replace")
+
+
+def secrets_hidden_reason(row):
+    """The Configs page's sentence when this version (a list_backups row) keeps passwords this sign-in can't see, else None."""
+    if not row.get("has_secret"):
+        return None
+    if not perms.allowed("unmasked"):
+        return HIDDEN_FOR_ROLE
+    return None if roles.holds("backups") else HIDDEN_UNTIL_ADMIN
 
 
 def list_backups(device, limit=200):
@@ -254,7 +285,7 @@ def list_backups(device, limit=200):
     with db.within(org):
         with db.connect() as c:
             rows = [dict(r) for r in c.execute(
-                "SELECT id, device, taken_at, sha, size, lines, added, removed FROM config_backups WHERE device=? "
+                "SELECT id, device, taken_at, sha, size, lines, added, removed, secret <> '' AS has_secret FROM config_backups WHERE device=? "
                 "ORDER BY id DESC LIMIT ?", (device, limit))]
         for r in rows:
             r["org"] = db.target()
@@ -326,20 +357,27 @@ def diff_lines(old, new, old_label="before", new_label="after", context=3):
 
 def store(device, text, mask=True, keep=None):
     """Save `text` if it differs from the newest version. Returns (state, backup row or None, added, removed)
-    where state is 'new' (first backup), 'changed' or 'unchanged'."""
-    body = clean(text, mask)
-    digest = sha(body)
+    where state is 'new' (first backup), 'changed' or 'unchanged'. The sha covers the text with or without masking as asked, so
+    a changed password alone is a change; the body is masked unless sign-in is off, and the passwords go in `secret`."""
+    full = clean(text, mask)
+    kept = not mask and roles.state() == "off"          # sign-in off: the body as read, as before
+    body = full if mask or kept else clean(text, mask=True)
+    digest = sha(full)
     prev = latest(device)
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     if prev and prev["sha"] == digest:
         return "unchanged", prev, 0, 0
+    pub = roles.backups_public() if body != full else None
+    # secret: the passwords, encrypted; '' when the body holds none (without a key too: rules that don't check out, so masked
+    # only); None for a body kept as read, which core/backupsplit.py looks at later
+    secret = None if kept else envelope.wrap(pub, _pack(full), aad(digest)) if pub else ""
     added = removed = 0
     if prev:
         _, added, removed = diff_lines(get_text(prev["id"]), body)
     with db.connect() as c:
-        bid = c.execute("INSERT INTO config_backups(device, taken_at, sha, size, lines, body, added, removed) "
-                        "VALUES(?,?,?,?,?,?,?,?)",
-                        (device, now, digest, len(body), body.count("\n"), _pack(body), added, removed)).lastrowid
+        bid = c.execute("INSERT INTO config_backups(device, taken_at, sha, size, lines, body, added, removed, secret) "
+                        "VALUES(?,?,?,?,?,?,?,?,?)",
+                        (device, now, digest, len(body), body.count("\n"), _pack(body), added, removed, secret)).lastrowid
         keep = int(db.get_setting("backup_keep")) if keep is None else keep
         if keep > 0:
             c.execute("DELETE FROM config_backups WHERE device=? AND id NOT IN "

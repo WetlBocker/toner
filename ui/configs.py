@@ -305,9 +305,12 @@ class ConfigsTab(QWidget):
             return
         mode = self.view.currentData()
         name = self.current_device()
+        reason = next(filter(None, (backup.secrets_hidden_reason(self.versions[i]) for i in rows)), None)
+        if reason or self.status.text() in (backup.HIDDEN_FOR_ROLE, backup.HIDDEN_UNTIL_ADMIN):
+            self.status.setText(reason or "")              # (clears only its own sentence: a backup's progress stays)
         if len(rows) >= 2:                                           # compare any two versions
             a, b = self.versions[rows[-1]], self.versions[rows[0]]  # older, newer (list is newest first)
-            lines, ad, rm = backup.diff_lines(backup.get_text(a["id"], a["org"]), backup.get_text(b["id"], b["org"]),
+            lines, ad, rm = backup.diff_lines(backup.get_text(a["id"], a["org"], unmasked=True), backup.get_text(b["id"], b["org"], unmasked=True),
                                               f"{db.label(name)} {a['taken_at']}", f"{db.label(name)} {b['taken_at']}")
             self.highlighter.setDocument(self.text.document())
             self.text.setPlainText("\n".join(lines) if lines else "These two versions are identical.")
@@ -321,12 +324,12 @@ class ConfigsTab(QWidget):
                                        "Switch to 'Full configuration' to read it.")
                 self.note.setText(v["taken_at"])
             else:
-                lines, ad, rm = backup.diff_lines(backup.get_text(older["id"], older["org"]), backup.get_text(v["id"], v["org"]),
+                lines, ad, rm = backup.diff_lines(backup.get_text(older["id"], older["org"], unmasked=True), backup.get_text(v["id"], v["org"], unmasked=True),
                                                   f"{db.label(name)} {older['taken_at']}", f"{db.label(name)} {v['taken_at']}")
                 self.text.setPlainText("\n".join(lines) if lines else "No difference.")
                 self.note.setText(f"{older['taken_at']} -> {v['taken_at']}:  +{ad} / -{rm}")
         else:
-            self.text.setPlainText(backup.get_text(v["id"], v["org"]))
+            self.text.setPlainText(backup.get_text(v["id"], v["org"], unmasked=True))
             self.note.setText(f"{v['taken_at']}  ({v['lines']} lines)")
 
     def save_version(self):
@@ -339,7 +342,7 @@ class ConfigsTab(QWidget):
         path, _ = QFileDialog.getSaveFileName(self, "Save configuration", f"{db.label(name)}_{stamp}.txt", "Text files (*.txt)")
         if path:
             with open(path, "w", encoding="utf-8", newline="") as fh:
-                fh.write(backup.get_text(v["id"], v["org"]))
+                fh.write(backup.get_text(v["id"], v["org"], unmasked=True))
 
     def prune(self):
         name = self.current_device()

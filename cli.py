@@ -14,7 +14,7 @@ import json
 import signal
 import sys
 
-from core import datakey, db, lockdown, passvault, service, session
+from core import backupsplit, datakey, db, lockdown, passvault, service, session
 from drivers.base import SEVERITY
 
 SERVICE_OFF = ("Toner's background service is off while sign-in is turned on. "
@@ -93,6 +93,7 @@ def _sign_in(a):
         if lockdown.pending():                 # Toner's window finishes the upgrade; the command line never encrypts
             print(UNFINISHED, file=sys.stderr)
             return 3
+        backupsplit.run()                      # passwords in old backups go behind the backups key, as the window does
     except passvault.Locked:                   # the old vault hasn't moved over yet: the window's first start does that
         print(UNFINISHED, file=sys.stderr)
         return 3

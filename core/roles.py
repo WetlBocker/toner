@@ -34,6 +34,7 @@ _held = {}           # kind -> the private role key this sign-in holds
 _cache = None        # what the file says, verified: {"state", "roles", "accounts", "backups_pub"}
 _rk = None           # the rules_key setting, read once
 _rs = None           # the rules_signed setting: what was last signed, read once
+_sk = None           # some database keeps backup passwords under a backups key, looked at once (only while rules_key is empty)
 _audited = False     # "roles were changed outside Toner" written this sign-in
 _upgrade_due = False  # an Admin signed in to a Part 1 file: make the role keys once the database can be written
 _own_box = False     # this sign-in's box key is the one its record shows (else it holds nothing and can't repair)
@@ -129,6 +130,15 @@ def _last_signed():
         return None
 
 
+def _secrets_kept():
+    """A Part 2 database under a Part 1 keys file: its backups already went behind a backups key that file never had."""
+    global _sk
+    if _sk is None:
+        from core import backupsplit
+        _sk = backupsplit.secrets_kept()
+    return _sk
+
+
 def _verifies(doc, pub):
     try:
         return envelope.fingerprint(pub) == _rules_key() and envelope.verify(pub, _signed(doc), doc["rules_sig"])
@@ -138,7 +148,7 @@ def _verifies(doc, pub):
 
 def _state_of(doc):
     if not _rules_key():                                # only a Part 1 file is unsigned; anything of Part 2's without the key is not
-        return "tampered" if any(k in doc for k in _PART2) else "unsigned"
+        return "tampered" if any(k in doc for k in _PART2) or (_rules_key() == "" and _secrets_kept()) else "unsigned"
     try:
         pub = _unb64(doc["rules_pub"])
     except (KeyError, TypeError, ValueError, AttributeError):
@@ -171,7 +181,7 @@ def _load():
     with _lock:
         if _cache is not None:
             return _cache
-        if _upgrade_due and _rules_key() == "":         # the database is ready now
+        if _upgrade_due and _rules_key() == "" and not _secrets_kept():    # the database is ready now (read before datakey's lock)
             _upgrade()
         try:
             doc = datakey.read()
@@ -189,8 +199,8 @@ def _load():
 
 
 def _invalidate():
-    global _cache, _rk, _rs
-    _cache = _rk = _rs = None
+    global _cache, _rk, _rs, _sk
+    _cache = _rk = _rs = _sk = None
 
 
 def _notify():

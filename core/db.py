@@ -716,9 +716,17 @@ def _m12_assistant_searches(c):
         c.execute("ALTER TABLE ai_turns ADD COLUMN sources TEXT DEFAULT ''")
 
 
+def _m13_backup_secrets(c):
+    """A config backup's passwords, encrypted to the backups key; body keeps the masked text. NULL: not looked at yet, which
+    core/backupsplit.py finds through the partial index."""
+    if "secret" not in {r[1] for r in c.execute("PRAGMA table_info(config_backups)")}:
+        c.execute("ALTER TABLE config_backups ADD COLUMN secret BLOB")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_backups_unchecked ON config_backups(id) WHERE secret IS NULL")
+
+
 MIGRATIONS = [(1, _m1_legacy_columns), (2, _m2_agent_history), (3, _m3_agent_tokens), (4, _m4_device_checks), (5, _m5_ansible_runs),
               (6, _m6_shared), (7, _m7_org_uids), (8, _m8_faster_history), (9, _m9_api_tester), (10, _m10_assistant), (11, _m11_device_software),
-              (12, _m12_assistant_searches)]
+              (12, _m12_assistant_searches), (13, _m13_backup_secrets)]
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 
 

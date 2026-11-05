@@ -191,7 +191,7 @@ check("Windows: the OS name and build from the report", drv.facts.get("software"
 check("a '?' or blank version is never a fact", (Driver({"name": "n"}, {}).found_software("?") or Driver({"name": "n"}, {}).found_software(" ")) is None and not Driver({"name": "n"}, {}).facts)
 
 print("== the record")
-check("the database is at version 12 and the devices table has the four columns", db.schema_version() == 12 and db.SCHEMA_VERSION == 12
+check("the database is at the newest version and the devices table has the four columns", db.schema_version() == db.SCHEMA_VERSION >= 12
       and set(db.SOFTWARE_FIELDS) <= {r[1] for r in db.connect().execute("PRAGMA table_info(devices)")} and not (set(db.SOFTWARE_FIELDS) & set(db.DEVICE_FIELDS)))
 sw1 = dev("core-sw1", platform="cisco_xe", location="Chicago", tags="core")
 check("a device starts with nothing read", db.software_of(sw1) == {"version": "", "image": "", "mode": "", "read_at": ""} and display.software_line(db.software_of(sw1)) == "")

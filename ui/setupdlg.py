@@ -195,15 +195,15 @@ class EncryptDialog(_CardDialog):
         pass                                             # a file is half way: it finishes (each one stands alone, but don't invite it)
 
 
-def encrypt(parent=None):
+def encrypt(parent=None, job=None):
     """Encrypt everything still plain, with a progress bar (the data key must be open). False when Toner's service has the data
-    and the person chose not to try again."""
+    and the person chose not to try again. job: other upgrade work run the same way (core/backupsplit.run)."""
     dlg = EncryptDialog(parent)
     dlg.show()
     try:
         while True:
             try:
-                lockdown.run(dlg.progress)
+                (job or lockdown.run)(dlg.progress)
                 return True
             except (lockdown.Busy, sqlite3.OperationalError):  # the service, or another Toner, has a file open
                 if QMessageBox.warning(dlg, ENCRYPTING, BUSY, QMessageBox.StandardButton.Retry | QMessageBox.StandardButton.Close,
