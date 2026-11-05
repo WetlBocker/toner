@@ -1081,7 +1081,7 @@ def sign_in_at_start():
     """The first start (a new install or an upgrade) or the sign-in window; then whatever is still plain gets encrypted (looked at
     every start: a session log left open last time, or a first start that stopped halfway). False: the person quit."""
     from PySide6.QtWidgets import QDialog
-    from core import backupsplit, datakey, lockdown, roles
+    from core import datakey, lockdown, roles
     from ui import setupdlg
     from ui.signinwindow import SignInWindow
     if not datakey.exists():
@@ -1091,8 +1091,8 @@ def sign_in_at_start():
         return False
     if lockdown.pending() and not setupdlg.encrypt():
         return False
-    if roles.backups_public() and backupsplit.pending() and not setupdlg.encrypt(job=backupsplit.run):
-        return False                               # (every sign-in: passwords in old backups go behind the backups key)
+    if roles.backups_public():
+        setupdlg.split_backups()                   # (every sign-in: passwords in old backups go behind the backups key)
     setupdlg.carry_credential_manager()            # (every start: a first start that stopped halfway left them there)
     return True
 

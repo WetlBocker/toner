@@ -428,6 +428,7 @@ class ConfigsTab(QWidget):
             comparing = len(rows) >= 2 or self.view.currentData() == "diff"
             out["view"] = "comparison" if len(rows) >= 2 else ("changes from the previous version" if comparing else "full configuration")
             out["note"] = self.note.text()
-            text = self.text.toPlainText() if comparing else backup.clean(self.text.toPlainText(), mask=True)
+            text = self.text.toPlainText()                   # (shown unmasked to whoever may see it: the Assistant gets it masked)
+            text = "\n".join(l[:1] + backup.mask_secrets(l[1:]) for l in text.split("\n")) if comparing else backup.clean(text, mask=True)
             out["text"] = text[:20000] + ("\n[cut]" if len(text) > 20000 else "")
         return out

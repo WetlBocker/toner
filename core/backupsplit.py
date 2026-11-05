@@ -8,7 +8,7 @@ each file moved or as it was, and running again carries on.
 """
 import zlib
 
-from core import backup, db, envelope, roles, sqldb
+from core import backup, db, envelope, quiet, roles, sqldb
 
 
 def databases():
@@ -35,47 +35,77 @@ def _unchecked(c):
         raise
 
 
+def locked(e):
+    """True for SQLite's "database is locked" or "busy": another Toner has the file open. Any other error is not a lock."""
+    return isinstance(e, sqldb.sqlite3.OperationalError) and any(w in str(e).lower() for w in ("locked", "busy"))
+
+
 def pending():
-    """The databases with a version not looked at yet (it may hold passwords in its body)."""
+    """The databases with a version not looked at yet (it may hold passwords in its body). A file that can't be read is left out
+    (it never stops Toner starting); a locked one raises."""
     out = []
     for p in databases():
-        c = _open(p)
         try:
-            if _unchecked(c):
-                out.append(p)
-        finally:
-            c.close()
+            c = _open(p)
+            try:
+                if _unchecked(c):
+                    out.append(p)
+            finally:
+                c.close()
+        except Exception as e:
+            if locked(e):
+                raise
+            quiet.ignored()
     return out
 
 
 def run(progress=None):
     """Look at every version not looked at yet: an unmasked body goes behind the backups key, a masked one is marked ''. Calls
-    progress(done, total) per database. Nothing to do without the backups key."""
+    progress(done, total) per database. A version or a file that fails is skipped and stays NULL, looked at again next time: never
+    a reason not to start. Raises only when a file is locked. True when everything was done (or there is no backups key)."""
     pub = roles.backups_public()
     if pub is None:
-        return
+        return True
     todo = pending()
     if progress:
         progress(0, len(todo))
+    whole = True
     for done, p in enumerate(todo, 1):
-        c = _open(p)
         try:
-            db._m13_backup_secrets(c)                    # a file the window hasn't brought up to date yet (db.init runs after this)
-            moved, clean = [], []
-            for r in c.execute("SELECT id, sha, body FROM config_backups WHERE secret IS NULL").fetchall():
+            whole = _split(p, pub) and whole
+        except Exception as e:
+            if locked(e):
+                raise
+            quiet.ignored()                              # a damaged or unreadable file: skipped
+            whole = False
+        if progress:
+            progress(done, len(todo))
+    return whole
+
+
+def _split(path, pub):
+    """One database, in one transaction: the whole file moves, or none of it. False when a version was skipped."""
+    c = _open(path)
+    try:
+        db._m13_backup_secrets(c)                        # a file the window hasn't brought up to date yet (db.init runs after this)
+        moved, clean, whole = [], [], True
+        for r in c.execute("SELECT id, sha, body FROM config_backups WHERE secret IS NULL").fetchall():
+            try:
                 text = zlib.decompress(r["body"]).decode("utf-8", "replace")
                 masked = backup.mask_secrets(text)
                 if masked == text:
                     clean.append((r["id"],))
                 else:
                     moved.append((envelope.wrap(pub, backup._pack(text), backup.aad(r["sha"])), backup._pack(masked), len(masked), r["id"]))
-            with c:                                      # one transaction: the whole file moves, or none of it
-                c.executemany("UPDATE config_backups SET secret='' WHERE id=?", clean)
-                c.executemany("UPDATE config_backups SET secret=?, body=?, size=? WHERE id=?", moved)
-        finally:
-            c.close()
-        if progress:
-            progress(done, len(todo))
+            except Exception:
+                quiet.ignored()                          # a damaged version: stays NULL
+                whole = False
+        with c:                                          # (secret IS NULL: an id deleted and used again meanwhile is another version)
+            c.executemany("UPDATE config_backups SET secret='' WHERE id=? AND secret IS NULL", clean)
+            c.executemany("UPDATE config_backups SET secret=?, body=?, size=? WHERE id=? AND secret IS NULL", moved)
+        return whole
+    finally:
+        c.close()
 
 
 def secrets_kept():

@@ -9,7 +9,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QFontDatabase, QGuiApplication
 from PySide6.QtWidgets import QApplication, QCheckBox, QDialog, QHBoxLayout, QLabel, QMessageBox, QProgressBar, QVBoxLayout
 
-from core import audit, datakey, db, lockdown, passvault, passwords, session, sqldb
+from core import audit, datakey, db, lockdown, passvault, passwords, quiet, session, sqldb
 from core.sqldb import sqlite3
 from ui.signinwindow import (DAMAGED, DAMAGED_ERRORS, MISMATCH, VAULT_CHANGED, brand, card, centred, error_label, field, heading, link,
                              primary, say, words)
@@ -195,15 +195,15 @@ class EncryptDialog(_CardDialog):
         pass                                             # a file is half way: it finishes (each one stands alone, but don't invite it)
 
 
-def encrypt(parent=None, job=None):
+def encrypt(parent=None):
     """Encrypt everything still plain, with a progress bar (the data key must be open). False when Toner's service has the data
-    and the person chose not to try again. job: other upgrade work run the same way (core/backupsplit.run)."""
+    and the person chose not to try again."""
     dlg = EncryptDialog(parent)
     dlg.show()
     try:
         while True:
             try:
-                (job or lockdown.run)(dlg.progress)
+                lockdown.run(dlg.progress)
                 return True
             except (lockdown.Busy, sqlite3.OperationalError):  # the service, or another Toner, has a file open
                 if QMessageBox.warning(dlg, ENCRYPTING, BUSY, QMessageBox.StandardButton.Retry | QMessageBox.StandardButton.Close,
@@ -212,6 +212,33 @@ def encrypt(parent=None, job=None):
     finally:
         dlg.hide()
         dlg.deleteLater()
+
+
+def split_backups(parent=None):
+    """Move the passwords in old config backups behind the backups key (core/backupsplit.py), with the same progress window.
+    Never stops Toner starting: what didn't move is looked at again next time, and is no more exposed than it was. Only a locked
+    file asks; Close carries on."""
+    from core import backupsplit
+    dlg = None
+    try:
+        while True:
+            try:
+                if backupsplit.pending():
+                    dlg = dlg or EncryptDialog(parent)
+                    dlg.show()
+                    backupsplit.run(dlg.progress)
+                return
+            except Exception as e:
+                if not backupsplit.locked(e):
+                    quiet.ignored()
+                    return
+                if QMessageBox.warning(dlg, ENCRYPTING, BUSY, QMessageBox.StandardButton.Retry | QMessageBox.StandardButton.Close,
+                                       QMessageBox.StandardButton.Retry) != QMessageBox.StandardButton.Retry:
+                    return
+    finally:
+        if dlg is not None:
+            dlg.hide()
+            dlg.deleteLater()
 
 
 def run_first_start(parent=None):

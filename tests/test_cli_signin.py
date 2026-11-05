@@ -165,6 +165,17 @@ check("exit 3 with the service message, no traceback, signed out",
       rc == 3 and err.strip() == "Toner's service is using the data. Stop it, then try again." and "Traceback" not in err
       and session.state() == "signed_out", (rc, err))
 
+print("== any other split failure is skipped: the command runs (Ruling 18)")
+import zlib
+for error in (sqldb.sqlite3.OperationalError("disk I/O error"), sqldb.sqlite3.DatabaseError("file is not a database"), zlib.error("bad")):
+    def failing_split(progress=None, e=error):
+        raise e
+    backupsplit.run = failing_split
+    rc, out, err = call("status", "--user", "admin")
+    check(f"{type(error).__name__} '{error}': exit 0, results, nothing on stderr",
+          rc == 0 and "No results yet" in out and not err.strip() and session.state() == "signed_out", (rc, out, err))
+backupsplit.run = real_split
+
 print("== a copy that has not finished encrypting")
 lockdown.pending, real_pending = (lambda: ["x.db"]), lockdown.pending
 rc, out, err = call("status", "--user", "admin")

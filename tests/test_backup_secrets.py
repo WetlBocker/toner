@@ -16,7 +16,7 @@ keyring.set_password = lambda s, u, p: STORE.__setitem__((s, u), p)
 keyring.get_password = lambda s, u: STORE.get((s, u))
 keyring.delete_password = lambda s, u: STORE.pop((s, u), None)
 import zlib
-from core import backupsplit, datakey, lockdown, orgs, roles, session, sqldb
+from core import backupsplit, datakey, envelope, lockdown, orgs, roles, session, sqldb
 
 ok = bad = 0
 def check(name, cond, extra=""):
@@ -181,6 +181,27 @@ check("masking off, an Admin: the type 7 password is judged", got[0] == "WARN" a
 msgs = [r.message for r in hardening.scan(g_sw)]
 check("...and no finding quotes a secret (Ruling 17)", any("<masked>" in m for m in msgs)
       and not any(v in m for m in msgs for v in (SECRET, "0822455D0A16", "TopEnableHash", "Comm5ecret")), msgs)
+
+# ---------------------------------------------------------------- the Assistant is told the masked text, even of an Admin's compare
+from PySide6.QtWidgets import QApplication, QDialog
+qapp = QApplication.instance() or QApplication([])
+from ui import configs as C
+db.save_device(dev("cmp-sw", 0))
+backup.store("cmp-sw", cfg(), mask=False)
+backup.store("cmp-sw", cfg().replace(SECRET, "N3wS3cretPW"), mask=False)
+page = C.ConfigsTab()
+page.select_device("cmp-sw"); qapp.processEvents()
+page.vers.selectAll(); qapp.processEvents()
+ctx = page.screen_context()
+check("an Admin comparing two versions sees the passwords", SECRET in page.text.toPlainText() and "N3wS3cretPW" in page.text.toPlainText())
+check("...the Assistant's context holds neither", ctx["view"] == "comparison" and "<masked>" in ctx["text"]
+      and not any(v in ctx["text"] for v in (SECRET, "N3wS3cretPW")), ctx)
+page.view.setCurrentIndex(page.view.findData("diff")); page.vers.selectRow(0); qapp.processEvents()
+ctx = page.screen_context()
+check("...nor in the changes view", ctx["view"] == "changes from the previous version" and SECRET in page.text.toPlainText()
+      and "<masked>" in ctx["text"] and not any(v in ctx["text"] for v in (SECRET, "N3wS3cretPW")), ctx)
+page.deleteLater()
+
 session.sign_out()
 session.sign_in("Tech1", PW3)
 got = type7()
@@ -194,8 +215,6 @@ def unsplit():
         c.execute("UPDATE config_backups SET body=?, secret=NULL WHERE id=?", (backup._pack(backup.clean(cfg(), mask=False)), rid))
     return rid
 
-from PySide6.QtWidgets import QApplication, QDialog
-qapp = QApplication.instance() or QApplication([])
 import app as A, cli, getpass, io
 from ui import setupdlg, signinwindow
 setupdlg.carry_credential_manager = lambda: None
@@ -215,11 +234,78 @@ try:
 finally:
     sys.stdin = real_stdin
 
+# ---------------------------------------------------------------- a split that fails never stops Toner starting (Ruling 18)
+good = unsplit()                                    # Globex: an unmasked body to move
+with db.connect() as c:                             # Global: a damaged body not looked at yet
+    damaged = c.execute("SELECT MAX(id) FROM config_backups").fetchone()[0]
+    kept = dict(c.execute("SELECT body, secret FROM config_backups WHERE id=?", (damaged,)).fetchone())
+    c.execute("UPDATE config_backups SET body=?, secret=NULL WHERE id=?", (b"not zlib at all", damaged))
+broken = db.org_path(999)
+broken.write_bytes(b"this is not a database file " * 200)
+session.sign_out()
+check("a damaged version and a broken organization file: Toner still starts", A.sign_in_at_start() is True)
+g = [r for r in rows(DBS[2]) if r["id"] == good][0]
+check("...the other versions are moved", g["secret"] and SECRET not in body(g))
+check("...the damaged one stays NULL, the broken file untouched",
+      [r["secret"] for r in rows(DBS[0]) if r["id"] == damaged] == [None] and broken.read_bytes() == b"this is not a database file " * 200)
+with db.connect() as c:
+    c.execute("UPDATE config_backups SET body=?, secret=? WHERE id=?", (kept["body"], kept["secret"], damaged))
+broken.unlink()
+
+asked = []
+real_warning, real_run = setupdlg.QMessageBox.warning, backupsplit.run
+setupdlg.QMessageBox.warning = lambda *a: (asked.append(a[2]), setupdlg.QMessageBox.StandardButton.Close)[1]
+for error, want in (("disk I/O error", []), ("database is locked", [setupdlg.BUSY])):
+    unsplit()
+    session.sign_out()
+    asked.clear()
+    backupsplit.run = lambda progress=None, e=error: (_ for _ in ()).throw(sqldb.sqlite3.OperationalError(e))
+    check(f"split fails with '{error}': Toner starts" + (", after the busy sentence and Close" if want else ", no busy sentence"),
+          A.sign_in_at_start() is True and asked == want, asked)
+backupsplit.run, setupdlg.QMessageBox.warning = real_run, real_warning
+
+# ---------------------------------------------------------------- an id deleted and used again between the look and the write
+rid = unsplit()                                     # Globex's newest version (a-sw's), unmasked again
+real_wrap, hooked = envelope.wrap, []
+def racing(*a):
+    if not hooked:
+        with db.within(globex), db.connect() as c:
+            c.execute("DELETE FROM config_backups WHERE id=?", (rid,))
+        with db.within(globex):
+            hooked.append(backup.store("a-sw", cfg(extra="\n description reused"), mask=True)[1]["id"])
+    return real_wrap(*a)
+envelope.wrap = racing
+try:
+    backupsplit.run()
+finally:
+    envelope.wrap = real_wrap
+r = [r for r in rows(DBS[2]) if r["id"] == rid]
+check("the id used again keeps its own version, not the old text", hooked == [rid] and r and r[0]["secret"] == ""
+      and "description reused" in body(r[0]) and SECRET not in body(r[0]), (hooked, r))
+
 # ---------------------------------------------------------------- the secret is encrypted on disk
 everything = [r for p in DBS for r in rows(p)]
 secrets = [r["secret"] if isinstance(r["secret"], bytes) else r["secret"].encode() for r in everything if r["secret"]]
 check("no secret holds the password's bytes", len(secrets) >= 8 and not any(SECRET.encode() in s for s in secrets), len(secrets))
 check("no body holds the password", not any(SECRET in body(r) for r in everything))
+import base64
+from cryptography.exceptions import InvalidTag
+wrapped = [r for r in everything if r["secret"]]
+def plain_zlib(r):
+    try:
+        zlib.decompress(base64.b64decode(r["secret"]))
+        return True
+    except Exception:
+        return False
+check("a secret isn't just zlib under base64", wrapped and not any(plain_zlib(r) for r in wrapped))
+other = envelope.new_box_key()[0]
+def other_opens(r):
+    try:
+        envelope.unwrap(other, r["secret"], backup.aad(r["sha"]))
+        return True
+    except (InvalidTag, ValueError):
+        return False
+check("another key can't open a secret", not any(other_opens(r) for r in wrapped))
 
 # ---------------------------------------------------------------- the tripwire: a Part 1 keys file put back over this database
 session.sign_out()
