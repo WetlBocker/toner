@@ -110,17 +110,16 @@ def _search(conn, base, flt, attrs, scope=ldap3.SUBTREE):
     return [e for e in conn.response or [] if e.get("type", "searchResEntry") == "searchResEntry"]
 
 
-def _unescape(v):
-    v = re.sub(r"(?:\\[0-9a-fA-F]{2})+", lambda m: bytes.fromhex(m.group(0).replace("\\", "")).decode("utf-8", "replace"), v)
-    return re.sub(r"\\(.)", r"\1", v)
+def _key(dn):
+    return str(dn).casefold()      # DNs compared are only ever ones the server wrote; no unescaping, so no two different DNs meet
 
 
-def norm_dn(dn):
-    """A DN in a comparable form (case, escapes, spacing), or None when it is not a DN."""
+def _is_dn(text):
     try:
-        return tuple((a.strip().lower(), _unescape(v).strip().casefold(), sep) for a, v, sep in parse_dn(re.sub(r"\s*(?<!\\),\s*", ",", dn.strip())))
+        parse_dn(text)
+        return True
     except (lx.LDAPInvalidDnError, ValueError, TypeError):
-        return None
+        return False
 
 
 def _groups(conn, cfg, dn, direct, uid=None):
@@ -135,7 +134,7 @@ def _groups(conn, cfg, dn, direct, uid=None):
     seen, todo = {}, list(direct) if ad else parents(dn, uid)
     while todo and len(seen) < _MAX_GROUPS:
         g = todo.pop()
-        key = norm_dn(g) or g.lower()
+        key = _key(g)
         if key in seen:
             continue
         seen[key] = g
@@ -169,11 +168,11 @@ _AD_ATTRS = ["objectGUID", "userPrincipalName", "displayName", "cn", "userAccoun
 _LDAP_ATTRS = ["uid", "entryUUID", "displayName", "cn", "nsAccountLock", "pwdAccountLockedTime"]
 
 
-def _find(conn, cfg, base, flt, scope=ldap3.SUBTREE):
-    """The one user the search finds; None for none; BadCredentials for more than one (never guess which)."""
+def _find(conn, cfg, base, flt, scope=ldap3.SUBTREE, many=BadCredentials):
+    """The one user the search finds; None for none; `many` is raised for more than one (never guess which)."""
     found = _search(conn, base, flt, _AD_ATTRS if cfg["kind"] == "ad" else _LDAP_ATTRS, scope)
     if len(found) > 1:
-        raise BadCredentials("more than one entry")
+        raise many("more than one entry")
     return _user_from(conn, cfg, found[0]) if found else None
 
 
@@ -196,6 +195,18 @@ def _split_login(cfg, login):
     return who, short
 
 
+def whoami_target(cfg, me):
+    """Who Am I answer -> ("dn", DN) or ("sam", name). Only u:DOMAIN\\name with our NetBIOS domain, or dn:..., is accepted."""
+    low = me.lower()
+    if low.startswith("dn:") and me[3:].strip():
+        return "dn", me[3:].strip()
+    if low.startswith("u:"):
+        dom, sep, sam = me[2:].partition("\\")
+        if sep and sam and dom.casefold() == str(cfg.get("netbios") or "").casefold() and dom:
+            return "sam", sam
+    raise BadCredentials("unexpected identity")
+
+
 def _who_am_i(conn):
     return conn.extend.standard.who_am_i() or ""
 
@@ -208,12 +219,11 @@ def sign_in(cfg, login, password, service_password=None):
         esc = ldap3.utils.conv.escape_filter_chars
         if cfg["kind"] == "ad":      # ask the server who the bind is, so a look-alike name can't pick another entry
             me = _who_am_i(conn)
-            if me.lower().startswith("dn:"):
-                user = _find(conn, cfg, me[3:], "(objectClass=user)", ldap3.BASE)
+            kind, target = whoami_target(cfg, me)
+            if kind == "dn":
+                user = _find(conn, cfg, target, "(objectClass=user)", ldap3.BASE)
             else:
-                sam = me[2:] if me.lower().startswith("u:") else me
-                sam = sam.split("\\", 1)[-1]
-                user = _find(conn, cfg, cfg["base_dn"], f"(&(objectClass=user)(sAMAccountName={esc(sam)}))") if sam else None
+                user = _find(conn, cfg, cfg["base_dn"], f"(&(objectClass=user)(sAMAccountName={esc(target)}))")
         else:
             user = _find(conn, cfg, who, "(objectClass=*)", ldap3.BASE)
     except lx.LDAPException:
@@ -230,8 +240,8 @@ def look_up(cfg, guid, service_password):
     try:
         if cfg["kind"] == "ad":
             raw = "".join(f"\\{b:02x}" for b in uuid.UUID(guid).bytes_le)
-            return _find(conn, cfg, cfg["base_dn"], f"(&(objectClass=user)(objectGUID={raw}))")
-        return _find(conn, cfg, cfg["base_dn"], f"(entryUUID={ldap3.utils.conv.escape_filter_chars(guid)})")
+            return _find(conn, cfg, cfg["base_dn"], f"(&(objectClass=user)(objectGUID={raw}))", many=Unreachable)
+        return _find(conn, cfg, cfg["base_dn"], f"(entryUUID={ldap3.utils.conv.escape_filter_chars(guid)})", many=Unreachable)
     except lx.LDAPException:
         raise Unreachable("read failed") from None
     finally:
@@ -239,25 +249,25 @@ def look_up(cfg, guid, service_password):
 
 
 def role_for(cfg, groups):
-    """The highest role whose group DN is among the person's group DNs (compared after normalising: case, escapes, spacing)."""
-    have = {n for n in map(norm_dn, groups) if n}
+    """The highest role whose group DN is among the person's group DNs (both as the server wrote them; compared by case only)."""
+    have = {_key(g) for g in groups}
     for role in ROLE_ORDER:
-        if have & {n for n in map(norm_dn, cfg.get("groups", {}).get(role, [])) if n}:
+        if have & {_key(g) for g in cfg.get("groups", {}).get(role, [])}:
             return role
     return None
 
 
 def resolve_groups(cfg, names, service_password):
-    """{name: group DN}. A name is a CN or a DN. A CN is searched under base_dn; a DN is checked to be a group and kept as given."""
+    """{name: group DN}. A name is a CN or a DN. A CN is searched under base_dn; a DN is read back. Either way the DN is the server's."""
     conn = connect(cfg, cfg["service_dn"], service_password)
     gf = AD_GROUP if cfg["kind"] == "ad" else LDAP_GROUP
     out = {}
     try:
         for name in names:
-            if norm_dn(name):
+            if _is_dn(name):      # a typed DN is read back, and the server's own form is what is stored
                 found = _search(conn, name, gf, ["cn"], ldap3.BASE)
                 if not found: raise NotFound(name)
-                out[name] = name
+                out[name] = found[0]["dn"]
             else:
                 found = _search(conn, cfg["base_dn"], f"(&{gf}(cn={ldap3.utils.conv.escape_filter_chars(name)}))", ["cn"])
                 if not found: raise NotFound(name)

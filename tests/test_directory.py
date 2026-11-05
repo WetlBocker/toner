@@ -61,7 +61,7 @@ for upn, dn in (("alice@corp.example", "CN=Alice A,OU=Users," + BASE), ("bob@cor
     srv.dit[upn] = srv.dit[dn]      # AD binds by UPN; the mock only knows DNs
 AD = {"id": "ab12", "name": "Corp", "kind": "ad", "servers": ["dc1.corp.example"], "port": 636, "security": "ldaps", "ca_file": "",
       "base_dn": BASE, "netbios": "CORP", "suffixes": ["corp.example"], "service_dn": "CN=svc,OU=Users," + BASE,
-      "groups": {"Admin": ["cn=network-admins, ou=Groups, " + BASE.lower()], "Engineer": ["CN=Engineers,OU=Groups," + BASE], "Tech": ["CN=Tech-Desk,OU=Groups," + BASE]}, "duo": {"on": False, "host": "", "ikey": ""}}
+      "groups": {"Admin": ["cn=network-admins,ou=Groups," + BASE.lower()], "Engineer": ["CN=Engineers,OU=Groups," + BASE], "Tech": ["CN=Tech-Desk,OU=Groups," + BASE]}, "duo": {"on": False, "host": "", "ikey": ""}}
 
 print("== Active Directory")
 u = D.sign_in(AD, "alice@corp.example", "pw-alice")
@@ -91,10 +91,25 @@ check("a name with nothing for the user is BadCredentials", all(raises(D.BadCred
 
 print("== resolving group names")
 check("a CN resolves to its DN", D.resolve_groups(AD, ["Network-Admins"], "svc-pw") == {"Network-Admins": G("Network-Admins")})
-check("a DN is checked and kept as given", D.resolve_groups(AD, [G("Eng-Team")], "svc-pw") == {G("Eng-Team"): G("Eng-Team")})
+typed = "cn=eng-team,ou=groups," + BASE.lower()
+# the mock echoes the requested DN back, a real server answers with the entry's own; so stand in a connection that does
+class Echo:
+    result = {"result": 0}
+    def search(self, base, *a, **k): self.response = [{"type": "searchResEntry", "dn": G("Eng-Team"), "attributes": {}}]
+    def unbind(self): pass
+_connect = D.connect; D.connect = lambda *a: Echo()
+r = D.resolve_groups(AD, [typed], "svc-pw"); D.connect = _connect
+check("a typed DN is read back and the server's form is stored, not the typed text", r == {typed: G("Eng-Team")}, r)
+check("a CN with an equals sign that is not a DN is searched as a CN", raises(D.NotFound, D.resolve_groups, AD, ["a=b"], "svc-pw") is not None)
 check("a CN used twice is Ambiguous", raises(D.Ambiguous, D.resolve_groups, AD, ["Tech-Desk"], "svc-pw") is not None)
 check("an unknown CN is NotFound", raises(D.NotFound, D.resolve_groups, AD, ["Nope"], "svc-pw") is not None)
 check("a DN that does not exist is NotFound", raises(D.NotFound, D.resolve_groups, AD, ["CN=Nope,OU=Groups," + BASE], "svc-pw") is not None)
+
+print("== Who Am I answers")
+for me, want in (("u:CORP\\alice", ("sam", "alice")), ("u:corp\\alice", ("sam", "alice")), ("dn:CN=A,DC=x", ("dn", "CN=A,DC=x"))):
+    check("accepted: " + me, D.whoami_target(AD, me) == want)
+for me in ("u:CHILD\\alice", "", "u:", "u:CORP\\", "u:\\alice", "x:foo", "CORP\\alice", "dn:"):
+    check("refused: %r" % me, raises(D.BadCredentials, D.whoami_target, AD, me) is not None)
 
 print("== referrals")
 class Fake:
@@ -111,9 +126,9 @@ D.sign_in(AD, "alice@corp.example", "pw-alice"); ldap3.Connection = _real
 check("every connection is made with referrals off", seen.get("auto_referrals") is False, seen)
 
 print("== roles")
-check("Admin wins over Tech, DNs compared by case and spacing", D.role_for(AD, [G("Tech-Desk"), "CN=NETWORK-ADMINS,OU=Groups,DC=corp,DC=example"]) == "Admin")
+check("Admin wins over Tech, DNs compared by case", D.role_for(AD, [G("Tech-Desk"), "CN=NETWORK-ADMINS,OU=Groups,DC=corp,DC=example"]) == "Admin")
 check("Tech alone", D.role_for(AD, [G("Tech-Desk")]) == "Tech")
-check("an escaped form of the same DN matches", D.role_for(AD, ["CN=Tech\\2dDesk,OU=Groups," + BASE]) == "Tech")
+check("escaped look-alike DNs do not match", D.role_for(AD, ["CN=\\54ech-Desk,OU=Groups," + BASE, "CN=Tech-Desk\\20,OU=Groups," + BASE, "CN=\\ Tech-Desk,OU=Groups," + BASE]) is None)
 check("a same-CN group in another OU grants nothing", D.role_for(AD, ["CN=Tech-Desk,OU=Other," + BASE]) is None)
 check("a bare CN is not a DN and grants nothing", D.role_for(AD, ["Tech-Desk", "Network-Admins"]) is None)
 check("no match is None", D.role_for(AD, [G("Other")]) is None and D.role_for(AD, []) is None)
