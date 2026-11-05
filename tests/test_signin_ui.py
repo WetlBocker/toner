@@ -244,6 +244,37 @@ check("later starts don't scan Credential Manager at all", A.sign_in_at_start() 
 passvault.left_in_credential_manager, passvault.forget_credential_manager = real_left, real_forget
 SW.SignInWindow.exec = real_exec
 
+print("== ...and only marked done after Credential Manager was read in full")
+import types
+from core import orgs
+db.init()
+real_sys, real_backend = passvault.sys, passvault._old_backend
+passvault.sys = types.SimpleNamespace(platform="win32")      # (the real read path, on any system)
+class BrokenStore:
+    def get_password(self, service, name): raise OSError("no logon session")
+    def delete_password(self, service, name): forgotten.append(name)
+forgotten.clear()
+db.set_setting("credential_manager_carried", False)
+passvault._old_backend = BrokenStore()
+setupdlg.carry_credential_manager()
+check("a read that fails: nothing is carried or forgotten, and the next start tries again",
+      db.get_setting("credential_manager_carried") is False and forgotten == [])
+passvault._old_backend = None
+setupdlg.carry_credential_manager()
+check("no way to reach Credential Manager on Windows: not marked done either", db.get_setting("credential_manager_carried") is False)
+class EmptyStore:
+    def get_password(self, service, name): return None
+passvault._old_backend = EmptyStore()
+acme, globex = orgs.create("Acme Charter", "ACME"), orgs.create("Globex", "GLBX")
+db.set_setting("credential_manager_carried", False)
+db.set_home(acme)
+setupdlg.carry_credential_manager()
+db.set_home(globex)
+check("a clean, empty read marks it done, for the whole installation (not one organization)",
+      db.get_setting("credential_manager_carried") is True)
+db.set_home(db.GLOBAL)
+passvault.sys, passvault._old_backend = real_sys, real_backend
+
 print("== the lock screen over Toner's window")
 db.init()
 A.apply_look(app)

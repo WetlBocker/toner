@@ -157,7 +157,10 @@ def open_at_start(parent=None):
         dlg = MasterDialog("create", parent)
         if not dlg.exec():
             return False
-        carry = passvault.left_in_credential_manager()        # an older Toner's passwords come along (nothing to say: they just work)
+        try:
+            carry = passvault.left_in_credential_manager()    # an older Toner's passwords come along (nothing to say: they just work)
+        except passvault.Unreadable as e:
+            carry = e.found
         if not passvault.create(dlg.master(), dlg.remember.isChecked(), carry):
             QMessageBox.information(parent, "Set a master password", NO_KEYRING_TEXT)
         passvault.forget_credential_manager(carry)

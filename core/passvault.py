@@ -515,20 +515,33 @@ def _tell_manager(name, op):
         quiet.ignored()
 
 
+class Unreadable(RuntimeError):
+    """Credential Manager couldn't be read (no backend for it, or a read failed). `found`: what was read all the same."""
+
+    def __init__(self, found):
+        super().__init__("Windows Credential Manager couldn't be read.")
+        self.found = found
+
+
 def left_in_credential_manager():
-    """{name: secret} of the passwords an older Toner kept in Windows Credential Manager (read before the vault takes over)."""
+    """{name: secret} of the passwords an older Toner kept in Windows Credential Manager (read before the vault takes over).
+    Raises Unreadable on Windows when it couldn't be read in full, so an empty answer always means there are none."""
     from core import vault
-    backend = _old_backend
-    if backend is None or sys.platform != "win32":       # (only Windows' Toner ever used Credential Manager)
+    if sys.platform != "win32":                          # (only Windows' Toner ever used Credential Manager)
         return {}
-    out = {}
+    backend = _old_backend
+    if backend is None:
+        raise Unreadable({})
+    out, failed = {}, False
     for name in vault.known_names():
         try:
             value = backend.get_password(db.SERVICE, name)
         except Exception:
-            value = None
+            value, failed = None, True
         if value:
             out[name] = value
+    if failed:
+        raise Unreadable(out)
     return out
 
 

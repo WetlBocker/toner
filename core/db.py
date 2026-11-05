@@ -1124,7 +1124,7 @@ def ensure_folder_path(path):
 # ---------- settings ----------
 # Settings: Global's apply everywhere; an organization's file holds only the ones it changes (Settings > ... while it is picked).
 # These are about this computer or the whole program, so they are always read from and written to the Global file:
-GLOBAL_ONLY = {"window_geometry", "splitters", "sidebar_collapsed", "inventory_details_hidden", "sessions_list_hidden", "settings_list_hidden", "tools_list_hidden", "automation_list_hidden", "onboarding_done", "org_current",
+GLOBAL_ONLY = {"credential_manager_carried", "window_geometry", "splitters", "sidebar_collapsed", "inventory_details_hidden", "sessions_list_hidden", "settings_list_hidden", "tools_list_hidden", "automation_list_hidden", "onboarding_done", "org_current",
                "theme", "look", "motion", "panels", "contrast", "custom_accent", "custom_base", "custom_tint", "panel_opacity", "vendor_icons_folder", "font_size", "color_preset", "status_colors",
                "term_font", "rdp_embedded", "term_font_size", "term_scrollback", "term_scheme", "term_syntax", "scan_enabled", "hardening_off", "paging_cmd",
                "hostkey_mode", "ssh_legacy_algorithms", "run_in_background", "metrics_port", "proxy", "ssh_tunnel",
