@@ -220,16 +220,27 @@ w.pw.setText(PW2); w.sign_in.click()
 check("...after which signing in works", w.result() == SignInWindow.DialogCode.Accepted and session.user() == "Jordan")
 session.sign_out()
 
-print("== passwords left in Windows Credential Manager move over at every start")
+print("== passwords left in Windows Credential Manager move over at a start, once")
 from ui import signinwindow as SW
-left = {"cm-x": "9"}
-forgotten = []
+left = {"cm-x": "9", "cm-y": "old"}
+forgotten, scans = [], []
 real_left, real_forget = passvault.left_in_credential_manager, passvault.forget_credential_manager
-passvault.left_in_credential_manager = lambda: dict(left)
+passvault.left_in_credential_manager = lambda: (scans.append(1), dict(left))[1]
 passvault.forget_credential_manager = lambda names: (forgotten.extend(names), [left.pop(n, None) for n in names])
 real_exec = SW.SignInWindow.exec
-SW.SignInWindow.exec = lambda self: (session.sign_in("Jordan", PW2), SignInWindow.DialogCode.Accepted)[1]
-check("the sign-in start carries them into the vault", A.sign_in_at_start() is True and passvault.get("cm-x") == "9" and forgotten == ["cm-x"])
+def signed_in(self):
+    session.sign_in("Jordan", PW2)
+    if passvault.get("cm-y") is None:
+        passvault.put("cm-y", "newer")                   # changed in the vault since the old copy was kept
+    return SignInWindow.DialogCode.Accepted
+SW.SignInWindow.exec = signed_in
+check("the sign-in start carries them into the vault", A.sign_in_at_start() is True and passvault.get("cm-x") == "9" and sorted(forgotten) == ["cm-x", "cm-y"])
+check("...never over a newer password the vault already has (the old copy still goes)", passvault.get("cm-y") == "newer" and "cm-y" not in left)
+check("...and the scan isn't marked done while it still found some", db.get_setting("credential_manager_carried") is False)
+session.sign_out()
+check("the next start finds none left and marks it done", A.sign_in_at_start() is True and db.get_setting("credential_manager_carried") is True and len(scans) == 2)
+session.sign_out()
+check("later starts don't scan Credential Manager at all", A.sign_in_at_start() is True and len(scans) == 2)
 passvault.left_in_credential_manager, passvault.forget_credential_manager = real_left, real_forget
 SW.SignInWindow.exec = real_exec
 
@@ -283,6 +294,33 @@ session.unlock(PW2); app.processEvents()
 check("...and is there after unlocking", late.isVisible() and QApplication.activeModalWidget() is late)
 late.close(); late.deleteLater(); app.processEvents()
 
+print("== a proxy's one-time code asked while locked (scheduled work)")
+from ui import otpprompt
+from PySide6.QtCore import QTimer
+from PySide6.QtWidgets import QInputDialog
+win.lock(); app.processEvents()
+seen_otp = {}
+def look_at_prompt():
+    dlg = next(w for w in QApplication.topLevelWidgets() if isinstance(w, QInputDialog) and w.isVisible())
+    seen_otp.update(parent=dlg.parentWidget(), covered=dlg in lock.covers and lock.covers[dlg].isVisible(),
+                    modal=QApplication.activeModalWidget(), focus=QApplication.focusWidget(),
+                    on_top=bool(dlg.windowHandle().flags() & Qt.WindowType.WindowStaysOnTopHint))
+    QTest.keyClicks(QApplication.focusWidget(), "typed at the lock")
+    seen_otp["prompt_text"] = dlg.textValue()
+    dlg.reject()
+QTimer.singleShot(200, look_at_prompt)
+real_active = QApplication.activeWindow
+QApplication.activeWindow = staticmethod(lambda: lock)  # what a real desktop reports while locked (offscreen has no active window)
+answer_otp = otpprompt.ask("Proxy one-time code", "Enter the code for the proxy.", secret=True)
+QApplication.activeWindow = real_active
+check("it belongs to Toner's window, not the lock", seen_otp.get("parent") is win, seen_otp.get("parent"))
+check("...is covered, and the lock stays the active modal with the focus", seen_otp.get("covered") and seen_otp.get("modal") is lock
+      and seen_otp.get("focus") is lock.pw, seen_otp)
+check("...doesn't stay on top of the lock while covered", seen_otp.get("on_top") is False)
+check("...and what is typed goes to the lock's box, not the prompt", seen_otp.get("prompt_text") == "" and lock.pw.text() == "typed at the lock")
+lock.pw.clear()
+session.unlock(PW2); app.processEvents()
+
 print("== the idle timer")
 from ui import lockscreen
 check("15 minutes by default", db.get_setting("signin_idle_minutes") == 15)
@@ -306,6 +344,11 @@ check("a jump forward past the limit (a sleep) locks", session.state() == "locke
 check("...and says so", lock.reason.text() == "Locked after 15 minutes without use.", lock.reason.text())
 session.unlock(PW2); app.processEvents()
 check("unlocking (from anywhere) hides it again", not lock.isVisible())
+lock.last = now[0]
+now[0] += 3 * 3600                                   # asleep; Qt's timers don't count that, so the idle check hasn't run
+QApplication.sendEvent(win, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_A, Qt.KeyboardModifier.NoModifier))
+check("the first key press after waking from a long sleep locks before anything else", session.state() == "locked" and lock.isVisible())
+session.unlock(PW2); app.processEvents()
 
 print("== Settings > Security > Lock now follows the session")
 from ui.settings_pages.security import SecurityPage

@@ -68,6 +68,7 @@ class LockScreen(QWidget):
         self.last = _now()
         self._idle_minutes = None                        # set when the idle lock is what locked
         self.covers = {}                                 # each covered window -> its cover
+        self._on_top = []                                # covered windows that stayed on top, so they don't sit over the lock
         self.locked = False                              # the lock is up (it may be hidden while every Toner window is)
         self._passing = False                            # Sign in as someone else: Main's closing questions must show
         QApplication.instance().installEventFilter(self)
@@ -78,7 +79,13 @@ class LockScreen(QWidget):
     def eventFilter(self, obj, event):
         kind = event.type()
         if kind in _INPUT:
-            self.last = _now()
+            now = _now()
+            if now - self.last > 60 and session.state() == "open":
+                self.check_idle()                        # waking from sleep: the idle timer may not have run yet
+                if session.state() == "locked":
+                    self.last = now
+                    return True                          # the key or click that woke it doesn't reach the window underneath
+            self.last = now
         elif self.locked and not self._passing:
             if kind == QEvent.Type.Show and isinstance(obj, QWidget) and obj.isWindow() and obj is not self:
                 QTimer.singleShot(0, self._cover_all)        # a window that opened (or came back) while locked
@@ -150,6 +157,10 @@ class LockScreen(QWidget):
             cover.show()
             cover.raise_()
             self.covers[w] = cover
+            handle = w.windowHandle()
+            if handle is not None and handle.flags() & Qt.WindowType.WindowStaysOnTopHint:
+                handle.setFlags(handle.flags() & ~Qt.WindowType.WindowStaysOnTopHint)   # (native flags: the widget isn't hidden)
+                self._on_top.append(w)
             w.destroyed.connect(lambda *_a, w=w: self.covers.pop(w, None))
         self.keep_covered()
         if not any(w.isVisible() for w in self.covers):
@@ -176,7 +187,12 @@ class LockScreen(QWidget):
         for cover in self.covers.values():
             cover.hide()
             cover.deleteLater()
-        self.covers = {}
+        for w in self._on_top:
+            try:
+                w.windowHandle().setFlags(w.windowHandle().flags() | Qt.WindowType.WindowStaysOnTopHint)
+            except (RuntimeError, AttributeError):
+                pass                                     # closed meanwhile
+        self.covers, self._on_top = {}, []
 
     def _unlock(self):
         pw = self.pw.text()

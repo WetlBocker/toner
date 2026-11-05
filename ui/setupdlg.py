@@ -212,10 +212,18 @@ def run_first_start(parent=None):
 
 def carry_credential_manager():
     """Passwords an older Toner kept in Windows Credential Manager move into the vault (signed in, data encrypted). Safe to run
-    again: each leaves Credential Manager only once it is in the vault, so a start that stopped halfway carries on."""
+    again: each leaves Credential Manager only once it is in the vault, so a start that stopped halfway carries on. A password
+    the vault already has is kept (it is newer); the old copy is still removed. Once a pass finds none, later starts skip the
+    scan (one read per name Toner knows)."""
     db.init()                                            # finding their names reads the devices
+    if db.get_setting("credential_manager_carried"):
+        return
     carry = passvault.left_in_credential_manager()
-    if carry:
-        passvault.put_many(carry)
-        passvault.forget_credential_manager(carry)
-        audit.log("passwords moved from Credential Manager", f"{len(carry)} password(s)")
+    if not carry:
+        db.set_setting("credential_manager_carried", True)
+        return
+    new = {name: secret for name, secret in carry.items() if passvault.get(name) is None}
+    if new:
+        passvault.put_many(new)
+    passvault.forget_credential_manager(carry)
+    audit.log("passwords moved from Credential Manager", f"{len(new)} password(s)")

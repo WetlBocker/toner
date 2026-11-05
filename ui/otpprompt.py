@@ -11,7 +11,11 @@ WAIT_SECONDS = 180
 
 
 def _dialog(title, text, secret=False):
-    dlg = QInputDialog(QApplication.activeWindow())
+    parent = QApplication.activeWindow()
+    from ui.lockscreen import LockScreen
+    if isinstance(parent, LockScreen):
+        parent = parent.main                                          # never the lock's child: the lock must block it
+    dlg = QInputDialog(parent)
     dlg.setWindowTitle(title)
     dlg.setLabelText(text)
     dlg.setTextEchoMode(QLineEdit.EchoMode.Password if secret else QLineEdit.EchoMode.Normal)

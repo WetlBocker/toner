@@ -96,6 +96,7 @@ DEFAULT_SETTINGS = {
     # security
     "hostkey_mode": "Trust on first use",
     "signin_idle_minutes": 15,                   # no mouse or key input this long locks Toner (ui/lockscreen.py); 0: never
+    "credential_manager_carried": False,         # an older Toner's Credential Manager passwords are all in the vault (ui/setupdlg.py)
     "ssh_legacy_algorithms": True,               # ssh-rsa and SHA-1 key exchange for older devices (core/legacyssh.py)
     # notifications
     "notify_enabled": False, "notify_channels": [], "notify_snooze_until": "",
@@ -144,7 +145,7 @@ DEFAULT_SETTINGS = {
 # the vault, so an imported channel would be broken).
 NOT_PORTABLE = {"vault_provider", "vault_config", "org_current", "window_geometry", "splitters", "inventory_details_hidden", "ansible_distro", "ansible_playbooks", "ansible_server", "ansible_server_device", "sidebar_collapsed", "sessions_list_hidden", "settings_list_hidden", "tools_list_hidden", "automation_list_hidden", "acks", "client_scope", "onboarding_done", "inventory_columns", "results_columns", "scanning_columns", "topology_last", "topology_prev", "topology_positions", "topology_top", "notify_channels", "notify_snooze_until", "inventory_expanded", "snippets", "fileserver", "iperf_path", "openssl_path",
                 "update_last_check", "update_skip", "update_pending", "sessions_expanded", "agent_enabled", "agent_enroll", "agent_bind",
-                "agent_address", "install_uid", "demarc", "assistant_button"}
+                "agent_address", "install_uid", "demarc", "assistant_button", "credential_manager_carried"}
 
 DEVICE_FIELDS = ["name", "vendor", "host", "port", "platform", "username",
                  "site", "verify_ssl", "ha_expected", "enabled", "location", "details", "folder_id",
