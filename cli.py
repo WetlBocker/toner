@@ -77,7 +77,13 @@ def main(argv=None, ready=None):
 def _sign_in(a):
     """None when signed in and ready to read; otherwise the exit code (3) after saying why on stderr."""
     try:
-        session.sign_in(a.user or input("Username: "), getpass.getpass("Password: "))
+        user = a.user or input("Username: ")
+        password = getpass.getpass("Password: ")
+    except EOFError:                           # Task Scheduler, redirected input: nobody to ask
+        print("Sign in needs a terminal.", file=sys.stderr)
+        return 3
+    try:
+        session.sign_in(user, password)
         if lockdown.pending():                 # Toner's window finishes the upgrade; the command line never encrypts
             print("Toner's data hasn't finished encrypting. Open Toner's window to finish, then try again.", file=sys.stderr)
             return 3

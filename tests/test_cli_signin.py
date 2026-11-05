@@ -83,6 +83,18 @@ asked.clear()
 rc, out, err = call("status")
 check("Username: is asked with input()", rc == 0 and asked == ["Username: ", "Password: "], (rc, asked, err))
 
+print("== no terminal (stdin at end of file)")
+def eof(*a): raise EOFError
+builtins.input = eof
+rc, out, err = call("status")
+check("no terminal at the username prompt: exit 3, message, no traceback, key closed",
+      rc == 3 and err.strip() == "Sign in needs a terminal." and not datakey.is_open() and session.state() == "signed_out", (rc, err))
+builtins.input = lambda p="": "admin"
+getpass.getpass = eof
+rc, out, err = call("status")
+check("no terminal at the password prompt: the same", rc == 3 and err.strip() == "Sign in needs a terminal." and not datakey.is_open(), (rc, err))
+getpass.getpass = fake_getpass
+
 print("== throttled")
 def throttled(*a): raise datakey.Throttled(7)
 session.sign_in = throttled
