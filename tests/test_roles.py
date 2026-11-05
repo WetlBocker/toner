@@ -608,4 +608,80 @@ check("after the real Admin signs in, the Tech is still a Tech holding nothing",
       and not roles.holds("backups") and not roles.holds("rules"))
 session.sign_out()
 
+# ---------------------------------------------------------------- under tamper, only the recovery key changes accounts
+fresh("tamperacct")
+datakey.add_local("Tech1", PW3, role="Tech")
+datakey.add_local("Admin2", PW2, role="Admin")
+session.sign_out()
+d = doc(); d["accounts"]["Tech1"]["role"] = "Engineer"; put(d)
+for who, pw in (("Tech1", PW3), ("Admin2", PW2)):
+    as_(who, pw)
+    check(f"tamper: {who} signs in to a tampered file", roles.state() == "tampered", roles.state())
+    for label, fn in (("add an account", lambda: datakey.add_local("Ghost2", PW4, role="Admin")),
+                      ("reset another's password", lambda: datakey.set_password("Admin1", PW4)),
+                      ("remove an account", lambda: datakey.remove("Admin1")),
+                      ("make a new recovery key", datakey.new_recovery)):
+        before = datakey.path().read_bytes()
+        check(f"tamper: {who} can't {label}", raises(fn, perms.Denied) is not None and datakey.path().read_bytes() == before)
+    datakey.set_password(who, PW5)
+    as_(who, PW5)
+    check(f"tamper: {who} can still change their own password", datakey.signed_in_name() == who)
+    datakey.set_password(who, pw)
+as_(None)
+check("tamper: the genuine recovery key is root", roles.state() == "tampered" and roles._root)
+datakey.add_local("Ghost2", PW4, role="Tech")
+datakey.set_password("Admin2", PW4)
+datakey.remove("Ghost2")
+recovery = datakey.new_recovery()
+check("tamper: the recovery key adds, resets, removes and makes a new recovery key", "Ghost2" not in doc()["accounts"])
+roles.set_permissions("Tech", {})
+check("...and repairs", roles.state() == "ok" and signed_ok(), roles.state())
+as_(None)
+check("...its new recovery key is the root of trust", roles.state() == "ok" and roles._root and roles.holds("rules"))
+session.sign_out()
+
+# ---------------------------------------------------------------- rules_signed not stored: the keys file goes back
+fresh("signedfail")
+datakey.add_local("Bob", PW3, role="Tech")
+real_set = db.set_setting
+def locked_signed(k, v):
+    if k == "rules_signed":
+        raise sqldb.sqlite3.OperationalError("database is locked")
+    return real_set(k, v)
+tk = next(iter(perms.DEFAULTS["Tech"]))
+for label, fn in (("a new recovery key", datakey.new_recovery), ("set_role", lambda: roles.set_role("Bob", "Engineer")),
+                  ("set_permissions", lambda: roles.set_permissions("Tech", {tk: not perms.DEFAULTS["Tech"][tk]}))):
+    before, held, signed = datakey.path().read_bytes(), dict(roles._held), db.get_setting("rules_signed")
+    db.set_setting = locked_signed
+    try:
+        e = raises(fn, sqldb.sqlite3.OperationalError)
+    finally:
+        db.set_setting = real_set
+    roles._invalidate()
+    check(f"rules_signed fails ({label}): raised, the keys file byte-identical", e is not None and datakey.path().read_bytes() == before)
+    check(f"...state ok, rules_signed and the held keys as before ({label})", roles.state() == "ok" and db.get_setting("rules_signed") == signed
+          and roles._held == held, roles.state())
+check("...Bob still a Tech", roles.role_of("Bob") == "Tech")
+session.sign_out()
+d = doc(); d["accounts"]["Bob"]["role"] = "Admin"; put(d)
+as_(None)                                               # the old recovery key still opens; its repair fails the same way
+check("rules_signed fails: the old recovery key still opens", roles.state() == "tampered" and roles._root)
+before, held, rk = datakey.path().read_bytes(), dict(roles._held), db.get_setting("rules_key")
+db.set_setting = locked_signed
+try:
+    e = raises(lambda: roles.set_permissions("Tech", {}), sqldb.sqlite3.OperationalError)
+finally:
+    db.set_setting = real_set
+check("rules_signed fails (a repair): the file, rules_key and the held keys as before",
+      e is not None and datakey.path().read_bytes() == before and db.get_setting("rules_key") == rk and roles._held == held)
+roles.set_permissions("Tech", {})
+check("...and the repair works once the database does", roles.state() == "ok" and signed_ok())
+
+# rules_signed is read past the settings cache: another process may have just signed
+db.get_setting("rules_signed")
+with db.connect() as c:
+    c.execute("UPDATE settings SET value=? WHERE key='rules_signed'", (json.dumps("another"),))
+check("rules_signed read fresh, not from the 2-second cache", roles._stored_signed() == "another")
+session.sign_out()
+
 print(f"\n{ok} passed, {bad} failed"); sys.exit(1 if bad else 0)

@@ -274,12 +274,18 @@ def _change(fn, accounts=False):
             if written is not None:
                 written(False)
             raise
-        try:
-            if done is not None:
-                done()
-        finally:
-            if written is not None:
-                written(True)                       # the file has landed, whatever done() did
+        if written is not None:
+            try:
+                written(True)                       # the file has landed: keep what it signed
+            except BaseException:
+                try:
+                    if doc != before:
+                        _write(before)              # not kept: the old file goes back, still under the lock, so the two agree
+                finally:
+                    written(False)
+                raise
+        if done is not None:
+            done()
         return result
 
 

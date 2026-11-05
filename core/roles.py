@@ -115,22 +115,24 @@ def _rules_key():
 
 def _stored_signed():
     """The rules_signed setting as stored: the database keeps what was last signed, so a repair takes the box keys and
-    backups_pub from there, not from the tampered file, and an older file put back doesn't match it. Read each time (through the
-    database's short cache): another Toner (the command line, the service) may have signed since."""
+    backups_pub from there, not from the tampered file, and an older file put back doesn't match it. Read each time, past the
+    database's short cache: another Toner (the command line, the service) may have signed since."""
+    db._forget_settings()
     return _setting("rules_signed")
 
 
 def _landed(ok):
     """datakey's hook after each change: once the keys file has landed, keep what it signed (when that is new); when the change
-    failed, keep nothing and hold the role keys held before it."""
+    failed, keep nothing and hold the role keys held before it. If keeping it raises, datakey puts the old file back and calls
+    this again with False."""
     global _pending, _was
-    payload, was, _pending, _was = _pending, _was, None, None
     if not ok:
-        if was is not None:
+        if _was is not None:
             _held.clear()
-            _held.update(was)
-    elif payload is not None and payload != _stored_signed():
-        db.set_setting("rules_signed", payload)
+            _held.update(_was)
+    elif _pending is not None and _pending != _stored_signed():
+        db.set_setting("rules_signed", _pending)
+    _pending = _was = None
 
 
 def _keep_held():
@@ -345,7 +347,11 @@ def _accounts_changed(before, doc):
     me, holder, root = datakey.signed_in_name(), "rules" in _held, _root
     rekeyed = [n for n, a in doc["accounts"].items() if before["accounts"].get(n, {}).get("box_pub") != a.get("box_pub")]
     recovery = before["recovery"].get("box_pub") != doc["recovery"].get("box_pub")
-    ok = _state_of(before) == "ok"
+    st = _state_of(before)
+    ok = st == "ok"
+    gone = [n for n in before["accounts"] if n not in doc["accounts"]]
+    if st not in ("ok", "unsigned") and not root and ([n for n in rekeyed if n != me] or gone or recovery):
+        raise perms.Denied()                            # rules that don't check out: only the recovery key, or your own password
     if ok and not holder and not root and ([n for n in rekeyed if n != me] or (recovery and me is not None)):
         raise perms.Denied()                            # only whoever holds the rules key may give someone else a box key
     grants = doc.get("grants")
@@ -500,7 +506,8 @@ def _rekey(doc):
     if last:                                            # the box keys and backups_pub vouched for last, not the file's
         old = last["accounts"]                          # (an account it never had: "", which first use never vouches for)
         doc["attested"] = {n: (old[n] or {}).get("box_pub") if n in old else "" for n in doc["accounts"]}
-        doc["recovery_attested"] = last.get("recovery_box_pub")
+        mine = doc["recovery"].get("box_pub") == _b64(_public("box", datakey.box_private()))
+        doc["recovery_attested"] = doc["recovery"]["box_pub"] if mine else last.get("recovery_box_pub")   # (its own new key: made under tamper)
         doc["backups_pub"] = last["backups_pub"]
         if "backups" in _held and _b64(_public("backups", _held["backups"])) != last["backups_pub"]:
             del _held["backups"]
