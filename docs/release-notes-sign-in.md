@@ -4,8 +4,8 @@ Toner now asks people to sign in. Every copy's data is encrypted and opens only 
 
 ## What changes
 
-- **Upgrading:** an existing copy asks for the old master password once. Toner moves your saved passwords into the new account,
-  then encrypts the data. It won't ask for the master password again.
+- **Upgrading:** Toner moves your saved passwords into the new account, then encrypts the data. If Toner didn't remember the
+  master password, it asks for it once.
 - **First start:** the first person to open the upgraded Toner creates the admin account and gets the recovery key. Save it
   somewhere safe. Toner shows it only once.
 - **Keep `netcheck.keys` with Toner's data.** Without it the recovery key can't open anything.

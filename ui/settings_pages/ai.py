@@ -16,7 +16,7 @@ INTRO = ("The Assistant answers questions about the organization you are looking
          "provider you choose below, to answer you.")
 RUN_NOTE = ("Off by default. When on, the Assistant may send commands that only look (show, display, get, dir, ping, traceroute; "
             "Get-… in PowerShell) to the devices the Command Runner can command, with the Command Runner's read-only block and no way "
-            "past it. Every command is written to the audit log and to a session log under Tools > Session logs.")
+            "past it. Every command is written to the audit log and to a session log under Sessions > Session logs.")
 SEARCH_NOTE = ("When on, the Assistant may search the web through the provider's own search (Claude, OpenAI or Gemini; with Claude it can "
                "also read the pages it finds) for public information: security advisories and CVEs, release notes, end-of-life dates, "
                "documentation. It is told never to put anything from your network in a search: no device, organization or people's names, "

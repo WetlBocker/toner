@@ -392,7 +392,7 @@ def run_commands(args):
 
 
 def _log_run(dev, kind, r):
-    """One session log of kind 'assistant' per run: each command and what the device answered, listed under Tools > Session logs."""
+    """One session log of kind 'assistant' per run: each command and what the device answered, listed under Sessions > Session logs."""
     port = dev.get("port") or (int(db.get_setting("default_ssh_port") or 22) if kind != "windows" else "")
     try:
         log = sessionlog.SessionLog(dev["name"], dev["host"], port, dev.get("username") or "", kind="assistant")

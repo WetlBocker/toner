@@ -186,7 +186,7 @@ print("== Settings > AI and the overview page")
 tab = S.SettingsTab(); tab.resize(1100, 700); tab.show(); settle()
 pg = {p.title: p for p in tab.pages}["AI"]
 check("the box, unticked, with its note", pg.run_cmds.text() == "Let the Assistant run show commands on devices" and not pg.run_cmds.isChecked() and pg.run_cmds.toolTip().startswith("Off by default.")
-      and "Tools > Session logs" in pg.run_cmds.toolTip())
+      and "Sessions > Session logs" in pg.run_cmds.toolTip())
 pg.run_cmds.setChecked(True)
 AI.check_in_background = lambda done=None: None
 tab.save()

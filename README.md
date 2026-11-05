@@ -560,7 +560,7 @@ block applies with no way past it, and a command that would write its output to 
 `| save`, `>`) is refused too; a refused command is never sent and the Assistant is told why. At most ten commands go in one
 login, each with 60 seconds to answer, and the output is masked like everything else. Every run is one audit line with the
 commands in full ("ran on core-sw1: show interfaces; show logging | include Gi1/0/24"; "refused on core-sw1: reload (could change
-the device)") and one session log of type ASSISTANT under Tools > Session logs with each command and what the device answered.
+the device)") and one session log of type ASSISTANT under Sessions > Session logs with each command and what the device answered.
 While the box is unticked the Assistant is not offered the ability at all.
 
 **Searching the internet.** On by default; untick **Let the Assistant search the internet** under Settings > AI to stop it. The

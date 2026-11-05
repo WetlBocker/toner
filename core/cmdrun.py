@@ -346,7 +346,7 @@ def run_on_device(dev, commands, opts=None, read_timeout=60):
         out["error"] = f"{type(e).__name__}: {str(e)[:200]}"
     path = _save_session(dev, out.pop("_log", None))
     if path and out["error"]:
-        out["error"] += " The session log is in Tools > Logs."
+        out["error"] += " The session log is in Sessions > Session logs."
     out["seconds"] = time.time() - start
     return out
 

@@ -1,6 +1,6 @@
 # Run directly (python tests/test_x.py) or all together (python tests/run_all.py). Each test builds its own
 # throw-away database and uses a fake credential store, so nothing on this computer is touched.
-# Tools > Logs with sealed logs: every file in the logs folder is listed (session logs, and the backup, Command Runner and
+# Sessions > Session logs with sealed logs: every file in the logs folder is listed (session logs, and the backup, Command Runner and
 # firmware logs), and "Save a readable copy..." decrypts one to a file the person picks (Documents by default).
 import os as _os, sys as _sys, tempfile as _tmp
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))

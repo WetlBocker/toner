@@ -184,7 +184,7 @@ class LogsTab(QWidget):
         self.table.blockSignals(True)
         self.table.setRowCount(len(self.sessions))
         for i, s in enumerate(self.sessions):
-            vals = ([s["started_at"], "", "", s["kind"].replace("-", " ").upper(), s["device"], "", "", ""] if s.get("file") else
+            vals = ([s["started_at"], "", "", s["kind"].replace("-", " ").capitalize(), s["device"], "", "", ""] if s.get("file") else
                     [s["started_at"], s["ended_at"] or "(open, or not closed cleanly)", self._duration(s),
                      (s.get("kind") or "ssh").upper(), s["device"], f"{s['host']}:{s['port']}", s["username"], s["reason"] or ""])
             for j, v in enumerate(vals):
