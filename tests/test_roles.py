@@ -684,4 +684,49 @@ with db.connect() as c:
 check("rules_signed read fresh, not from the 2-second cache", roles._stored_signed() == "another")
 session.sign_out()
 
+# ---------------------------------------------------------------- the root's new recovery key under tamper repairs in the same write
+fresh("rootkey")
+datakey.add_local("Tech1", PW3, role="Tech")
+session.sign_out()
+d = doc(); d["accounts"]["Tech1"]["role"] = "Engineer"; put(d)
+tampered, old_code = datakey.path().read_bytes(), recovery
+as_(None)
+check("rootkey: the genuine recovery key is root on a tampered file", roles.state() == "tampered" and roles._root)
+db.set_setting = locked_signed
+try:
+    e = raises(datakey.new_recovery, sqldb.sqlite3.OperationalError)
+finally:
+    db.set_setting = real_set
+check("rootkey: rules_signed fails, the file goes back", e is not None and datakey.path().read_bytes() == tampered)
+as_(None)
+check("...the old key still opens, root", roles._root)
+recovery = datakey.new_recovery()
+session.sign_out()                                      # no Save roles: the app closes
+as_(None)
+check("rootkey: the new key signs in ok, root, holding the rules key", roles.state() == "ok" and roles._root and roles.holds("rules"),
+      roles.state())
+session.sign_out()
+check("...the old key is refused", raises(lambda: session.sign_in_recovery(old_code), datakey.WrongPassword) is not None)
+
+# ---------------------------------------------------------------- a root holding no rules key: a new recovery key whose rules_key fails
+fresh("rootnokey")
+session.sign_out()
+d = doc(); d["recovery_grants"] = {}; put(d)            # (not signed: the rules still check out)
+as_(None)
+check("rootnokey: ok, root, holding no rules key", roles.state() == "ok" and roles._root and not roles.holds("rules"))
+before = datakey.path().read_bytes()
+def locked_key(k, v):
+    if k == "rules_key":
+        raise sqldb.sqlite3.OperationalError("database is locked")
+    return real_set(k, v)
+db.set_setting = locked_key
+try:
+    e = raises(datakey.new_recovery, sqldb.sqlite3.OperationalError)
+finally:
+    db.set_setting = real_set
+check("rootnokey: rules_key fails, the file goes back", e is not None and datakey.path().read_bytes() == before)
+as_(None)
+check("...the old key still opens, ok and root", roles.state() == "ok" and roles._root, roles.state())
+session.sign_out()
+
 print(f"\n{ok} passed, {bad} failed"); sys.exit(1 if bad else 0)

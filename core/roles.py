@@ -364,8 +364,9 @@ def _accounts_changed(before, doc):
     if _admins(before) and not _admins(doc):
         raise ValueError(LAST_ADMIN)
     done = None
-    if ok:                                              # never re-sign rules that didn't check out: that would hide the edit
-        if not holder and root:                         # e.g. a Part 1 recovery key resetting the only Admin's password
+    repair = root and recovery and st not in ("ok", "unsigned")     # else its new key isn't the root at its next sign-in
+    if ok or repair:                                    # never re-sign rules that didn't check out: that would hide the edit
+        if repair or not holder and root:               # e.g. a Part 1 recovery key resetting the only Admin's password
             pub = _rekey(doc)
             doc["recovery_attested"] = doc["recovery"].get("box_pub")
             holder, done = True, lambda: _written(pub)
@@ -506,8 +507,7 @@ def _rekey(doc):
     if last:                                            # the box keys and backups_pub vouched for last, not the file's
         old = last["accounts"]                          # (an account it never had: "", which first use never vouches for)
         doc["attested"] = {n: (old[n] or {}).get("box_pub") if n in old else "" for n in doc["accounts"]}
-        mine = doc["recovery"].get("box_pub") == _b64(_public("box", datakey.box_private()))
-        doc["recovery_attested"] = doc["recovery"]["box_pub"] if mine else last.get("recovery_box_pub")   # (its own new key: made under tamper)
+        doc["recovery_attested"] = last.get("recovery_box_pub")
         doc["backups_pub"] = last["backups_pub"]
         if "backups" in _held and _b64(_public("backups", _held["backups"])) != last["backups_pub"]:
             del _held["backups"]
