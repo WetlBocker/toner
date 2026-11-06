@@ -13,7 +13,7 @@ STORE = {}
 keyring.set_password = lambda s, u, p: STORE.__setitem__((s, u), p)
 keyring.get_password = lambda s, u: STORE.get((s, u))
 keyring.delete_password = lambda s, u: STORE.pop((s, u), None)
-import copy, json
+import base64, copy, json
 from core import audit, datakey, db, directory, osstore, perms, pinslot, roles, session
 
 PEPPERS = {}                                            # the protected store, as a dict on every platform
@@ -98,7 +98,7 @@ rec = datakey.directory_account("BOB@acme.com")
 check("started: an unapproved directory record", rec is not None and rec["kind"] == "directory" and rec["directory"] == "d1"
       and rec["guid"] == BOB.guid and rec["display"] == "Bob Jones" and rec["sealed"] is None and rec["approved_role"] is None
       and rec["groups_role"] == "Tech" and rec["slot_kind"] == "store" and rec["slot"] == bob_first.rec
-      and rec["slot_id"] == bob_first._slot_id and rec["box_pub"], rec)
+      and rec["slot_id"] == bob_first.slot_id and rec["box_pub"], rec)
 check("needs_approval: first", roles.needs_approval("bob@acme.com") == "first")
 check("directory_account of a local name: None", datakey.directory_account("Admin1") is None)
 check("a start under a local account's name is refused",
@@ -112,14 +112,14 @@ check("a start for an unknown directory is refused",
 check("a start with a slot id that isn't random (the guid) is refused",
       raises(lambda: datakey.start_directory_account(BOB, "d1", pinslot.new("pin", BOB.guid, PIN)), ValueError) is not None)
 check("a start with a slot id already in use is refused",
-      raises(lambda: datakey.start_directory_account(BOB, "d1", pinslot.new("pin", bob_first._slot_id, PIN)), ValueError) is not None)
+      raises(lambda: datakey.start_directory_account(BOB, "d1", pinslot.new("pin", bob_first.slot_id, PIN)), ValueError) is not None)
 bob_slot = pinslot.new("store", datakey.new_slot_id(), PIN)
 datakey.start_directory_account(BOB, "d1", bob_slot)  # the same person starting again replaces the unapproved record
 check("the same guid may start again while unapproved, under a new slot id",
-      datakey.directory_account("bob@acme.com")["sealed"] is None and bob_slot._slot_id != bob_first._slot_id
-      and datakey.directory_account("bob@acme.com")["slot_id"] == bob_slot._slot_id)
-check("...the replaced record's slot is removed", osstore.get("pin:" + bob_first._slot_id) is None
-      and osstore.get("pin:" + bob_slot._slot_id) is not None)
+      datakey.directory_account("bob@acme.com")["sealed"] is None and bob_slot.slot_id != bob_first.slot_id
+      and datakey.directory_account("bob@acme.com")["slot_id"] == bob_slot.slot_id)
+check("...the replaced record's slot is removed", osstore.get("pin:" + bob_first.slot_id) is None
+      and osstore.get("pin:" + bob_slot.slot_id) is not None)
 check("the PIN can't open an unapproved account", raises(lambda: datakey.open_with_pin("bob@acme.com", PIN), pinslot.WrongPin) is not None)
 
 # the password calls treat a directory account as a wrong password, never a KeyError
@@ -193,22 +193,101 @@ session.sign_out()
 
 # ---------------------------------------------------------------- a new PIN (or another computer): the approved record re-sealed
 as_("Admin1", PW)
+admin_box = datakey.box_private()
 old_box = doc()["accounts"]["bob@acme.com"]["box_pub"]
 check("a re-seal under the slot already in use is refused", raises(lambda: roles.approve("bob@acme.com", bob_slot), ValueError) is not None)
 bob_new = pinslot.new("store", datakey.new_slot_id(), PIN3)
 roles.approve("bob@acme.com", bob_new)
 rec = datakey.directory_account("bob@acme.com")
-check("re-sealed: the new slot and a new box key, vouched for; rules ok", rec["slot_id"] == bob_new._slot_id and rec["slot"] == bob_new.rec
+check("re-sealed: the new slot and a new box key, vouched for; rules ok", rec["slot_id"] == bob_new.slot_id and rec["slot"] == bob_new.rec
       and rec["box_pub"] != old_box and doc()["attested"]["bob@acme.com"] == rec["box_pub"] and roles.state() == "ok" and signed_ok())
-check("...the old slot is gone from this computer", osstore.get("pin:" + bob_slot._slot_id) is None
-      and osstore.get("pin:" + bob_new._slot_id) is not None)
+check("...the old slot is gone from this computer", osstore.get("pin:" + bob_slot.slot_id) is None
+      and osstore.get("pin:" + bob_new.slot_id) is not None)
 session.sign_out()
 check("...the old PIN is refused", raises(lambda: datakey.open_with_pin("bob@acme.com", PIN), pinslot.WrongPin) is not None)
 pin_in("bob@acme.com", PIN3)
 check("...the new PIN opens the same data key; grants follow the approved role (Engineer)", bytes(datakey._key) == data_key
       and roles.holds("backups") and not roles.holds("rules") and roles.state() == "ok")
+bob_box = datakey.box_private()
 session.sign_out()
-check("no slot id is ever reused", len({bob_first._slot_id, bob_slot._slot_id, bob_new._slot_id, carol_slot._slot_id}) == 4)
+check("no slot id is ever reused", len({bob_first.slot_id, bob_slot.slot_id, bob_new.slot_id, carol_slot.slot_id}) == 4)
+
+
+def no_key_material(label):
+    """The data key and box privates, raw, in base64 or in hex, are nowhere in the keys file or the audit rows."""
+    keys_file = datakey.path().read_bytes()
+    audit_rows = "\n".join(f"{r['actor']} {r['action']} {r['detail']}" for r in audit.recent(5000)).encode("utf-8")
+    forms = [f for k in (data_key, admin_box, bob_box) for f in (k, base64.b64encode(k), k.hex().encode())]
+    check(f"no data key or box private in the keys file ({label})", not any(f in keys_file for f in forms))
+    check(f"...nor in the audit rows ({label})", not any(f in audit_rows for f in forms)
+          and not any(p.encode() in audit_rows for p in (PIN, PIN2, PIN3, PW, PW2)))
+
+as_("Admin1", PW)                                       # (the audit table is encrypted)
+no_key_material("after a re-seal")
+session.sign_out()
+
+# ---------------------------------------------------------------- wrong PINs count and wait; a name with no PIN slot answers alike
+def throttle():
+    return doc()["throttle"]
+
+def clear_wait():
+    d = doc(); d["throttle"] = {"fails": 0, "until": 0}; put(d)
+
+clear_wait()
+for _ in range(datakey.FREE_TRIES):
+    raises(lambda: datakey.open_with_pin("bob@acme.com", PIN), pinslot.WrongPin)
+check("wrong PINs through open_with_pin are counted", throttle()["fails"] == datakey.FREE_TRIES and not throttle()["until"], throttle())
+check("...the next one starts the wait", raises(lambda: datakey.open_with_pin("bob@acme.com", PIN), pinslot.PinLocked) is not None
+      and throttle()["until"] > time.time())
+check("...while it runs even the right PIN waits", raises(lambda: datakey.open_with_pin("bob@acme.com", PIN3), pinslot.PinLocked) is not None)
+check("...and so do an unknown name and a local one", raises(lambda: datakey.open_with_pin("nobody@acme.com", PIN), pinslot.PinLocked)
+      is not None and raises(lambda: datakey.open_with_pin("Admin1", PIN), pinslot.PinLocked) is not None)
+clear_wait()
+check("wrong PINs for an unknown or local name are counted", raises(lambda: datakey.open_with_pin("nobody@acme.com", PIN), pinslot.WrongPin)
+      is not None and raises(lambda: datakey.open_with_pin("Admin1", PIN), pinslot.WrongPin) is not None and throttle()["fails"] == 2)
+clear_wait()
+
+# ---------------------------------------------------------------- the seal is bound to its account
+saved = datakey.path().read_text(encoding="utf-8")
+d = doc()
+for f in ("slot", "slot_kind", "slot_id", "sealed"):
+    d["accounts"]["bob@acme.com"][f] = d["accounts"]["carol@acme.com"][f]
+put(d)
+check("Carol's seal copied into Bob's record: her PIN doesn't sign in as Bob, and the try counts",
+      raises(lambda: datakey.open_with_pin("bob@acme.com", PIN2), pinslot.WrongPin) is not None and not datakey.is_open()
+      and throttle()["fails"] == 1)
+datakey.path().write_text(saved, encoding="utf-8")
+
+# ---------------------------------------------------------------- approval after a restart lost the held box key
+FRANK = directory.User("6f1c2a4e-0000-4000-8000-000000000004", "frank@acme.com", "Frank", (TECHS,), True)
+frank_slot = pinslot.new("pin", datakey.new_slot_id(), PIN)
+datakey.start_directory_account(FRANK, "d1", frank_slot)
+datakey._started.clear()                                # Toner restarted between choosing the PIN and the approval
+as_("Admin1", PW)
+before = datakey.path().read_bytes()
+check("approve without the held box key: ValueError, nothing changed",
+      raises(lambda: roles.approve("frank@acme.com", frank_slot), ValueError) is not None and datakey.path().read_bytes() == before)
+session.sign_out()
+
+# ---------------------------------------------------------------- a demotion in the directory takes keys away (Ruling 15)
+ERIN = directory.User("6f1c2a4e-0000-4000-8000-000000000005", "erin@acme.com", "Erin", (ADMINS,), True)
+erin_slot = pinslot.new("pin", datakey.new_slot_id(), PIN)
+datakey.start_directory_account(ERIN, "d1", erin_slot)
+as_("Admin1", PW)
+roles.approve("erin@acme.com", erin_slot)
+pin_in("erin@acme.com", PIN)
+check("an approved directory Admin holds both role keys", roles.holds("rules") and roles.holds("backups"))
+session.sign_out()
+datakey.set_groups_role("erin@acme.com", "Tech")
+as_("Admin1", PW)
+g = doc()["grants"].get("erin@acme.com", {})
+check("her groups drop to Tech: the next sync takes the rules and backups grants", "rules" not in g and "backups" not in g
+      and roles.state() == "ok", g)
+e = raises(lambda: roles.set_role("Admin1", "Tech"), ValueError)
+check("...and she isn't counted as an Admin", e is not None and str(e) == roles.LAST_ADMIN and roles.role_of("Admin1") == "Admin", e)
+pin_in("erin@acme.com", PIN)
+check("...she signs in holding neither", not roles.holds("rules") and not roles.holds("backups"))
+session.sign_out()
 
 # ---------------------------------------------------------------- groups_role edited to Admin: permissions only, never keys
 d = doc(); d["accounts"]["bob@acme.com"]["groups_role"] = "Admin"; put(d)
@@ -222,11 +301,12 @@ session.sign_out()
 datakey.set_groups_role("bob@acme.com", "Engineer")
 check("set_groups_role refuses an unknown role", raises(lambda: datakey.set_groups_role("bob@acme.com", "Root"), ValueError) is not None)
 
-# ---------------------------------------------------------------- online_at is capped at now
+# ---------------------------------------------------------------- online_at: capped at now when written, expired when read ahead
 datakey.set_online("bob@acme.com", time.time() + 3600)
-check("set_online an hour ahead is stored as now", datakey.directory_account("bob@acme.com")["online_at"] <= time.time())
+at = datakey.directory_account("bob@acme.com")["online_at"]
+check("set_online an hour ahead is stored as now", 0 < at <= time.time() and doc()["accounts"]["bob@acme.com"]["online_at"] == at)
 d = doc(); d["accounts"]["bob@acme.com"]["online_at"] = time.time() + 3600; put(d)
-check("online_at edited an hour ahead is read as now", datakey.directory_account("bob@acme.com")["online_at"] <= time.time())
+check("online_at edited an hour ahead reads as expired", datakey.directory_account("bob@acme.com")["online_at"] == 0)
 as_("Admin1", PW)
 check("online_at and groups_role aren't signed: still ok", roles.state() == "ok")
 session.sign_out()
@@ -260,27 +340,27 @@ roles._rules_key = real_rk
 DAVE = directory.User("6f1c2a4e-0000-4000-8000-000000000003", "dave@acme.com", "Dave", (TECHS,), True)
 dave_slot = pinslot.new("store", datakey.new_slot_id(), PIN)
 datakey.start_directory_account(DAVE, "d1", dave_slot)
-check("dave's pepper is here", osstore.get("pin:" + dave_slot._slot_id) is not None)
+check("dave's pepper is here", osstore.get("pin:" + dave_slot.slot_id) is not None)
 datakey.remove("dave@acme.com")
 check("removing a directory account removes its slot", datakey.directory_account("dave@acme.com") is None
-      and osstore.get("pin:" + dave_slot._slot_id) is None and roles.state() == "ok")
+      and osstore.get("pin:" + dave_slot.slot_id) is None and roles.state() == "ok")
 roles.set_directories([{**ACME, "servers": ["dc1.acme.com", "dc2.acme.com"]}])
 check("directory changed: audited, signed", rows("directory changed")[0]["detail"] == "ACME" and roles.state() == "ok" and signed_ok())
-check("the store slot's pepper is here", osstore.get("pin:" + carol_slot._slot_id) is not None)
+check("the store slot's pepper is here", osstore.get("pin:" + carol_slot.slot_id) is not None)
 roles.set_directories([])
 check("directory removed: its accounts are gone, audited, signed", "bob@acme.com" not in doc()["accounts"]
       and "carol@acme.com" not in doc()["accounts"] and doc()["directories"] == [] and rows("directory removed")[0]["detail"] == "ACME"
       and roles.state() == "ok" and signed_ok())
 check("...their grants are gone", not any(n in doc()["grants"] for n in ("bob@acme.com", "carol@acme.com")))
-check("...and their slots", osstore.get("pin:" + carol_slot._slot_id) is None)
+check("...and their slots", osstore.get("pin:" + carol_slot.slot_id) is None)
 check("...the PIN no longer opens", raises(lambda: datakey.open_with_pin("bob@acme.com", PIN3), pinslot.WrongPin) is not None)
 
 # ---------------------------------------------------------------- no secrets in the audit
 d = doc()
-secrets = [base64 for base64 in (d["rules_pub"], d["rules_sig"], d["backups_pub"]) if base64]
+signed_parts = [v for v in (d["rules_pub"], d["rules_sig"], d["backups_pub"]) if v]
 details = [r["detail"] or "" for r in audit.recent(5000)]
-check("no audit detail holds a key or a PIN", not any(s[:16] in x for s in secrets for x in details)
-      and not any(p in x for p in (PIN, PIN2, PIN3, PW) for x in details))
+check("no audit detail holds a rules key part or a signature", not any(v[:16] in x for v in signed_parts for x in details))
+no_key_material("at the end")
 session.sign_out()
 
 print(f"\n{ok} passed, {bad} failed"); sys.exit(1 if bad else 0)

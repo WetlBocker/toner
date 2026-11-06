@@ -439,29 +439,39 @@ def new_recovery():
 # ---------------------------------------------------------------- directory accounts
 # The account's key in "accounts" is its User.name. Its PIN slot's id ("slot_id") is random (new_slot_id), never reused, so two
 # accounts or two copies of Toner on one computer never share a TPM key or pepper. Its seal ("sealed", made by roles.approve)
-# holds the data key and its box private under the slot. online_at and groups_role are written by the sign-in before the key is
-# open, so the rules don't sign them; approved_role, the attested box key and the directories are signed.
+# holds the data key, its box private and its name (seal_payload) under the slot. online_at and groups_role are written by the
+# sign-in before the key is open, so the rules don't sign them; approved_role, the attested box key and the directories are signed.
 def new_slot_id():
     """The id for a new PIN slot: pinslot.new(kind, new_slot_id(), pin)."""
     return secrets.token_hex(16)
 
 
+def _is_slot_id(sid):
+    return isinstance(sid, str) and len(sid) == 32 and all(c in "0123456789abcdef" for c in sid)
+
+
 def _fresh_slot(doc, slot):
     """Refuse a slot whose id isn't a new_slot_id() or is already some account's."""
-    sid = slot._slot_id
-    if (len(sid) != 32 or any(c not in "0123456789abcdef" for c in sid)
-            or any(a.get("slot_id") == sid for a in doc["accounts"].values())):
+    if not _is_slot_id(slot.slot_id) or any(a.get("slot_id") == slot.slot_id for a in doc["accounts"].values()):
         raise ValueError("a PIN slot needs a new id of its own")
 
 
+def seal_payload(name, private):
+    """What a directory account's slot seals: the data key, its box private, and its name (so a seal copied into another
+    account's record opens nothing there)."""
+    return _key + private + name.encode("utf-8")
+
+
 def directory_account(name):
-    """The directory account's record (a copy), or None; online_at is never later than now."""
+    """The directory account's record (a copy), or None. An online_at later than now reads as 0 (expired): a clock put back
+    can't stretch the offline hour."""
     doc = read()
     stored = _find(doc, _clean(name))
     rec = doc["accounts"][stored] if stored else None
     if rec is None or rec.get("kind") != "directory":
         return None
-    rec["online_at"] = min(rec.get("online_at") or 0, time.time())     # a clock put back can't stretch the offline hour
+    online = rec.get("online_at") or 0
+    rec["online_at"] = 0 if online > time.time() else online
     return rec
 
 
@@ -484,27 +494,48 @@ def start_directory_account(user, directory_id, slot):
                 raise NameTaken("That username is already taken.")
         doc["accounts"][user.name] = {
             "kind": "directory", "directory": directory_id, "guid": user.guid, "display": user.display,
-            "slot_kind": slot.rec["kind"], "slot": slot.rec, "slot_id": slot._slot_id, "sealed": None, "box_pub": _b64(public),
+            "slot_kind": slot.rec["kind"], "slot": slot.rec, "slot_id": slot.slot_id, "sealed": None, "box_pub": _b64(public),
             "approved_role": None, "online_at": time.time(), "groups_role": directory.role_for(cfg, user.groups),
             "created": datetime.now(timezone.utc).isoformat(timespec="seconds")}
         return old
     replaced = _change(start, signed_in=False)
-    _started[slot._slot_id] = private
+    _started[slot.slot_id] = private
     drop_slot(replaced)                                 # the unapproved record's own slot, if this replaced one
 
 
-def _pin(name, pin):
-    """(the payload of the account's seal, its stored name, the failed tries counted before it); WrongPin, PinLocked or
-    SlotMissing from pinslot. A name with no seal is a wrong PIN."""
+def _pin_refused(pin):
+    """A PIN try that can't open anything (no such account, no usable slot, or another account's seal): it waits, costs and
+    counts as a wrong PIN does, so the answers don't show which names exist. `pin` None: the cost was already paid."""
     from core import pinslot
+    with _lock, _FileLock():
+        doc = _read()
+        counter = doc.setdefault("throttle", {"fails": 0, "until": 0})
+        now = time.time()
+        try:
+            _gate(doc, counter, now)
+            if pin is not None:
+                _kek(pin, _DUMMY_SALT, pinslot.KDF["pin"])
+            _failed(doc, counter, now)
+        except Throttled as e:
+            raise pinslot.PinLocked(e.seconds) from None
+    raise pinslot.WrongPin()
+
+
+def _pin(name, pin):
+    """(the data key and box private, the stored name, the failed tries counted before it); WrongPin, PinLocked or SlotMissing."""
+    from core import pinslot
+    pin = pin or ""
     with _lock:
         doc = read()
         stored = _find(doc, _clean(name))
         rec = doc["accounts"][stored] if stored else None
-        if rec is None or rec.get("kind") != "directory" or not rec.get("sealed") or not rec.get("slot_id"):
-            raise pinslot.WrongPin()
+        if rec is None or rec.get("kind") != "directory" or not rec.get("sealed") or not _is_slot_id(rec.get("slot_id")):
+            _pin_refused(pin)
         fails = (doc.get("throttle") or {}).get("fails", 0)
-        return pinslot.open(rec["slot"], rec["slot_id"], pin, rec["sealed"]), stored, fails
+        payload = pinslot.open(rec["slot"], rec["slot_id"], pin, rec["sealed"])
+        if payload[64:] != stored.encode("utf-8"):
+            _pin_refused(None)                          # another account's seal copied into this record
+        return payload[:64], stored, fails
 
 
 def open_with_pin(name, pin):
@@ -545,7 +576,7 @@ def set_groups_role(name, role):
 
 def drop_slot(rec):
     """After a directory account's record (or its slot) is gone: delete that PIN slot's TPM key or pepper from this computer."""
-    if not rec or rec.get("kind") != "directory" or not rec.get("slot_id"):
+    if not rec or rec.get("kind") != "directory" or not _is_slot_id(rec.get("slot_id")):
         return
     _started.pop(rec["slot_id"], None)
     from core import pinslot

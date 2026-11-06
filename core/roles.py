@@ -79,8 +79,12 @@ def _role(a):
 
 
 def _keys_role(a):
-    """The role whose role keys the account is granted: a directory account's as an admin last approved it (None: not yet)."""
-    return a.get("approved_role") if _directory(a) else a.get("role", "Admin")
+    """The role whose role keys the account is granted. A directory account's: the lower of the role an admin last approved and
+    its groups' role now, so a demotion in the directory takes keys away at the next sync (None: not approved, or in no group)."""
+    if not _directory(a):
+        return a.get("role", "Admin")
+    both = (a.get("approved_role"), a.get("groups_role"))
+    return max(both, key=ROLES.index) if all(r in ROLES for r in both) else None
 
 
 def _accounts(doc):
@@ -658,7 +662,7 @@ def approve(name, slot=None):
                 raise ValueError("only a directory account in a Toner group can be approved")
             first, old = not rec.get("sealed"), None
             if first:
-                if slot is None or slot.rec != rec.get("slot") or slot._slot_id != rec.get("slot_id"):
+                if slot is None or slot.rec != rec.get("slot") or slot.slot_id != rec.get("slot_id"):
                     raise ValueError("that isn't the account's PIN slot")
                 private = datakey._started.get(rec["slot_id"])
                 if private is None or _b64(_public("box", private)) != rec.get("box_pub"):
@@ -667,11 +671,11 @@ def approve(name, slot=None):
                 datakey._fresh_slot(doc, slot)
                 old = dict(rec)
                 private, public = envelope.new_box_key()
-                rec.update(slot_kind=slot.rec["kind"], slot=slot.rec, slot_id=slot._slot_id, box_pub=_b64(public))
+                rec.update(slot_kind=slot.rec["kind"], slot=slot.rec, slot_id=slot.slot_id, box_pub=_b64(public))
                 if isinstance(doc.get("grants"), dict):
                     doc["grants"].pop(stored, None)     # wrapped to the old box key
             if slot is not None:
-                rec["sealed"] = slot.seal(datakey._key + private)
+                rec["sealed"] = slot.seal(datakey.seal_payload(stored, private))
             had = _admins(doc)
             rec["approved_role"] = rec["groups_role"]
             if had and not _admins(doc):
@@ -687,6 +691,7 @@ def approve(name, slot=None):
         datakey.drop_slot(old)
         admin = datakey.signed_in_name() or audit.actor()
         audit.log("sign-in approved", f"{stored}, approved by {admin}", who=admin)
+        _trim()
     _notify()
 
 

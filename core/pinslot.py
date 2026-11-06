@@ -111,6 +111,10 @@ class Slot:
     def __init__(self, rec, slot_id, kek=None):
         self.rec, self._slot_id, self._kek = rec, slot_id, kek
 
+    @property
+    def slot_id(self):
+        return self._slot_id
+
     def seal(self, secret):
         if self.rec["kind"] == "chip":
             kek = os.urandom(32)
