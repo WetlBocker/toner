@@ -66,6 +66,38 @@ def _make_server(cfg, host, ca=None):
                         connect_timeout=CONNECT_TIMEOUT, get_info=ldap3.NONE)
 
 
+def _open(cfg, host, ca, **credentials):
+    """The connection to one server with TLS up (LDAPS, or StartTLS) and the certificate checked; not bound. It is closed again
+    if opening fails. auto_referrals off: ldap3 would follow an ldap:// referral in clear text with the same user and password."""
+    conn = None
+    try:
+        conn = ldap3.Connection(_make_server(cfg, host, ca), client_strategy=_STRATEGY, receive_timeout=RECEIVE_TIMEOUT,
+                                raise_exceptions=True, auto_referrals=False, **credentials)
+        conn.open()
+        if cfg["security"] == "starttls" and not (conn.start_tls() and conn.tls_started):
+            raise Unreachable(f"StartTLS failed on {host}")
+        return conn
+    except BaseException:
+        _close(conn)
+        raise
+
+
+def reachable(cfg):
+    """True if any server completes the TLS handshake (certificate checked as connect does). Never binds, sends no credential."""
+    try:
+        check_config(cfg)
+        ca = _ca(cfg)
+    except InsecureConfig:
+        return False
+    for host in cfg["servers"]:
+        try:
+            _close(_open(cfg, host, ca))
+            return True
+        except Exception:
+            continue
+    return False
+
+
 def connect(cfg, who, password):
     check_config(cfg)
     if not who or not password:      # an empty password makes a SIMPLE bind anonymous, which "succeeds"
@@ -74,12 +106,8 @@ def connect(cfg, who, password):
     down = None
     for host in cfg["servers"]:
         conn = None
-        try:      # auto_referrals off: ldap3 would follow an ldap:// referral in clear text with the same user and password
-            conn = ldap3.Connection(_make_server(cfg, host, ca), user=who, password=password, authentication=ldap3.SIMPLE,
-                                    client_strategy=_STRATEGY, receive_timeout=RECEIVE_TIMEOUT, raise_exceptions=True, auto_referrals=False)
-            conn.open()
-            if cfg["security"] == "starttls" and not (conn.start_tls() and conn.tls_started):
-                raise Unreachable(f"StartTLS failed on {host}")
+        try:
+            conn = _open(cfg, host, ca, user=who, password=password, authentication=ldap3.SIMPLE)
             conn.bind()
             return conn
         except (lx.LDAPInvalidCredentialsResult, lx.LDAPBindError, lx.LDAPUserNameIsMandatoryError, lx.LDAPPasswordIsMandatoryError):

@@ -11,9 +11,9 @@ import time
 from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QVBoxLayout, QWidget
 
-from core import datakey, db, session
+from core import datakey, db, directory, pinslot, session
 from ui import theme
-from ui.signinwindow import DAMAGED, DAMAGED_ERRORS, Wait, card, centred, error_label, heading, link, primary, say, words
+from ui.signinwindow import DAMAGED, DAMAGED_ERRORS, Job, Wait, card, centred, error_label, heading, link, primary, say, words
 
 _now = time.time                                         # wall-clock: it keeps counting while the computer sleeps (the tests move it)
 _INPUT = {QEvent.Type.KeyPress, QEvent.Type.MouseButtonPress, QEvent.Type.MouseMove, QEvent.Type.Wheel, QEvent.Type.TouchBegin}
@@ -36,7 +36,8 @@ class LockScreen(QWidget):
         self.avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(self.avatar)
         lay.addSpacing(6)
-        lay.addWidget(heading("Toner is locked"))
+        self.head = heading("Toner is locked")
+        lay.addWidget(self.head)
         self.reason = words()
         lay.addWidget(self.reason)
         self.who = words()
@@ -52,14 +53,19 @@ class LockScreen(QWidget):
         self.error = error_label()
         self.unlock = primary("Unlock")
         self.other = link("Sign in as someone else")
+        self.again = primary("Sign in")                  # after the workday, with the directory reachable: the full sign-in
+        self.again.hide()
         lay.addWidget(self.error)
         lay.addSpacing(10)
         lay.addWidget(self.unlock)
+        lay.addWidget(self.again)
         lay.addSpacing(6)
         lay.addWidget(self.other, 0, Qt.AlignmentFlag.AlignLeft)
         self.pw.returnPressed.connect(self.unlock.click)
         self.unlock.clicked.connect(self._unlock)
         self.other.clicked.connect(self._sign_out)
+        self.again.clicked.connect(self._sign_out)
+        self._jobs = set()                               # the directory probes running off this thread
         self.wait = Wait(self.error, self.unlock)
         centred(frame, QVBoxLayout(self))
         self.idle = QTimer(self)                         # checks now and then; input moves `last` (eventFilter)
@@ -112,6 +118,8 @@ class LockScreen(QWidget):
             self.idle.stop()
         if state == "locked" and not self.locked:
             self.show_locked()
+        elif state == "locked" and session.refused():
+            self._arrange("refused")                     # the directory refused the account while the lock was up
 
     def check_idle(self):
         if session.state() != "open" or session.user() is None:
@@ -129,7 +137,8 @@ class LockScreen(QWidget):
         user = session.user() or ""
         minutes, self._idle_minutes = self._idle_minutes, None
         self.reason.setText(f"Locked after {minutes} minutes without use." if minutes else f"Locked by {user}.")
-        self.who.setText(f"{user}, local account")
+        directory_user = session.kind() == "directory"
+        self.who.setText(user if directory_user else f"{user}, local account")
         self.avatar.setText("".join(w[0] for w in user.split()[:2]).upper())
         t = theme.current()
         self.setStyleSheet(f"QWidget#lockScreen, QWidget#lockCover {{ background: {t.get('bg', '#081420')}; }}")
@@ -137,8 +146,26 @@ class LockScreen(QWidget):
                                   f"border-radius: 22px; color: {t.get('accent_ink', '#22d3ee')}; font-weight: 600;")
         say(self.error, "")
         self.pw.clear()
+        self._arrange("refused" if session.refused() else "directory" if directory_user else "local")
         self.locked = True
         self._cover_all()
+
+    def _arrange(self, mode):
+        """What the screen shows: "local" (password), "directory" (PIN), "again" (the workday is over and the directory is
+        reachable: sign in in full) or "refused" (only the sentence and the way out)."""
+        full = mode in ("local", "directory")
+        label = "PIN" if mode == "directory" else "Password"
+        self.pw.setPlaceholderText(label)
+        self.pw.setAccessibleName(label)
+        self.wait.error = pinslot.PinLocked if mode == "directory" else datakey.Throttled
+        for w in (self.avatar, self.head, self.who, self.pw, self.unlock):
+            w.setVisible(full)
+        self.again.setVisible(mode == "again")
+        self.other.setVisible(mode != "again")
+        if not full:
+            say(self.error, "")
+            self.pw.clear()
+            self.reason.setText(session.REFUSED if mode == "refused" else "Please sign in again.")
 
     def _cover_all(self):
         """An opaque cover over every visible Toner window (dialogs included, which stay open underneath), then the lock on top
@@ -197,12 +224,50 @@ class LockScreen(QWidget):
     def _unlock(self):
         pw = self.pw.text()
         self.pw.clear()
+        if session.kind() == "directory":
+            return self._unlock_pin(pw)
+        self._try(session.unlock, pw)
+
+    def _unlock_pin(self, pin):
+        """After the 12-hour workday a reachable directory means a full sign-in, so the PIN isn't tried (and not counted); the
+        probe runs on a Job, with the field off meanwhile."""
+        if not session.workday_over():
+            return self._try(session.unlock_pin, pin)
+        name = session.user()
+
+        def probe():
+            rec = datakey.directory_account(name)
+            cfg = next(d for d in datakey.read().get("directories") or [] if d.get("id") == rec["directory"])
+            return directory.reachable(cfg)
+
+        def landed(job, up, _error):                     # (an error: no config to probe, so not reachable)
+            job.wait()
+            job.fn = None
+            self._jobs.discard(job)
+            self.pw.setEnabled(True)
+            self.unlock.setEnabled(True)
+            if session.state() != "locked":
+                return
+            if up is True:
+                self._arrange("again")
+            else:
+                self._try(session.unlock_pin, pin)
+        job = Job(probe)
+        job.done.connect(landed, Qt.ConnectionType.QueuedConnection)
+        self.pw.setEnabled(False)
+        self.unlock.setEnabled(False)
+        self._jobs.add(job)
+        job.start()
+
+    def _try(self, unlock, secret):
         try:
-            session.unlock(pw)
-        except datakey.Throttled as e:
+            unlock(secret)
+        except (datakey.Throttled, pinslot.PinLocked) as e:
             self.wait.start(e.seconds)
-        except datakey.WrongPassword as e:
+        except (datakey.WrongPassword, pinslot.WrongPin) as e:
             say(self.error, str(e))
+        except session.Refused:
+            self._arrange("refused")
         except RuntimeError:
             self.follow()                                # unlocked already (from elsewhere)
         except DAMAGED_ERRORS:
@@ -212,6 +277,7 @@ class LockScreen(QWidget):
         """Sign in as someone else: Main's closing questions (unsaved settings, a running playbook) must be answerable, so the
         lock steps aside for them, the windows staying covered; if one is refused, the lock comes back."""
         self._passing = True
+        self.pw.clear()
         self.hide()
         try:
             self.main.sign_out()
