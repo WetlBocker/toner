@@ -5,7 +5,8 @@ from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QLabel, QMenu, QMes
                                QTableWidgetItem)
 
 from core import audit, datakey, db, osstore, passvault, passwords, perms, quiet, roles, session
-from ui.directorydlg import DirectoryDialog, service_key
+from ui.directorydlg import service_key
+from ui.identitywizard import IdentityWizard
 from ui.settings_base import Page, compact_row, note, spin
 from ui.setupdlg import RecoveryDialog, _CardDialog
 from ui.signinwindow import MISMATCH, error_label, field, primary, say
@@ -298,12 +299,12 @@ class AccountsPage(Page):
         return m
 
     def _add_ident(self):
-        if self._dirs is not None and DirectoryDialog(self._dirs, None, self).exec():
+        if self._dirs is not None and IdentityWizard(self._dirs, None, self).exec():
             self.refresh()
 
     def _edit_ident(self):
         d = self._dir()
-        if d is not None and DirectoryDialog(self._dirs, d, self).exec():
+        if d is not None and IdentityWizard(self._dirs, d, self).exec():
             self.refresh()
 
     def _remove_ident(self):

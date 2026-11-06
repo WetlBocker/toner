@@ -41,7 +41,7 @@ check("lists the account", rows() == ["Admin"], rows())
 check("columns: Unlocks with is last; a local account unlocks with its Password",
       [page.table.horizontalHeaderItem(j).text() for j in range(page.table.columnCount())] == ["Username", "Type", "Created", "Role", "Unlocks with"]
       and page.table.item(0, 1).text() == "local" and page.table.item(0, 4).text() == "Password")
-check("the Directories section (tests/test_directorydlg.py covers it): empty, Add on", page.idents.rowCount() == 0 and page.add_ident.isEnabled()
+check("the External Identities section (tests/test_identitywizard.py covers it): empty, Add on", page.idents.rowCount() == 0 and page.add_ident.isEnabled()
       and not page.edit_ident.isEnabled() and not page.remove_ident.isEnabled())
 
 shown = {}
@@ -280,7 +280,7 @@ check("menu items, in order", [a.text() for a in menu.actions()] == ["Test login
 check("Test login and Set up 2FA are off for now", not menu.actions()[0].isEnabled() and not menu.actions()[1].isEnabled())
 check("Edit and Remove are on", menu.actions()[2].isEnabled() and menu.actions()[3].isEnabled())
 edited = []
-A.DirectoryDialog.exec = lambda self: edited.append(self.orig["name"]) or 0
+A.IdentityWizard.exec = lambda self: edited.append(self.orig["name"]) or 0
 menu.actions()[2].trigger()
 check("menu Edit opens the selected identity", edited == ["Corp LDAP"], edited)
 asked = []
