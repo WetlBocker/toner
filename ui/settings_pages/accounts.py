@@ -283,7 +283,7 @@ class AccountsPage(Page):
         if d is None or not confirm(self, self.title, REMOVE_DIRECTORY.format(name=d.get("name", ""))):
             return
         try:
-            roles.set_directories([x for x in self._dirs if x is not d])     # its accounts and their PIN slots go too
+            roles.set_directories([x for x in self._dirs if x is not d])     # (none re-hashed) its accounts and PIN slots go too
         except (ValueError, datakey.Locked, perms.Denied) as e:            # "Toner needs at least one Admin.", "Sign in first."
             QMessageBox.warning(self, self.title, str(e))
             self.refresh()

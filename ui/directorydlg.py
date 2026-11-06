@@ -307,7 +307,7 @@ class DirectoryDialog(QDialog):
         cfg["groups"] = {role: list(dict.fromkeys(found[n] for n in names[role])) for role in ROLES}
         new = [cfg if d.get("id") == self.id else d for d in self.dirs] + ([] if self.orig else [cfg])
         try:
-            roles.set_directories(new)                       # signs the CA file's hash in, and writes the audit row
+            roles.set_directories(new, edited=self.id)       # hashes this one's CA file only; writes the audit row
         except (ValueError, datakey.Locked, perms.Denied) as e:
             self._say(CA_UNREADABLE if str(e) == "the CA file can't be read" else str(e))
             return

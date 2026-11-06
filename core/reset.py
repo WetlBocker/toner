@@ -134,13 +134,19 @@ def _directory_keys():
     """What directory sign-in keeps for this copy outside its data folder, read while netcheck.keys is still there: each directory
     account's PIN slot (a TPM key or a pepper in the protected store), each directory's id (its Duo secret) and the name this
     copy's remembered directories list is kept under."""
-    from core import datakey, dirpin
+    from core import datakey, dirpin, quiet, roles
     try:
         doc = datakey.read()
         name = dirpin.store_name()
     except (OSError, ValueError):                  # no keys file (sign-in never set up), or one that isn't Toner's
         return [], [], None
-    slots = [a for a in (doc.get("accounts") or {}).values() if isinstance(a, dict) and a.get("kind") == "directory"]
+    try:
+        ok = roles.verified()                      # slots only from rules that check out: an edited file names no one's chip key
+    except Exception:
+        quiet.ignored()
+        ok = None
+    slots = [a for a in ((ok or {}).get("accounts") or {}).values()
+             if isinstance(a, dict) and a.get("kind") == "directory" and datakey._is_slot_id(a.get("slot_id"))]
     ids = [d["id"] for d in doc.get("directories") or [] if isinstance(d, dict) and isinstance(d.get("id"), str)]
     return slots, ids, name
 

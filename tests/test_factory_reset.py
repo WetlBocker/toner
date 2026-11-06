@@ -70,7 +70,8 @@ reset._native_delete = lambda s, u: native.pop((s, u))
 # directory sign-in keeps things outside the data folder: each PIN slot's TPM key or pepper, each Duo secret, and this copy's
 # remembered directories list (dirpins.json under APPDATA on Windows, the keyring elsewhere); all fakes here
 import json
-from core import datakey, dirpin, osstore, pinslot
+from core import datakey, dirpin, osstore, pinslot, roles
+REAL_VERIFIED = roles.verified
 OS = {}                                                                 # (name, file) -> value: the protected store
 osstore.available = lambda: True
 osstore.put = lambda n, v, file=None: OS.__setitem__((n, file), v)
@@ -85,14 +86,18 @@ class FakeTpm:
     @classmethod
     def delete(cls, name): cls.keys.pop(name, None)
 pinslot.tpm_windows = FakeTpm
-CHIP, PEP = "a" * 32, "b" * 32
-def directory_keys():
-    """netcheck.keys with two directory accounts (a chip slot and a store slot) and a directory with Duo, as the file holds them."""
-    datakey.path().write_text(json.dumps({"format": "toner-keys", "directories": [{"id": "d1", "name": "ACME"}], "accounts": {
+CHIP, PEP, ODD = "a" * 32, "b" * 32, "../not-a-slot-id"
+def directory_keys(verified=True):
+    """netcheck.keys with directory accounts (a chip slot, a store slot, and a slot id that isn't one) and a directory with Duo,
+    as the file holds them. `verified`: roles.verified() returns that doc (the rules check out), else the real one (it doesn't)."""
+    doc = {"format": "toner-keys", "directories": [{"id": "d1", "name": "ACME"}], "accounts": {
         "Admin": {"kind": "local"},
         "bob@acme.com": {"kind": "directory", "directory": "d1", "slot": {"kind": "chip"}, "slot_id": CHIP},
-        "eve@acme.com": {"kind": "directory", "directory": "d1", "slot": {"kind": "store"}, "slot_id": PEP}}}), encoding="utf-8")
-    FakeTpm.keys["Toner-" + CHIP] = "key"
+        "eve@acme.com": {"kind": "directory", "directory": "d1", "slot": {"kind": "store"}, "slot_id": PEP},
+        "mal@acme.com": {"kind": "directory", "directory": "d1", "slot": {"kind": "chip"}, "slot_id": ODD}}}
+    datakey.path().write_text(json.dumps(doc), encoding="utf-8")
+    roles.verified = (lambda: doc) if verified else REAL_VERIFIED
+    FakeTpm.keys["Toner-" + CHIP] = FakeTpm.keys["Toner-" + ODD] = "key"
     OS[("pin:" + PEP, None)] = b"pepper"
     OS[("duo:d1", None)] = b"duo secret"
     OS[("duo:other", None)] = b"another copy's"
@@ -135,7 +140,8 @@ check("the vault key in the system keyring is gone, other programs' stay", nativ
 check("the schedule lock was let go", service._schedule_lock is None)
 check("the log file was closed", not any(getattr(h, "baseFilename", "").startswith(str(data)) for h in logging.getLogger("toner").handlers))
 check("the vault is locked in memory", not passvault.is_open())
-check("each directory account's PIN key on the chip is gone", FakeTpm.keys == {}, FakeTpm.keys)
+check("each directory account's PIN key on the chip is gone; a slot id that isn't 32 hex is never used", FakeTpm.keys == {"Toner-" + ODD: "key"},
+      FakeTpm.keys)
 if platforms.WINDOWS:
     check("...the pepper and the Duo secret were in netcheck.store, which went with the folder", ("pin:" + PEP, None) in OS
           and not KEYS.with_name("netcheck.store").exists(), OS)
@@ -145,13 +151,17 @@ if dirpin.pins_file() is not None:
     check("this copy's remembered list is gone from dirpins.json, another copy's stays",
           json.loads(dirpin.pins_file().read_text(encoding="utf-8")) == {"dirs:other": "theirs"})
 check("netcheck.keys and netcheck.store went with the folder", not KEYS.exists() and not KEYS.with_name("netcheck.store").exists())
+print("== rules that don't check out: no PIN key is removed (Ruling 33)")
+fill(); directory_keys(verified=False)
+native[(passvault.NATIVE_SERVICE, str(passvault.path()))] = "key"
 if dirpin.pins_file() is not None:
-    print("== a dirpins.json holding only this copy's entry goes")
-    fill(); directory_keys()
-    native[(passvault.NATIVE_SERVICE, str(passvault.path()))] = "key"
     dirpin.pins_file().write_text(json.dumps({dirpin.store_name(): "mine"}), encoding="utf-8")
-    reset.wipe()
-    check("the file is deleted", not dirpin.pins_file().exists())
+check("(the hand-written file doesn't verify)", roles.verified() is None)
+reset.wipe()
+check("the data still goes, but every PIN key stays", not data.exists() and "Toner-" + CHIP in FakeTpm.keys and "Toner-" + ODD in FakeTpm.keys,
+      FakeTpm.keys)
+if dirpin.pins_file() is not None:
+    check("a dirpins.json holding only this copy's entry is deleted", not dirpin.pins_file().exists())
 if platforms.LINUX:
     check("the autostart entry is gone", not autostart.enabled())
 check("nothing was written afterwards", not data.exists())

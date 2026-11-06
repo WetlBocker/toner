@@ -340,6 +340,22 @@ def new_file(dlg):
 DD.DirectoryDialog.exec = answers(new_file)
 page.dirs.setCurrentRow(0); page.edit_dir.click()
 check("a CA file just chosen is tested with its own hash", said["msg"] == "Connected. Found 5 groups.", said)
+print("== saving or removing another directory keeps this one's CA hash (Ruling 32)")
+signed_a = doc()["directories"][0]["ca_sha256"]                      # (its file now holds "a third CA")
+DD.DirectoryDialog.exec = answers(add_with(name="Beta", netbios="BETA", suffixes="beta.com"))
+page.add_dir.click()
+check("another directory saved: this one's hash is the one signed before", [d["name"] for d in doc()["directories"]] == ["ACME Corp", "Beta"]
+      and doc()["directories"][0]["ca_sha256"] == signed_a, said)
+DD.DirectoryDialog.exec = answers(test_only)
+page.dirs.setCurrentRow(0); page.edit_dir.click()
+check("...so its Test connection still says the CA file changed", said["msg"] == "The directory's CA file changed. An admin needs to save the directory again.", said)
+def remove_box(self):
+    [b for b in self.buttons() if b.text() == "Remove"][0].click()
+before_exec, QMessageBox.exec = QMessageBox.exec, remove_box
+page.dirs.setCurrentRow(1); page.remove_dir.click()
+QMessageBox.exec = before_exec
+check("removing the other directory re-hashes none", [d["name"] for d in doc()["directories"]] == ["ACME Corp"]
+      and doc()["directories"][0]["ca_sha256"] == signed_a)
 DD.DirectoryDialog.exec = answers(lambda dlg: (dlg.cert.setCurrentText("System trust store"), saved(dlg)))
 page.dirs.setCurrentRow(0); page.edit_dir.click()
 check("back to the system trust store", doc()["directories"][0].get("ca_file") == "" and "ca_sha256" not in doc()["directories"][0])
@@ -395,7 +411,7 @@ page.remove_dir.click()
 check("Remove: gone from the list and the file", dir_rows() == [] and doc()["directories"] == [])
 check("...its accounts and their PIN keys go", datakey.directory_account("bob@acme.com") is None and slot_key not in FakeTpm.keys)
 check("...the service password and the Duo secret go", passvault.get(f"service:directory-{DID}") is None and ("duo:" + DID, None) not in OS)
-check("...one audit row", acts().count("directory removed") == 1)
+check("...one audit row (Beta's removal above was the first)", acts().count("directory removed") == 2)
 check("no secret was ever written to netcheck.keys or the audit", no_secret_written())
 QMessageBox.exec = real_exec
 

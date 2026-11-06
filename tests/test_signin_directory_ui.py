@@ -403,14 +403,14 @@ print("== the CA file changed since the directory was saved")
 import hashlib
 ca = os.path.join(SP, "ui-ca.pem")
 with open(ca, "w") as f: f.write("one CA")
-session.sign_in("Admin1", PW); roles.set_directories([{**ACME, "ca_file": ca}]); session.sign_out()
+session.sign_in("Admin1", PW); roles.set_directories([{**ACME, "ca_file": ca}], edited="d1"); session.sign_out()
 with open(ca, "w") as f: f.write("another CA")
 w = open_window()
 w.name.setText("bob@acme.com"); w.next.click(); w.pw.setText("pw-bob"); w.sign_in.click(); settle(w)
 check("the password page says the CA file changed", at(w) == "password"
       and w.error.text() == "The directory's CA file changed. An admin needs to save the directory again.", w.error.text())
 w.reject()
-session.sign_in("Admin1", PW); roles.set_directories([ACME]); session.sign_out()
+session.sign_in("Admin1", PW); roles.set_directories([ACME], edited="d1"); session.sign_out()
 no_wait()
 
 print("== Not you? from every page")

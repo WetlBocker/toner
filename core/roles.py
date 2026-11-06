@@ -706,9 +706,13 @@ def approve(name, slot=None, approved_by=None):
     _notify()
 
 
-def set_directories(directories):
-    """Admin only. Replaces the directories, signed. Removing one removes its accounts, and their PIN slots on this computer."""
+def set_directories(directories, edited=None):
+    """Admin only. Replaces the directories, signed. Removing one removes its accounts, and their PIN slots on this computer.
+    Only the directory being saved (id `edited`, or one the verified list doesn't have yet) has its CA file read and hashed; every
+    other keeps the hash signed before, so a CA file swapped since stays refused until an admin saves that directory again. Any
+    other directory's CA file path can't change here."""
     from core import directory
+    signed = {d.get("id"): d for d in (verified() or {}).get("directories") or [] if isinstance(d, dict)}
     new = {}
     for d in directories:
         if not d.get("id") or set(d) - _DIRECTORY or set(d.get("duo") or {}) - _DUO:
@@ -716,7 +720,13 @@ def set_directories(directories):
         directory.check_config(d)                       # TLS only (InsecureConfig is a ValueError)
         c = new[d["id"]] = json.loads(json.dumps(d))   # a copy, as the file will hold it (tuples as lists)
         c.pop("ca_sha256", None)
-        if c.get("ca_file"):                            # signed with the list: connect refuses a CA file changed since
+        was = signed.get(c["id"]) if c["id"] != edited else None
+        if was is not None:
+            if (c.get("ca_file") or "") != (was.get("ca_file") or ""):
+                raise ValueError("only the directory being saved can change its CA file")
+            if was.get("ca_sha256"):
+                c["ca_sha256"] = was["ca_sha256"]
+        elif c.get("ca_file"):                          # signed with the list: connect refuses a CA file changed since
             try:
                 with open(c["ca_file"], "rb") as f:
                     c["ca_sha256"] = hashlib.sha256(f.read()).hexdigest()
