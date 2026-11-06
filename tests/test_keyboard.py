@@ -109,6 +109,14 @@ check("a box in a form is called by its label, without the colon", named.accessi
 check("a box with no label is called by its placeholder", loose.accessibleName() == "Search devices", loose.accessibleName())
 mine_page = QWidget(); mine = QLineEdit(); mine.setAccessibleName("My own"); QFormLayout(mine_page).addRow("Other", mine); mine_page.show(); pump(0.1)
 check("and a box that has a name keeps it", mine.accessibleName() == "My own")
+import shiboken6
+from PySide6.QtCore import QEvent
+gone = QLineEdit(); shiboken6.delete(gone)
+try:
+    check("a box already deleted is left alone (an app-wide filter must never raise)",
+          keys.eventFilter(gone, QEvent(QEvent.Type.Polish)) is False)
+except RuntimeError as e:
+    check("a box already deleted is left alone (an app-wide filter must never raise)", False, e)
 
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

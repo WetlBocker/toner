@@ -3,7 +3,7 @@ from PySide6.QtGui import QColor, QFont, QIcon, QIconEngine, QPainter, QPalette,
 from PySide6.QtWidgets import (QAbstractButton, QAbstractSpinBox, QApplication, QCheckBox, QComboBox, QHBoxLayout, QHeaderView, QLabel, QLayout, QLineEdit,
                                QAbstractItemView, QFormLayout, QMenu, QPushButton, QSizePolicy, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QToolButton,
                                QVBoxLayout, QWidget, QWidgetAction)
-from core import db, perms, reports
+from core import db, perms, quiet, reports
 from ui import status as st, theme
 
 
@@ -658,7 +658,13 @@ class KeyboardAccess(QObject):
     label beside it (else its placeholder). Screen readers read those names; nothing on screen changes."""
 
     def eventFilter(self, obj, event):
-        kind = event.type()
+        try:
+            self._name(obj, event.type())
+        except RuntimeError:                       # a widget already deleted (it happens mid-teardown): an app-wide filter that
+            quiet.ignored()                        # raises makes Qt report it at every later event, as a growing pop-up
+        return False
+
+    def _name(self, obj, kind):
         if kind == QEvent.Type.Polish:
             if isinstance(obj, QAbstractItemView) and obj.editTriggers() == QAbstractItemView.EditTrigger.NoEditTriggers:
                 obj.setTabKeyNavigation(False)
@@ -670,7 +676,6 @@ class KeyboardAccess(QObject):
                     obj.setAccessibleName(name)
         elif kind == QEvent.Type.ToolTipChange and isinstance(obj, QAbstractButton) and obj.property("tipName"):
             self._name_button(obj)                                           # the fold button says the other thing once used
-        return False
 
     @staticmethod
     def _name_button(b):
