@@ -67,10 +67,10 @@ def _put(name, value):
     f = pins_file()
     try:
         osstore.put(name, value, f)
-    except Exception:
+    except (ValueError, TypeError):            # its content is corrupt (not JSON, or not a JSON object); any other error raises
         if f is None:
             raise
-        f.unlink(missing_ok=True)              # a corrupt pins file: start a fresh one (its entries couldn't be read anyway)
+        f.unlink(missing_ok=True)              # start a fresh one (its entries couldn't be read anyway)
         osstore.put(name, value, f)
 
 

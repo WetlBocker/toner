@@ -687,6 +687,18 @@ else:
     check("elsewhere: a keyring error other than NoKeyring is no store (unguarded)", S.classify("bob@acme.com")[0] == "directory")
     osstore.get = real_get
 
+real_pins_file, real_put = dirpin.pins_file, osstore.put
+pf = pathlib.Path(SP) / "pins-test.json"
+pf.write_text('{"dirs:another copy": "kept"}', "utf-8")
+dirpin.pins_file = lambda: pf
+def refused(n, v, file=None): raise PermissionError("in use")
+osstore.put = refused
+dirpin._avail = True
+dirpin.remember(doc())
+dirpin.pins_file, osstore.put = real_pins_file, real_put
+check("a pins file that can't be written now is kept (only a corrupt one starts afresh)",
+      pf.exists() and pf.read_text("utf-8") == '{"dirs:another copy": "kept"}')
+
 name = dirpin.store_name()
 DIRS.pop(name, None)
 dirpin._avail = False                                            # no store when this process first asked; one came since
