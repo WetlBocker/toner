@@ -1,6 +1,7 @@
 """The security chip on Windows: RSA-2048 keys in the Microsoft Platform Crypto Provider (the TPM), each protected by a PIN that
-Toner passes in code (NCRYPT_PIN_PROPERTY, every call silent, so Windows never shows a prompt). Wrong PINs are counted by the
-chip: after a few, Windows refuses every try (even a right one) until the TPM forgets a failure, which is LockedOut.
+Toner passes in code (NCRYPT_PIN_PROPERTY, every call silent, so Windows never shows a prompt). Wrong PINs are counted by
+Windows: after 4 in 8 hours (its defaults for a standard user, before the TPM's own 32), it refuses every try, even a right one
+and even making a new key, until the oldest is 8 hours old. That is LockedOut.
 
 Elsewhere, and on a computer without the key, decrypt and delete raise FileNotFoundError; a wrong PIN raises PermissionError."""
 import ctypes
@@ -13,7 +14,7 @@ SILENT, OVERWRITE, OAEP, ALLOW_DECRYPT = 0x40, 0x80, 0x4, 0x1
 BAD_KEYSET = 0x80090016                                          # NTE_BAD_KEYSET: no key by that name here
 WRONG_PIN = {0x80090010, 0x80290408}                             # NTE_PERM, TPM_E_PCP_AUTHENTICATION_FAILED
 LOCKED = {0x80090031, 0x80290409, 0x80280921}                    # NTE_AUTHENTICATION_IGNORED, its PCP twin, TPM_20_E_LOCKOUT
-DEFAULT_WAIT = 7200                                              # Windows 11's lockout interval, when the TPM can't be asked
+DEFAULT_WAIT = 480 * 60                                          # Windows' default "Standard User Lockout Duration"
 
 
 class LockedOut(Exception):
@@ -48,7 +49,7 @@ def _check(r, what):
     if r == 0:
         return
     if r in LOCKED:
-        raise LockedOut(_lockout_interval())
+        raise LockedOut(_lockout_wait())
     if r in WRONG_PIN:
         raise PermissionError("wrong PIN")
     if r == BAD_KEYSET:
@@ -56,30 +57,15 @@ def _check(r, what):
     raise OSError(f"{what} failed (0x{r:08X})")
 
 
-def _lockout_interval():
-    """Seconds the TPM takes to forget one failure (TPM_PT_LOCKOUT_INTERVAL), read through TBS: the longest a lockout lasts
-    once the count is one past Windows' limit. The exact time left can't be read."""
+def _lockout_wait():
+    """The longest Windows' lockout can last: a standard user's TPM failures count for the "Standard User Lockout Duration"
+    policy (480 minutes unless set). The time left can't be read without admin rights."""
     try:
-        from ctypes import wintypes as W
-        tbs = ctypes.WinDLL("tbs.dll")
-
-        class Params(ctypes.Structure):
-            _fields_ = [("version", W.UINT), ("flags", W.UINT)]
-        ctx = ctypes.c_void_p()
-        if tbs.Tbsi_Context_Create(ctypes.byref(Params(2, 4)), ctypes.byref(ctx)):    # 2, TPM 2.0
-            return DEFAULT_WAIT
-        try:      # TPM2_GetCapability(TPM_CAP_TPM_PROPERTIES, TPM_PT_LOCKOUT_INTERVAL, 1)
-            cmd = bytes.fromhex("8001" "00000016" "0000017A" "00000006" "00000210" "00000001")
-            out, n = ctypes.create_string_buffer(64), W.UINT(64)
-            if tbs.Tbsip_Submit_Command(ctx, 0, 200, cmd, len(cmd), out, ctypes.byref(n)):
-                return DEFAULT_WAIT
-        finally:
-            tbs.Tbsip_Context_Close(ctx)
-        b = out.raw[:n.value]
-        if len(b) < 27 or int.from_bytes(b[6:10], "big") or int.from_bytes(b[19:23], "big") != 0x210:
-            return DEFAULT_WAIT
-        return int.from_bytes(b[23:27], "big") or DEFAULT_WAIT
-    except OSError:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Policies\Microsoft\Tpm") as k:
+            minutes = int(winreg.QueryValueEx(k, "StandardUserAuthorizationFailureDuration")[0])
+        return minutes * 60 if minutes > 0 else DEFAULT_WAIT
+    except (OSError, ValueError):
         return DEFAULT_WAIT
 
 

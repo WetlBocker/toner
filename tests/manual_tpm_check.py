@@ -1,8 +1,8 @@
 # Run by hand on a Windows computer with a TPM (not part of run_all.py, which runs only test_*.py; CI has no TPM):
 #     python tests/manual_tpm_check.py             the chip: a key with a PIN, right and wrong PINs, a PIN slot, delete
 #     python tests/manual_tpm_check.py --lockout   also wrong PINs until Windows refuses every PIN, and the wait it gives
-# --lockout locks the security chip for every app on this computer (Windows Hello's PIN too) until the TPM forgets a failure,
-# up to the TPM's lockout interval (2 hours on Windows 11). It uses a throw-away data folder: Toner's own data isn't touched.
+# Each run spends one of Windows' 4 wrong-PIN tries per 8 hours (a standard user's defaults). --lockout spends them all: this
+# user's TPM PINs are then refused until the oldest failure is 8 hours old. A throw-away data folder: Toner's data isn't touched.
 import os as _os, sys as _sys, tempfile as _tmp
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 _os.environ["SP"] = _tmp.mkdtemp(prefix="netcheck_tpm_")
@@ -32,8 +32,13 @@ OAEP = padding.OAEP(padding.MGF1(hashes.SHA256()), hashes.SHA256(), None)
 name, slot_id, PIN = "Toner-check-" + os.urandom(6).hex(), "check-" + os.urandom(6).hex(), "482916"
 started = time.time()
 check("the chip is available (provider opens, a test key is made and deleted)", tpm_windows.available())
+sealed = None
 try:
-    pub = serialization.load_der_public_key(tpm_windows.create(name, PIN))
+    try:
+        der = tpm_windows.create(name, PIN)
+    except tpm_windows.LockedOut as e:
+        sys.exit(f"Windows is refusing the chip's PINs now (a lockout). Wait up to {e.seconds} seconds, then run this again.")
+    pub = serialization.load_der_public_key(der)
     check("create: an RSA-2048 key with a PIN", pub.key_size == 2048)
     data = pub.encrypt(b"manual check", OAEP)
     check("decrypt with the right PIN", outcome(lambda: tpm_windows.decrypt(name, PIN, data)) == b"manual check")
