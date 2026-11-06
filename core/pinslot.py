@@ -105,10 +105,20 @@ def _fails_file():
     return user_data_root() / "Toner" / "chipfails.json"
 
 
+def _write_fails(times):
+    f = _fails_file()
+    f.parent.mkdir(parents=True, exist_ok=True)
+    tmp = f.with_name(f.name + ".tmp")
+    tmp.write_text(json.dumps(times), "utf-8")
+    os.replace(tmp, f)                     # atomic: a crash never leaves an empty record
+
+
 def _chip_fails(now):
     """The times of wrong chip PINs still inside Windows' lockout window, oldest first. A record that can't be read counts as
-    one fewer than the threshold, all now: Toner waits rather than risk locking the chip."""
+    one fewer than the threshold, all now: Toner waits rather than risk locking the chip. A damaged record, or times in the
+    future (the clock went back), are written back as read, so the wait ends one window later instead of never."""
     window = tpm_windows.lockout_window()
+    heal = False
     try:
         times = json.loads(_fails_file().read_text("utf-8"))
         if not isinstance(times, list) or not all(isinstance(t, (int, float)) and not isinstance(t, bool) for t in times):
@@ -116,8 +126,15 @@ def _chip_fails(now):
     except FileNotFoundError:
         times = []
     except (OSError, ValueError):
-        times = [now] * max(tpm_windows.lockout_threshold() - 1, 0)
-    return sorted(min(t, now) for t in times if t > now - window)     # (a time in the future: the clock went back; now)
+        times, heal = [now] * max(tpm_windows.lockout_threshold() - 1, 0), True
+    heal = heal or any(t > now for t in times)
+    times = sorted(min(t, now) for t in times if t > now - window)
+    if heal:
+        try:
+            _write_fails(times)
+        except OSError:
+            quiet.ignored()
+    return times
 
 
 def chip_wait(now=None):
@@ -132,9 +149,7 @@ def chip_wait(now=None):
 
 def _chip_failed(now):
     try:
-        f = _fails_file()
-        f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(json.dumps(_chip_fails(now) + [now]), "utf-8")
+        _write_fails(_chip_fails(now) + [now])
     except OSError:
         quiet.ignored()                    # Toner's shared counter still waits after the threshold - 1
 

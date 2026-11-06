@@ -70,14 +70,15 @@ TECHS, ENGINEERS, ADMINS = "CN=Toner Techs," + BASE, "CN=Toner Engineers," + BAS
 directory._STRATEGY = ldap3.MOCK_SYNC
 ldap = ldap3.Server("mock", get_info=ldap3.NONE)
 c = ldap3.Connection(ldap, client_strategy=ldap3.MOCK_SYNC)
-G_BOB = uuid.uuid4()
+G_BOB = uuid.UUID("41424344-4546-4748-494a-4b4c4d4e4f50")    # fixed ASCII-safe bytes: the ldap3 mock can't match some random GUIDs
 SVC = "svc-pass-SECRET-4711"
 for dn, attrs in [
         ("CN=Bob,OU=Users," + BASE, {"objectClass": "user", "userPrincipalName": "bob@acme.com", "sAMAccountName": "bob", "cn": "Bob",
                                      "objectGUID": G_BOB.bytes_le, "userAccountControl": 512, "userPassword": "pw-bob",
                                      "memberOf": [ENGINEERS]}),
         ("CN=Ann,OU=Users," + BASE, {"objectClass": "user", "userPrincipalName": "ann@acme.com", "sAMAccountName": "ann", "cn": "Ann",
-                                     "objectGUID": uuid.uuid4().bytes_le, "userAccountControl": 512, "userPassword": "pw-ann",
+                                     "objectGUID": uuid.UUID("51525354-5556-5758-595a-616263646566").bytes_le,
+                                     "userAccountControl": 512, "userPassword": "pw-ann",
                                      "memberOf": [ADMINS]}),
         (ADMINS, {"objectClass": "group", "cn": "Toner Admins"}),
         ("CN=svc," + BASE, {"objectClass": "user", "sAMAccountName": "svc", "cn": "svc", "objectGUID": uuid.uuid4().bytes_le,
