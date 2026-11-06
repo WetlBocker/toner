@@ -13,14 +13,17 @@ import getpass
 import json
 import signal
 import sys
+import threading
 
-from core import backupsplit, datakey, db, lockdown, passvault, quiet, service, session
+from core import backupsplit, datakey, db, directory, dirsignin, duo, lockdown, passvault, pinslot, quiet, service, session
 from drivers.base import SEVERITY
 
 SERVICE_OFF = ("Toner's background service is off while sign-in is turned on. "
                "Scheduled checks and backups run while someone is signed in to Toner's window.")
 UNFINISHED = "Toner's data hasn't finished encrypting. Open Toner's window to finish, then try again."
 BUSY = "Toner's service is using the data. Stop it, then try again."
+DUO_LINE = "Approve the sign-in on your phone. (Press Ctrl+C to enter a code instead.)"
+APPROVAL = "Sign in to Toner's window once first, so an admin can approve this computer."
 LEVEL = {"warn": 1, "fail": 2, "error": 3, "never": 99}
 
 
@@ -85,12 +88,24 @@ def _sign_in(a):
         if sys.stdin is None or not sys.stdin.isatty():   # Toner.exe (a window program) has no stdin; piped or redirected
             raise EOFError                                # input has no one typing, and getpass would wait on the console
         user = a.user or input("Username: ")
+        kind = dirsignin.classify(user)
         password = getpass.getpass("Password: ")
     except (EOFError, RuntimeError):           # Task Scheduler, redirected input, or input() that "lost sys.stdin": nobody to ask
         print("Sign in needs a terminal.", file=sys.stderr)
         return 3
+    except dirsignin.Paused as e:
+        print(e, file=sys.stderr)
+        return 3
+    except (ValueError, KeyError, AttributeError):          # a damaged keys file
+        print("This file is damaged or was changed outside Toner.", file=sys.stderr)
+        return 3
     try:
-        session.sign_in(user, password)
+        if kind[0] == "directory":
+            if not _directory_sign_in(user, password):
+                print(APPROVAL, file=sys.stderr)       # approval needs an admin at the window; nothing was written for it
+                return 3
+        else:
+            session.sign_in(user, password)
         if lockdown.pending():                 # Toner's window finishes the upgrade; the command line never encrypts
             print(UNFINISHED, file=sys.stderr)
             return 3
@@ -104,12 +119,53 @@ def _sign_in(a):
     except passvault.Locked:                   # the old vault hasn't moved over yet: the window's first start does that
         print(UNFINISHED, file=sys.stderr)
         return 3
-    except (datakey.WrongPassword, datakey.Throttled) as e:
+    except directory.Unreachable:
+        print(dirsignin.UNREACHABLE, file=sys.stderr)
+        return 3
+    except (datakey.WrongPassword, datakey.Throttled, dirsignin.NotInGroup, dirsignin.CaChanged, duo.Unavailable, duo.Denied,
+            pinslot.WrongPin, pinslot.PinLocked) as e:      # WrongPin is a ValueError: keep it ahead of the damaged-file case
         print(e, file=sys.stderr)
         return 3
     except (ValueError, KeyError, AttributeError):          # includes JSONDecodeError: a damaged keys file
         print("This file is damaged or was changed outside Toner.", file=sys.stderr)
         return 3
+
+
+def _directory_sign_in(login, password):
+    """True when signed in; False when it needs an admin's approval, which never happens at a terminal."""
+    at = dirsignin.begin(login, password)
+    if at.stage == "password":                 # (offline, begin has gone straight to the PIN)
+        dirsignin.after_password(at)
+    if at.stage == "duo":
+        _duo(at)
+    if at.stage == "pin":
+        dirsignin.finish(at, getpass.getpass("PIN: "))
+    return at.stage == "done"
+
+
+def _duo(at):
+    """The push on a worker thread; Ctrl+C cancels it and asks for a code (a second Ctrl+C at that prompt ends as usual)."""
+    print(DUO_LINE)
+    cancel, failed = threading.Event(), []
+
+    def push():
+        try:
+            dirsignin.duo_push(at, cancel)
+        except Exception as e:
+            failed.append(e)
+    worker = threading.Thread(target=push, daemon=True)
+    worker.start()
+    try:
+        while worker.is_alive():
+            worker.join(0.2)
+    except KeyboardInterrupt:
+        cancel.set()
+        worker.join()
+        failed.clear()                          # a cancelled push's end (denied or cut off) isn't the answer
+    if failed:
+        raise failed[0]
+    if at.stage == "duo":                       # still: the person chose a code
+        dirsignin.duo_code(at, getpass.getpass("Duo code: "))
 
 
 def _run(a, ready=None):
