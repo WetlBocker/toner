@@ -8,6 +8,7 @@ _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import os, sys, time
 SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\dirsignin%d.db").replace("\\", os.sep) % int(time.time()); os.environ["APPDATA"] = SP
+os.environ["APPDATA"] = _tmp.mkdtemp(prefix="netcheck_appdata_")       # as installed: the keys file isn't directly in %APPDATA%
 import keyring
 STORE = {}
 keyring.set_password = lambda s, u, p: STORE.__setitem__((s, u), p)
@@ -40,11 +41,15 @@ def raises(fn, exc):
 
 # ---------------------------------------------------------------- fakes: the protected store, the chip, Duo, the directory
 SKEY = "Zh5eGmUq9zpfQnyUIu5OL9iWoMMv5ZNmk3zLJ4Ep"
-PEPPERS = {"duo:d1": SKEY.encode()}
+REAL_PUT, REAL_GET = osstore.put, osstore.get
+PEPPERS = {"duo:d1": SKEY.encode()}     # netcheck.store on Windows; the keyring elsewhere
+PINS = {}                               # a file the caller names (dirpins.json on Windows)
+def _box(file): return PEPPERS if file is None else PINS
 osstore.available = lambda: True
-osstore.put = PEPPERS.__setitem__
-osstore.get = PEPPERS.get
+osstore.put = lambda n, v, file=None: _box(file).__setitem__(n, v)
+osstore.get = lambda n, file=None: _box(file).get(n)
 osstore.delete = lambda n: PEPPERS.pop(n, None)
+DIRS = _box(dirpin.pins_file())         # where the directories fingerprint lives on this platform
 
 
 class FakeTpm:
@@ -173,11 +178,11 @@ check("a local name can't begin a directory sign-in", raises(lambda: S.begin("ad
 
 # ---------------------------------------------------------------- the first sign-in: password, Duo push, choose a PIN, approval, PIN
 check("set_directories remembers the list on this computer",
-      PEPPERS.get(dirpin.store_name()) == dirpin.fingerprint([ACME]).encode())
-PEPPERS.pop(dirpin.store_name())
-check("a local login never looks at it", S.classify("admin") == ("local", "admin") and dirpin.store_name() not in PEPPERS)
+      DIRS.get(dirpin.store_name()) == dirpin.fingerprint([ACME]).encode())
+DIRS.pop(dirpin.store_name())
+check("a local login never looks at it", S.classify("admin") == ("local", "admin") and dirpin.store_name() not in DIRS)
 a = S.begin("ACME\\bob", "pw-bob")
-check("the first directory sign-in remembers the list", PEPPERS.get(dirpin.store_name()) == dirpin.fingerprint([ACME]).encode())
+check("the first directory sign-in remembers the list", DIRS.get(dirpin.store_name()) == dirpin.fingerprint([ACME]).encode())
 check("begin: the password is checked online", a.stage == "password" and not a.offline and a.user.name == "bob@acme.com"
       and a.cfg["id"] == "d1", vars(a))
 check("begin writes nothing before a PIN is chosen", datakey.directory_account("bob@acme.com") is None)
@@ -514,26 +519,54 @@ check("a hand-edited file is tampered, and a sign-in doesn't remember it", roles
       and raises(lambda: S.classify("bob@acme.com"), S.Paused) is not None)
 session.sign_out()
 datakey.path().write_bytes(good)
-PEPPERS[dirpin.store_name()] = b"a list remembered before"
+DIRS[dirpin.store_name()] = b"a list remembered before"
 check("a list changed elsewhere pauses here", raises(lambda: S.classify("bob@acme.com"), S.Paused) is not None)
 as_("Admin1", PW)
 check("a local Admin's sign-in with the rules ok remembers the list", roles.state() == "ok"
-      and PEPPERS.get(dirpin.store_name()) == dirpin.fingerprint([ACME]).encode())
+      and DIRS.get(dirpin.store_name()) == dirpin.fingerprint([ACME]).encode())
 session.sign_out()
 check("...and directory sign-in works again", S.classify("bob@acme.com")[0] == "directory")
 
-PEPPERS[dirpin.store_name()] = b"a list remembered before"
+if sys.platform == "win32":
+    check("Windows: the fingerprint file is outside the data folder, under %APPDATA%",
+          dirpin.pins_file() == pathlib.Path(os.environ["APPDATA"], "Toner", "dirpins.json")
+          and datakey.path().parent not in dirpin.pins_file().parents)
+    edited(lambda c: c.update(servers=["ldap.evil.example"]))
+    kept = dict(PEPPERS); PEPPERS.clear()                       # netcheck.store deleted along with the edit
+    check("Windows: deleting netcheck.store doesn't re-pin an edited list", raises(lambda: S.classify("bob@acme.com"), S.Paused)
+          is not None and dirpin.store_name() not in PEPPERS)
+    PEPPERS.update(kept)
+    datakey.path().write_bytes(good)
+    store = datakey.path().with_name("netcheck.store")
+    before = store.read_bytes() if store.exists() else None
+    REAL_PUT("dirs:test", b"a fingerprint", dirpin.pins_file())
+    check("Windows: the real store writes the named file (DPAPI), not netcheck.store",
+          REAL_GET("dirs:test", dirpin.pins_file()) == b"a fingerprint" and dirpin.pins_file().exists()
+          and b"a fingerprint" not in dirpin.pins_file().read_bytes()
+          and (store.read_bytes() if store.exists() else None) == before and REAL_GET("dirs:test") is None)
+else:
+    check("elsewhere: the keyring, no file", dirpin.pins_file() is None)
+
+name = dirpin.store_name()
+DIRS.pop(name, None)
+dirpin._avail = False                                            # no store when this process first asked; one came since
+dirpin.remember()
+check("a stale 'no store' doesn't skip the put: it looks again off the thread",
+      dirpin._looking.acquire(timeout=10) and DIRS.get(name) == dirpin.fingerprint([ACME]).encode() and dirpin._avail is True)
+dirpin._looking.release()
+
+DIRS[dirpin.store_name()] = b"a list remembered before"
 osstore.available = lambda: False
-dirpin._store.cache_clear()
+dirpin._avail = None
 check("no protected store: sign-in goes on unguarded", S.classify("bob@acme.com")[0] == "directory")
 osstore.available = lambda: True
-dirpin._store.cache_clear()
+dirpin._avail = None
 real_get = osstore.get
-def no_keyring(name): raise passvault.NoKeyring("no keyring")
+def no_keyring(name, file=None): raise passvault.NoKeyring("no keyring")
 osstore.get = no_keyring
 check("no keyring: sign-in goes on unguarded", S.classify("bob@acme.com")[0] == "directory")
 osstore.get = real_get
-del PEPPERS[dirpin.store_name()]
+del DIRS[dirpin.store_name()]
 
 real_path = datakey.path
 datakey.path = lambda: pathlib.Path(SP) / "one" / "netcheck.keys"

@@ -1,5 +1,6 @@
 """The operating system's protected store, usable before anyone signs in (Duo's secret key lives here).
-Windows: DPAPI blobs in netcheck.store beside netcheck.keys. Elsewhere: the Keychain / Secret Service that passvault keeps."""
+Windows: DPAPI blobs in netcheck.store beside netcheck.keys (or in the file a caller names). Elsewhere: the Keychain / Secret
+Service that passvault keeps (a named file is ignored there)."""
 import base64
 import json
 import os
@@ -45,34 +46,35 @@ def available():
     return bool(ok)
 
 
-def _load():
+def _load(f=None):
     try:
-        return json.loads(_file().read_text("utf-8"))
+        return json.loads((f or _file()).read_text("utf-8"))
     except FileNotFoundError:
         return {}
 
 
-def _save(data):
-    p = _file()
+def _save(data, f=None):
+    p = f or _file()
+    p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_name(p.name + ".tmp")
     tmp.write_text(json.dumps(data), "utf-8")
     os.replace(tmp, p)
 
 
-def put(name, secret):
+def put(name, secret, file=None):
     if sys.platform == "win32":
-        data = _load()
+        data = _load(file)
         data[name] = base64.b64encode(passvault.dpapi_protect(secret)).decode()
-        return _save(data)
+        return _save(data, file)
     b = _backend()
     if b is None:
         raise passvault.NoKeyring("no keyring")
     b.set_password(db.SERVICE, name, base64.b64encode(secret).decode())
 
 
-def get(name):
+def get(name, file=None):
     if sys.platform == "win32":
-        blob = _load().get(name)
+        blob = _load(file).get(name)
         return passvault.dpapi_unprotect(base64.b64decode(blob)) if blob else None
     b = _backend()
     if b is None:
