@@ -129,6 +129,7 @@ for dn, attrs in [
     c.strategy.add_entry(dn, attrs)
 for upn, cn in (("bob@acme.com", "Bob"), ("carol@acme.com", "Carol"), ("dave@acme.com", "Dave")):
     ldap.dit[upn] = ldap.dit["CN=%s,OU=Users,%s" % (cn, BASE)]       # AD binds by UPN; the mock only knows DNs
+    ldap.dit["ACME\\" + upn.split("@")[0]] = ldap.dit[upn]              # ...or as DOMAIN\user, as typed
 directory._who_am_i = lambda conn: "u:ACME\\" + conn.server.dit[conn.user]["sAMAccountName"][0].decode()
 UP = lambda cfg, host, *_: ldap
 def DOWN(cfg, host, *_): raise OSError("no route")

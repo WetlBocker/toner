@@ -86,6 +86,7 @@ for dn, attrs in [
         (ENGINEERS, {"objectClass": "group", "cn": "Toner Engineers"})]:
     c.strategy.add_entry(dn, attrs)
 ldap.dit["bob@acme.com"] = ldap.dit["CN=Bob,OU=Users," + BASE]
+ldap.dit["ACME\\bob"] = ldap.dit["bob@acme.com"]                     # AD binds DOMAIN\user as typed
 ldap.dit["ann@acme.com"] = ldap.dit["CN=Ann,OU=Users," + BASE]
 directory._who_am_i = lambda conn: "u:ACME\\" + conn.server.dit[conn.user]["sAMAccountName"][0].decode()
 directory._make_server = lambda cfg, host, *_: ldap

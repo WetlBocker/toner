@@ -115,7 +115,7 @@ for cn, sam, groups in PEOPLE:
 for dn, cn in ((ADMINS, "Toner Admins"), (ENGINEERS, "Toner Engineers"), (TECHS, "Toner Techs")):
     c.strategy.add_entry(dn, {"objectClass": "group", "cn": cn})
 for cn, sam, _g in PEOPLE:
-    ldap.dit[f"{sam}@acme.com"] = ldap.dit[f"CN={cn},OU=Users,{BASE}"]
+    ldap.dit[f"{sam}@acme.com"] = ldap.dit[f"ACME\\{sam}"] = ldap.dit[f"CN={cn},OU=Users,{BASE}"]   # AD binds by UPN or DOMAIN\user
 directory._who_am_i = lambda conn: "u:ACME\\" + conn.server.dit[conn.user]["sAMAccountName"][0].decode()
 UP = lambda cfg, host, *_: ldap
 def DOWN(cfg, host, *_): raise OSError("no route")

@@ -1,6 +1,6 @@
 """Directory client: binds to Active Directory or LDAP over TLS, reads a person's groups and state, maps groups to roles.
 No user-facing text lives here; exception messages are internal and never contain a password."""
-import hashlib, ssl, uuid
+import hashlib, ssl, string, uuid
 from dataclasses import dataclass
 
 import ldap3
@@ -155,8 +155,13 @@ def _search(conn, base, flt, attrs, scope=ldap3.SUBTREE):
     return [e for e in conn.response or [] if e.get("type", "searchResEntry") == "searchResEntry"]
 
 
+_ASCII_LOWER = str.maketrans(string.ascii_uppercase, string.ascii_lowercase)
+
+
 def _key(dn):
-    return str(dn).casefold()      # DNs compared are only ever ones the server wrote; no unescaping, so no two different DNs meet
+    """DNs compared are only ever ones the server wrote; no unescaping, so no two different DNs meet. Only ASCII letters fold:
+    str.casefold would make "STRASSE" match "Straße" and a Kelvin sign match K, which a directory keeps apart."""
+    return str(dn).translate(_ASCII_LOWER)
 
 
 def _is_dn(text):
@@ -222,13 +227,14 @@ def _find(conn, cfg, base, flt, scope=ldap3.SUBTREE, many=BadCredentials):
 
 
 def _split_login(cfg, login):
-    """(bind identity, short user name). AD: DOMAIN\\user becomes user@<first suffix> when there is one, else binds as given.
+    """(bind identity, short user name). AD: DOMAIN\\user binds as typed, and DOMAIN must be the directory's NetBIOS name.
     LDAP: the DN is built as uid=<user>,<base_dn> (no service account is available at sign-in to search for it)."""
     login = login.strip()
     if "\\" in login:
-        short = login.split("\\", 1)[1]
-        suffix = (cfg.get("suffixes") or [None])[0]
-        who = f"{short}@{suffix}" if suffix else login
+        dom, short = login.split("\\", 1)
+        if cfg["kind"] == "ad" and (not dom or dom.casefold() != str(cfg.get("netbios") or "").casefold()):
+            raise BadCredentials("another domain")
+        who = login
     elif "@" in login:
         short, who = login.split("@", 1)[0], login
     else:
@@ -323,6 +329,46 @@ def resolve_groups(cfg, names, service_password):
     finally:
         conn.unbind()
     return out
+
+
+def _config_nc(conn):
+    """The configuration naming context, from the rootDSE (None when the server doesn't say)."""
+    conn.search("", "(objectClass=*)", search_scope=ldap3.BASE, attributes=["configurationNamingContext"])
+    for e in conn.response or []:
+        nc = _one(e.get("attributes") or {}, "configurationNamingContext")
+        if nc:
+            return str(nc)
+    return None
+
+
+def _domain_dn(base_dn):
+    """The domain's DN: base_dn's trailing DC= parts."""
+    parts = []
+    for attr, value, _ in reversed(parse_dn(base_dn)):
+        if attr.lower() != "dc":
+            break
+        parts.append(f"DC={value}")
+    return ",".join(reversed(parts))
+
+
+def netbios(cfg, service_password):
+    """AD: the domain's NetBIOS name, as the service account reads it: the nETBIOSName of the crossRef in CN=Partitions of the
+    configuration naming context whose nCName is the domain's DN. Unreachable when it can't be read."""
+    conn = connect(cfg, cfg["service_dn"], service_password)
+    try:
+        nc, domain = _config_nc(conn), _domain_dn(cfg["base_dn"])
+        if not nc or not domain:
+            raise Unreachable("no NetBIOS name found")
+        esc = ldap3.utils.conv.escape_filter_chars
+        found = _search(conn, "CN=Partitions," + nc, f"(&(objectClass=crossRef)(nCName={esc(domain)}))", ["nETBIOSName"])
+        name = _one(found[0]["attributes"], "nETBIOSName") if len(found) == 1 else None
+        if not name:
+            raise Unreachable("no NetBIOS name found")
+        return str(name)
+    except (lx.LDAPException, ValueError):
+        raise Unreachable("read failed") from None
+    finally:
+        conn.unbind()
 
 
 def test(cfg, service_password):

@@ -54,6 +54,10 @@ srv = tree([
     ("CN=Zed,OU=Users," + BASE, {"objectClass": "user", "userPrincipalName": "zed@corp.example", "sAMAccountName": "bob2", "cn": "Zed", "objectGUID": G_ZED.bytes_le,
         "userAccountControl": 512, "userPassword": "pw-zed", "memberOf": ["CN=Network-Admins,OU=Groups," + BASE]}),
     ("CN=Tech-Desk,OU=Other," + BASE, {"objectClass": "group", "cn": "Tech-Desk"}),
+    # the configuration naming context's partitions: the domain's crossRef holds its NetBIOS name
+    ("CN=CORP,CN=Partitions,CN=Configuration," + BASE, {"objectClass": "crossRef", "cn": "CORP", "nCName": BASE, "nETBIOSName": "CORP"}),
+    ("CN=Enterprise Configuration,CN=Partitions,CN=Configuration," + BASE, {"objectClass": "crossRef", "cn": "Enterprise Configuration",
+        "nCName": "CN=Configuration," + BASE}),
 ])
 srv.dit["bob2@corp.example"] = srv.dit["CN=Bobby,OU=Users," + BASE]; srv.dit["zed@corp.example"] = srv.dit["CN=Zed,OU=Users," + BASE]
 D._who_am_i = lambda conn: "u:CORP\\" + conn.server.dit[conn.user]["sAMAccountName"][0].decode()    # the mock has no Who Am I
@@ -69,7 +73,19 @@ check("the UPN form signs in", u.name == "alice@corp.example" and u.display == "
 check("the GUID is text", u.guid == str(G_ALICE), u.guid)
 G = lambda cn: "CN=%s,OU=Groups,%s" % (cn, BASE)
 check("groups (as DNs) include the nested one", set(u.groups) == {G("Eng-Team"), G("Network-Admins"), G("Tech-Desk")}, u.groups)
-check("DOMAIN\\user converts to the UPN with the first suffix", D.sign_in(AD, "CORP\\alice", "pw-alice").guid == u.guid)
+srv.dit["CORP\\alice"] = srv.dit["CN=Alice A,OU=Users," + BASE]      # AD binds DOMAIN\\user as typed
+binds = []
+class BindSpy(ldap3.Connection):
+    def __init__(self, *a, **k): binds.append(k.get("user")); super().__init__(*a, **k)
+_real_conn = ldap3.Connection; ldap3.Connection = BindSpy
+check("DOMAIN\\user binds as typed, not as user@first-suffix", D.sign_in(AD, "CORP\\alice", "pw-alice").guid == u.guid
+      and binds == ["CORP\\alice"], binds)
+binds.clear()
+check("DOMAIN\\user of another domain is refused before any bind",
+      raises(D.BadCredentials, D.sign_in, AD, "OTHER\\alice", "pw-alice") is not None and binds == [], binds)
+_wai = D._who_am_i; D._who_am_i = lambda conn: "u:CHILD\\alice"
+check("...and Who Am I is still checked", raises(D.BadCredentials, D.sign_in, AD, "CORP\\alice", "pw-alice") is not None)
+D._who_am_i = _wai; ldap3.Connection = _real_conn
 m = raises(D.BadCredentials, D.sign_in, AD, "alice@corp.example", "nope-nope")
 check("a wrong password is BadCredentials, and the message has no password", m is not None and "nope-nope" not in m)
 check("an empty password is refused (it would be an anonymous bind)", raises(D.BadCredentials, D.sign_in, AD, "alice@corp.example", "") is not None)
@@ -82,6 +98,16 @@ check("look_up of a removed GUID is None", D.look_up(AD, str(uuid.uuid4()), "svc
 check("look_up with a wrong service password is BadCredentials", raises(D.BadCredentials, D.look_up, AD, str(G_ALICE), "bad") is not None)
 n = D.test(AD, "svc-pw")
 check("test counts the groups", n == 4, n)
+
+print("== the NetBIOS name, read from the directory")
+D._config_nc = lambda conn: "CN=Configuration," + BASE        # the mock has no rootDSE
+check("AD: the domain's crossRef gives its NetBIOS name", D.netbios(dict(AD, netbios=""), "svc-pw") == "CORP")
+check("...also when the base DN is an OU in the domain", D.netbios(dict(AD, netbios="", base_dn="OU=Users," + BASE), "svc-pw") == "CORP")
+check("...no crossRef for the domain is Unreachable", raises(D.Unreachable, D.netbios, dict(AD, netbios="", base_dn="DC=other,DC=example"),
+      "svc-pw") is not None)
+check("...a wrong service password is BadCredentials", raises(D.BadCredentials, D.netbios, dict(AD, netbios=""), "bad") is not None)
+D._config_nc = lambda conn: None
+check("...no configuration naming context is Unreachable", raises(D.Unreachable, D.netbios, dict(AD, netbios=""), "svc-pw") is not None)
 
 print("== look-alike users")
 z = D.sign_in(AD, "bob2@corp.example", "pw-bobby")
@@ -132,6 +158,8 @@ check("escaped look-alike DNs do not match", D.role_for(AD, ["CN=\\54ech-Desk,OU
 check("a same-CN group in another OU grants nothing", D.role_for(AD, ["CN=Tech-Desk,OU=Other," + BASE]) is None)
 check("a bare CN is not a DN and grants nothing", D.role_for(AD, ["Tech-Desk", "Network-Admins"]) is None)
 check("no match is None", D.role_for(AD, [G("Other")]) is None and D.role_for(AD, []) is None)
+check("only ASCII letters fold: Unicode case look-alikes grant nothing",
+      D.role_for(dict(AD, groups={"Admin": ["CN=Straße,DC=x"], "Tech": ["CN=Kiosk,DC=x"]}), ["CN=STRASSE,DC=x", "CN=\u212aiosk,DC=x"]) is None)
 check("alice maps to Admin through the nested group", D.role_for(AD, u.groups) == "Admin")
 
 print("== LDAP")

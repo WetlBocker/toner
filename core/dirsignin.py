@@ -142,9 +142,9 @@ def _mine(a):
 def _offline(a):
     """The directory can't be reached: the PIN alone, within the hour of the last good check of a sealed account."""
     who, short = directory._split_login(a.cfg, a.login)
-    if a.cfg["kind"] == "ad":
+    if a.cfg["kind"] == "ad" and "@" in who:
         name = who.lower()                                  # the UPN the directory would have named the account by
-    else:
+    else:                                                   # (DOMAIN\user: its UPN prefix taken to be the user name)
         first = (a.cfg.get("suffixes") or [""])[0]
         name = f"{short.lower()}@{first}" if first else short.lower()
     rec = datakey.directory_account(name)
