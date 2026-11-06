@@ -55,29 +55,29 @@ The mockups from the conversation are beside this document: `2026-11-04-user-sig
    *(my call: an admin can also map a domain to a method by hand when the two would clash.)*
 2. **The method's own step.**
    - **SSO:** Toner opens the provider's sign-in page in the system browser, using the authorization code flow with PKCE and a loopback redirect. The provider handles the password and MFA.
-   - **AD and LDAP:** a password, checked by binding to the directory over LDAPS, or over StartTLS. Plain LDAP is refused.
+   - **AD and LDAP:** a password, checked by binding to the directory over LDAPS, or over StartTLS. Plain LDAP is refused. *(built in part 3)*
    - **Local:** a password.
-3. **Second step (AD and LDAP, when turned on).** A Duo push first, with "Enter a code instead" as the backup: a 6-digit code. The push screen reads "Approve on your phone" and waits, with Cancel.
-4. **The Toner PIN** (directory and SSO users only). On the first sign-in to a copy, the person sets a PIN. After that, the full sign-in asks for it as well. The PIN is 6 digits, protected by the computer's security chip (see "Locking the data"). *(my call: the PIN comes last, after the directory or provider has said yes.)*
-5. **Admin approval, the first time only.** When a directory or SSO user signs in to a copy for the first time, an admin approves it at the laptop, by signing in or by using the recovery key. Nothing the user types can unlock the data yet. The directory only answers yes or no. The same approval is needed after a forgotten PIN, on a different computer, and when a group change moves someone into a role that can see unmasked backups. The owner decided this.
+3. **Second step (AD and LDAP, when turned on).** A Duo push first, with "Enter a code instead" as the backup: a 6-digit code. The push screen reads "Approve on your phone" and waits, with Cancel. *(built in part 3)*
+4. **The Toner PIN** (directory and SSO users only). On the first sign-in to a copy, the person sets a PIN. After that, the full sign-in asks for it as well. The PIN is 6 digits, protected by the computer's security chip (see "Locking the data"). *(my call: the PIN comes last, after the directory or provider has said yes.)* *(directory part built in part 3; SSO in part 4)*
+5. **Admin approval, the first time only.** When a directory or SSO user signs in to a copy for the first time, an admin approves it at the laptop, by signing in or by using the recovery key. Nothing the user types can unlock the data yet. The directory only answers yes or no. The same approval is needed after a forgotten PIN, on a different computer, and when a group change moves someone into a role that can see unmasked backups. The owner decided this. *(directory part built in part 3; SSO in part 4)*
 6. Toner opens.
 
 **Lock screen (layout B).**
 - Toner's window stays open behind a cover reading "Toner is locked".
-- To unlock, a local user types their password and a directory or SSO user types their PIN.
+- To unlock, a local user types their password and a directory or SSO user types their PIN. *(directory part built in part 3; SSO in part 4)*
 - "Sign in as someone else" goes back to step 1.
 - The lock comes after a stretch of no use. *(my call: 15 minutes by default, set by an admin.)*
 - Locking with a keyboard shortcut is also available.
 
 **How often.**
-- *(my call: a full sign-in, with the directory and the second step, lasts the workday, 12 hours by default and set by an admin.)* Within that, idle locks only ask for the PIN or password.
-- While online, Toner re-checks directory and SSO accounts quietly in the background. If an admin disables someone, or removes them from Toner's groups, that person's Toner locks at the next check. *(my call: about every 15 minutes. AD and LDAP need a service account the admin enters, kept in the vault. SSO uses the refresh token.)*
+- *(my call: a full sign-in, with the directory and the second step, lasts the workday, 12 hours by default and set by an admin.)* Within that, idle locks only ask for the PIN or password. *(built in part 3)*
+- While online, Toner re-checks directory and SSO accounts quietly in the background. If an admin disables someone, or removes them from Toner's groups, that person's Toner locks at the next check. *(my call: about every 15 minutes. AD and LDAP need a service account the admin enters, kept in the vault. SSO uses the refresh token.)* *(directory part built in part 3; SSO in part 4)*
 
-**Offline.** A new full sign-in for a directory or SSO account needs a connection, or a successful online check in the last hour. Local accounts work offline. Within that hour, the PIN is what unlocks.
+**Offline.** A new full sign-in for a directory or SSO account needs a connection, or a successful online check in the last hour. Local accounts work offline. Within that hour, the PIN is what unlocks. *(directory part built in part 3; SSO in part 4)*
 
 A tech who is already signed in and goes offline keeps working: on a console cable, say, or at an isolated site. The open session carries on, and PIN unlocks keep working, until the workday sign-in ends. Only a brand-new full sign-in needs a connection again. The owner decided this, because techs locked out mid-job is the failure they most want to avoid. If the background check reaches the directory again and finds the account disabled, Toner still locks it at once.
 
-**When Duo can't be reached.** If the directory answers but Duo doesn't, sign-in is refused. Duo's own default is to refuse, and skipping the second step would let anyone get past it by blocking one web address. *(my call)* The 6-digit code is Duo's own passcode, checked through Duo, so it needs Duo too.
+**When Duo can't be reached.** If the directory answers but Duo doesn't, sign-in is refused. Duo's own default is to refuse, and skipping the second step would let anyone get past it by blocking one web address. *(my call)* The 6-digit code is Duo's own passcode, checked through Duo, so it needs Duo too. *(built in part 3)*
 
 ## Locking the data
 
@@ -86,7 +86,7 @@ The vault already works this way: one data key, sealed by a key made from the ma
 - **One data key per copy** encrypts everything Toner keeps on disk: every organization's database, the vault, config backups, session logs, saved reports, and the other files in the data folder. Logs keep no secrets, but are covered anyway.
 - **The data key is sealed several times,** once for each way in:
   - **Local account:** sealed with a key made from that person's password.
-  - **Directory or SSO account:** sealed with a key held by the computer's security chip and unlocked by their 6-digit PIN: the TPM on Windows and Linux, the Secure Enclave on Macs. It works the way Windows Hello does. The chip, not Toner, limits wrong guesses, so someone inside the tech's computer account can't copy the sealed key and try every PIN offline. The owner chose this over a longer software-only PIN, so that someone inside the tech's Windows account still can't get in without the PIN.
+  - **Directory or SSO account:** sealed with a key held by the computer's security chip and unlocked by their 6-digit PIN: the TPM on Windows and Linux, the Secure Enclave on Macs. It works the way Windows Hello does. The chip, not Toner, limits wrong guesses, so someone inside the tech's computer account can't copy the sealed key and try every PIN offline. The owner chose this over a longer software-only PIN, so that someone inside the tech's Windows account still can't get in without the PIN. *(directory part built in part 3; SSO in part 4)* *(built in part 3 for Windows; macOS and Linux use the protected-store PIN for now)*
     - *(my call)* **A computer without a usable chip:** a TPM switched off, an old Mac, a Linux box without a TPM. There, the key is sealed by the operating system's protected store (DPAPI, the Keychain, Secret Service) plus a PIN of at least 8 characters, letters allowed, which is too many combinations to guess offline. The admin sees which kind each account on a copy has. With no protected store either (Linux without Secret Service, which `passvault.NoKeyring` already detects), it uses the 8-character PIN alone.
   - **Recovery key:** shown once when the copy is set up, kept by the admin. It opens the data and lets the admin reset any account. There is no other way back. If it's lost along with every password and PIN, the data on that copy is gone. The owner decided this.
 - **What's covered.** Everything in the data folder, with four exceptions *(my call; the fourth is the owner's)*:

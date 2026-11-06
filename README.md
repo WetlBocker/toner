@@ -140,7 +140,9 @@ once, then it is gone.
 
 Every account has a role: Admin, Engineer or Tech. Admins can do everything. An admin chooses what Engineers and Techs can do in **Settings > Accounts and sign-in**: push changes to devices, see passwords in config backups, the AI assistant, each tool and each Settings page. A tool or the AI that a role can't use is hidden, an action it can't take is greyed out, and a Settings page it can't change shows read-only. Passwords in config backups are encrypted separately, so a role that can't see them really can't.
 
-On the command line, Toner asks for a username and password. The scheduled service (`cli service`) is off while sign-in is set up.
+People can also sign in with their Active Directory or LDAP account. An admin adds the directory in **Settings > Accounts and sign-in** and maps its groups to Admin, Engineer and Tech. Duo push or a Duo code can be required as a second step. The first time someone signs in on a computer, they choose a PIN for it (6 digits protected by the security chip on Windows, at least 8 characters elsewhere), and an admin approves it at that computer. If the directory turns an account off, Toner locks within 15 minutes.
+
+On the command line, Toner asks for a username and password, and for directory accounts also Duo and the PIN. A first sign-in on a computer has to happen in the window. The scheduled service (`cli service`) is off while sign-in is set up.
 
 ## The sections
 

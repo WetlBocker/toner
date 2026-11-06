@@ -17,6 +17,10 @@ Toner now asks people to sign in. Every copy's data is encrypted and opens only 
 - Accounts now have a role: Admin, Engineer or Tech. Every account on an upgraded copy starts as an Admin.
 - An admin chooses what Engineers and Techs can do in **Settings > Accounts and sign-in**.
 - Passwords kept in config backups are now encrypted separately, and only roles allowed to see them can.
+- People can sign in with their Active Directory or LDAP account. An admin adds the directory in Settings > Accounts and sign-in and maps its groups to roles.
+- Duo push or a Duo code can be required as a second step.
+- On Windows, a 6-digit PIN protected by the computer's security chip unlocks Toner. Elsewhere, the PIN is at least 8 characters.
+- A person's first sign-in to a copy needs an admin to approve it at that computer.
 
 ## What stops working
 
@@ -26,7 +30,3 @@ Toner now asks people to sign in. Every copy's data is encrypted and opens only 
 - Scheduled command-line runs stop working for the same reason: with no terminal to ask, they exit with code 3.
 - Database backups now ask for a password. The backup holds devices, history and settings, encrypted with the password you choose.
   Saved passwords stay in Toner's vault and aren't included.
-
-## Not in this release
-
-Only local accounts are available. Other kinds of sign-in come later.
