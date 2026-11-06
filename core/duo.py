@@ -32,8 +32,8 @@ def _h(s):
 
 
 def sign(skey, date, method, host, path, query, body):
-    """Duo signature v5, no X-Duo-* headers (so the last line is empty; matches the docs example). `query` is the encoded, sorted query string; `body` the JSON text."""
-    canon = "\n".join([date, method.upper(), host.lower(), path, query, _h(body), ""])
+    """Duo signature v5 with no X-Duo-* headers (the last line is the SHA-512 of the empty header text). `query` is the encoded, sorted query string; `body` the JSON text."""
+    canon = "\n".join([date, method.upper(), host.lower(), path, query, _h(body), _h("")])
     return hmac.new(skey.encode(), canon.encode(), hashlib.sha512).hexdigest()
 
 

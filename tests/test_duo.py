@@ -1,6 +1,6 @@
 # Run directly (python tests/test_x.py) or all together (python tests/run_all.py). Each test builds its own
 # throw-away database and uses a fake credential store, so nothing on this computer is touched.
-# Duo Auth API client against a fake local Duo (signature vector from Duo docs) and the OS protected store.
+# Duo Auth API client against a fake local Duo (signatures checked by an independent v5 implementation) and the OS protected store.
 import os as _os, sys as _sys, tempfile as _tmp
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
@@ -24,10 +24,18 @@ def check(name, cond):
     else: bad += 1; print("FAIL", name)
 
 SKEY = "Zh5eGmUq9zpfQnyUIu5OL9iWoMMv5ZNmk3zLJ4Ep"
+import hashlib, hmac
+def ref_sign(skey, date, method, host, path, params, body, xduo=""):
+    """Duo's documented v5 algorithm, written apart from duo.sign: date, METHOD, host lowercased, path, canonical params,
+    sha512(body), sha512(canonical X-Duo headers); HMAC-SHA512 keyed by skey."""
+    lines = [date, method.upper(), host.lower(), path, params,
+             hashlib.sha512(body.encode()).hexdigest(), hashlib.sha512(xduo.encode()).hexdigest()]
+    return hmac.new(skey.encode(), "\n".join(lines).encode(), hashlib.sha512).hexdigest()
+def ref_header(ikey, sig):
+    return "Basic " + base64.b64encode(f"{ikey}:{sig}".encode()).decode()
 body = '{"device":"auto","factor":"push","hostname":"wks01","ipaddr":"10.2.3.4","username":"narroway"}'
-sig = duo.sign(SKEY, "Tue, 21 Aug 2012 17:29:18 -0000", "POST", "api-xxxxxxxx.duosecurity.com", "/auth/v2/auth", "", body)
-want = "RElXSjhYNkFFWU9SNU9NQzZUUTE6NWI3NTg5MzA4Y2JiYWE5MzYwOWM1ZGQ5MTljYmY2ZDI0ZjlkYTkxNTQ2YzgxY2ZkYmQ1OTI2MjNmYzM2ZTU1Y2QzYmQ0NzBiYWQyMzBhYzQ1YTA2ODZkYWVlMGU1YmE4YjViZGVlM2ZmMzI1ODUwNWQyZDBlYTI3YzAxNGRlYTM="
-check("docs v5 vector", base64.b64encode(f"DIWJ8X6AEYOR5OMC6TQ1:{sig}".encode()).decode() == want)
+args = ("Tue, 21 Aug 2012 17:29:18 -0000", "POST", "API-xxxxxxxx.duosecurity.com", "/auth/v2/auth", "", body)
+check("v5 matches the documented algorithm", duo.sign(SKEY, *args) == ref_sign(SKEY, *args))
 check("http off by default", duo._TEST_ALLOW_HTTP is False)
 
 STATE = {"status": "allow", "code": "123456", "badsig": 0, "hold": 0, "hold_n": 0}
@@ -42,8 +50,8 @@ class H(http.server.BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(n).decode() if n else ""
         u = urllib.parse.urlsplit(self.path)
-        s = duo.sign(SKEY, self.headers["Date"], method, self.headers["Host"], u.path, u.query, raw)
-        if base64.b64decode(self.headers["Authorization"][6:]).decode() != "IK:" + s:
+        s = ref_sign(SKEY, self.headers["Date"], method, self.headers["Host"], u.path, u.query, raw)
+        if self.headers["Authorization"] != ref_header("IK", s):
             STATE["badsig"] += 1
         p = json.loads(raw) if raw else {}
         if p.get("username") == "u_redirect":
