@@ -27,6 +27,8 @@ CHANGED = "Your access changed. Ask an admin to sign in here to approve it."
 PAUSED = "Directory sign-in is paused on this computer. An admin needs to sign in first."
 CA_CHANGED = "The directory's CA file changed. An admin needs to save the directory again."
 NAME_TAKEN = "That name already belongs to another account on this copy. Ask an admin."     # Choose a PIN only
+TEST_OK = "Signed in as {name}. Role: {role}. Signed out."                                  # Test login only
+TEST_NOT_MAPPED = "{name} isn't in an OU or group that Toner maps to a role."
 
 
 def _windows_user():
@@ -246,6 +248,94 @@ def duo_code(a, code):
         _denied(a)
         raise duo.Denied(WRONG_CODE) from None
     _onward(a, "duo")
+
+
+class TestLogin:
+    """Test login: an Admin checks one directory user's password and Duo. begin's and the Duo steps' checks, with nothing kept:
+    no data key, PIN slot, account record or session, no write to the account, and a pass never clears the shared counter.
+    cfg comes from roles.verified(). stage: "password", "duo" or "done"; result is the sentence shown once done. Each finished
+    test writes one "test login" audit row; a push cancelled for a code writes none."""
+
+    def __init__(self, cfg):
+        self.cfg, self.stage, self.result = cfg, "password", None
+        self.name = self.role = None
+
+    def check_password(self, login, password):
+        failed = user = None
+        try:
+            _expect(self, "password")
+            if not perms.is_admin():
+                raise perms.Denied()
+            _tries()                                        # a wait running: Throttled, before any bind
+            try:
+                user = directory.sign_in(self.cfg, login, password)
+            except (directory.BadCredentials, directory.Unreachable, directory.CaChanged) as e:
+                failed = type(e)                            # raised below, outside this block: nothing chains to sign_in's frame
+        finally:
+            del password
+        if failed is directory.Unreachable:                 # no offline path: a test needs the directory
+            self._fail(login, directory.Unreachable(UNREACHABLE))
+        if failed is directory.CaChanged:
+            self._fail(login, CaChanged(CA_CHANGED))
+        if user is None or not user.enabled:
+            self._fail(login, datakey.WrongPassword(datakey.WRONG), count=True)
+        role = directory.role_for(self.cfg, user.groups, user.dn)
+        if role is None:                                    # counted, as begin counts it
+            self._fail(user.name, NotInGroup(TEST_NOT_MAPPED.format(name=user.name)), count=True)
+        self.name, self.role = user.name, role
+        if not (self.cfg.get("duo") or {}).get("on"):
+            return self._passed("password")
+        try:
+            r = duo.preauth(self.cfg, self.name)
+        except duo.Unavailable:
+            self._fail(self.name, duo.Unavailable(DUO_DOWN))
+        if r in ("deny", "enroll"):
+            self._fail(self.name, duo.Denied(DUO_DENIED))
+        if r == "allow":                                    # Duo's bypass, set by its admin
+            return self._passed("password")
+        self.stage = "duo"
+
+    def duo_push(self, cancel):
+        _expect(self, "duo")
+        try:
+            duo.push(self.cfg, self.name, cancel)
+        except duo.Unavailable:
+            self._fail(self.name, duo.Unavailable(DUO_DOWN))
+        except duo.Denied:
+            if cancel.is_set():                             # the Admin chose a code instead: the test goes on
+                raise duo.Denied(DUO_DENIED) from None
+            self._fail(self.name, duo.Denied(DUO_DENIED))
+        self._passed("duo")
+
+    def duo_code(self, code):
+        _expect(self, "duo")
+        try:
+            duo.passcode(self.cfg, self.name, code)
+        except duo.Unavailable:
+            self._fail(self.name, duo.Unavailable(DUO_DOWN))
+        except duo.Denied:
+            self._fail(self.name, duo.Denied(WRONG_CODE))
+        self._passed("duo")
+
+    def _passed(self, stage):
+        self._end(stage, self.name, TEST_OK.format(name=self.name, role=self.role))
+
+    def _fail(self, name, exc, count=False):
+        if count:
+            try:
+                _tries(failed=True)
+            except datakey.Throttled as e:                  # past the free tries the wait is what the window shows
+                exc = e
+        self._end(self.stage, name, str(exc))
+        raise exc from None
+
+    def _end(self, stage, name, sentence):
+        """Done, audited once; nothing when the test already ended meanwhile (a push that ends after a code)."""
+        with _steps:
+            if self.stage != stage:
+                return
+            self.stage, self.result = "done", sentence
+        audit.log("test login", f"{name}, {sentence}")
 
 
 def pin_kind(a):
