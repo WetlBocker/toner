@@ -13,7 +13,7 @@ STORE = {}
 keyring.set_password = lambda s, u, p: STORE.__setitem__((s, u), p)
 keyring.get_password = lambda s, u: STORE.get((s, u))
 keyring.delete_password = lambda s, u: STORE.pop((s, u), None)
-import io, logging, threading, uuid
+import io, json, logging, threading, uuid
 from dataclasses import replace
 import ldap3
 from cryptography.hazmat.primitives import hashes, serialization
@@ -66,7 +66,7 @@ pinslot.tpm_windows = FakeTpm
 pinslot.best_kind = lambda: "chip"
 
 BASE = "DC=acme,DC=com"
-TECHS, ENGINEERS = "CN=Toner Techs," + BASE, "CN=Toner Engineers," + BASE
+TECHS, ENGINEERS, ADMINS = "CN=Toner Techs," + BASE, "CN=Toner Engineers," + BASE, "CN=Toner Admins," + BASE
 directory._STRATEGY = ldap3.MOCK_SYNC
 ldap = ldap3.Server("mock", get_info=ldap3.NONE)
 c = ldap3.Connection(ldap, client_strategy=ldap3.MOCK_SYNC)
@@ -76,18 +76,23 @@ for dn, attrs in [
         ("CN=Bob,OU=Users," + BASE, {"objectClass": "user", "userPrincipalName": "bob@acme.com", "sAMAccountName": "bob", "cn": "Bob",
                                      "objectGUID": G_BOB.bytes_le, "userAccountControl": 512, "userPassword": "pw-bob",
                                      "memberOf": [ENGINEERS]}),
+        ("CN=Ann,OU=Users," + BASE, {"objectClass": "user", "userPrincipalName": "ann@acme.com", "sAMAccountName": "ann", "cn": "Ann",
+                                     "objectGUID": uuid.uuid4().bytes_le, "userAccountControl": 512, "userPassword": "pw-ann",
+                                     "memberOf": [ADMINS]}),
+        (ADMINS, {"objectClass": "group", "cn": "Toner Admins"}),
         ("CN=svc," + BASE, {"objectClass": "user", "sAMAccountName": "svc", "cn": "svc", "objectGUID": uuid.uuid4().bytes_le,
                             "userAccountControl": 512, "userPassword": SVC}),
         (TECHS, {"objectClass": "group", "cn": "Toner Techs"}),
         (ENGINEERS, {"objectClass": "group", "cn": "Toner Engineers"})]:
     c.strategy.add_entry(dn, attrs)
 ldap.dit["bob@acme.com"] = ldap.dit["CN=Bob,OU=Users," + BASE]
+ldap.dit["ann@acme.com"] = ldap.dit["CN=Ann,OU=Users," + BASE]
 directory._who_am_i = lambda conn: "u:ACME\\" + conn.server.dit[conn.user]["sAMAccountName"][0].decode()
 directory._make_server = lambda cfg, host, *_: ldap
 
 ACME = {"id": "d1", "name": "ACME", "kind": "ad", "servers": ["dc1.acme.com"], "port": 636, "security": "ldaps", "ca_file": "",
         "base_dn": BASE, "netbios": "ACME", "suffixes": ["acme.com"], "service_dn": "CN=svc," + BASE,
-        "groups": {"Tech": [TECHS], "Engineer": [ENGINEERS]}, "duo": {"on": False, "host": "", "ikey": ""}}
+        "groups": {"Admin": [ADMINS], "Tech": [TECHS], "Engineer": [ENGINEERS]}, "duo": {"on": False, "host": "", "ikey": ""}}
 PW, PIN = "correct horse battery 42", "246813"
 REFUSED_ROW = "locked: the directory refused the account"
 
@@ -120,7 +125,7 @@ def reopen():
     b = S.begin("bob@acme.com", "pw-bob"); S.after_password(b); S.finish(b, PIN)
     put_svc()
 
-real_look_up, real_verified, real_state = directory.look_up, roles.verified, roles.state
+real_look_up, real_last_signed = directory.look_up, roles.last_signed
 
 def lookup_as(**kw):
     u = real_look_up(ACME, str(G_BOB), SVC)
@@ -154,21 +159,37 @@ for label, exc in (("unreachable", directory.Unreachable("x")), ("InsecureConfig
           and snap() == (1000.0, "Tech"))
 directory.look_up = real_look_up
 
-# ---------------------------------------------------------------- skipped: rules not verified
+# ---------------------------------------------------------------- the signed list, not the file (Ruling 30 superseded)
+good = datakey.path().read_text(encoding="utf-8")
 calls = []
-directory.look_up = lambda *a: calls.append(a)
-roles.state = lambda: "tampered"
-check("tampered rules: skipped, and no look_up", dircheck.run_once() == "skipped" and not calls)
-roles.state = real_state
-roles.verified = lambda: None
-check("no verified doc: skipped, and no look_up", dircheck.run_once() == "skipped" and not calls)
+def recording(cfg, guid, pw):
+    calls.append((cfg, guid, pw))
+    return real_look_up(cfg, guid, pw)
+directory.look_up = recording
+SIGNED = real_last_signed()["directories"]
+def edited(change):
+    d = json.loads(good); change(d); datakey.path().write_text(json.dumps(d), encoding="utf-8"); roles._invalidate()
+edited(lambda d: d["directories"][0].update(servers=["ldap.evil.example"]))
+check("a tampered file is still checked", roles.state() == "tampered" and dircheck.run_once() == "ok" and len(calls) == 1)
+check("...against the signed list", calls[-1][0] == SIGNED[0] and calls[-1][0]["servers"] == ["dc1.acme.com"], calls[-1][0])
+edited(lambda d: d["accounts"]["bob@acme.com"].update(guid=str(uuid.uuid4())))
+check("an edited guid in the file: the signed guid is looked up", dircheck.run_once() == "ok" and calls[-1][1] == str(G_BOB),
+      calls[-1][1])
+edited(lambda d: d["accounts"]["bob@acme.com"].update(directory="d9"))
+check("an edited directory id in the file: the signed one", dircheck.run_once() == "ok" and calls[-1][0] == SIGNED[0])
+check("the service password went only to the signed list", all(c == SIGNED[0] for c, _, pw in calls if pw == SVC) and calls)
+datakey.path().write_text(good, encoding="utf-8"); roles._invalidate()
+calls.clear()
+roles.last_signed = lambda: None
+check("nothing signed yet: skipped, and no look_up", dircheck.run_once() == "skipped" and not calls)
+roles.last_signed = real_last_signed
 directory.look_up = real_look_up
 
-# ---------------------------------------------------------------- the directory is gone from the verified list
-roles.verified = lambda: {**real_verified(), "directories": []}
+# ---------------------------------------------------------------- the directory is gone from the signed list
+roles.last_signed = lambda: {**real_last_signed(), "directories": []}
 check("directory removed: refused", dircheck.run_once() == "refused")
 check("...locked as refused, and audited", session.state() == "locked" and session.refused() and len(rows(REFUSED_ROW)) == 1)
-roles.verified = real_verified
+roles.last_signed = real_last_signed
 reopen()
 check("a new sign-in opens again", session.state() == "open" and not session.refused())
 
@@ -191,6 +212,27 @@ session.sign_out()
 check("signed out: skipped", dircheck.run_once() == "skipped")
 session.sign_in("Admin1", PW)
 check("a local session: skipped", dircheck.run_once() == "skipped" and session.state() == "open")
+session.sign_out()
+
+# ---------------------------------------------------------------- a demotion takes the role keys away at once
+from core import perms
+b = S.begin("ann@acme.com", "pw-ann"); S.after_password(b); S.choose_pin(b, PIN); S.approve(b, "Admin1", PW); S.finish(b, PIN)
+check("set-up: Ann, a directory Admin, holds the rules key", session.user() == "ann@acme.com" and roles.holds("rules"))
+ldap.dit["ann@acme.com"]["memberOf"] = [TECHS.encode()]
+told = []
+roles.on_change(lambda: told.append(threading.current_thread().name))
+check("demoted to Tech in the directory: the check is ok", dircheck.run_once() == "ok")
+check("...the rules key is let go at once", not roles.holds("rules") and not roles.holds("backups"))
+check("...and the window is told", told == [threading.current_thread().name], told)
+def raised(fn, exc):
+    try: fn()
+    except exc: return True
+    except Exception as e: print("   (raised", type(e).__name__, e, ")")
+    return False
+check("...approve then refuses", raised(lambda: roles.approve("bob@acme.com"), perms.Denied))
+check("...and so does set_directories", raised(lambda: roles.set_directories([ACME]), (perms.Denied, datakey.Locked)))
+told.clear()
+check("a check with the same role tells nobody", dircheck.run_once() == "ok" and told == [])
 session.sign_out()
 
 # ---------------------------------------------------------------- start / stop

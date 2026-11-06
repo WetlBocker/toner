@@ -185,6 +185,13 @@ st.select_page("Security"); app.processEvents()
 check("own demotion to Tech: Accounts and sign-in hidden, Security locked under the banner, SNMP gone (Tech's)",
       st.nav.isRowHidden(page_row(st, "Accounts and sign-in")) and sec in st.locked and not st.pages[sec].isEnabled()
       and st.role_lines[sec].isVisibleTo(st) and "SNMP" not in tool_names(w), (sorted(st.locked), tool_names(w)))
+import threading
+where = []
+w.apply_permissions = lambda: where.append(threading.current_thread() is threading.main_thread())
+t = threading.Thread(target=roles._notify); t.start(); t.join()   # the directory check tells roles' listeners on its thread
+check("a change told on another thread doesn't touch the window there", where == [], where)
+app.processEvents()
+check("...it reaches the window on its own thread", where == [True], where)
 w.close()
 session.sign_out(); session.sign_in("Admin2", PW)
 roles.set_role("Admin1", "Admin")

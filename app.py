@@ -117,6 +117,7 @@ def restart():
 
 class Main(QMainWindow):
     ai_state_changed = Signal(object, str)          # the Assistant's connection was checked (on another thread): connected?, the sentence
+    rules_changed = Signal()                        # roles told its listeners, maybe on the directory check's thread
 
     def __init__(self):
         super().__init__()
@@ -315,7 +316,9 @@ class Main(QMainWindow):
         from ui.lockscreen import LockScreen
         self.lock_screen = LockScreen(self)             # last, so it is above everything else in the window
         self.apply_permissions()
-        roles.on_change(lambda: (self.apply_permissions(), self.settings.apply_role()))    # e.g. an Admin changing their own role
+        self.rules_changed.connect(lambda: (self.apply_permissions(), self.settings.apply_role()),
+                                   Qt.ConnectionType.QueuedConnection)
+        roles.on_change(self.rules_changed.emit)        # e.g. an Admin changing their own role, or the directory demoting them
         session.on_change(lambda st: dircheck.stop() if st == "signed_out" else dircheck.start())   # the directory check runs while a session is open or locked
         if session.state() != "signed_out":
             dircheck.start()

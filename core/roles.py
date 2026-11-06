@@ -184,8 +184,8 @@ def _keep_held():
         _was = dict(_held)
 
 
-def _last_signed():
-    """What was last signed (parsed), or None when there is none or it can't be read."""
+def last_signed():
+    """What was last signed (parsed), as the encrypted database keeps it, or None when there is none or it can't be read."""
     rs = _stored_signed()
     try:
         last = json.loads(rs) if rs else None
@@ -334,7 +334,16 @@ def backups_private():
 
 
 def on_change(fn):
+    """`fn()` after the rules change. It may run on a worker thread (the directory check): one that touches widgets queues."""
     _callbacks.append(fn)
+
+
+def groups_changed():
+    """After the directory check wrote the signed-in account's groups role: let go of role keys it no longer allows, then tell
+    the listeners."""
+    with _lock:
+        _trim()
+    _notify()
 
 
 # ---------------------------------------------------------------- grants
@@ -473,7 +482,7 @@ def unlock():
         _audited = _upgrade_due = False
         name, box = datakey.signed_in_name(), datakey.box_private()
         _rules_key()                                    # read the settings before taking datakey's lock
-        last = _last_signed()
+        last = last_signed()
         doc = datakey.read()
         rec = doc["recovery"] if name is None else doc["accounts"][name]
         _own_box = box is not None and rec.get("box_pub") == _b64(_public("box", box))
@@ -553,7 +562,7 @@ def _rekey(doc):
     doc["rules_pub"] = _b64(pub)
     grants = doc.get("grants") if isinstance(doc.get("grants"), dict) else {}
     rg = doc.get("recovery_grants") if isinstance(doc.get("recovery_grants"), dict) else {}
-    last = _last_signed()
+    last = last_signed()
     if last:                                            # the box keys and backups_pub vouched for last, not the file's
         old = last["accounts"]                          # (an account it never had: "", which first use never vouches for)
         doc["attested"] = {n: (old[n] or {}).get("box_pub") if n in old else "" for n in doc["accounts"]}

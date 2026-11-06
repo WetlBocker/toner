@@ -1,5 +1,7 @@
 """The background check of a directory account: every 15 minutes, off the UI thread, ask the directory (as the service account)
-whether the signed-in person is still found, enabled and in a Toner group. If not, Toner locks and won't unlock until a new sign-in."""
+whether the signed-in person is still found, enabled and in a Toner group. If not, Toner locks and won't unlock until a new sign-in.
+The directory, the account's guid and its directory id come from what an Admin last signed (roles.last_signed), never from the
+file, so an edit can neither switch the check off nor send the service password anywhere else."""
 import logging
 import threading
 import time
@@ -26,12 +28,13 @@ def run_once():
     name = session.user()
     if session.kind() != "directory" or session.state() not in ("open", "locked") or name is None:
         return "skipped"
-    doc = roles.verified() if roles.state() == "ok" else None      # a hand-edited list never receives the service password
-    if doc is None:
+    last = roles.last_signed()          # what an Admin last signed, kept in the encrypted database: a file edit can't change it
+    if last is None:
         return "skipped"
-    rec = datakey.directory_account(name)
-    cfg = next((d for d in doc.get("directories") or [] if rec and d.get("id") == rec.get("directory")), None)
-    if cfg is None:
+    acct = (last.get("accounts") or {}).get(name) or {}
+    cfg = next((d for d in last.get("directories") or []
+                if isinstance(d, dict) and acct.get("directory") is not None and d.get("id") == acct["directory"]), None)
+    if cfg is None or not acct.get("guid"):
         _refuse()
         return "refused"
     try:
@@ -41,7 +44,7 @@ def run_once():
     if not password:
         return "offline"
     try:
-        user = directory.look_up(cfg, rec["guid"], password)
+        user = directory.look_up(cfg, acct["guid"], password)
     except directory.NotFound:
         user = None
     except Exception as e:     # unreachable, a refused service bind, a config problem: never a reason to lock anyone out
@@ -51,8 +54,11 @@ def run_once():
     if role is None:
         _refuse()
         return "refused"
+    before = (datakey.directory_account(name) or {}).get("groups_role")
     datakey.set_online(name, time.time())
     datakey.set_groups_role(name, role)
+    if role != before:
+        roles.groups_changed()          # a demotion lets go of role keys now, not at the next sign-in
     return "ok"
 
 
