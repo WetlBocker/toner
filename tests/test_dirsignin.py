@@ -181,6 +181,13 @@ check("classify a suffix no directory lists: local", S.classify("bob@other.com")
 check("classify a domain no directory has: local", S.classify("OTHER\\bob") == ("local", "OTHER\\bob"))
 check("classify a plain name: local", S.classify(" admin ") == ("local", "admin"))
 check("a local name can't begin a directory sign-in", raises(lambda: S.begin("admin", PW), ValueError) is not None)
+as_("Admin1", PW)
+datakey.add_local("ops@acme.com", PW2, role="Tech")
+datakey.add_local("ACME\\ops", PW2, role="Tech")
+session.sign_out()
+check("a local account named like a directory suffix stays local", S.classify("OPS@Acme.com") == ("local", "OPS@Acme.com"))
+check("...and one named like DOMAIN\\user", S.classify("acme\\OPS") == ("local", "acme\\OPS"))
+check("...other names with that suffix are still the directory's", S.classify("bob@acme.com")[0] == "directory")
 
 # ---------------------------------------------------------------- the first sign-in: password, Duo push, choose a PIN, approval, PIN
 check("set_directories remembers the list on this computer",

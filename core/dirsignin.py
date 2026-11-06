@@ -74,19 +74,24 @@ class Attempt:
         self.kind = None            # the PIN slot kind once the chip refused a new key (pin_kind)
 
 
-def _directories():
+def _keys_doc():
     try:
-        return datakey.read().get("directories") or []
+        return datakey.read()
     except FileNotFoundError:
-        return []
+        return {}
 
 
 def classify(login):
     """("directory", cfg, login) for DOMAIN\\user with a directory's NetBIOS name or user@suffix with a suffix a directory lists;
     else ("local", login). Read from netcheck.keys without the data key, so a match needs the list this computer remembers
-    (Paused otherwise)."""
+    (Paused otherwise). A local account with exactly that name (in any case, as datakey matches names) stays local."""
     login = (login or "").strip()
-    dirs, cfg = _directories(), None
+    doc, cfg = _keys_doc(), None
+    accounts = doc.get("accounts") or {}
+    local = datakey._find(doc, login) if login and accounts else None
+    if local is not None and accounts[local].get("kind") != "directory":
+        return "local", login
+    dirs = doc.get("directories") or []
     if "\\" in login:
         dom = login.split("\\", 1)[0].casefold()
         cfg = next((d for d in dirs if dom and str(d.get("netbios") or "").casefold() == dom), None)
