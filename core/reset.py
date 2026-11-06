@@ -3,8 +3,10 @@
 What goes: the whole data folder (core/paths.py data_dir(): the Global database and every organization's, the vault and its
 remembered key, logs, session logs, saved host keys, the agent certificate, downloaded updates, Ansible files, the Demarc queue and
 the lock files), what the system keeps for Toner outside it (the vault key in the keyring on Linux and macOS; the entries an older
-Toner left in Windows Credential Manager under the service name 'netcheck') and, on Linux, the autostart entry. Nothing on other
-systems is touched: Windows agents keep their tokens and Demarc keeps this Toner enrolled, and both stop working until enrolled again.
+Toner left in Windows Credential Manager under the service name 'netcheck'; directory sign-in's PIN keys on the security chip, its
+peppers and Duo secrets in the protected store, and this copy's entry in the remembered directories lists) and, on Linux, the
+autostart entry. Nothing on other systems is touched: Windows agents keep their tokens and Demarc keeps this Toner enrolled, and
+both stop working until enrolled again.
 
 The folder is renamed first, in one step. Windows refuses that while any file inside is open (another Toner window, the service, a
 program holding a log), so nothing is deleted until nothing holds a file; and if deleting what was renamed stops half-way, what is
@@ -128,6 +130,42 @@ def _delete_tree(folder_):
     return left
 
 
+def _directory_keys():
+    """What directory sign-in keeps for this copy outside its data folder, read while netcheck.keys is still there: each directory
+    account's PIN slot (a TPM key or a pepper in the protected store), each directory's id (its Duo secret) and the name this
+    copy's remembered directories list is kept under."""
+    from core import datakey, dirpin
+    try:
+        doc = datakey.read()
+        name = dirpin.store_name()
+    except (OSError, ValueError):                  # no keys file (sign-in never set up), or one that isn't Toner's
+        return [], [], None
+    slots = [a for a in (doc.get("accounts") or {}).values() if isinstance(a, dict) and a.get("kind") == "directory"]
+    ids = [d["id"] for d in doc.get("directories") or [] if isinstance(d, dict) and isinstance(d.get("id"), str)]
+    return slots, ids, name
+
+
+def _forget_directory_keys(slots, duo_ids, pin_name):
+    """Delete them (the folder is renamed, so nothing signs in meanwhile). Each is best effort: a key left behind opens nothing.
+    On Windows the peppers and Duo secrets are in netcheck.store, which goes with the folder (and asking the store for its path
+    now would make the folder again), so only the chip's keys are deleted there."""
+    from core import datakey, dirpin, osstore, quiet
+    windows = sys.platform == "win32"
+    for rec in slots:
+        if not windows or (rec.get("slot") or {}).get("kind") == "chip":
+            datakey.drop_slot(rec)                 # pinslot.remove, errors ignored
+    for i in [] if windows else duo_ids:
+        try:
+            osstore.delete("duo:" + i)
+        except Exception:
+            quiet.ignored()
+    if pin_name:
+        try:
+            dirpin.forget(pin_name)
+        except Exception:
+            quiet.ignored()
+
+
 # ---------------------------------------------------------------- the reset itself
 def wipe():
     """Delete it all. Raises ResetError with what to tell the person (deleted=True when the data is gone anyway); otherwise
@@ -139,6 +177,7 @@ def wipe():
         native = passvault.key_path().read_bytes().startswith(passvault.KEYRING_MARK)   # the vault key is in the system's keyring
     except OSError:
         native = False
+    slots, duo_ids, pin_name = _directory_keys()
     stop_background()
     close_logs(f)
     db._forget_settings()
@@ -152,6 +191,7 @@ def wipe():
     except OSError:
         raise ResetError(IN_USE.format(path=in_use(f) or f)) from None
     passvault.lock()                               # from here on nothing reads or writes a password
+    _forget_directory_keys(slots, duo_ids, pin_name)
     problems = []
     if native:
         try:

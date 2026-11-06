@@ -9,6 +9,7 @@
 
 Wrong directory passwords count on netcheck.keys' shared counter, as local passwords do. No password, PIN or Duo code is kept on
 an Attempt, logged or put in a message."""
+import getpass
 import threading
 import time
 
@@ -24,7 +25,18 @@ CANNOT_APPROVE = "That account can't approve sign-ins."
 FIRST = "This is your first sign-in to this copy of Toner. Ask an admin to sign in here to approve it."
 CHANGED = "Your access changed. Ask an admin to sign in here to approve it."
 PAUSED = "Directory sign-in is paused on this computer. An admin needs to sign in first."
-RECOVERY_APPROVER = "the recovery key"                     # {admin} in "sign-in approved" for the recovery key
+CA_CHANGED = "The directory's CA file changed. An admin needs to save the directory again."
+NAME_TAKEN = "That name already belongs to another account on this copy. Ask an admin."     # Choose a PIN only
+
+
+def _windows_user():
+    try:
+        return getpass.getuser()
+    except Exception:                                   # no user name in the environment or the system
+        return ""
+
+
+RECOVERY_APPROVER = f"recovery key ({_windows_user()})"   # {admin} in "sign-in approved" for the recovery key
 
 _steps = threading.Lock()       # a push finishing on a worker thread vs. the person moving on (a code, Forgot your PIN?)
 
@@ -39,6 +51,10 @@ class CannotApprove(Exception):
 
 class Paused(Exception):
     """The directories list isn't the one this computer last saw verified (core/dirpin.py)."""
+
+
+class CaChanged(Exception):
+    """The directory's CA file isn't the one signed into the list: an admin needs to save the directory again."""
 
 
 class Attempt:
@@ -143,6 +159,8 @@ def begin(login, password):
         user = directory.sign_in(a.cfg, a.login, password)
     except directory.Unreachable:
         return _offline(a)
+    except directory.CaChanged:
+        raise CaChanged(CA_CHANGED) from None
     except directory.BadCredentials:
         user = None
     if user is None or not user.enabled:

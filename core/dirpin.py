@@ -107,3 +107,23 @@ def changed(dirs):
             quiet.ignored()
         return False
     return stored != now
+
+
+def forget(name):
+    """Factory reset: this copy's remembered list (`name`, from store_name() while the keys file is still there) goes; on
+    Windows the pins file goes too once no other copy's entry is left in it (a corrupt one holds nothing anyone can read)."""
+    f = pins_file()
+    if f is None:
+        osstore.delete(name)
+        return
+    try:
+        data = json.loads(f.read_text("utf-8"))
+    except FileNotFoundError:
+        return
+    except ValueError:
+        data = {}
+    data.pop(name, None)
+    if data:
+        osstore._save(data, f)
+    else:
+        f.unlink(missing_ok=True)

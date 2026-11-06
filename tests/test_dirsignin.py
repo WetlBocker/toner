@@ -411,7 +411,9 @@ as_("Eng1", PW2)
 S.approve_recovery(a, recovery)
 check("the recovery key approves while Eng1 is signed in", a.stage == "pin" and session.user() == "Eng1"
       and datakey.signed_in_name() == "Eng1")
-check("...credited to the recovery key", rows("sign-in approved")[0]["detail"] == "bob@acme.com, approved by the recovery key")
+import getpass
+check("...credited to the recovery key and the Windows user", rows("sign-in approved")[0]["detail"]
+      == f"bob@acme.com, approved by recovery key ({getpass.getuser()})", rows("sign-in approved")[0]["detail"])
 session.sign_out()
 S.finish(a, PIN3)
 check("the new PIN opens on this computer", a.stage == "done" and session.user() == "bob@acme.com")
@@ -520,12 +522,13 @@ check("set_directories remembers the new list (with its CA file)", S.classify("b
 check("...and signs the CA file's SHA-256 into it", doc()["directories"][0].get("ca_sha256") == hashlib.sha256(b"one CA").hexdigest())
 with open(ca, "w") as f: f.write("another CA")
 binds.clear()
-check("changing only the CA file's contents: connect refuses it and nothing binds",
-      raises(lambda: S.begin("bob@acme.com", "pw-bob"), directory.InsecureConfig) is not None and binds == [], binds)
+e = raises(lambda: S.begin("bob@acme.com", "pw-bob"), S.CaChanged)
+check("changing only the CA file's contents: refused in the approved words, and nothing binds",
+      e is not None and str(e) == "The directory's CA file changed. An admin needs to save the directory again." and binds == [], (e, binds))
 as_("Admin1", PW)
 session.sign_out()
 check("...a local Admin's 'ok' sign-in doesn't make it work again",
-      raises(lambda: S.begin("bob@acme.com", "pw-bob"), directory.InsecureConfig) is not None and binds == [], binds)
+      raises(lambda: S.begin("bob@acme.com", "pw-bob"), S.CaChanged) is not None and binds == [], binds)
 as_("Admin1", PW)
 roles.set_directories([{**ACME, "ca_file": ca}])
 session.sign_out()

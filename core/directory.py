@@ -20,6 +20,7 @@ LDAP_GROUP = "(|(objectClass=groupOfNames)(objectClass=groupOfUniqueNames)(objec
 class Unreachable(Exception): pass
 class BadCredentials(Exception): pass
 class InsecureConfig(ValueError): pass
+class CaChanged(InsecureConfig): pass     # the CA file isn't the one signed into the list: an admin saves the directory again
 class Ambiguous(Exception): pass      # more than one group has that name
 class NotFound(Exception): pass       # no group has that name
 
@@ -56,7 +57,7 @@ def _ca(cfg):
     except OSError:
         raise InsecureConfig("the CA file can't be read") from None
     if hashlib.sha256(data).hexdigest() != cfg.get("ca_sha256"):
-        raise InsecureConfig("the CA file isn't the one signed")
+        raise CaChanged("the CA file isn't the one signed")
     return data.decode("ascii", "ignore") if b"-----BEGIN" in data else data     # ssl's cadata takes PEM as text, DER as bytes
 
 

@@ -67,6 +67,45 @@ reset._cred_enumerate = lambda: list(creds)
 reset._cred_delete = lambda t: creds.pop(t)
 reset._native_delete = lambda s, u: native.pop((s, u))
 
+# directory sign-in keeps things outside the data folder: each PIN slot's TPM key or pepper, each Duo secret, and this copy's
+# remembered directories list (dirpins.json under APPDATA on Windows, the keyring elsewhere); all fakes here
+import json
+from core import datakey, dirpin, osstore, pinslot
+OS = {}                                                                 # (name, file) -> value: the protected store
+osstore.available = lambda: True
+osstore.put = lambda n, v, file=None: OS.__setitem__((n, file), v)
+osstore.get = lambda n, file=None: OS.get((n, file))
+def os_delete(n):
+    if platforms.WINDOWS:
+        osstore._file()                                                 # as the real one: netcheck.store's path (which makes the folder)
+    OS.pop((n, None), None)
+osstore.delete = os_delete
+class FakeTpm:
+    keys = {}
+    @classmethod
+    def delete(cls, name): cls.keys.pop(name, None)
+pinslot.tpm_windows = FakeTpm
+CHIP, PEP = "a" * 32, "b" * 32
+def directory_keys():
+    """netcheck.keys with two directory accounts (a chip slot and a store slot) and a directory with Duo, as the file holds them."""
+    datakey.path().write_text(json.dumps({"format": "toner-keys", "directories": [{"id": "d1", "name": "ACME"}], "accounts": {
+        "Admin": {"kind": "local"},
+        "bob@acme.com": {"kind": "directory", "directory": "d1", "slot": {"kind": "chip"}, "slot_id": CHIP},
+        "eve@acme.com": {"kind": "directory", "directory": "d1", "slot": {"kind": "store"}, "slot_id": PEP}}}), encoding="utf-8")
+    FakeTpm.keys["Toner-" + CHIP] = "key"
+    OS[("pin:" + PEP, None)] = b"pepper"
+    OS[("duo:d1", None)] = b"duo secret"
+    OS[("duo:other", None)] = b"another copy's"
+    if dirpin.pins_file() is None:
+        OS[(dirpin.store_name(), None)] = b"fingerprint"
+    else:
+        dirpin.pins_file().parent.mkdir(parents=True, exist_ok=True)
+        dirpin.pins_file().write_text(json.dumps({dirpin.store_name(): "mine", "dirs:other": "theirs"}), encoding="utf-8")
+    if platforms.WINDOWS:
+        datakey.path().with_name("netcheck.store").write_text("{}", encoding="utf-8")
+directory_keys()
+KEYS = datakey.path()                                                   # (asked now: asking after the reset makes the folder again)
+
 print("== what counts as Toner's in Credential Manager")
 check("the service name and user@service entries, nothing else", reset.legacy_targets(["netcheck", "jw@netcheck", "someone@other", "netcheckx", "Toner vault"])
       == ["netcheck", "jw@netcheck"])
@@ -83,6 +122,9 @@ if platforms.WINDOWS:
     held.close()
     check("...and nothing was deleted", data.exists() and db.base_path().exists() and passvault.path().exists() and len(creds) == 4 and len(native) == 2)
     check("...the probe left no trace", not list(data.rglob("*.inuse")))
+    check("...and no PIN key, pepper, Duo secret or remembered list was touched", "Toner-" + CHIP in FakeTpm.keys
+          and ("pin:" + PEP, None) in OS and ("duo:d1", None) in OS
+          and (dirpin.pins_file() is None or dirpin.store_name() in json.loads(dirpin.pins_file().read_text(encoding="utf-8"))))
 
 print("== the reset")
 reset.wipe()
@@ -93,6 +135,23 @@ check("the vault key in the system keyring is gone, other programs' stay", nativ
 check("the schedule lock was let go", service._schedule_lock is None)
 check("the log file was closed", not any(getattr(h, "baseFilename", "").startswith(str(data)) for h in logging.getLogger("toner").handlers))
 check("the vault is locked in memory", not passvault.is_open())
+check("each directory account's PIN key on the chip is gone", FakeTpm.keys == {}, FakeTpm.keys)
+if platforms.WINDOWS:
+    check("...the pepper and the Duo secret were in netcheck.store, which went with the folder", ("pin:" + PEP, None) in OS
+          and not KEYS.with_name("netcheck.store").exists(), OS)
+else:
+    check("...and the pepper and the directory's Duo secret, but not what isn't this copy's", OS == {("duo:other", None): b"another copy's"}, OS)
+if dirpin.pins_file() is not None:
+    check("this copy's remembered list is gone from dirpins.json, another copy's stays",
+          json.loads(dirpin.pins_file().read_text(encoding="utf-8")) == {"dirs:other": "theirs"})
+check("netcheck.keys and netcheck.store went with the folder", not KEYS.exists() and not KEYS.with_name("netcheck.store").exists())
+if dirpin.pins_file() is not None:
+    print("== a dirpins.json holding only this copy's entry goes")
+    fill(); directory_keys()
+    native[(passvault.NATIVE_SERVICE, str(passvault.path()))] = "key"
+    dirpin.pins_file().write_text(json.dumps({dirpin.store_name(): "mine"}), encoding="utf-8")
+    reset.wipe()
+    check("the file is deleted", not dirpin.pins_file().exists())
 if platforms.LINUX:
     check("the autostart entry is gone", not autostart.enabled())
 check("nothing was written afterwards", not data.exists())
@@ -130,6 +189,8 @@ body = FR.text()
 check("the dialog says what goes, where, and what is not touched", body.startswith("This deletes everything Toner keeps on this computer and closes Toner:")
       and f"Data folder: {data}" in body and "Windows agents keep their tokens and Demarc keeps this Toner enrolled" in body
       and body.endswith("Back up the database and export saved passwords first if you may want them back."), body)
+check("the second bullet names the PIN keys and Duo secret", "• the vault with every saved password, token and SNMP community, every account, "
+      "netcheck.keys, and the PIN keys and Duo secret kept on this computer\n" in body, body)
 check("Linux names the autostart entry, Windows does not", ("the Start Toner when I sign in entry" in body) == platforms.LINUX)
 dlg.confirm.setText("reset"); check("lower case does not enable it", not dlg.ok.isEnabled())
 dlg.confirm.setText("RESET "); check("a stray space does not", not dlg.ok.isEnabled())

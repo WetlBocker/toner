@@ -27,7 +27,7 @@ CHOOSE_TEXT = "You'll use this PIN to unlock Toner on this computer."
 APPROVE_TITLE = "An admin needs to approve this"
 PIN_MISMATCH = "The two PINs don't match."
 # directory steps' errors whose text is already the approved sentence
-SAID = (datakey.WrongPassword, datakey.NameTaken, dirsignin.NotInGroup, dirsignin.Paused, dirsignin.CannotApprove,
+SAID = (datakey.WrongPassword, datakey.NameTaken, dirsignin.NotInGroup, dirsignin.Paused, dirsignin.CannotApprove, dirsignin.CaChanged,
         duo.Unavailable, duo.Denied, pinslot.WrongPin)
 
 
@@ -547,6 +547,8 @@ class SignInWindow(QDialog):
             return why
 
         def landed(why, e):
+            if isinstance(e, datakey.NameTaken):         # the directory's name for this person is another account's here
+                e, why = None, dirsignin.NAME_TAKEN
             if e is not None:
                 return self._fail(e, self.choose_error, self.choose_wait, self.pin1)
             if why is None:

@@ -215,6 +215,11 @@ for what, cfg in (("a CA file whose contents changed", dict(AD, ca_file=der, ca_
                   ("a CA file that can't be read", dict(AD, ca_file=os.path.join(SP, "ca-missing.pem"),
                                                         ca_sha256=hashlib.sha256(DER).hexdigest()))):
     check("%s is refused before any server is made" % what, connect_with(cfg) is not None and seen == [], seen)
+check("a CA file whose contents changed is CaChanged (an InsecureConfig), so the sign-in can say so",
+      raises(D.CaChanged, D._ca, dict(AD, ca_file=der, ca_sha256=hashlib.sha256(b"other").hexdigest())) is not None
+      and issubclass(D.CaChanged, D.InsecureConfig))
+check("...a CA file that can't be read is not CaChanged", raises(D.InsecureConfig, D._ca, dict(AD, ca_file=os.path.join(SP, "ca-missing.pem"),
+      ca_sha256="x")) is not None and raises(D.CaChanged, D._ca, dict(AD, ca_file=os.path.join(SP, "ca-missing.pem"), ca_sha256="x")) is None)
 
 print("== unreachable (no mock)")
 D._STRATEGY = ldap3.SYNC; D._make_server = REAL_MAKE_SERVER
