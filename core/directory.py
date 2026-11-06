@@ -307,9 +307,18 @@ def role_for(cfg, groups, dn=""):
     for role in ROLE_ORDER:
         if have & {_key(g) for g in cfg.get("groups", {}).get(role, [])}:
             return role
-        if me and any(me.endswith("," + _key(ou)) for ou in (cfg.get("ous") or {}).get(role, [])):
+        if me and any(_under(me, _key(ou)) for ou in (cfg.get("ous") or {}).get(role, [])):
             return role
     return None
+
+
+def _under(me, ou):
+    """True when DN `me` (folded) is below OU `ou` (folded): it ends in "," + ou and that comma isn't escaped (an even run of
+    backslashes before it): an entry named "x,OU=IT" in the parent is not under OU=IT."""
+    if not me.endswith("," + ou):
+        return False
+    head = me[:-len(ou) - 1]
+    return bool(head) and (len(head) - len(head.rstrip("\\"))) % 2 == 0
 
 
 def resolve_groups(cfg, names, service_password):
@@ -402,7 +411,7 @@ def discover(cfg, service_password):
         if cfg["kind"] == "ad":
             try:
                 name = _netbios(conn, base)
-            except Unreachable:
+            except (Unreachable, lx.LDAPException):
                 pass
         domain = _domain_dn(base)
         dns = ".".join(v for _, v, _ in parse_dn(domain)).lower() if domain else ""

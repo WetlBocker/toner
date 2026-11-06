@@ -729,6 +729,11 @@ def set_directories(directories, edited=None):
         directory.check_config(d)                       # TLS only (InsecureConfig is a ValueError)
         c = new[d["id"]] = json.loads(json.dumps(d))   # a copy, as the file will hold it (tuples as lists)
         c.pop("ca_sha256", None)
+        for field in ("groups", "ous"):                 # {role: [DN, ...]}; role_for would read a bare string as its letters
+            m = c.get(field, {})
+            if not isinstance(m, dict) or set(m) - set(ROLES) or not all(
+                    isinstance(v, list) and all(isinstance(x, str) for x in v) for v in m.values()):
+                raise ValueError(f"bad {field} map")
         was = signed.get(c["id"]) if c["id"] != edited else None
         if was is not None:
             if (c.get("ca_file") or "") != (was.get("ca_file") or ""):

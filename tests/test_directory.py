@@ -27,7 +27,8 @@ def raises(exc, fn, *a):
 D._STRATEGY = ldap3.MOCK_SYNC
 REAL_MAKE_SERVER = D._make_server
 BASE = "DC=corp,DC=example"
-G_ALICE, G_BOB, G_BOBBY, G_ZED = uuid.uuid4(), uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+# fixed GUIDs whose bytes are plain letters: the mock mismatches some random ones (bytes it reads as filter syntax)
+G_ALICE, G_BOB, G_BOBBY, G_ZED = (uuid.UUID(bytes_le=(c * 16).encode()) for c in "ABCD")
 
 def tree(entries):
     srv = ldap3.Server("mock", get_info=ldap3.NONE)
@@ -172,6 +173,12 @@ OU = dict(AD, groups={"Admin": [], "Engineer": [], "Tech": [TD]}, ous={"Admin": 
 check("an account in an OU below a mapped OU gets its role", got(lambda: D.role_for(OU, [], "CN=Bob,OU=Ops,OU=IT,DC=acme,DC=com")) == "Tech")
 check("...and one right in it", got(lambda: D.role_for(OU, [], "CN=Bob,OU=IT,DC=acme,DC=com")) == "Tech")
 check("an OU whose name only starts the same grants nothing", got(lambda: D.role_for(OU, [], "CN=Bob,OU=IT-Old,DC=acme,DC=com")) is None)
+check("an escaped comma is not a boundary: CN=x\\,OU=IT,... lives in DC=acme, not in OU=IT",
+      got(lambda: D.role_for(OU, [], r"CN=x\,OU=IT,DC=acme,DC=com")) is None)
+check("...an escaped backslash then a real comma is one", got(lambda: D.role_for(OU, [], r"CN=x\\,OU=IT,DC=acme,DC=com")) == "Tech")
+check("...three backslashes: escaped again", got(lambda: D.role_for(OU, [], r"CN=x\\\,OU=IT,DC=acme,DC=com")) is None)
+check("an object named to look like it is in Admins (it is in IT) isn't made Admin",
+      got(lambda: D.role_for(dict(OU, ous={"Admin": ["OU=Admins,OU=IT,DC=acme,DC=com"]}), [], r"CN=x\,OU=Admins,OU=IT,DC=acme,DC=com")) is None)
 check("the OU itself as a DN grants nothing", got(lambda: D.role_for(OU, [], "OU=IT,DC=acme,DC=com")) is None)
 check("ASCII case doesn't matter", got(lambda: D.role_for(OU, [], "cn=bob,ou=ops,ou=it,DC=ACME,dc=com")) == "Tech")
 check("...but Unicode case look-alikes grant nothing", got(lambda: D.role_for(dict(OU, ous={"Tech": ["OU=Kiosk,DC=x"]}), [], "CN=a,OU=Kiosk,DC=x")) is None)
@@ -210,6 +217,13 @@ check("discover on LDAP: no NetBIOS", d == {"base_dn": AB, "netbios": "", "suffi
 D._config_nc = lambda conn: None
 d = got(lambda: D.discover(AC, "svc-pw"))
 check("...a NetBIOS name that can't be read is empty (step 5 lets it be typed)", d == {"base_dn": AB, "netbios": "", "suffixes": ["acme.com"]}, d)
+def boom(*a, **k): raise ldap3.core.exceptions.LDAPOperationsErrorResult("read refused")
+D._config_nc = boom
+d = got(lambda: D.discover(AC, "svc-pw"))
+check("...also when its read fails with an LDAP error", d == {"base_dn": AB, "netbios": "", "suffixes": ["acme.com"]}, d)
+_b = D._base_dn; D._base_dn = boom
+check("an LDAP error reading the base DN is Unreachable", raises(D.Unreachable, lambda: D.discover(AC, "svc-pw")) is not None)
+D._base_dn = _b
 D._base_dn = lambda conn, ad: "OU=People,o=acme"
 d = got(lambda: D.discover(dict(AC, kind="ldap"), "svc-pw"))
 check("...a base DN with no DC= parts has no suffix", d == {"base_dn": "OU=People,o=acme", "netbios": "", "suffixes": []}, d)
@@ -238,6 +252,11 @@ for x, want in (("*", "\\2a"), ("IT)(ou=*", "IT\\29\\28ou=\\2a"), ("\\2a", "\\5c
     flts.clear(); got(lambda: D.tree(TC, "svc-pw", text=x))
     check("text %r is escaped, never widening the search" % x, flts == ["(&(objectClass=organizationalUnit)(ou=*%s*))" % want,
           "(&(objectClass=group)(cn=*%s*))" % want], flts)
+ldap3.Connection = _real
+class Refusing(ldap3.Connection):
+    def search(self, *a, **k): boom()
+ldap3.Connection = Refusing
+check("an LDAP error during tree is Unreachable", raises(D.Unreachable, lambda: D.tree(TC, "svc-pw")) is not None)
 ldap3.Connection = _real
 check("tree with a wrong service password is BadCredentials", raises(D.BadCredentials, lambda: D.tree(TC, "bad")) is not None)
 D._base_dn = _base

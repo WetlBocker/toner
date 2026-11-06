@@ -96,6 +96,12 @@ except Exception as e:
     err = e
 check("an OU map is accepted and signed", err is None and doc()["directories"][0].get("ous") == OUS and roles.state() == "ok"
       and signed_ok(), err)
+before = datakey.path().read_bytes()
+for label, bad_map in (("an unknown role", {"ous": {"Root": ["OU=IT,DC=acme,DC=com"]}}), ("a DN not in a list", {"ous": {"Admin": "OU=IT,DC=acme,DC=com"}}),
+                       ("a non-text DN", {"groups": {**ACME["groups"], "Admin": [1]}}), ("a list for the map", {"ous": ["OU=IT,DC=acme,DC=com"]}),
+                       ("an unknown group role", {"groups": {"Owner": [ADMINS]}})):
+    check(f"set_directories refuses {label}, writing nothing",
+          raises(lambda: roles.set_directories([{**ACME, **bad_map}]), ValueError) is not None and datakey.path().read_bytes() == before)
 from core import dirpin, dirsignin
 real_sign_in, real_changed = directory.sign_in, dirpin.changed
 dirpin.changed = lambda dirs: False                     # (this file's fake store keeps no remembered list)
