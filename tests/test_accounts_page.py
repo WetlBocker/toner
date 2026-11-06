@@ -277,7 +277,7 @@ check("no selection: Edit and Remove off", not page.edit_ident.isEnabled() and n
 page.idents.selectRow(1)
 menu = page._ident_menu(None)
 check("menu items, in order", [a.text() for a in menu.actions()] == ["Test login...", "Set up 2FA...", "Edit...", "Remove"], [a.text() for a in menu.actions()])
-check("Test login and Set up 2FA are off for now", not menu.actions()[0].isEnabled() and not menu.actions()[1].isEnabled())
+check("Test login is off for now, Set up 2FA is on", not menu.actions()[0].isEnabled() and menu.actions()[1].isEnabled())
 check("Edit and Remove are on", menu.actions()[2].isEnabled() and menu.actions()[3].isEnabled())
 edited = []
 A.IdentityWizard.exec = lambda self: edited.append(self.orig["name"]) or 0

@@ -10,6 +10,7 @@ from ui.identitywizard import IdentityWizard
 from ui.settings_base import Page, compact_row, note, spin
 from ui.setupdlg import RecoveryDialog, _CardDialog
 from ui.signinwindow import MISMATCH, error_label, field, primary, say
+from ui.twofadlg import TwoFactorDialog
 
 OWN_ACCOUNT = "You can't remove the account you're signed in with."
 ROLES_NOTE = "Admins can do everything. Tick what Engineers and Techs can do."
@@ -286,14 +287,15 @@ class AccountsPage(Page):
         self.remove_ident.setEnabled(on)
 
     def _ident_menu(self, pos):
-        """The right-click menu, not shown: Tasks 6 and 7 enable and wire `test_login` and `set_up_2fa`."""
+        """The right-click menu, not shown: Task 7 enables and wires `test_login`."""
         row = self.idents.rowAt(pos.y()) if pos is not None else -1
         if row >= 0:
             self.idents.selectRow(row)
         m = QMenu(self.idents)
         self.test_login, self.set_up_2fa = (m.addAction(t) for t in ("Test login...", "Set up 2FA..."))
         self.test_login.setEnabled(False)
-        self.set_up_2fa.setEnabled(False)
+        self.set_up_2fa.setEnabled(self._dir() is not None)
+        self.set_up_2fa.triggered.connect(self._set_up_2fa)
         m.addAction("Edit...", self._edit_ident).setEnabled(self.edit_ident.isEnabled())
         m.addAction("Remove", self._remove_ident).setEnabled(self.remove_ident.isEnabled())
         return m
@@ -305,6 +307,11 @@ class AccountsPage(Page):
     def _edit_ident(self):
         d = self._dir()
         if d is not None and IdentityWizard(self._dirs, d, self).exec():
+            self.refresh()
+
+    def _set_up_2fa(self):
+        d = self._dir()
+        if d is not None and TwoFactorDialog(self._dirs, d, self).exec():
             self.refresh()
 
     def _remove_ident(self):
