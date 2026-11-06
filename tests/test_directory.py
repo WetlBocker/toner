@@ -259,6 +259,8 @@ ldap3.Connection = Refusing
 check("an LDAP error during tree is Unreachable", raises(D.Unreachable, lambda: D.tree(TC, "svc-pw")) is not None)
 ldap3.Connection = _real
 check("tree with a wrong service password is BadCredentials", raises(D.BadCredentials, lambda: D.tree(TC, "bad")) is not None)
+check("has_entry: an entry that is there", got(lambda: D.has_entry(TC, "OU=IT," + AB, "svc-pw")) is True)
+check("...and one that isn't", got(lambda: D.has_entry(TC, "OU=Nope," + AB, "svc-pw")) is False)
 D._base_dn = _base
 
 print("== LDAP")

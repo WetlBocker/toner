@@ -448,6 +448,17 @@ def tree(cfg, service_password, cap=5000, text=""):
     return {k: sorted(v, key=str.lower)[:cap] for k, v in out.items()} | {"more": more}
 
 
+def has_entry(cfg, dn, service_password):
+    """True when the service account can read the entry `dn` (a Base DN typed after discovery is checked with it)."""
+    conn = connect(cfg, cfg["service_dn"], service_password)
+    try:
+        return bool(_search(conn, dn, "(objectClass=*)", ["objectClass"], ldap3.BASE))
+    except lx.LDAPException:
+        raise Unreachable("read failed") from None
+    finally:
+        conn.unbind()
+
+
 def test(cfg, service_password):
     conn = connect(cfg, cfg["service_dn"], service_password)
     try:

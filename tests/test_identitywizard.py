@@ -85,7 +85,7 @@ for dn, attrs in [
         ("OU=Two," + BASE, {"objectClass": "organizationalUnit", "ou": "Two"}),
         ("OU=Ops," + OU_IT, {"objectClass": "organizationalUnit", "ou": "Ops"}),
         ("OU=Lab," + BASE, {"objectClass": "organizationalUnit", "ou": "Lab"}),
-        (OU_ZETA, {"objectClass": "organizationalUnit", "ou": "Zeta"}),     # past a cap of 5: found only by a search
+        (OU_ZETA, {"objectClass": "organizationalUnit", "ou": "Zeta"}),     # 7 OUs: a cap of 5 leaves some to be searched for
         ("CN=Bob," + OU_USERS, {"objectClass": "user", "userPrincipalName": "bob@acme.com", "sAMAccountName": "bob", "cn": "Bob",
                                 "objectGUID": G_BOB, "userAccountControl": 512, "userPassword": "pw-bob"}),
         ("CN=svc," + BASE, {"objectClass": "user", "sAMAccountName": "svc", "cn": "svc", "objectGUID": G_SVC,
@@ -167,14 +167,25 @@ def to_connection(w, kind="Active Directory", servers="dc1.acme.com, dc2.acme.co
     w.security.setCurrentText(security); w.port.setValue(port)
     if ca:
         QFileDialog.getOpenFileName = staticmethod(lambda *a, **k: (ca, ""))
-        w.cert.setCurrentText("CA file...")
+        choose(w, "CA file...")
+
+def choose(w, text):
+    """Picks a Certificate item as a person does (activated fires even when it is already the current one)."""
+    i = w.cert.findText(text)
+    w.cert.setCurrentIndex(i); w.cert.activated.emit(i)
+
+PICKED = []                                 # the start path of each file picker opened
+def picker(path):
+    QFileDialog.getOpenFileName = staticmethod(lambda parent, caption="", start="", *a, **k: (PICKED.append(start), (path, ""))[1])
 
 def connect(w, **kw):
     to_connection(w, **kw)
     return nxt(w)
 
 def tick(w, which, dn, on=True):
-    item = w.lists[which].findItems(dn, Qt.MatchFlag.MatchExactly)[0]
+    found = w.lists[which].findItems(dn, Qt.MatchFlag.MatchExactly)
+    assert found, (dn, step(w), w.message.text(), rows(w, which))
+    item = found[0]
     item.setCheckState(Qt.CheckState.Checked if on else Qt.CheckState.Unchecked)
 
 def answers(fn):
@@ -246,12 +257,14 @@ w.back_btn.click(); w.servers.setText("127.0.0.1"); nxt(w); w.port.setValue(clos
 check("a closed port", nxt(w) == "Toner couldn't connect: cannot use 127.0.0.1" and step(w) == 2, w.message.text())
 directory._STRATEGY, directory._make_server = ldap3.MOCK_SYNC, (lambda cfg, host, *_: ldap)
 missing = os.path.join(SP, "no-such-ca.pem")
-QFileDialog.getOpenFileName = staticmethod(lambda *a, **k: (missing, ""))
+picker(missing)
 w.back_btn.click(); w.servers.setText("dc1.acme.com"); nxt(w); w.port.setValue(636)
-w.cert.setCurrentText("CA file...")
+choose(w, "CA file...")
 check("choosing a CA file shows its path", w.ca_path == missing and w.ca_label.text() == missing)
 check("a CA file that can't be read", nxt(w) == "Toner can't read that CA file." and step(w) == 2, w.message.text())
-w.cert.setCurrentText("System trust store")
+PICKED.clear(); choose(w, "CA file...")
+check("choosing CA file... again opens the picker again, at the file there is", PICKED == [missing], PICKED)
+choose(w, "System trust store")
 check("the system trust store again: no CA file", w.ca_path == "" and w.ca_label.text() == "")
 w.reject()
 
@@ -372,21 +385,21 @@ for path, text in ((ca, "one CA"), (ca2, "beta CA")):
     with open(path, "w") as f: f.write(text)
 def with_cert(path):
     def go(w):
-        QFileDialog.getOpenFileName = staticmethod(lambda *a, **k: (path, ""))
+        picker(path)
         nxt(w); nxt(w)
         seen["cert"], seen["path"] = w.cert.currentText(), w.ca_label.text()
-        if path:
-            w.cert.setCurrentText("System trust store"); w.cert.setCurrentText("CA file...")
-        else:
-            w.cert.setCurrentText("System trust store")
+        choose(w, "CA file..." if path else "System trust store")
         said["msg"] = nxt(w)
         if step(w) == 3:
             nxt(w); w.save_btn.click(); settle(w)
     return go
 def test_only(w):
+    picker("")                              # (a picker opened is cancelled)
+    PICKED.clear()
     nxt(w); nxt(w)
     seen["cert"], seen["path"] = w.cert.currentText(), w.ca_label.text()
     said["msg"] = nxt(w)
+    seen["step"] = step(w)
 IW.IdentityWizard.exec = answers(with_cert(ca))
 page.idents.selectRow(0); page.edit_ident.click()
 signed_a = doc()["directories"][0].get("ca_sha256")
@@ -395,7 +408,8 @@ with open(ca, "w") as f: f.write("another CA")
 IW.IdentityWizard.exec = answers(test_only)
 page.idents.selectRow(0); page.edit_ident.click()
 check("Edit shows the CA file", seen["cert"] == "CA file..." and seen["path"] == ca, seen)
-check("the CA file changed since: step 3 says so and stays", said["msg"] == "The directory's CA file changed. An admin needs to save the directory again.", said)
+check("the CA file changed since: step 3 says so", said["msg"] == "The directory's CA file changed. An admin needs to save the directory again.", said)
+check("...and opens the file picker at the stored path; cancelled, it stays on step 3", PICKED == [ca] and seen.get("step") == 2, (PICKED, seen))
 e = None
 session.sign_out()
 try: S.begin("bob@acme.com", "pw-bob")
@@ -410,9 +424,17 @@ check("Beta added with its own CA file; ACME's hash is the one signed before", [
       and doc()["directories"][0]["ca_sha256"] == signed_a and doc()["directories"][1].get("ca_file") == ca2, said)
 signed_b = doc()["directories"][1]["ca_sha256"]
 with open(ca2, "w") as f: f.write("beta CA, changed")
-IW.IdentityWizard.exec = answers(with_cert(ca))
+def repick(w):
+    picker(ca)
+    PICKED.clear()
+    nxt(w); nxt(w)
+    said["msg"] = nxt(w)                    # CA_CHANGED, the picker, the file chosen again, connected
+    if step(w) == 3:
+        nxt(w); w.save_btn.click(); settle(w)
+IW.IdentityWizard.exec = answers(repick)
 page.idents.selectRow(0); page.edit_ident.click()
-check("choosing the CA file again and saving signs it anew", said["msg"] == "Connected. Choose who can sign in."
+check("choosing the file in the picker step 3 opened, then Save, signs it anew", PICKED == [ca]
+      and said["msg"] == "Connected. Choose who can sign in."
       and doc()["directories"][0]["ca_sha256"] not in (None, signed_a), said)
 check("...and only this directory is re-hashed", doc()["directories"][1]["ca_sha256"] == signed_b)
 IW.IdentityWizard.exec = answers(test_only)
@@ -519,6 +541,91 @@ check("a step 3 that fails turns the form on again", w2.message.text() == "Toner
 w2.reject()
 QMessageBox.exec = answer("Remove"); page.refresh(); page.idents.selectRow(0); page.remove_ident.click(); QMessageBox.exec = real_exec
 
+print("== a failed Save turns the form on again")
+def to_roles(w, **kw):
+    connect(w, **kw); tick(w, "groups", ADMINS); nxt(w)
+form_on = lambda w: w.stack.isEnabled() and w.save_btn.isEnabled() and w.back_btn.isEnabled()
+directory._config_nc = lambda conn: None
+w = wizard([], None); to_roles(w)
+w.save_btn.click(); settle(w)
+check("a NetBIOS read that fails: said, the form on, nothing written", w.message.text() == "Toner couldn't connect: no NetBIOS name found"
+      and form_on(w) and doc()["directories"] == [] and step(w) == 4, w.message.text())
+w.reject()
+directory._config_nc = lambda conn: "CN=Configuration," + BASE
+gone = os.path.join(SP, "gone-ca.pem")
+with open(gone, "w") as f: f.write("a CA")
+w = wizard([], None); to_roles(w, ca=gone)
+os.remove(gone)
+w.save_btn.click(); settle(w)
+check("a CA file that can't be read by Save", w.message.text() == "Toner can't read that CA file." and form_on(w)
+      and doc()["directories"] == [], w.message.text())
+w.reject()
+
+print("== a Base DN changed on step 5 is read before Save (Ruling R9)")
+w = wizard([], None); to_roles(w)
+w.base_dn.setText("OU=Nope," + BASE)
+w.save_btn.click(); settle(w)
+check("one that isn't there: refused, nothing written", w.message.text() == "Toner couldn't connect: no base DN found" and form_on(w)
+      and doc()["directories"] == [], w.message.text())
+w.base_dn.setText(OU_IT)
+w.save_btn.click(); settle(w)
+check("one that is: saved", w.result() and [x["base_dn"] for x in doc()["directories"]] == [OU_IT], w.message.text())
+roles.set_directories([])
+
+print("== step 3 again, to another server (Ruling R9)")
+real_tree = directory.tree
+w = wizard([], None)
+connect(w, servers="dc1.acme.com")
+tick(w, "ous", OU_IT); tick(w, "ous", OU_USERS); nxt(w)
+w.name.setText("Typed"); w.netbios.setText("TYPED")
+directory.tree = lambda cfg, pw, cap=5000, text="": dict(real_tree(cfg, pw, cap, text), ous=[d for d in real_tree(cfg, pw, cap, text)["ous"] if d != OU_USERS])
+w.back_btn.click(); w.back_btn.click(); w.back_btn.click()
+w.servers.setText("dc9.acme.com"); nxt(w)
+check("...the settings are read anew", nxt(w) == "Connected. Choose who can sign in." and (w.name.text(), w.netbios.text()) == ("acme.com", "ACME"),
+      (w.name.text(), w.netbios.text()))
+check("...a tick the new tree lacks is dropped, the others kept", ticked(w, "ous") == [OU_IT] and OU_USERS not in rows(w, "ous"), ticked(w, "ous"))
+directory.tree = real_tree
+w.back_btn.click(); w.name.setText("Typed")
+nxt(w)
+check("the same server again: what was typed stays", w.name.text() == "Typed" and ticked(w, "ous") == [OU_IT])
+w.reject()
+
+print("== a search error that lands after step 4 is left (Ruling R9)")
+IW.CAP = 5
+def boom_tree(cfg, pw, cap=5000, text=""):
+    if text == "boom":
+        time.sleep(0.6)
+        raise directory.Unreachable("read failed")
+    return real_tree(cfg, pw, cap, text)
+directory.tree = boom_tree
+w = wizard([], None); connect(w); tick(w, "ous", rows(w, "ous")[0])          # (which 5 load depends on the mock's order)
+w.filters["ous"].setText("boom"); settle(w)
+check("on step 4 it is said", pump(lambda: w.message.text() == "Toner couldn't connect: read failed", 3), w.message.text())
+w.filters["ous"].setText(""); w.filters["ous"].setText("boom")
+pump(lambda: bool(w._jobs), 3)
+w.next_btn.click(); settle(w)
+check("...on step 5 it is ignored", step(w) == 4 and w.message.text() == "", w.message.text())
+w.reject()
+directory.tree = real_tree
+
+print("== Edit of a capped directory keeps what lies past the cap")
+CAPPED = {"id": "capped1", "name": "ACME", "kind": "ad", "servers": ["dc1.acme.com"], "port": 636, "security": "ldaps", "ca_file": "",
+          "base_dn": BASE, "netbios": "ACME", "suffixes": ["acme.com"], "service_dn": "CN=svc," + BASE,
+          "groups": {"Admin": [], "Engineer": [ADMINS], "Tech": []}, "ous": {"Admin": [OU_ZETA], "Engineer": [], "Tech": []},
+          "duo": {"on": False, "host": "", "ikey": ""}}
+roles.set_directories([CAPPED])
+passvault.put("service:directory-capped1", SVC)
+d = doc()["directories"][0]
+w = wizard([d], d)
+nxt(w); nxt(w); nxt(w)
+check("a saved OU past the cap comes back ticked", w.more and OU_ZETA in rows(w, "ous") and ticked(w, "ous") == [OU_ZETA]
+      and ticked(w, "groups") == [ADMINS], (rows(w, "ous"), ticked(w, "ous")))
+nxt(w); w.save_btn.click(); settle(w)
+d = doc()["directories"][0]
+check("...and is saved unchanged", w.result() and d["ous"] == CAPPED["ous"] and d["groups"] == CAPPED["groups"], d)
+roles.set_directories([])
+IW.CAP = 5000
+
 print("== 3000 OUs (Review Focus 1)")
 real_tree = directory.tree
 MANY = ["OU=Site-%04d,%s" % (i, BASE) for i in range(3000)]
@@ -547,15 +654,18 @@ def spy_tree(cfg, pw, cap=5000, text=""):
 directory.tree = spy_tree
 w = wizard([], None)
 connect(w)
-check("a capped list: 5 OUs, Zeta not among them", len(rows(w, "ous")) == 5 and OU_ZETA not in rows(w, "ous") and w.more, rows(w, "ous"))
-tick(w, "ous", OU_IT)
+# which 5 of the 7 OUs load depends on the order the mock sends them; one not loaded (a name no other DN contains) is searched for
+lost = next(n for n in ("Zeta", "Lab", "One", "Two", "Users") if "OU=%s,%s" % (n, BASE) not in rows(w, "ous"))
+LOST, first = "OU=%s,%s" % (lost, BASE), rows(w, "ous")[0]
+check("a capped list: 5 OUs", len(rows(w, "ous")) == 5 and w.more, rows(w, "ous"))
+tick(w, "ous", first)
 asked_for.clear()
-w.filters["ous"].setText("Zeta")
+w.filters["ous"].setText(lost)
 check("typing narrows at once and doesn't search yet", shown(w, "ous") == [] and not w._jobs and asked_for == [])
-check("...after the pause it searches on a Job", pump(lambda: bool(asked_for), 3) and asked_for[0][0] == "Zeta"
+check("...after the pause it searches on a Job", pump(lambda: bool(asked_for), 3) and asked_for[0][0] == lost
       and asked_for[0][1] != threading.get_ident(), asked_for)
 settle(w)
-check("...and adds the match, keeping the ticks", OU_ZETA in rows(w, "ous") and shown(w, "ous") == [OU_ZETA] and ticked(w, "ous") == [OU_IT],
+check("...and adds the match, keeping the ticks", LOST in rows(w, "ous") and shown(w, "ous") == [LOST] and ticked(w, "ous") == [first],
       rows(w, "ous"))
 asked_for.clear()
 w.filters["ous"].setText("slow")

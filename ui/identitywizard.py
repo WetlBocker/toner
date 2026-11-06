@@ -60,6 +60,7 @@ class IdentityWizard(QDialog):
         self.ca_path, self.ca_picked = saved.get("ca_file") or "", False
         self._jobs, self._closed = set(), False
         self._live, self.more, self._loaded = None, False, False     # step 3's (cfg, service password) for the searches
+        self._target = None                                          # (servers, base DN) step 3 last connected to
         self._asked = {k: 0 for k, _ in LISTS}                       # a search's answer counts only while this is unchanged
         self._role = {}                                              # DN key -> role chosen (Edit: as saved; the highest wins)
         self._saved_ticks = {}
@@ -98,7 +99,7 @@ class IdentityWizard(QDialog):
         self.cert, self.ca_label = QComboBox(), note(self.ca_path)
         self.cert.addItems(["System trust store", "CA file..."])
         self.cert.setCurrentIndex(1 if self.ca_path else 0)
-        self.cert.currentIndexChanged.connect(self._cert)
+        self.cert.activated.connect(self._cert)           # (not currentIndexChanged: choosing CA file... again re-opens the picker)
         _row(form, "Certificate", self.cert, self.ca_label)
 
         page = QWidget()                                             # 4: who can sign in
@@ -200,19 +201,24 @@ class IdentityWizard(QDialog):
 
     def _cert(self, i):
         if i == 1:
-            path, _ = QFileDialog.getOpenFileName(self, "")
-            if not path and not self.ca_path:
-                self.cert.blockSignals(True)
+            self._pick()
+            if not self.ca_path:
                 self.cert.setCurrentIndex(0)
-                self.cert.blockSignals(False)
-            self.ca_picked = self.ca_picked or bool(path)
-            self.ca_path = path or self.ca_path
         else:
             self.ca_path = ""
-        self.ca_label.setText(self.ca_path)
+            self.ca_label.setText("")
+
+    def _pick(self):
+        """The file picker, starting at the CA file there is. A file chosen here is trusted: step 3 hashes it anew. True if chosen."""
+        path, _ = QFileDialog.getOpenFileName(self, "", self.ca_path)
+        if path:
+            self.ca_picked, self.ca_path = True, path
+            self.ca_label.setText(path)
+        return bool(path)
 
     def _connect(self):
         cfg, pw = self._cfg(), self._password()
+        refill = self._loaded and self._target is not None and self._servers(cfg) != self._target[0]   # another server: read anew
         # Edit, with the CA file not chosen again here: it must still be the one signed (else CA_CHANGED); choosing it is trusting it
         signed = self.orig.get("ca_sha256") if self.orig and not self.ca_picked else None
         got = {}                                             # (a dict sent through the Job's signal aborts PySide6)
@@ -221,23 +227,35 @@ class IdentityWizard(QDialog):
             directory.check_config(cfg)
             c = with_ca(cfg, signed)
             info = directory.discover(c, pw)
-            c["base_dn"] = c["base_dn"] or info["base_dn"]
+            c["base_dn"] = (not refill and c["base_dn"]) or info["base_dn"]
             got.update(info=info, tree=directory.tree(c, pw, cap=CAP), cfg=c)
-        self._run(run, lambda _r, e: self._connected(got, pw, e))
+        self._run(run, lambda _r, e: self._connected(got, pw, refill, e))
 
-    def _connected(self, got, pw, error):
+    @staticmethod
+    def _servers(cfg):
+        return tuple(directory._key(s) for s in cfg["servers"])
+
+    def _connected(self, got, pw, refill, error):
         if error is not None:
-            return self._say(words(error))
-        info, found = got["info"], got["tree"]
-        self._live, self.more = (got["cfg"], pw), found["more"]
+            self._say(words(error))
+            if isinstance(error, directory.CaChanged) and self._pick():     # the file chosen again is the one to trust
+                self._connect()
+            return
+        info, found, c = got["info"], got["tree"], got["cfg"]
+        target = (self._servers(c), directory._key(c["base_dn"]))
+        moved = self._loaded and target != self._target
+        self._live, self.more, self._target = (c, pw), found["more"], target
         for k in self._asked:                                # a search sent before this connection is stale
             self._asked[k] += 1
-        for box, value in ((self.name, (info["suffixes"] or [""])[0]), (self.base_dn, info["base_dn"]),
+        for box, value in ((self.name, (info["suffixes"] or [""])[0]), (self.base_dn, c["base_dn"]),
                            (self.netbios, info["netbios"]), (self.suffixes, ", ".join(info["suffixes"]))):
-            if not box.text().strip():
+            if refill or not box.text().strip():
                 box.setText(value)
         for kind, _ in LISTS:
             keep = self._ticked(kind) if self._loaded else self._saved_ticks[kind]
+            if moved:                                        # another server or base: only what it has (and, on Edit, what was saved)
+                there = {directory._key(dn) for dn in found[kind]}
+                keep = [dn for dn in keep if directory._key(dn) in there] + self._saved_ticks[kind]
             self.lists[kind].clear()
             self._add(kind, found[kind] + keep, {directory._key(dn) for dn in keep})
         self._loaded = True
@@ -293,7 +311,9 @@ class IdentityWizard(QDialog):
         if n != self._asked[kind]:                           # typed again since: a newer search answers
             return
         if error is not None:
-            return self._say(words(error))
+            if self.stack.currentIndex() == 3:               # an error landing after step 4 was left is no longer about anything
+                self._say(words(error))
+            return
         self._add(kind, got[kind])
 
     # ---------------------------------------------------------------- step 5
@@ -340,9 +360,13 @@ class IdentityWizard(QDialog):
             return self._say(TAKEN.format(value=taken))
         self._say("")
         got = []
+        moved = directory._key(cfg["base_dn"]) != directory._key(self._live[0]["base_dn"])
 
         def look():
-            got.extend(_netbios(with_ca(dict(cfg)), pw))     # a blank AD NetBIOS name is read; a failed read refuses (Ruling R4)
+            c = with_ca(dict(cfg))
+            if moved and not directory.has_entry(c, c["base_dn"], pw):     # a Base DN typed after step 3 must be there
+                raise directory.Unreachable("no base DN found")
+            got.extend(_netbios(c, pw))                      # a blank AD NetBIOS name is read; a failed read refuses (Ruling R4)
         self._run(look, lambda _r, e: self._saved(cfg, got, typed, e))
 
     def _saved(self, cfg, got, typed, error):
