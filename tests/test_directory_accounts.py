@@ -38,7 +38,7 @@ def raises(fn, exc):
     return None
 
 PW, PW2 = "correct horse battery 42", "engineers have long passwords 7"
-PIN, PIN2 = "a long pin 4321", "another long pin 99"
+PIN, PIN2, PIN3 = "a long pin 4321", "another long pin 99", "a third long pin 5"
 ADMINS, ENGINEERS, TECHS = "CN=Toner Admins,DC=acme,DC=com", "CN=Toner Engineers,DC=acme,DC=com", "CN=Toner Techs,DC=acme,DC=com"
 ACME = {"id": "d1", "name": "ACME", "kind": "ad", "servers": ["dc1.acme.com"], "port": 636, "security": "ldaps", "ca_file": "",
         "base_dn": "DC=acme,DC=com", "netbios": "ACME", "suffixes": ["acme.com"], "service_dn": "CN=svc,DC=acme,DC=com",
@@ -92,26 +92,34 @@ check("an unknown field (a secret) is refused", raises(lambda: roles.set_directo
 session.sign_out()
 
 # ---------------------------------------------------------------- a first sign-in starts an unapproved account (key closed)
-bob_slot = pinslot.new("pin", BOB.guid, PIN)
-datakey.start_directory_account(BOB, "d1", bob_slot)
+bob_first = pinslot.new("store", datakey.new_slot_id(), PIN)
+datakey.start_directory_account(BOB, "d1", bob_first)
 rec = datakey.directory_account("BOB@acme.com")
 check("started: an unapproved directory record", rec is not None and rec["kind"] == "directory" and rec["directory"] == "d1"
       and rec["guid"] == BOB.guid and rec["display"] == "Bob Jones" and rec["sealed"] is None and rec["approved_role"] is None
-      and rec["groups_role"] == "Tech" and rec["slot_kind"] == "pin" and rec["slot"] == bob_slot.rec and rec["box_pub"], rec)
+      and rec["groups_role"] == "Tech" and rec["slot_kind"] == "store" and rec["slot"] == bob_first.rec
+      and rec["slot_id"] == bob_first._slot_id and rec["box_pub"], rec)
 check("needs_approval: first", roles.needs_approval("bob@acme.com") == "first")
 check("directory_account of a local name: None", datakey.directory_account("Admin1") is None)
 check("a start under a local account's name is refused",
       raises(lambda: datakey.start_directory_account(directory.User("g9", "admin1", "x", (TECHS,), True), "d1",
-                                                      pinslot.new("pin", "g9", PIN)), ValueError) is not None)
+                                                      pinslot.new("pin", datakey.new_slot_id(), PIN)), ValueError) is not None)
 check("a start under another guid's name is refused",
       raises(lambda: datakey.start_directory_account(directory.User("g8", "bob@acme.com", "x", (TECHS,), True), "d1",
-                                                      pinslot.new("pin", "g8", PIN)), ValueError) is not None)
+                                                      pinslot.new("pin", datakey.new_slot_id(), PIN)), ValueError) is not None)
 check("a start for an unknown directory is refused",
-      raises(lambda: datakey.start_directory_account(BOB, "nope", bob_slot), ValueError) is not None)
-check("a start with a slot made for another id is refused",
-      raises(lambda: datakey.start_directory_account(BOB, "d1", pinslot.new("pin", "other", PIN)), ValueError) is not None)
+      raises(lambda: datakey.start_directory_account(BOB, "nope", pinslot.new("pin", datakey.new_slot_id(), PIN)), ValueError) is not None)
+check("a start with a slot id that isn't random (the guid) is refused",
+      raises(lambda: datakey.start_directory_account(BOB, "d1", pinslot.new("pin", BOB.guid, PIN)), ValueError) is not None)
+check("a start with a slot id already in use is refused",
+      raises(lambda: datakey.start_directory_account(BOB, "d1", pinslot.new("pin", bob_first._slot_id, PIN)), ValueError) is not None)
+bob_slot = pinslot.new("store", datakey.new_slot_id(), PIN)
 datakey.start_directory_account(BOB, "d1", bob_slot)  # the same person starting again replaces the unapproved record
-check("the same guid may start again while unapproved", datakey.directory_account("bob@acme.com")["sealed"] is None)
+check("the same guid may start again while unapproved, under a new slot id",
+      datakey.directory_account("bob@acme.com")["sealed"] is None and bob_slot._slot_id != bob_first._slot_id
+      and datakey.directory_account("bob@acme.com")["slot_id"] == bob_slot._slot_id)
+check("...the replaced record's slot is removed", osstore.get("pin:" + bob_first._slot_id) is None
+      and osstore.get("pin:" + bob_slot._slot_id) is not None)
 check("the PIN can't open an unapproved account", raises(lambda: datakey.open_with_pin("bob@acme.com", PIN), pinslot.WrongPin) is not None)
 
 # the password calls treat a directory account as a wrong password, never a KeyError
@@ -131,8 +139,12 @@ check("an unapproved account leaves the rules ok", roles.state() == "ok", roles.
 check("set_password on a directory account fails as a wrong password",
       raises(lambda: datakey.set_password("bob@acme.com", "a brand new password 12"), datakey.WrongPassword) is not None)
 as_("Admin1", PW)
-check("approving with another slot is refused", raises(lambda: roles.approve("bob@acme.com", pinslot.new("pin", BOB.guid, PIN2)),
-                                                        ValueError) is not None)
+check("a first approval with another slot is refused",
+      raises(lambda: roles.approve("bob@acme.com", pinslot.new("pin", datakey.new_slot_id(), PIN2)), ValueError) is not None)
+check("a first approval with no slot is refused", raises(lambda: roles.approve("bob@acme.com"), ValueError) is not None)
+before = datakey.path().read_bytes()
+check("set_role refuses a directory account, writing nothing", raises(lambda: roles.set_role("bob@acme.com", "Admin"), ValueError)
+      is not None and datakey.path().read_bytes() == before)
 roles.approve("bob@acme.com", bob_slot)
 r = rows("sign-in approved")
 check("approved: audited naming both", len(r) == 1 and r[0]["detail"] == "bob@acme.com, approved by Admin1", r)
@@ -169,7 +181,7 @@ check("...and Bob holds the backups key", roles.holds("backups") and not roles.h
 session.sign_out()
 
 # ---------------------------------------------------------------- the recovery key can approve
-carol_slot = pinslot.new("store", CAROL.guid, PIN2)
+carol_slot = pinslot.new("store", datakey.new_slot_id(), PIN2)
 datakey.start_directory_account(CAROL, "d1", carol_slot)
 as_(None)
 roles.approve("carol@acme.com", carol_slot)
@@ -179,9 +191,28 @@ pin_in("carol@acme.com", PIN2)
 check("Carol opens with her PIN and holds the backups key", bytes(datakey._key) == data_key and roles.holds("backups"))
 session.sign_out()
 
+# ---------------------------------------------------------------- a new PIN (or another computer): the approved record re-sealed
+as_("Admin1", PW)
+old_box = doc()["accounts"]["bob@acme.com"]["box_pub"]
+check("a re-seal under the slot already in use is refused", raises(lambda: roles.approve("bob@acme.com", bob_slot), ValueError) is not None)
+bob_new = pinslot.new("store", datakey.new_slot_id(), PIN3)
+roles.approve("bob@acme.com", bob_new)
+rec = datakey.directory_account("bob@acme.com")
+check("re-sealed: the new slot and a new box key, vouched for; rules ok", rec["slot_id"] == bob_new._slot_id and rec["slot"] == bob_new.rec
+      and rec["box_pub"] != old_box and doc()["attested"]["bob@acme.com"] == rec["box_pub"] and roles.state() == "ok" and signed_ok())
+check("...the old slot is gone from this computer", osstore.get("pin:" + bob_slot._slot_id) is None
+      and osstore.get("pin:" + bob_new._slot_id) is not None)
+session.sign_out()
+check("...the old PIN is refused", raises(lambda: datakey.open_with_pin("bob@acme.com", PIN), pinslot.WrongPin) is not None)
+pin_in("bob@acme.com", PIN3)
+check("...the new PIN opens the same data key; grants follow the approved role (Engineer)", bytes(datakey._key) == data_key
+      and roles.holds("backups") and not roles.holds("rules") and roles.state() == "ok")
+session.sign_out()
+check("no slot id is ever reused", len({bob_first._slot_id, bob_slot._slot_id, bob_new._slot_id, carol_slot._slot_id}) == 4)
+
 # ---------------------------------------------------------------- groups_role edited to Admin: permissions only, never keys
 d = doc(); d["accounts"]["bob@acme.com"]["groups_role"] = "Admin"; put(d)
-pin_in("bob@acme.com", PIN)
+pin_in("bob@acme.com", PIN3)
 check("groups_role edited to Admin: is_admin this session, rules still ok", perms.is_admin() and roles.state() == "ok")
 check("...but no rules key", not roles.holds("rules"))
 as_("Admin1", PW)
@@ -227,28 +258,29 @@ roles._rules_key = real_rk
 
 # ---------------------------------------------------------------- removing an account, changing and removing a directory
 DAVE = directory.User("6f1c2a4e-0000-4000-8000-000000000003", "dave@acme.com", "Dave", (TECHS,), True)
-datakey.start_directory_account(DAVE, "d1", pinslot.new("store", DAVE.guid, PIN))
-check("dave's pepper is here", osstore.get("pin:" + DAVE.guid) is not None)
+dave_slot = pinslot.new("store", datakey.new_slot_id(), PIN)
+datakey.start_directory_account(DAVE, "d1", dave_slot)
+check("dave's pepper is here", osstore.get("pin:" + dave_slot._slot_id) is not None)
 datakey.remove("dave@acme.com")
 check("removing a directory account removes its slot", datakey.directory_account("dave@acme.com") is None
-      and osstore.get("pin:" + DAVE.guid) is None and roles.state() == "ok")
+      and osstore.get("pin:" + dave_slot._slot_id) is None and roles.state() == "ok")
 roles.set_directories([{**ACME, "servers": ["dc1.acme.com", "dc2.acme.com"]}])
 check("directory changed: audited, signed", rows("directory changed")[0]["detail"] == "ACME" and roles.state() == "ok" and signed_ok())
-check("the store slot's pepper is here", osstore.get("pin:" + CAROL.guid) is not None)
+check("the store slot's pepper is here", osstore.get("pin:" + carol_slot._slot_id) is not None)
 roles.set_directories([])
 check("directory removed: its accounts are gone, audited, signed", "bob@acme.com" not in doc()["accounts"]
       and "carol@acme.com" not in doc()["accounts"] and doc()["directories"] == [] and rows("directory removed")[0]["detail"] == "ACME"
       and roles.state() == "ok" and signed_ok())
 check("...their grants are gone", not any(n in doc()["grants"] for n in ("bob@acme.com", "carol@acme.com")))
-check("...and their slots", osstore.get("pin:" + CAROL.guid) is None)
-check("...the PIN no longer opens", raises(lambda: datakey.open_with_pin("bob@acme.com", PIN), pinslot.WrongPin) is not None)
+check("...and their slots", osstore.get("pin:" + carol_slot._slot_id) is None)
+check("...the PIN no longer opens", raises(lambda: datakey.open_with_pin("bob@acme.com", PIN3), pinslot.WrongPin) is not None)
 
 # ---------------------------------------------------------------- no secrets in the audit
 d = doc()
 secrets = [base64 for base64 in (d["rules_pub"], d["rules_sig"], d["backups_pub"]) if base64]
 details = [r["detail"] or "" for r in audit.recent(5000)]
 check("no audit detail holds a key or a PIN", not any(s[:16] in x for s in secrets for x in details)
-      and not any(p in x for p in (PIN, PIN2, PW) for x in details))
+      and not any(p in x for p in (PIN, PIN2, PIN3, PW) for x in details))
 session.sign_out()
 
 print(f"\n{ok} passed, {bad} failed"); sys.exit(1 if bad else 0)

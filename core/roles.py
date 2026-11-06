@@ -581,6 +581,8 @@ def set_role(name, role):
         def go(doc):
             repair = _may_write(doc)
             stored = datakey._stored(doc, name)
+            if _directory(doc["accounts"][stored]):
+                raise ValueError("a directory account's role comes from its groups")
             old = doc["accounts"][stored].get("role", "Admin")
             doc["accounts"][stored]["role"] = role
             if not _admins(doc):
@@ -637,8 +639,12 @@ def needs_approval(name):
 
 def approve(name, slot=None):
     """An Admin (who holds the rules key) or the recovery key approves a directory account: its approved role becomes its groups'
-    role, and the role keys follow. A first approval seals the data key and the account's box private (held since
-    start_directory_account) under `slot`, the one that start wrote, and vouches for its box key; a later one keeps the seal."""
+    role, and the role keys follow.
+      first approval    `slot` is the one start_directory_account wrote: seals the data key and the box private held since then
+                        under it, and vouches for that box key.
+      new slot          (an approved account's new PIN, or another computer) `slot` is a new one: a new box key, vouched for and
+                        sealed with the data key under it; the old slot is removed from this computer.
+      no slot           (an approved account whose groups changed) keeps the seal."""
     from core import perms
     with _lock:
         if not _root and "rules" not in _held:
@@ -650,27 +656,35 @@ def approve(name, slot=None):
             rec = doc["accounts"][stored]
             if not _directory(rec) or rec.get("groups_role") not in ROLES:
                 raise ValueError("only a directory account in a Toner group can be approved")
-            first = not rec.get("sealed")
-            if first or slot is not None:
-                if slot is None or slot.rec != rec.get("slot") or slot._slot_id != rec.get("guid"):
-                    raise ValueError("that isn't the account's PIN slot")
+            first, old = not rec.get("sealed"), None
             if first:
-                private = datakey._started.get(rec["guid"])
+                if slot is None or slot.rec != rec.get("slot") or slot._slot_id != rec.get("slot_id"):
+                    raise ValueError("that isn't the account's PIN slot")
+                private = datakey._started.get(rec["slot_id"])
                 if private is None or _b64(_public("box", private)) != rec.get("box_pub"):
                     raise ValueError("start the account again: its box key isn't held")
+            elif slot is not None:
+                datakey._fresh_slot(doc, slot)
+                old = dict(rec)
+                private, public = envelope.new_box_key()
+                rec.update(slot_kind=slot.rec["kind"], slot=slot.rec, slot_id=slot._slot_id, box_pub=_b64(public))
+                if isinstance(doc.get("grants"), dict):
+                    doc["grants"].pop(stored, None)     # wrapped to the old box key
+            if slot is not None:
                 rec["sealed"] = slot.seal(datakey._key + private)
             had = _admins(doc)
             rec["approved_role"] = rec["groups_role"]
             if had and not _admins(doc):
                 raise ValueError(LAST_ADMIN)
             pub = _rekey(doc) if repair else None
-            if first:
-                _attested(doc)[stored] = rec["box_pub"]   # it made this box key at start; the approver vouches for it
+            if slot is not None:
+                _attested(doc)[stored] = rec["box_pub"]   # the approver saw this box key made (at start, or just now)
             _sync(doc)
-            return stored, rec["guid"], pub
-        stored, guid, pub = datakey.edit(go)
+            return stored, rec["slot_id"], old, pub
+        stored, slot_id, old, pub = datakey.edit(go)
         _written(pub)
-        datakey._started.pop(guid, None)
+        datakey._started.pop(slot_id, None)
+        datakey.drop_slot(old)
         admin = datakey.signed_in_name() or audit.actor()
         audit.log("sign-in approved", f"{stored}, approved by {admin}", who=admin)
     _notify()

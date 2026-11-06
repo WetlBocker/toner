@@ -13,6 +13,7 @@ import copy
 import json
 import math
 import os
+import secrets
 import threading
 import time
 from datetime import datetime, timezone
@@ -40,7 +41,7 @@ _lock = threading.RLock()
 _key = None
 _box = None       # the signed-in account's (or the recovery key's) private box key
 _name = None      # the signed-in account's stored spelling; None for the recovery key
-_started = {}     # guid -> a started directory account's box private, held until an approval seals it (roles.approve)
+_started = {}     # slot id -> a started directory account's box private, held until an approval seals it (roles.approve)
 # core/roles sets this (it reads this module, so this one can't import it): fn(before, after) inside each write that adds, removes or
 # re-keys an account or the recovery key. It drops grants made for a box key that is gone, re-signs the rules, and may refuse. It
 # may return a function to run once the write has landed.
@@ -436,9 +437,23 @@ def new_recovery():
 
 
 # ---------------------------------------------------------------- directory accounts
-# The account's key in "accounts" is its User.name. Its PIN slot's id is its guid. Its seal ("sealed", made by roles.approve) holds
-# the data key and its box private under the slot. online_at and groups_role are written by the sign-in before the key is open,
-# so the rules don't sign them; approved_role, the attested box key and the directories are signed.
+# The account's key in "accounts" is its User.name. Its PIN slot's id ("slot_id") is random (new_slot_id), never reused, so two
+# accounts or two copies of Toner on one computer never share a TPM key or pepper. Its seal ("sealed", made by roles.approve)
+# holds the data key and its box private under the slot. online_at and groups_role are written by the sign-in before the key is
+# open, so the rules don't sign them; approved_role, the attested box key and the directories are signed.
+def new_slot_id():
+    """The id for a new PIN slot: pinslot.new(kind, new_slot_id(), pin)."""
+    return secrets.token_hex(16)
+
+
+def _fresh_slot(doc, slot):
+    """Refuse a slot whose id isn't a new_slot_id() or is already some account's."""
+    sid = slot._slot_id
+    if (len(sid) != 32 or any(c not in "0123456789abcdef" for c in sid)
+            or any(a.get("slot_id") == sid for a in doc["accounts"].values())):
+        raise ValueError("a PIN slot needs a new id of its own")
+
+
 def directory_account(name):
     """The directory account's record (a copy), or None; online_at is never later than now."""
     doc = read()
@@ -454,15 +469,14 @@ def start_directory_account(user, directory_id, slot):
     """Write an unapproved record for `user` (a directory.User) with a new box key, whose private half is held until approval.
     Refused (ValueError) when the name belongs to a local account, another directory or another person, or is approved."""
     from core import directory
-    if slot._slot_id != user.guid:
-        raise ValueError("a directory account's PIN slot id is its guid")
     private, public = envelope.new_box_key()
 
     def start(doc):
         cfg = next((d for d in doc.get("directories") or [] if d.get("id") == directory_id), None)
         if cfg is None:
             raise ValueError("no such directory")
-        stored = _find(doc, _clean(user.name))
+        _fresh_slot(doc, slot)
+        stored, old = _find(doc, _clean(user.name)), None
         if stored is not None:
             old = doc["accounts"].pop(stored)
             if (old.get("kind") != "directory" or old.get("directory") != directory_id or old.get("guid") != user.guid
@@ -470,11 +484,13 @@ def start_directory_account(user, directory_id, slot):
                 raise NameTaken("That username is already taken.")
         doc["accounts"][user.name] = {
             "kind": "directory", "directory": directory_id, "guid": user.guid, "display": user.display,
-            "slot_kind": slot.rec["kind"], "slot": slot.rec, "sealed": None, "box_pub": _b64(public), "approved_role": None,
-            "online_at": time.time(), "groups_role": directory.role_for(cfg, user.groups),
+            "slot_kind": slot.rec["kind"], "slot": slot.rec, "slot_id": slot._slot_id, "sealed": None, "box_pub": _b64(public),
+            "approved_role": None, "online_at": time.time(), "groups_role": directory.role_for(cfg, user.groups),
             "created": datetime.now(timezone.utc).isoformat(timespec="seconds")}
-    _change(start, signed_in=False)
-    _started[user.guid] = private
+        return old
+    replaced = _change(start, signed_in=False)
+    _started[slot._slot_id] = private
+    drop_slot(replaced)                                 # the unapproved record's own slot, if this replaced one
 
 
 def _pin(name, pin):
@@ -485,10 +501,10 @@ def _pin(name, pin):
         doc = read()
         stored = _find(doc, _clean(name))
         rec = doc["accounts"][stored] if stored else None
-        if rec is None or rec.get("kind") != "directory" or not rec.get("sealed"):
+        if rec is None or rec.get("kind") != "directory" or not rec.get("sealed") or not rec.get("slot_id"):
             raise pinslot.WrongPin()
         fails = (doc.get("throttle") or {}).get("fails", 0)
-        return pinslot.open(rec["slot"], rec["guid"], pin, rec["sealed"]), stored, fails
+        return pinslot.open(rec["slot"], rec["slot_id"], pin, rec["sealed"]), stored, fails
 
 
 def open_with_pin(name, pin):
@@ -528,13 +544,13 @@ def set_groups_role(name, role):
 
 
 def drop_slot(rec):
-    """After a directory account's record is gone: delete its PIN slot's TPM key or pepper from this computer."""
-    if not rec or rec.get("kind") != "directory":
+    """After a directory account's record (or its slot) is gone: delete that PIN slot's TPM key or pepper from this computer."""
+    if not rec or rec.get("kind") != "directory" or not rec.get("slot_id"):
         return
-    _started.pop(rec.get("guid"), None)
+    _started.pop(rec["slot_id"], None)
     from core import pinslot
     try:
-        pinslot.remove(rec["slot"], rec["guid"])
+        pinslot.remove(rec["slot"], rec["slot_id"])
     except Exception:                                   # the record is already gone; a key left behind opens nothing
         quiet.ignored()
 
