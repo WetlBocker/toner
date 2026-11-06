@@ -627,6 +627,15 @@ demarc.QUEUE_BYTES = 1
 with q.tx() as c:
     c.execute("INSERT INTO pending(org_uid, kind, changed_at, body, queued_at) VALUES('x', 'org', 'now', '{}', ?)", (time.time(),))
 check("a queue bigger than the cap counts as over it", q.over_cap())
+from core import sqldb
+sqldb.set_key(b"\x11" * 32)                       # an encrypted queue: SQLCipher answers page_size as text
+try:
+    kq = demarc.Queue(os.path.join(os.path.dirname(q.path), "keyed-queue.db"))
+    with kq.tx() as c:
+        c.execute("INSERT INTO pending(org_uid, kind, changed_at, body, queued_at) VALUES('x', 'org', 'now', '{}', ?)", (time.time(),))
+    check("an encrypted queue's size is counted too", kq.over_cap())
+finally:
+    sqldb.set_key(None)
 demarc.QUEUE_BYTES = saved
 check("the real cap is 7 days or 500 MB", demarc.QUEUE_DAYS == 7 and demarc.QUEUE_BYTES == 500 * 1024 * 1024)
 

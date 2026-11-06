@@ -493,8 +493,8 @@ class Queue:
         with self.tx() as c:
             olds = [r[0] for r in (c.execute("SELECT queued_at FROM pending ORDER BY id LIMIT 1").fetchone(),
                                    c.execute("SELECT queued_at FROM outbox ORDER BY seq LIMIT 1").fetchone()) if r]
-            used = (c.execute("PRAGMA page_count").fetchone()[0] - c.execute("PRAGMA freelist_count").fetchone()[0]) \
-                * c.execute("PRAGMA page_size").fetchone()[0]
+            used = (int(c.execute("PRAGMA page_count").fetchone()[0]) - int(c.execute("PRAGMA freelist_count").fetchone()[0])) \
+                * int(c.execute("PRAGMA page_size").fetchone()[0])          # SQLCipher answers page_size as text once keyed
         return bool(olds and now - min(olds) > QUEUE_DAYS * 86400) or used > QUEUE_BYTES
 
 
