@@ -85,10 +85,13 @@ for dn, attrs in [
         (ENGINEERS, {"objectClass": "group", "cn": "Toner Engineers"}),
         (TECHS, {"objectClass": "group", "cn": "Toner Techs"}),
         ("CN=Desk,OU=One," + BASE, {"objectClass": "group", "cn": "Desk"}),
-        ("CN=Desk,OU=Two," + BASE, {"objectClass": "group", "cn": "Desk"})]:
+        ("CN=Desk,OU=Two," + BASE, {"objectClass": "group", "cn": "Desk"}),
+        ("CN=ACME,CN=Partitions,CN=Configuration," + BASE, {"objectClass": "crossRef", "cn": "ACME", "nCName": BASE,
+                                                            "nETBIOSName": "ACME"})]:
     c.strategy.add_entry(dn, attrs)
 ldap.dit["bob@acme.com"] = ldap.dit["CN=Bob,OU=Users," + BASE]
 directory._who_am_i = lambda conn: "u:ACME\\" + conn.server.dit[conn.user]["sAMAccountName"][0].decode()
+directory._config_nc = lambda conn: "CN=Configuration," + BASE          # the mock has no rootDSE
 REAL_MAKE_SERVER = directory._make_server
 directory._make_server = lambda cfg, host, *_: ldap
 
@@ -416,6 +419,38 @@ check("...the service password and the Duo secret go", passvault.get(f"service:d
 check("...one audit row (Beta's removal above was the first)", acts().count("directory removed") == 2)
 check("no secret was ever written to netcheck.keys or the audit", no_secret_written())
 QMessageBox.exec = real_exec
+
+print("== a blank NetBIOS name is read from the directory")
+dlg = dialog([], None); settle(dlg)
+fill(dlg, netbios="")
+check("Test connection fills it in", tested(dlg) == "Connected. Found 5 groups." and dlg.netbios.text() == "ACME", dlg.netbios.text())
+dlg.close()
+DD.DirectoryDialog.exec = answers(add_with(netbios=""))
+page.add_dir.click()
+check("Save stores it", [d.get("netbios") for d in doc()["directories"]] == ["ACME"], said)
+QMessageBox.exec = answer("Remove"); page.refresh(); page.dirs.setCurrentRow(0); page.remove_dir.click(); QMessageBox.exec = real_exec
+directory._config_nc = lambda conn: None
+DD.DirectoryDialog.exec = answers(add_with(netbios=""))
+page.add_dir.click()
+check("a lookup that fails: Save refuses, in the approved words", said["msg"] == "Toner couldn't connect: no NetBIOS name found"
+      and doc()["directories"] == [], said)
+directory._config_nc = lambda conn: "CN=Configuration," + BASE
+
+print("== Save takes the secrets as they were at the click, and the form waits")
+dlg = dialog([], None); settle(dlg)
+fill(dlg, second="Duo", host="api-1234.duosecurity.com", ikey="DIXXXXXXXXXXXXXXXXXX", skey=SKEY)
+dlg.save_btn.click()
+check("while Save runs the form is off", not dlg.service_pw.isEnabled() and not dlg.duo_skey.isEnabled() and not dlg.name.isEnabled())
+dlg.service_pw.setText("typed-after-the-click"); dlg.duo_skey.setText("typed-after-the-click")
+settle(dlg)
+d = (doc().get("directories") or [{}])[0]
+check("...the service password and Duo secret saved are the ones at the click", passvault.get(f"service:directory-{d.get('id')}") == SVC
+      and OS.get(("duo:" + str(d.get("id")), None)) == SKEY.encode(), d)
+dlg2 = dialog([d], d); settle(dlg2)
+fill(dlg2, admin="Nope")
+check("a Save that fails turns the form on again", saved(dlg2) == "Toner couldn't find a group named Nope." and dlg2.name.isEnabled())
+dlg2.close()
+QMessageBox.exec = answer("Remove"); page.refresh(); page.dirs.setCurrentRow(0); page.remove_dir.click(); QMessageBox.exec = real_exec
 
 print("== an Engineer never reaches the page (Part 2)")
 from ui.settings import SettingsTab as Settings

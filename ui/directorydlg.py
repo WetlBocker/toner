@@ -1,7 +1,8 @@
 """The Directory dialog (Settings > Accounts and sign-in > Directories): one directory's settings. Test connection and Save talk
 to the directory on a Job thread. Save turns the group names into the DNs the server writes (only those are stored), then signs
 the list with roles.set_directories. The service password goes to the vault and Duo's secret key to the OS protected store;
-neither is ever in netcheck.keys, a log, the audit or a message. An empty password box on Edit keeps the stored password."""
+neither is ever in netcheck.keys, a log, the audit or a message. An empty password box on Edit keeps the stored password. An
+Active Directory with no NetBIOS name typed has it read from the directory by Test connection and Save."""
 import hashlib
 import secrets
 
@@ -62,6 +63,11 @@ def with_ca(cfg, signed=None):
     return cfg
 
 
+def _netbios(cfg, pw):
+    """[the domain's NetBIOS name] read from the directory when an Active Directory has none typed, else []."""
+    return [directory.netbios(cfg, pw)] if cfg["kind"] == "ad" and not cfg["netbios"] else []
+
+
 def _split(text):
     """Comma-separated values, trimmed, each once (case aside)."""
     out = {}
@@ -85,7 +91,7 @@ class DirectoryDialog(QDialog):
         self._closed = False
         self.store = None                                    # the protected store: unknown until asked off this thread
 
-        body = QWidget()
+        self.body = body = QWidget()
         self.form = QFormLayout(body)
         self.name = self._row("Name", QLineEdit())
         self.kind = self._row("Kind", QComboBox())
@@ -285,25 +291,52 @@ class DirectoryDialog(QDialog):
         same = self.orig and self.orig.get("ca_file") and self.orig.get("ca_file") == cfg["ca_file"]
         signed = self.orig.get("ca_sha256") if same else None
         self._say("")
-        self._run(lambda: directory.test(with_ca(cfg, signed), pw),
-                  lambda n, e: self._say(words(e)) if e is not None else self._say(CONNECTED.format(n=n), good=True))
+        got = []
+
+        def test():
+            c = with_ca(cfg, signed)
+            n = directory.test(c, pw)
+            got.extend(_netbios(c, pw))
+            return n
+
+        def landed(n, e):
+            if e is not None:
+                return self._say(words(e))
+            if got:
+                self.netbios.setText(got[0])
+            self._say(CONNECTED.format(n=n), good=True)
+        self._run(test, landed)
 
     def _save(self):
         cfg, pw, names = self._cfg(), self._password(), self._names()
+        typed = self.service_pw.text(), self.duo_skey.text()     # the secrets as they are now, not when the Save lands
         taken = self._taken(cfg)
         if taken:
             self._say(TAKEN.format(value=taken))
             return
         self._say("")
         wanted = list(dict.fromkeys(n for role in ROLES for n in names[role]))
-        found = {}                                           # (a dict sent through the Job's signal aborts PySide6)
-        self._run(lambda: found.update(directory.resolve_groups(with_ca(dict(cfg)), wanted, pw)),
-                  lambda _r, e: self._saved(cfg, names, found, e))
+        found, got = {}, []                                  # (a dict sent through the Job's signal aborts PySide6)
 
-    def _saved(self, cfg, names, found, error):
+        def look():
+            c = with_ca(dict(cfg))
+            found.update(directory.resolve_groups(c, wanted, pw))
+            got.extend(_netbios(c, pw))
+        self.body.setEnabled(False)                          # what is saved is what was typed at the click
+        self._run(look, lambda _r, e: self._saved(cfg, names, found, got, typed, e))
+
+    def _saved(self, cfg, names, found, got, typed, error):
+        self.body.setEnabled(True)
         if error is not None:
             self._say(words(error))
             return
+        if got:
+            cfg["netbios"] = got[0]
+            self.netbios.setText(got[0])
+            taken = self._taken(cfg)
+            if taken:
+                self._say(TAKEN.format(value=taken))
+                return
         cfg["groups"] = {role: list(dict.fromkeys(found[n] for n in names[role])) for role in ROLES}
         new = [cfg if d.get("id") == self.id else d for d in self.dirs] + ([] if self.orig else [cfg])
         try:
@@ -311,10 +344,11 @@ class DirectoryDialog(QDialog):
         except (ValueError, datakey.Locked, perms.Denied) as e:
             self._say(CA_UNREADABLE if str(e) == "the CA file can't be read" else str(e))
             return
-        if self.service_pw.text():
-            passvault.put(service_key(self.id), self.service_pw.text())
-        if cfg["duo"]["on"] and self.duo_skey.text():
-            osstore.put("duo:" + self.id, self.duo_skey.text().encode("utf-8"))
+        service_pw, skey = typed
+        if service_pw:
+            passvault.put(service_key(self.id), service_pw)
+        if cfg["duo"]["on"] and skey:
+            osstore.put("duo:" + self.id, skey.encode("utf-8"))
         self.service_pw.clear()
         self.duo_skey.clear()
         self.accept()
