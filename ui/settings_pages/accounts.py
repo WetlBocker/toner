@@ -148,6 +148,8 @@ class AccountsPage(Page):
         self._shown = {}
         self.idle = spin(1, 240, " minutes without use")
         self.form.addRow("Lock after", self.idle)
+        self.session = spin(1, 72, "")
+        self.form.addRow("Session length (hours)", self.session)
         for i, w in enumerate((self.banner, QLabel("<b>Accounts</b>"), note("Changes to accounts take effect right away."), self.table,
                                compact_row(self.add, self.change, self.reset, self.remove), compact_row(self.recovery),
                                QLabel("<b>Directories</b>"), self.dirs, compact_row(self.add_dir, self.edit_dir, self.remove_dir),
@@ -156,9 +158,11 @@ class AccountsPage(Page):
 
     def load(self):
         self.idle.setValue(int(db.get_setting("signin_idle_minutes") or 15))
+        self.session.setValue(int(db.get_setting("signin_session_hours") or 12))
         self.refresh()
 
     def save(self):
+        db.set_setting("signin_session_hours", self.session.value())
         db.set_setting("signin_idle_minutes", self.idle.value())
 
     def refresh(self):

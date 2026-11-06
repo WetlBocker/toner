@@ -245,6 +245,12 @@ page.idle.setValue(30); page.save()
 check("idle saves", db.get_setting("signin_idle_minutes") == 30)
 check("idle range 1-240", (page.idle.minimum(), page.idle.maximum()) == (1, 240))
 
+check("session length loads 12", (page.load(), page.session.value())[1] == 12)
+page.session.setValue(8); page.save()
+check("session length saves", db.get_setting("signin_session_hours") == 8)
+check("session range 1-72", (page.session.minimum(), page.session.maximum()) == (1, 72))
+check("session label", page.form.labelForField(page.session).text() == "Session length (hours)")
+
 from ui import settings
 check("page is listed", "Accounts and sign-in" in dict(settings.GROUPS)["Security and data"] and "Accounts and sign-in" in settings.GLOBAL_PAGES)
 

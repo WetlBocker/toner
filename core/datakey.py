@@ -445,7 +445,7 @@ def new_recovery():
 # The account's key in "accounts" is its User.name. Its PIN slot's id ("slot_id") is random (new_slot_id), never reused, so two
 # accounts or two copies of Toner on one computer never share a TPM key or pepper. Its seal ("sealed", made by roles.approve)
 # holds the data key, its box private and its name (seal_payload) under the slot. online_at (the last good check, by the sign-in or
-# the background check), full_at (the last password and Duo, which starts the workday) and groups_role are written before the key
+# the background check), full_at (the last password and Duo, which starts the session) and groups_role are written before the key
 # is open, so the rules don't sign them; approved_role, the attested box key and the directories are signed.
 def new_slot_id():
     """The id for a new PIN slot: pinslot.new(kind, new_slot_id(), pin)."""
@@ -470,7 +470,7 @@ def seal_payload(name, private):
 
 def directory_account(name):
     """The directory account's record (a copy), or None. An online_at or full_at later than now reads as 0 (expired): a clock
-    put back can't stretch the offline hour or the workday."""
+    put back can't stretch the offline hour or the session."""
     doc = read()
     stored = _find(doc, _clean(name))
     rec = doc["accounts"][stored] if stored else None
@@ -577,7 +577,7 @@ def set_online(name, at):
 
 
 def set_full(name, at):
-    """The last full check (password and Duo), which starts the workday. Only a sign-in writes it, never the background check."""
+    """The last full check (password and Duo), which starts the session. Only a sign-in writes it, never the background check."""
     _set_directory_field(name, "full_at", min(at, time.time()))
 
 

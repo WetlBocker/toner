@@ -1,6 +1,6 @@
 # Run directly (python tests/test_x.py) or all together (python tests/run_all.py). Each test builds its own
 # throw-away database and uses a fake credential store, so nothing on this computer is touched.
-# The lock screen for directory accounts: the PIN, a wrong PIN, the wait, a refused account, the 12-hour workday (the directory
+# The lock screen for directory accounts: the PIN, a wrong PIN, the wait, a refused account, the 12-hour session (the directory
 # probed off the UI thread; reachable: "Please sign in again.", unreachable: the PIN unlocks) and directory.reachable (never binds).
 import os as _os, sys as _sys, tempfile as _tmp
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
@@ -215,7 +215,7 @@ check("...then only the refusal", shown(lock) == sorted(["Your account can't sig
                                                           "Sign in as someone else"]), shown(lock))
 session.sign_out(); app.processEvents()
 
-print("== the workday is over")
+print("== the session is over")
 calls, threads, spy = [], [], []
 real_unlock_pin = session.unlock_pin
 session.unlock_pin = lambda pin: spy.append(pin) or real_unlock_pin(pin)
@@ -262,7 +262,7 @@ lock.pw.setText(PIN); lock.unlock.click(); pump(lambda: lock.again.isVisibleTo(l
 check("with the real probe and a server answering: Please sign in again.", shown(lock) == sorted(["Please sign in again.", "Sign in"]))
 session.sign_out(); app.processEvents()
 
-print("== within the workday there is no probe")
+print("== within the session there is no probe")
 sign_in_bob(); calls.clear(); spy.clear()
 directory.reachable = probe(True)
 session.lock(); app.processEvents()
@@ -305,7 +305,7 @@ gate.set(); pump(lambda: not lock._jobs)
 check("a probe's answer after a new lock is ignored", lock.pw.isVisibleTo(lock) and not lock.again.isVisibleTo(lock) and spy == []
       and lock.pw.isEnabled() and lock.other.isEnabled() and session.state() == "locked", shown(lock))
 
-relock(); directory.reachable = real_reachable; session._full_at = time.time()      # (inside the workday: no probe)
+relock(); directory.reachable = real_reachable; session._full_at = time.time()      # (inside the session: no probe)
 FakeTpm.locked = 30
 lock.pw.setText(PIN); lock.unlock.click(); pump(lambda: lock.wait.timer.isActive())
 check("a PIN wait is running", lock.wait.timer.isActive() and "30 seconds" in lock.error.text(), lock.error.text())

@@ -5,7 +5,7 @@ import time
 
 from core import audit, datakey, db, dirpin, passvault, pinslot, quiet, roles, sqldb
 
-WORKDAY = 12 * 3600
+SESSION_HOURS = 12      # the default; Settings > Accounts changes it (signin_session_hours)
 REFUSED = "Your account can't sign in to Toner any more. Ask an admin."
 
 _lock = threading.RLock()
@@ -118,10 +118,18 @@ def kind():
     return _kind
 
 
-def workday_over():
-    """True once a directory account's last full check (directory and Duo) is more than 12 hours old (or the clock went back
-    past it): an offline PIN sign-in doesn't start a new workday."""
-    return _full_at is not None and not 0 <= time.time() - _full_at <= WORKDAY
+def session_hours():
+    """The session length setting, 1 to 72 hours; the default when it can't be read."""
+    try:
+        return min(72, max(1, int(db.get_setting("signin_session_hours"))))
+    except Exception:
+        return SESSION_HOURS
+
+
+def session_over():
+    """True once a directory account's last full check (directory and Duo) is more than session_hours() old (or the clock went
+    back past it): an offline PIN sign-in doesn't start a new session."""
+    return _full_at is not None and not 0 <= time.time() - _full_at <= session_hours() * 3600
 
 
 def refused():

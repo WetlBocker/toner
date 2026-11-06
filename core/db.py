@@ -95,6 +95,7 @@ DEFAULT_SETTINGS = {
     "report_include_all": True,
     # security
     "hostkey_mode": "Trust on first use",
+    "signin_session_hours": 12,                  # a full sign-in (directory and second step) lasts this long (core/session.py)
     "signin_idle_minutes": 15,                   # no mouse or key input this long locks Toner (ui/lockscreen.py); 0: never
     "credential_manager_carried": False,         # an older Toner's Credential Manager passwords are all in the vault (ui/setupdlg.py)
     "rules_key": "",                             # the fingerprint of the key that signs the roles in netcheck.keys (core/roles.py)

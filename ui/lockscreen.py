@@ -53,7 +53,7 @@ class LockScreen(QWidget):
         self.error = error_label()
         self.unlock = primary("Unlock")
         self.other = link("Sign in as someone else")
-        self.again = primary("Sign in")                  # after the workday, with the directory reachable: the full sign-in
+        self.again = primary("Sign in")                  # after the session, with the directory reachable: the full sign-in
         self.again.hide()
         lay.addWidget(self.error)
         lay.addSpacing(10)
@@ -155,7 +155,7 @@ class LockScreen(QWidget):
         self._cover_all()
 
     def _arrange(self, mode):
-        """What the screen shows: "local" (password), "directory" (PIN), "again" (the workday is over and the directory is
+        """What the screen shows: "local" (password), "directory" (PIN), "again" (the session is over and the directory is
         reachable: sign in in full) or "refused" (only the sentence and the way out)."""
         full = mode in ("local", "directory")
         label = "PIN" if mode == "directory" else "Password"
@@ -234,9 +234,9 @@ class LockScreen(QWidget):
         self._try(session.unlock, pw)
 
     def _unlock_pin(self, pin):
-        """After the 12-hour workday a reachable directory means a full sign-in, so the PIN isn't tried (and not counted); the
+        """After the session a reachable directory means a full sign-in, so the PIN isn't tried (and not counted); the
         probe runs on a Job, with the field off meanwhile."""
-        if not session.workday_over():
+        if not session.session_over():
             return self._try(session.unlock_pin, pin)
         name, turn = session.user(), self._locks
 

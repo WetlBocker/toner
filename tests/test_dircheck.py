@@ -216,7 +216,7 @@ session.sign_in("Admin1", PW)
 check("a local session: skipped", dircheck.run_once() == "skipped" and session.state() == "open")
 session.sign_out()
 
-# ---------------------------------------------------------------- the background check doesn't extend the workday
+# ---------------------------------------------------------------- the background check doesn't extend the session
 reopen()
 d = json.loads(datakey.path().read_text(encoding="utf-8"))
 d["accounts"]["bob@acme.com"]["full_at"] = time.time() - 13 * 3600          # password and Duo were 13 hours ago
@@ -230,8 +230,8 @@ directory._make_server = down
 b = S.begin("bob@acme.com", "pw-bob")
 S.finish(b, PIN)
 directory._make_server = real_make
-check("an offline PIN sign-in after it doesn't start a new workday", b.offline and session.user() == "bob@acme.com"
-      and session.workday_over())
+check("an offline PIN sign-in after it doesn't start a new session", b.offline and session.user() == "bob@acme.com"
+      and session.session_over())
 session.sign_out()
 
 # ---------------------------------------------------------------- a demotion takes the role keys away at once

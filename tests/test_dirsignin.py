@@ -228,7 +228,7 @@ check("...sealed with the approved role", datakey.directory_account("bob@acme.co
 check("a wrong PIN is refused", raises(lambda: S.finish(a, "975310"), pinslot.WrongPin) is not None and a.stage == "pin")
 S.finish(a, PIN)
 check("the PIN signs Bob in", a.stage == "done" and session.state() == "open" and session.user() == "bob@acme.com"
-      and session.kind() == "directory" and not session.workday_over())
+      and session.kind() == "directory" and not session.session_over())
 check("audited: signed in (with the directory), approved, PIN set",
       rows("signed in")[0]["actor"] == "bob@acme.com" and rows("signed in")[0]["detail"] == "directory ACME"
       and rows("sign-in approved")[0]["detail"] == "bob@acme.com, approved by Admin1"
@@ -244,7 +244,19 @@ check("unlock_pin: a wrong PIN", raises(lambda: session.unlock_pin("975310"), pi
 session.unlock_pin(PIN)
 check("unlock_pin: the right PIN opens", session.state() == "open")
 session._full_at = time.time() - 12 * 3600 - 5
-check("the workday is over after 12 hours", session.workday_over())
+session._full_at = time.time() - 11 * 3600
+check("the session is not over at 11 hours", not session.session_over())
+session._full_at = time.time() - 13 * 3600
+check("the session is over at 13 hours", session.session_over())
+db.set_setting("signin_session_hours", 2); session._full_at = time.time() - 3 * 3600
+check("with 2 hours set, over at 3 hours", session.session_over() and session.session_hours() == 2)
+db.set_setting("signin_session_hours", 500)
+check("session_hours is clamped to 72", session.session_hours() == 72)
+db.set_setting("signin_session_hours", 0)
+check("session_hours is clamped to 1", session.session_hours() == 1)
+db.set_setting("signin_session_hours", 12)
+session._full_at = time.time() - 12 * 3600 - 5
+check("the session is over after 12 hours", session.session_over())
 session.lock(reason="refused")
 check("refused: the PIN can't unlock", raises(lambda: session.unlock_pin(PIN), session.Refused) is not None
       and session.refused() and session.state() == "locked")
@@ -285,9 +297,9 @@ check("offline: the PIN opens, never the approval (with the keys it already has)
       and session.user() == "bob@acme.com" and not roles.holds("backups"))
 real_time = time.time
 time.time = lambda: real_time() + 11 * 3600 + 15 * 60
-over = session.workday_over()
+over = session.session_over()
 time.time = real_time
-check("offline: the workday runs from the last full check, not the offline sign-in", over and not session.workday_over())
+check("offline: the session runs from the last full check, not the offline sign-in", over and not session.session_over())
 session.sign_out()
 datakey.set_groups_role("bob@acme.com", "Tech")
 datakey.set_online("bob@acme.com", time.time() - 3700)
