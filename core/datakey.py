@@ -503,7 +503,7 @@ def start_directory_account(user, directory_id, slot):
             "kind": "directory", "directory": directory_id, "guid": user.guid, "display": user.display,
             "slot_kind": slot.rec["kind"], "slot": slot.rec, "slot_id": slot.slot_id, "sealed": None, "box_pub": _b64(public),
             "approved_role": None, "online_at": time.time(), "full_at": time.time(),     # (only after password and Duo)
-            "groups_role": directory.role_for(cfg, user.groups),
+            "groups_role": directory.role_for(cfg, user.groups, user.dn),
             "created": datetime.now(timezone.utc).isoformat(timespec="seconds")}
         return old
     replaced = _change(start, signed_in=False)

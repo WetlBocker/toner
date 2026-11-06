@@ -89,6 +89,33 @@ check("directory added: stored, signed, audited", doc()["directories"] == [ACME]
 check("plain LDAP is refused", raises(lambda: roles.set_directories([{**ACME, "security": "none"}]), ValueError) is not None)
 check("an unknown field (a secret) is refused", raises(lambda: roles.set_directories([{**ACME, "password": "x"}]), ValueError) is not None
       and raises(lambda: roles.set_directories([{**ACME, "duo": {**ACME["duo"], "skey": "x"}}]), ValueError) is not None)
+OUS = {"Admin": [], "Engineer": ["OU=IT,DC=acme,DC=com"], "Tech": []}
+try:
+    roles.set_directories([{**ACME, "ous": OUS}]); err = None
+except Exception as e:
+    err = e
+check("an OU map is accepted and signed", err is None and doc()["directories"][0].get("ous") == OUS and roles.state() == "ok"
+      and signed_ok(), err)
+from core import dirpin, dirsignin
+real_sign_in, real_changed = directory.sign_in, dirpin.changed
+dirpin.changed = lambda dirs: False                     # (this file's fake store keeps no remembered list)
+directory.sign_in = lambda cfg, login, pw: directory.User("6f1c2a4e-0000-4000-8000-000000000006", "gina@acme.com", "Gina", (), True,
+                                                          "CN=Gina,OU=Ops,OU=IT,DC=acme,DC=com")
+try:
+    role = dirsignin.begin("gina@acme.com", PW).role
+except Exception as e:
+    role = e
+check("dirsignin.begin grants the OU-mapped role (no group)", role == "Engineer", role)
+directory.sign_in, dirpin.changed = real_sign_in, real_changed
+try:
+    gina = pinslot.new("pin", datakey.new_slot_id(), PIN)
+    datakey.start_directory_account(directory.User("6f1c2a4e-0000-4000-8000-000000000006", "gina@acme.com", "Gina", (), True,
+                                                   "CN=Gina,OU=Ops,OU=IT,DC=acme,DC=com"), "d1", gina)
+    role = datakey.directory_account("gina@acme.com")["groups_role"]
+    datakey.remove("gina@acme.com")
+except Exception as e:
+    role = e
+check("...and a started account's groups_role is the OU's", role == "Engineer", role)
 session.sign_out()
 
 # ---------------------------------------------------------------- a first sign-in starts an unapproved account (key closed)
@@ -327,6 +354,7 @@ def tampered(label, change):
 
 tampered("a directory's server", lambda d: d["directories"][0].__setitem__("servers", ["evil.example.com"]))
 tampered("the group map", lambda d: d["directories"][0]["groups"]["Admin"].append(TECHS))
+tampered("the OU map", lambda d: d["directories"][0].setdefault("ous", {}).setdefault("Admin", []).append("OU=IT,DC=acme,DC=com"))
 tampered("the Duo host", lambda d: d["directories"][0]["duo"].__setitem__("host", "api-evil.duosecurity.com"))
 tampered("an approved role", lambda d: d["accounts"]["bob@acme.com"].__setitem__("approved_role", "Admin"))
 tampered("an approval removed", lambda d: d["accounts"]["bob@acme.com"].__setitem__("approved_role", None))

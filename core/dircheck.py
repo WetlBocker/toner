@@ -50,7 +50,7 @@ def run_once():
     except Exception as e:     # unreachable, a refused service bind, a config problem: never a reason to lock anyone out
         log.info("directory check failed: %s", type(e).__name__)
         return "offline"
-    role = directory.role_for(cfg, user.groups) if user is not None and user.enabled else None
+    role = directory.role_for(cfg, user.groups, user.dn) if user is not None and user.enabled else None
     if role is None:
         _refuse()
         return "refused"

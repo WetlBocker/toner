@@ -162,6 +162,86 @@ check("only ASCII letters fold: Unicode case look-alikes grant nothing",
       D.role_for(dict(AD, groups={"Admin": ["CN=Straße,DC=x"], "Tech": ["CN=Kiosk,DC=x"]}), ["CN=STRASSE,DC=x", "CN=\u212aiosk,DC=x"]) is None)
 check("alice maps to Admin through the nested group", D.role_for(AD, u.groups) == "Admin")
 
+print("== roles from OUs")
+def got(fn):
+    try: return fn()
+    except Exception as e: return e
+check("sign_in gives the entry's DN", getattr(u, "dn", None) == "CN=Alice A,OU=Users," + BASE, u)
+TD = "CN=Tech-Desk,OU=Groups,DC=acme,DC=com"
+OU = dict(AD, groups={"Admin": [], "Engineer": [], "Tech": [TD]}, ous={"Admin": [], "Engineer": [], "Tech": ["OU=IT,DC=acme,DC=com"]})
+check("an account in an OU below a mapped OU gets its role", got(lambda: D.role_for(OU, [], "CN=Bob,OU=Ops,OU=IT,DC=acme,DC=com")) == "Tech")
+check("...and one right in it", got(lambda: D.role_for(OU, [], "CN=Bob,OU=IT,DC=acme,DC=com")) == "Tech")
+check("an OU whose name only starts the same grants nothing", got(lambda: D.role_for(OU, [], "CN=Bob,OU=IT-Old,DC=acme,DC=com")) is None)
+check("the OU itself as a DN grants nothing", got(lambda: D.role_for(OU, [], "OU=IT,DC=acme,DC=com")) is None)
+check("ASCII case doesn't matter", got(lambda: D.role_for(OU, [], "cn=bob,ou=ops,ou=it,DC=ACME,dc=com")) == "Tech")
+check("...but Unicode case look-alikes grant nothing", got(lambda: D.role_for(dict(OU, ous={"Tech": ["OU=Kiosk,DC=x"]}), [], "CN=a,OU=Kiosk,DC=x")) is None)
+UP = dict(OU, ous={"Admin": ["OU=Ops,OU=IT,DC=acme,DC=com"], "Engineer": [], "Tech": []})
+check("an OU and a group together: the highest role (OU Admin over group Tech)", got(lambda: D.role_for(UP, [TD], "CN=Bob,OU=Ops,OU=IT,DC=acme,DC=com")) == "Admin")
+check("...(group Admin over OU Tech)", got(lambda: D.role_for(dict(OU, groups={"Admin": [TD]}), [TD], "CN=Bob,OU=IT,DC=acme,DC=com")) == "Admin")
+check("...and the group alone where the OU doesn't match", got(lambda: D.role_for(UP, [TD], "CN=Bob,OU=IT-Old,DC=acme,DC=com")) == "Tech")
+check("no ous key: groups only, as before", got(lambda: D.role_for(AD, [G("Tech-Desk")], "CN=Bob,OU=IT,DC=acme,DC=com")) == "Tech"
+      and got(lambda: D.role_for(AD, [], "CN=Alice A,OU=Users," + BASE)) is None)
+
+print("== discovery: the base DN, NetBIOS and DNS domain; the OUs and groups")
+AB = "DC=acme,DC=com"
+tree([("CN=svc,OU=IT," + AB, {"objectClass": "user", "userPassword": "svc-pw"}),
+      ("OU=IT," + AB, {"objectClass": "organizationalUnit", "ou": "IT"}),
+      ("OU=Ops,OU=IT," + AB, {"objectClass": "organizationalUnit", "ou": "Ops"}),
+      ("OU=IT-Old," + AB, {"objectClass": "organizationalUnit", "ou": "IT-Old"}),
+      ("OU=sales," + AB, {"objectClass": "organizationalUnit", "ou": "sales"}),
+      ("CN=Ops-Team,OU=IT," + AB, {"objectClass": "group", "cn": "Ops-Team"}),
+      ("CN=admins,OU=IT," + AB, {"objectClass": "group", "cn": "admins"}),
+      ("CN=Sales,OU=sales," + AB, {"objectClass": "group", "cn": "Sales"}),
+      ("CN=ACME,CN=Partitions,CN=Configuration," + AB, {"objectClass": "crossRef", "cn": "ACME", "nCName": AB, "nETBIOSName": "ACME"})])
+AC = dict(AD, base_dn="", netbios="", suffixes=[], service_dn="CN=svc,OU=IT," + AB)
+class Root:      # a rootDSE as a server answers it (the mock has none)
+    def __init__(self, attrs): self.attrs, self.asked = attrs, []
+    def search(self, base, flt, search_scope=None, attributes=()): self.asked.append((base, search_scope, list(attributes))); self.response = [{"type": "searchResEntry", "dn": "", "attributes": self.attrs}]
+r = Root({"defaultNamingContext": AB, "namingContexts": ["CN=Configuration," + AB, AB]})
+check("AD: the base DN is the rootDSE's defaultNamingContext", got(lambda: D._base_dn(r, True)) == AB and r.asked[0][:2] == ("", ldap3.BASE), r.asked)
+check("LDAP: the first namingContexts value", got(lambda: D._base_dn(Root({"namingContexts": ["dc=example,dc=org", "o=other"]}), False)) == "dc=example,dc=org")
+check("...none said is None", got(lambda: D._base_dn(Root({}), True)) is None)
+_base = getattr(D, "_base_dn", None); D._base_dn = lambda conn, ad: AB
+D._config_nc = lambda conn: "CN=Configuration," + AB
+d = got(lambda: D.discover(AC, "svc-pw"))
+check("discover on AD: base DN, NetBIOS ACME, suffix acme.com", d == {"base_dn": AB, "netbios": "ACME", "suffixes": ["acme.com"]}, d)
+d = got(lambda: D.discover(dict(AC, kind="ldap"), "svc-pw"))
+check("discover on LDAP: no NetBIOS", d == {"base_dn": AB, "netbios": "", "suffixes": ["acme.com"]}, d)
+D._config_nc = lambda conn: None
+d = got(lambda: D.discover(AC, "svc-pw"))
+check("...a NetBIOS name that can't be read is empty (step 5 lets it be typed)", d == {"base_dn": AB, "netbios": "", "suffixes": ["acme.com"]}, d)
+D._base_dn = lambda conn, ad: "OU=People,o=acme"
+d = got(lambda: D.discover(dict(AC, kind="ldap"), "svc-pw"))
+check("...a base DN with no DC= parts has no suffix", d == {"base_dn": "OU=People,o=acme", "netbios": "", "suffixes": []}, d)
+D._base_dn = lambda conn, ad: None
+check("no base DN is Unreachable", raises(D.Unreachable, lambda: D.discover(AC, "svc-pw")) is not None)
+D._base_dn = lambda conn, ad: AB
+check("a wrong service password is BadCredentials", raises(D.BadCredentials, lambda: D.discover(AC, "bad")) is not None)
+TC = dict(AC, base_dn=AB)
+OUS = ["OU=IT," + AB, "OU=IT-Old," + AB, "OU=Ops,OU=IT," + AB, "OU=sales," + AB]
+GRPS = ["CN=admins,OU=IT," + AB, "CN=Ops-Team,OU=IT," + AB, "CN=Sales,OU=sales," + AB]
+t = got(lambda: D.tree(TC, "svc-pw"))
+check("tree lists OUs and groups as written, sorted ignoring case", t == {"ous": OUS, "groups": GRPS, "more": False}, t)
+t = got(lambda: D.tree(TC, "svc-pw", cap=2))
+check("...at most cap of each, and more is True", isinstance(t, dict) and len(t["ous"]) == 2 and len(t["groups"]) == 2 and t["more"] is True
+      and set(t["ous"]) <= set(OUS) and set(t["groups"]) <= set(GRPS) and t["ous"] == sorted(t["ous"], key=str.lower), t)
+t = got(lambda: D.tree(TC, "svc-pw", cap=4))
+check("...exactly cap of one kind is not more", isinstance(t, dict) and t["ous"] == OUS and t["more"] is False, t)
+t = got(lambda: D.tree(TC, "svc-pw", text="ops"))
+check("text: only OUs (by ou) and groups (by cn) containing it", t == {"ous": ["OU=Ops,OU=IT," + AB], "groups": ["CN=Ops-Team,OU=IT," + AB], "more": False}, t)
+# the mock reads a filter back unescaped (an escaped * is a wildcard to it), so the filters sent are checked instead
+flts = []
+class FilterSpy(ldap3.Connection):
+    def search(self, base, flt, *a, **k): flts.append(flt); return super().search(base, flt, *a, **k)
+_real = ldap3.Connection; ldap3.Connection = FilterSpy
+for x, want in (("*", "\\2a"), ("IT)(ou=*", "IT\\29\\28ou=\\2a"), ("\\2a", "\\5c2a")):
+    flts.clear(); got(lambda: D.tree(TC, "svc-pw", text=x))
+    check("text %r is escaped, never widening the search" % x, flts == ["(&(objectClass=organizationalUnit)(ou=*%s*))" % want,
+          "(&(objectClass=group)(cn=*%s*))" % want], flts)
+ldap3.Connection = _real
+check("tree with a wrong service password is BadCredentials", raises(D.BadCredentials, lambda: D.tree(TC, "bad")) is not None)
+D._base_dn = _base
+
 print("== LDAP")
 LB = "dc=example,dc=org"
 tree([

@@ -172,7 +172,7 @@ def begin(login, password):
     if user is None or not user.enabled:
         _tries(failed=True)
         raise datakey.WrongPassword(datakey.WRONG)
-    role = directory.role_for(a.cfg, user.groups)
+    role = directory.role_for(a.cfg, user.groups, user.dn)
     if role is None:
         _tries(failed=True)
         raise NotInGroup(NOT_IN_GROUP)

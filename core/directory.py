@@ -32,6 +32,7 @@ class User:
     display: str
     groups: tuple
     enabled: bool
+    dn: str = ""          # the entry's DN as the server wrote it (OU mappings compare against it)
 
 
 def check_config(cfg):
@@ -211,7 +212,7 @@ def _user_from(conn, cfg, entry):
         guid = _guid_text(_one(a, "entryUUID"))
         enabled = str(_one(a, "nsAccountLock", "false")).lower() != "true" and not _one(a, "pwdAccountLockedTime")
     display = str(_one(a, "displayName") or _one(a, "cn") or name)
-    return User(guid, name, display, _groups(conn, cfg, dn, a.get("memberOf") or [], uid), enabled)
+    return User(guid, name, display, _groups(conn, cfg, dn, a.get("memberOf") or [], uid), enabled, dn)
 
 
 _AD_ATTRS = ["objectGUID", "userPrincipalName", "displayName", "cn", "userAccountControl", "memberOf"]
@@ -299,11 +300,14 @@ def look_up(cfg, guid, service_password):
         conn.unbind()
 
 
-def role_for(cfg, groups):
-    """The highest role whose group DN is among the person's group DNs (both as the server wrote them; compared by case only)."""
-    have = {_key(g) for g in groups}
+def role_for(cfg, groups, dn=""):
+    """The highest role whose group DN is among the person's group DNs, or whose OU holds the person's DN (in it or in an OU
+    below it). All DNs as the server wrote them; compared by ASCII case only."""
+    have, me = {_key(g) for g in groups}, _key(dn)
     for role in ROLE_ORDER:
         if have & {_key(g) for g in cfg.get("groups", {}).get(role, [])}:
+            return role
+        if me and any(me.endswith("," + _key(ou)) for ou in (cfg.get("ous") or {}).get(role, [])):
             return role
     return None
 
@@ -351,24 +355,88 @@ def _domain_dn(base_dn):
     return ",".join(reversed(parts))
 
 
+def _netbios(conn, base_dn):
+    nc, domain = _config_nc(conn), _domain_dn(base_dn)
+    if not nc or not domain:
+        raise Unreachable("no NetBIOS name found")
+    esc = ldap3.utils.conv.escape_filter_chars
+    found = _search(conn, "CN=Partitions," + nc, f"(&(objectClass=crossRef)(nCName={esc(domain)}))", ["nETBIOSName"])
+    name = _one(found[0]["attributes"], "nETBIOSName") if len(found) == 1 else None
+    if not name:
+        raise Unreachable("no NetBIOS name found")
+    return str(name)
+
+
 def netbios(cfg, service_password):
     """AD: the domain's NetBIOS name, as the service account reads it: the nETBIOSName of the crossRef in CN=Partitions of the
     configuration naming context whose nCName is the domain's DN. Unreachable when it can't be read."""
     conn = connect(cfg, cfg["service_dn"], service_password)
     try:
-        nc, domain = _config_nc(conn), _domain_dn(cfg["base_dn"])
-        if not nc or not domain:
-            raise Unreachable("no NetBIOS name found")
-        esc = ldap3.utils.conv.escape_filter_chars
-        found = _search(conn, "CN=Partitions," + nc, f"(&(objectClass=crossRef)(nCName={esc(domain)}))", ["nETBIOSName"])
-        name = _one(found[0]["attributes"], "nETBIOSName") if len(found) == 1 else None
-        if not name:
-            raise Unreachable("no NetBIOS name found")
-        return str(name)
+        return _netbios(conn, cfg["base_dn"])
     except (lx.LDAPException, ValueError):
         raise Unreachable("read failed") from None
     finally:
         conn.unbind()
+
+
+def _base_dn(conn, ad):
+    """The base DN from the rootDSE: defaultNamingContext on AD, the first namingContexts value on LDAP (None when not said)."""
+    attr = "defaultNamingContext" if ad else "namingContexts"
+    conn.search("", "(objectClass=*)", search_scope=ldap3.BASE, attributes=[attr])
+    for e in conn.response or []:
+        v = _one(e.get("attributes") or {}, attr)
+        if v:
+            return str(v)
+    return None
+
+
+def discover(cfg, service_password):
+    """What the Add flow fills in, read as the service account: {"base_dn", "netbios" (AD; "" on LDAP or when it can't be read,
+    to be typed), "suffixes" (the DNS domain from the base DN's DC= parts)}. Unreachable when the base DN can't be read."""
+    conn = connect(cfg, cfg["service_dn"], service_password)
+    try:
+        base = _base_dn(conn, cfg["kind"] == "ad")
+        if not base:
+            raise Unreachable("no base DN found")
+        name = ""
+        if cfg["kind"] == "ad":
+            try:
+                name = _netbios(conn, base)
+            except Unreachable:
+                pass
+        domain = _domain_dn(base)
+        dns = ".".join(v for _, v, _ in parse_dn(domain)).lower() if domain else ""
+        return {"base_dn": base, "netbios": name, "suffixes": [dns] if dns else []}
+    except (lx.LDAPException, ValueError):
+        raise Unreachable("read failed") from None
+    finally:
+        conn.unbind()
+
+
+def tree(cfg, service_password, cap=5000, text=""):
+    """{"ous": [DN], "groups": [DN], "more": bool}: the OUs and groups under base_dn as the server wrote them, sorted ignoring
+    case, at most `cap` of each; more when either kind had more. text: only those whose ou (OUs) or cn (groups) contains it."""
+    esc = ldap3.utils.conv.escape_filter_chars
+    kinds = (("ous", "ou", "(objectClass=organizationalUnit)"), ("groups", "cn", AD_GROUP if cfg["kind"] == "ad" else LDAP_GROUP))
+    conn = connect(cfg, cfg["service_dn"], service_password)
+    try:
+        out = {}
+        for kind, attr, flt in kinds:
+            if text:
+                flt = f"(&{flt}({attr}=*{esc(text)}*))"
+            dns = []
+            for e in conn.extend.standard.paged_search(cfg["base_dn"], flt, attributes=[attr], paged_size=500, generator=True):
+                if e.get("type") == "searchResEntry":
+                    dns.append(e["dn"])
+                    if len(dns) > cap:
+                        break
+            out[kind] = dns
+    except lx.LDAPException:
+        raise Unreachable("read failed") from None
+    finally:
+        conn.unbind()
+    more = any(len(v) > cap for v in out.values())
+    return {k: sorted(v, key=str.lower)[:cap] for k, v in out.items()} | {"more": more}
 
 
 def test(cfg, service_password):
