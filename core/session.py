@@ -1,11 +1,24 @@
 """Who is signed in, and whether Toner is open, locked or signed out. Locking keeps the data key open (scheduled work and
 worker threads still need the database); it only hides the window until the password is entered again."""
 import threading
+import time
 
-from core import audit, datakey, db, passvault, quiet, roles, sqldb
+from core import audit, datakey, db, passvault, pinslot, quiet, roles, sqldb
+
+WORKDAY = 12 * 3600
+REFUSED = "Your account can't sign in to Toner any more. Ask an admin."
 
 _lock = threading.RLock()
 _state, _user, _callbacks = "signed_out", None, []
+_kind = None          # "local", "directory" or "recovery" while signed in
+_full_at = None       # when a directory account last signed in in full (time.time())
+_refused = False      # lock(reason="refused"): no unlock until a new sign-in
+# shortcut: kept in memory, so rows waiting here are lost if Toner exits first; upgrade by counting them in netcheck.keys.
+_soon = []            # audit rows from while the key was closed (the audit table is encrypted), written at the next sign-in
+
+
+class Refused(RuntimeError):
+    pass
 
 
 def state():
@@ -34,9 +47,9 @@ def _after_open():
     passvault.open_with(sqldb.current_key())
 
 
-def _opened(opener, action, who):
+def _opened(opener, action, who, kind="local", detail=""):
     """Open the key, then the rest; if any step fails, close what opened so the state and the key agree."""
-    global _state, _user
+    global _state, _user, _kind, _full_at, _refused
     with _lock:
         if _state != "signed_out":
             raise RuntimeError("Already signed in.")
@@ -45,13 +58,17 @@ def _opened(opener, action, who):
             _after_open()
             roles.unlock()                       # inside the rollback: anything it raises closes what opened
             who = who() if callable(who) else who
-            _state, _user = "open", who          # before the audit row, so it names the Toner user
+            detail = detail() if callable(detail) else detail
+            _state, _user, _kind, _refused = "open", who, kind, False     # before the audit row, so it names the Toner user
+            _full_at = time.time() if kind == "directory" else None
         except BaseException:
             _close()
             raise
-        audit.log(action)
+        audit.log(action, detail)
         if fails:                                # counted in netcheck.keys; the audit table opens only now
             audit.log(f"{fails} failed sign-in attempts since the last sign-in")
+        while _soon:
+            audit.log(*_soon.pop(0))
     _notify("open")
 
 
@@ -77,18 +94,55 @@ def sign_in(name, password):
 
 
 def sign_in_recovery(recovery):
-    _opened(lambda: datakey.open_with_recovery(recovery), "signed in with the recovery key", None)
+    _opened(lambda: datakey.open_with_recovery(recovery), "signed in with the recovery key", None, "recovery")
 
 
-def lock():
-    global _state
+def _directory_name(name):
+    doc = datakey.read()
+    rec = doc["accounts"][datakey._find(doc, name)]
+    return next((d.get("name", "") for d in doc.get("directories") or [] if d.get("id") == rec.get("directory")), "")
+
+
+def sign_in_pin(name, pin):
+    """A directory account's sign-in with its PIN (core/dirsignin.py checks the directory and Duo first)."""
+    _opened(lambda: datakey.open_with_pin(name, pin), "signed in", lambda: _stored_name(name), "directory",
+            lambda: f"directory {_directory_name(name)}")
+
+
+def kind():
+    """"local", "directory" or "recovery"; None when signed out."""
+    return _kind
+
+
+def workday_over():
+    """True once a directory account's full sign-in is more than 12 hours old (or the clock went back past it)."""
+    return _full_at is not None and not 0 <= time.time() - _full_at <= WORKDAY
+
+
+def refused():
+    return _refused
+
+
+def audit_soon(action, detail="", who=None):
+    """Audit now while the key is open, else at the next sign-in in this process."""
     with _lock:
-        if _state != "open":
+        if datakey.is_open():
+            audit.log(action, detail, who)
+        else:
+            _soon.append((action, detail, who))
+
+
+def lock(reason=None):
+    """reason "refused" (the directory refused the account): unlocking is refused until a new sign-in, also when already locked."""
+    global _state, _refused
+    with _lock:
+        if _state != "open" and not (reason == "refused" and _state == "locked"):
             raise RuntimeError("Toner isn't open.")
         if _user is None:
             raise RuntimeError("Signed in with the recovery key: there is no password to unlock with.")
-        audit.log("locked")
-        _state = "locked"
+        if _state == "open":
+            audit.log("locked")
+        _state, _refused = "locked", _refused or reason == "refused"
     _notify("locked")
 
 
@@ -97,6 +151,8 @@ def unlock(password):
     with _lock:
         if _state != "locked":
             raise RuntimeError("Toner isn't locked.")
+        if _refused:
+            raise Refused(REFUSED)
         try:
             right = datakey.check_password(_user, password)
         except datakey.Throttled:
@@ -110,8 +166,28 @@ def unlock(password):
     _notify("open")
 
 
+def unlock_pin(pin):
+    global _state
+    with _lock:
+        if _state != "locked":
+            raise RuntimeError("Toner isn't locked.")
+        if _refused:
+            raise Refused(REFUSED)
+        try:
+            right = datakey.check_pin(_user, pin)
+        except pinslot.PinLocked:
+            audit.log("unlock failed", "too many tries")
+            raise
+        if not right:
+            audit.log("unlock failed")
+            raise pinslot.WrongPin()
+        audit.log("unlocked")
+        _state = "open"
+    _notify("open")
+
+
 def sign_out():
-    global _state, _user
+    global _state, _user, _kind, _full_at
     was = _state
     try:
         with _lock:
@@ -123,7 +199,7 @@ def sign_out():
                 try:
                     _close()                 # also when "signed_out": datakey.create leaves the key open
                 finally:
-                    _state, _user = "signed_out", None
+                    _state, _user, _kind, _full_at = "signed_out", None, None, None
     finally:
         if was != "signed_out":
             _notify("signed_out")

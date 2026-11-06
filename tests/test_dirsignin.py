@@ -1,0 +1,398 @@
+# Run directly (python tests/test_x.py) or all together (python tests/run_all.py). Each test builds its own
+# throw-away database and uses a fake credential store, so nothing on this computer is touched.
+# Directory sign-in steps (core/dirsignin.py) on ldap3's MOCK_SYNC, a fake local Duo and a fake security chip: the first sign-in
+# with an admin's approval, the PIN after it, the offline hour, Duo refusals, a role change, a forgotten PIN, another computer.
+import os as _os, sys as _sys, tempfile as _tmp
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+_os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
+_os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+import os, sys, time
+SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\dirsignin%d.db").replace("\\", os.sep) % int(time.time()); os.environ["APPDATA"] = SP
+import keyring
+STORE = {}
+keyring.set_password = lambda s, u, p: STORE.__setitem__((s, u), p)
+keyring.get_password = lambda s, u: STORE.get((s, u))
+keyring.delete_password = lambda s, u: STORE.pop((s, u), None)
+import http.server, json, threading, urllib.parse, uuid
+import ldap3
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from core import audit, datakey, db, directory, duo, osstore, pinslot, roles, session, tpm_windows
+from core import dirsignin as S
+
+ok = bad = 0
+def check(name, cond, extra=""):
+    global ok, bad
+    if cond: ok += 1; print("  ok  ", name)
+    else: bad += 1; print("  FAIL", name, extra)
+
+MESSAGES = []
+def raises(fn, exc):
+    try:
+        fn()
+    except exc as e:
+        MESSAGES.append(str(e))
+        return e
+    except Exception as e:
+        print("   (raised", type(e).__name__, e, ")")
+    return None
+
+
+# ---------------------------------------------------------------- fakes: the protected store, the chip, Duo, the directory
+SKEY = "Zh5eGmUq9zpfQnyUIu5OL9iWoMMv5ZNmk3zLJ4Ep"
+PEPPERS = {"duo:d1": SKEY.encode()}
+osstore.available = lambda: True
+osstore.put = PEPPERS.__setitem__
+osstore.get = PEPPERS.get
+osstore.delete = lambda n: PEPPERS.pop(n, None)
+
+
+class FakeTpm:
+    LockedOut = tpm_windows.LockedOut
+    keys = {}
+
+    @classmethod
+    def lockout_threshold(cls): return 4
+
+    @classmethod
+    def available(cls): return True
+
+    @classmethod
+    def create(cls, name, pin):
+        k = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        cls.keys[name] = (k, pin)
+        return k.public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+
+    @classmethod
+    def decrypt(cls, name, pin, data):
+        if name not in cls.keys:
+            raise FileNotFoundError(name)
+        k, right = cls.keys[name]
+        if pin != right:
+            raise PermissionError("wrong PIN")
+        return k.decrypt(data, padding.OAEP(padding.MGF1(hashes.SHA256()), hashes.SHA256(), None))
+
+    @classmethod
+    def delete(cls, name): cls.keys.pop(name, None)
+
+
+pinslot.tpm_windows = FakeTpm
+pinslot.best_kind = lambda: "chip"
+
+DUO = {"preauth": "auth", "push": "allow", "code": "135790", "down": False, "users": []}
+class H(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def handle_(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        p = json.loads(self.rfile.read(n).decode() or "{}") if n else {}
+        if DUO["down"]:
+            self.send_response(503); self.send_header("Content-Length", "0"); self.end_headers(); return
+        path = urllib.parse.urlsplit(self.path).path
+        if "username" in p: DUO["users"].append(p["username"])
+        if path.endswith("preauth"): r = {"result": DUO["preauth"]}
+        elif path.endswith("/auth") and p.get("factor") == "passcode": r = {"result": "allow" if p["passcode"] == DUO["code"] else "deny"}
+        elif path.endswith("/auth"): r = {"txid": "t"}
+        else: r = {"result": DUO["push"], "status": "x"}
+        b = json.dumps({"stat": "OK", "response": r}).encode()
+        self.send_response(200); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
+    do_POST = do_GET = handle_
+srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H); threading.Thread(target=srv.serve_forever, daemon=True).start()
+duo._TEST_ALLOW_HTTP = True
+
+BASE = "DC=acme,DC=com"
+ADMINS, ENGINEERS, TECHS = "CN=Toner Admins," + BASE, "CN=Toner Engineers," + BASE, "CN=Toner Techs," + BASE
+G_BOB = uuid.uuid4()
+directory._STRATEGY = ldap3.MOCK_SYNC
+ldap = ldap3.Server("mock", get_info=ldap3.NONE)
+c = ldap3.Connection(ldap, client_strategy=ldap3.MOCK_SYNC)
+for dn, attrs in [
+        ("CN=Bob,OU=Users," + BASE, {"objectClass": "user", "userPrincipalName": "bob@acme.com", "sAMAccountName": "bob", "cn": "Bob",
+                                     "objectGUID": G_BOB.bytes_le, "userAccountControl": 512, "userPassword": "pw-bob",
+                                     "memberOf": [TECHS]}),
+        ("CN=Carol,OU=Users," + BASE, {"objectClass": "user", "userPrincipalName": "carol@acme.com", "sAMAccountName": "carol",
+                                       "cn": "Carol", "objectGUID": uuid.uuid4().bytes_le, "userAccountControl": 512,
+                                       "userPassword": "pw-carol", "memberOf": [TECHS]}),
+        ("CN=Dave,OU=Users," + BASE, {"objectClass": "user", "userPrincipalName": "dave@acme.com", "sAMAccountName": "dave", "cn": "Dave",
+                                      "objectGUID": uuid.uuid4().bytes_le, "userAccountControl": 512, "userPassword": "pw-dave"}),
+        (ADMINS, {"objectClass": "group", "cn": "Toner Admins"}),
+        (ENGINEERS, {"objectClass": "group", "cn": "Toner Engineers"}),
+        (TECHS, {"objectClass": "group", "cn": "Toner Techs"})]:
+    c.strategy.add_entry(dn, attrs)
+for upn, cn in (("bob@acme.com", "Bob"), ("carol@acme.com", "Carol"), ("dave@acme.com", "Dave")):
+    ldap.dit[upn] = ldap.dit["CN=%s,OU=Users,%s" % (cn, BASE)]       # AD binds by UPN; the mock only knows DNs
+directory._who_am_i = lambda conn: "u:ACME\\" + conn.server.dit[conn.user]["sAMAccountName"][0].decode()
+UP = lambda cfg, host: ldap
+def DOWN(cfg, host): raise OSError("no route")
+directory._make_server = UP
+
+ACME = {"id": "d1", "name": "ACME", "kind": "ad", "servers": ["dc1.acme.com"], "port": 636, "security": "ldaps", "ca_file": "",
+        "base_dn": BASE, "netbios": "ACME", "suffixes": ["acme.com"], "service_dn": "CN=svc," + BASE,
+        "groups": {"Admin": [ADMINS], "Engineer": [ENGINEERS], "Tech": [TECHS]},
+        "duo": {"on": True, "host": f"127.0.0.1:{srv.server_port}", "ikey": "IK"}}
+PW, PW2 = "correct horse battery 42", "engineers have long passwords 7"
+PIN, PIN2, PIN3 = "246813", "975318", "802461"
+
+def doc():
+    return json.loads(datakey.path().read_text(encoding="utf-8"))
+
+def rows(action):
+    return [r for r in audit.recent(5000) if r["action"] == action]
+
+def fails():
+    return doc()["throttle"]["fails"]
+
+def as_(name, pw):
+    session.sign_out()
+    session.sign_in(name, pw)
+
+def to_pin(login="bob@acme.com", password="pw-bob"):
+    a = S.begin(login, password)
+    S.after_password(a)
+    S.duo_push(a, threading.Event())
+    return a
+
+
+# ---------------------------------------------------------------- set up: an Admin, an Engineer, the directory
+recovery = datakey.create("Admin1", PW)
+db.init()
+datakey.close()
+as_("Admin1", PW)
+datakey.add_local("Eng1", PW2, role="Engineer")
+roles.set_directories([ACME])
+session.sign_out()
+
+# ---------------------------------------------------------------- classify
+check("classify DOMAIN\\user", S.classify("ACME\\bob")[0] == "directory" and S.classify("ACME\\bob")[1]["id"] == "d1"
+      and S.classify("ACME\\bob")[2] == "ACME\\bob")
+check("classify the domain in any case", S.classify("acme\\bob")[0] == "directory")
+check("classify user@suffix", S.classify("bob@acme.com")[:1] == ("directory",) and S.classify("bob@ACME.com")[1]["id"] == "d1")
+check("classify a suffix no directory lists: local", S.classify("bob@other.com") == ("local", "bob@other.com"))
+check("classify a domain no directory has: local", S.classify("OTHER\\bob") == ("local", "OTHER\\bob"))
+check("classify a plain name: local", S.classify(" admin ") == ("local", "admin"))
+check("a local name can't begin a directory sign-in", raises(lambda: S.begin("admin", PW), ValueError) is not None)
+
+# ---------------------------------------------------------------- the first sign-in: password, Duo push, choose a PIN, approval, PIN
+a = S.begin("ACME\\bob", "pw-bob")
+check("begin: the password is checked online", a.stage == "password" and not a.offline and a.user.name == "bob@acme.com"
+      and a.cfg["id"] == "d1", vars(a))
+check("begin writes nothing before a PIN is chosen", datakey.directory_account("bob@acme.com") is None)
+S.after_password(a)
+check("Duo on: the Duo step", a.stage == "duo" and DUO["users"][-1] == "bob@acme.com")
+check("a PIN can't be finished before Duo", raises(lambda: S.finish(a, PIN), RuntimeError) is not None)
+S.duo_push(a, threading.Event())
+check("an approved push: choose a PIN, with the first-sign-in text", a.stage == "choose-pin" and a.message ==
+      "This is your first sign-in to this copy of Toner. Ask an admin to sign in here to approve it.", vars(a))
+e = raises(lambda: S.choose_pin(a, "123456"), ValueError)
+check("a simple PIN is refused with the approved sentence", e is not None and str(e) == "Avoid simple PINs like 123456."
+      and a.stage == "choose-pin")
+S.choose_pin(a, PIN)
+rec = datakey.directory_account("bob@acme.com")
+check("choose_pin: a chip slot and an unapproved record", a.stage == "approve" and rec["slot_kind"] == "chip"
+      and rec["sealed"] is None and rec["groups_role"] == "Tech" and "Toner-" + rec["slot_id"] in FakeTpm.keys, rec)
+e = raises(lambda: S.approve(a, "Eng1", PW2), S.CannotApprove)
+check("an Engineer can't approve", e is not None and str(e) == "That account can't approve sign-ins." and a.stage == "approve"
+      and datakey.directory_account("bob@acme.com")["sealed"] is None)
+check("...and the key is closed again", session.state() == "signed_out" and not datakey.is_open() and not roles.holds("rules"))
+before = fails()
+check("a wrong admin password is refused", raises(lambda: S.approve(a, "Admin1", "not it at all"), datakey.WrongPassword) is not None
+      and a.stage == "approve")
+check("...and counted on the shared counter", fails() == before + 1, fails())
+S.approve(a, "Admin1", PW)
+check("approved: the PIN comes next, and nobody is signed in", a.stage == "pin" and session.state() == "signed_out"
+      and not datakey.is_open() and not roles.holds("rules"))
+check("...sealed with the approved role", datakey.directory_account("bob@acme.com")["approved_role"] == "Tech")
+check("a wrong PIN is refused", raises(lambda: S.finish(a, "975310"), pinslot.WrongPin) is not None and a.stage == "pin")
+S.finish(a, PIN)
+check("the PIN signs Bob in", a.stage == "done" and session.state() == "open" and session.user() == "bob@acme.com"
+      and session.kind() == "directory" and not session.workday_over())
+check("audited: signed in (with the directory), approved, PIN set",
+      rows("signed in")[0]["actor"] == "bob@acme.com" and rows("signed in")[0]["detail"] == "directory ACME"
+      and rows("sign-in approved")[0]["detail"] == "bob@acme.com, approved by Admin1"
+      and len(rows("PIN set")) == 1 and rows("PIN set")[0]["detail"] == "bob@acme.com", rows("signed in")[:1])
+
+# ---------------------------------------------------------------- the session's own steps for a directory account
+session.lock()
+check("unlock_pin: a wrong PIN", raises(lambda: session.unlock_pin("975310"), pinslot.WrongPin) is not None
+      and session.state() == "locked")
+session.unlock_pin(PIN)
+check("unlock_pin: the right PIN opens", session.state() == "open")
+session._full_at = time.time() - 12 * 3600 - 5
+check("the workday is over after 12 hours", session.workday_over())
+session.lock(reason="refused")
+check("refused: the PIN can't unlock", raises(lambda: session.unlock_pin(PIN), session.Refused) is not None
+      and session.refused() and session.state() == "locked")
+check("refused: nor a password", raises(lambda: session.unlock(PW), session.Refused) is not None)
+check("refused: the approved sentence", str(session.Refused(session.REFUSED)) ==
+      "Your account can't sign in to Toner any more. Ask an admin.")
+session.sign_out()
+as_("Admin1", PW)
+check("kind: a local account", session.kind() == "local" and not session.refused())
+session.lock(); session.unlock(PW)
+check("a new sign-in clears the refusal", session.state() == "open")
+session.sign_out()
+session.sign_in_recovery(recovery)
+check("kind: the recovery key", session.kind() == "recovery")
+session.sign_out()
+check("kind: signed out", session.kind() is None)
+
+# ---------------------------------------------------------------- the second sign-in: password, push, PIN
+datakey.set_online("bob@acme.com", time.time() - 5000)
+a = to_pin("bob@acme.com")
+check("a second sign-in goes straight to the PIN", a.stage == "pin" and a.fresh
+      and time.time() - datakey.directory_account("bob@acme.com")["online_at"] < 60)
+S.finish(a, PIN)
+check("...and opens", a.stage == "done" and session.user() == "bob@acme.com")
+session.sign_out()
+
+# ---------------------------------------------------------------- offline: within the hour the PIN alone, past it refused
+directory._make_server = DOWN
+datakey.set_online("bob@acme.com", time.time() - 600)
+a = S.begin("ACME\\bob", "anything")
+check("offline within the hour: the PIN", a.offline and a.stage == "pin" and a.user is None and not a.fresh)
+check("offline: no Forgot your PIN?", raises(lambda: S.restart_pin(a), RuntimeError) is not None and a.stage == "pin")
+S.finish(a, PIN)
+check("offline: the PIN opens", a.stage == "done" and session.user() == "bob@acme.com")
+session.sign_out()
+datakey.set_online("bob@acme.com", time.time() - 3700)
+e = raises(lambda: S.begin("bob@acme.com", "pw-bob"), directory.Unreachable)
+check("offline past the hour: Unreachable, with the approved sentence",
+      e is not None and str(e) == "Toner can't reach the directory. Connect to the network, then try again.")
+check("offline, a name with no account here: Unreachable", raises(lambda: S.begin("ACME\\carol", "x"), directory.Unreachable) is not None)
+directory._make_server = UP
+
+# ---------------------------------------------------------------- wrong passwords, no group, and the wait
+before = fails()
+check("a wrong directory password: WrongPassword", str(raises(lambda: S.begin("bob@acme.com", "nope"), datakey.WrongPassword))
+      == "That username or password isn't right.")
+check("...counted", fails() == before + 1)
+e = raises(lambda: S.begin("dave@acme.com", "pw-dave"), S.NotInGroup)
+check("not in a Toner group: NotInGroup, with the approved sentence",
+      e is not None and str(e) == "Your account isn't in a Toner group. Ask an admin." and fails() == before + 2)
+d = doc(); d["throttle"] = {"fails": 9, "until": time.time() + 100}; datakey.path().write_text(json.dumps(d), encoding="utf-8")
+check("while a wait runs the directory isn't asked", raises(lambda: S.begin("bob@acme.com", "pw-bob"), datakey.Throttled) is not None)
+d = doc(); d["throttle"] = {"fails": 0, "until": 0}; datakey.path().write_text(json.dumps(d), encoding="utf-8")
+
+# ---------------------------------------------------------------- Duo: unreachable, deny, enroll, a code
+datakey.set_online("bob@acme.com", time.time() - 4000)
+a = S.begin("bob@acme.com", "pw-bob")
+DUO["down"] = True
+e = raises(lambda: S.after_password(a), duo.Unavailable)
+check("Duo unreachable: refused, with the approved sentence", e is not None and a.stage == "password"
+      and str(e) == "Toner can't reach Duo, so you can't sign in right now. Try again in a minute.")
+DUO["down"] = False
+S.after_password(a)
+DUO["push"] = "deny"
+e = raises(lambda: S.duo_push(a, threading.Event()), duo.Denied)
+check("Duo deny: refused, with the approved sentence", e is not None and str(e) == "Duo didn't approve the sign-in."
+      and a.stage == "duo")
+check("...the password alone doesn't start a new offline hour", time.time() - datakey.directory_account("bob@acme.com")["online_at"] > 3600)
+DUO["push"] = "allow"
+e = raises(lambda: S.duo_code(a, "000000"), duo.Denied)
+check("a wrong Duo code: refused", e is not None and str(e) == "That code isn't right." and a.stage == "duo")
+S.duo_code(a, DUO["code"])
+check("the right Duo code: the PIN, and a new offline hour", a.stage == "pin"
+      and time.time() - datakey.directory_account("bob@acme.com")["online_at"] < 60)
+for result in ("deny", "enroll"):
+    DUO["preauth"] = result
+    a = S.begin("bob@acme.com", "pw-bob")
+    check("preauth %s: refused" % result, raises(lambda: S.after_password(a), duo.Denied) is not None and a.stage == "password")
+DUO["preauth"] = "auth"
+a = to_pin()
+S.finish(a, PIN)
+check("Duo's refusals are audited once the key opens", len(rows("Duo denied a sign-in")) == 4
+      and rows("Duo denied a sign-in")[0]["detail"] == "bob@acme.com", rows("Duo denied a sign-in"))
+pin_rows = len(rows("PIN set"))
+session.sign_out()
+
+# ---------------------------------------------------------------- the groups move Bob to Engineer: approve again first
+ldap.dit["bob@acme.com"]["memberOf"] = [ENGINEERS.encode()]
+a = to_pin()
+check("the groups' role is written at sign-in", datakey.directory_account("bob@acme.com")["groups_role"] == "Engineer")
+S.finish(a, PIN)
+check("a role that may see unmasked backups: approval before the PIN opens", a.stage == "approve"
+      and a.message == "Your access changed. Ask an admin to sign in here to approve it." and session.state() == "signed_out")
+S.approve(a, "Admin1", PW)
+check("approved: the PIN again", a.stage == "pin" and session.state() == "signed_out")
+S.finish(a, PIN)
+check("...opens as an Engineer holding the backups key", a.stage == "done" and roles.role_of("bob@acme.com") == "Engineer"
+      and roles.holds("backups") and len(rows("PIN set")) == pin_rows)
+session.sign_out()
+
+# ---------------------------------------------------------------- forgot the PIN (approved while another session is open)
+a = S.begin("bob@acme.com", "pw-bob")
+S.after_password(a)
+check("Forgot your PIN? needs Duo first", raises(lambda: S.restart_pin(a), RuntimeError) is not None and a.stage == "duo")
+S.duo_push(a, threading.Event())
+old_slot = datakey.directory_account("bob@acme.com")["slot_id"]
+S.restart_pin(a)
+check("Forgot your PIN?: choose a new one", a.stage == "choose-pin"
+      and a.message == "Your access changed. Ask an admin to sign in here to approve it.")
+check("...the old slot stays until the approval", "Toner-" + old_slot in FakeTpm.keys)
+S.choose_pin(a, PIN2)
+check("...still the old slot in the file", datakey.directory_account("bob@acme.com")["slot_id"] == old_slot and a.stage == "approve")
+
+as_("Eng1", PW2)
+was = (datakey._key, datakey.box_private(), datakey.signed_in_name(), roles.holds("backups"), roles.holds("rules"))
+check("approval while a session is open: an Engineer still can't", raises(lambda: S.approve(a, "Eng1", PW2), S.CannotApprove)
+      is not None)
+check("...the session is untouched", (datakey._key, datakey.box_private(), datakey.signed_in_name(), roles.holds("backups"),
+                                      roles.holds("rules")) == was and session.state() == "open" and session.user() == "Eng1")
+raises(lambda: S.approve(a, "Admin1", "not it at all"), datakey.WrongPassword)
+check("...nor by a wrong password", (datakey._key, datakey.box_private(), datakey.signed_in_name()) == was[:3] and a.stage == "approve")
+S.approve(a, "Admin1", PW)
+check("an Admin approves while Eng1 is signed in: Eng1's session is as it was",
+      (datakey._key, datakey.box_private(), datakey.signed_in_name(), roles.holds("backups"), roles.holds("rules")) == was
+      and session.state() == "open" and session.user() == "Eng1" and datakey.is_open() and a.stage == "pin")
+check("...the old slot is gone, the new one sealed", "Toner-" + old_slot not in FakeTpm.keys
+      and datakey.directory_account("bob@acme.com")["slot_id"] != old_slot)
+check("...audited: PIN reset", len(rows("PIN reset")) == 1 and rows("PIN reset")[0]["detail"] == "bob@acme.com")
+session.sign_out()
+check("the old PIN no longer opens", raises(lambda: S.finish(a, PIN), pinslot.WrongPin) is not None)
+S.finish(a, PIN2)
+check("the new PIN opens", a.stage == "done" and session.user() == "bob@acme.com")
+session.sign_out()
+
+# ---------------------------------------------------------------- another computer (the chip has no key): a new PIN, approved
+FakeTpm.keys.clear()
+a = to_pin()
+S.finish(a, PIN2)
+check("no key on this chip: choose a new PIN, with the access-changed text", a.stage == "choose-pin"
+      and a.message == "Your access changed. Ask an admin to sign in here to approve it." and session.state() == "signed_out")
+S.choose_pin(a, PIN3)
+S.approve_recovery(a, recovery)
+check("the recovery key approves", a.stage == "pin" and not datakey.is_open())
+S.finish(a, PIN3)
+check("the new PIN opens on this computer", a.stage == "done" and session.user() == "bob@acme.com")
+check("audited: PIN set again", len(rows("PIN set")) == pin_rows + 1)
+session.sign_out()
+directory._make_server = DOWN
+datakey.set_online("bob@acme.com", time.time() - 60)
+FakeTpm.keys.clear()
+a = S.begin("bob@acme.com", "pw-bob")
+check("offline with no key on the chip: Unreachable (a new PIN needs the directory)",
+      raises(lambda: S.finish(a, PIN3), directory.Unreachable) is not None and a.stage == "pin")
+directory._make_server = UP
+
+# ---------------------------------------------------------------- the held box key lost before approval (Toner restarted)
+a = to_pin("carol@acme.com", "pw-carol")
+S.choose_pin(a, PIN)
+datakey._started.clear()
+S.approve(a, "Admin1", PW)
+check("the started box key gone: choose the PIN again, nothing approved", a.stage == "choose-pin" and a.slot is None
+      and datakey.directory_account("carol@acme.com")["sealed"] is None and not datakey.is_open())
+S.choose_pin(a, PIN2)
+S.approve(a, "Admin1", PW)
+S.finish(a, PIN2)
+check("...then approved and signed in", a.stage == "done" and session.user() == "carol@acme.com")
+session.sign_out()
+
+# ---------------------------------------------------------------- nothing secret anywhere
+as_("Admin1", PW)
+text = datakey.path().read_text(encoding="utf-8") + json.dumps(audit.recent(5000)) + " ".join(MESSAGES)
+secrets = [PW, PW2, PIN, PIN2, PIN3, "pw-bob", "pw-carol", "pw-dave", "not it at all", DUO["code"], "000000", SKEY, recovery]
+check("no password, PIN, Duo code or key in the keys file, the audit or a message", not any(s in text for s in secrets),
+      [s for s in secrets if s in text])
+session.sign_out()
+
+srv.shutdown(); srv.server_close()
+print(f"\n{ok} passed, {bad} failed"); sys.exit(1 if bad else 0)
