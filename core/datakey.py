@@ -21,7 +21,7 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
-from core import db, envelope, passwords, sqldb
+from core import db, envelope, passwords, quiet, sqldb
 
 FORMAT = "toner-keys"
 PASSWORD_KDF = {"n": 2 ** 16, "r": 8, "p": 1}
@@ -40,6 +40,7 @@ _lock = threading.RLock()
 _key = None
 _box = None       # the signed-in account's (or the recovery key's) private box key
 _name = None      # the signed-in account's stored spelling; None for the recovery key
+_started = {}     # guid -> a started directory account's box private, held until an approval seals it (roles.approve)
 # core/roles sets this (it reads this module, so this one can't import it): fn(before, after) inside each write that adds, removes or
 # re-keys an account or the recovery key. It drops grants made for a box key that is gone, re-signs the rules, and may refuse. It
 # may return a function to run once the write has landed.
@@ -241,6 +242,8 @@ def _attempt(name, secret):
         _gate(doc, counter, now)
         key = None
         stored = None if name is None else _find(doc, name)
+        if stored is not None and doc["accounts"][stored].get("kind") == "directory":
+            stored = None                                     # no password here: as an unknown name
         rec = doc["recovery"] if name is None else doc["accounts"].get(stored)
         upgrade = rec is not None and "box_pub" not in rec
         try:
@@ -268,12 +271,13 @@ def _open(payload, name):
     _key, _box, _name = payload[:32], payload[32:], name
 
 
-def _change(fn, accounts=False):
+def _change(fn, accounts=False, signed_in=True):
     """Read, change and write the file under its lock, with the key open. `accounts`: fn changes the accounts or a box key, so
-    the roles hook sees the file before and after. A change that leaves the file as it was writes nothing."""
+    the roles hook sees the file before and after. `signed_in=False`: a directory sign-in's own write before the key is open,
+    which only touches what the rules don't sign. A change that leaves the file as it was writes nothing."""
     with _lock, _FileLock():
         try:
-            if _key is None:
+            if signed_in and _key is None:
                 raise Locked("Sign in first.")
             doc = _read()
             before = copy.deepcopy(doc)
@@ -367,8 +371,10 @@ def set_password(name, password):
     global _box
     def reseal(doc):
         stored = _stored(doc, name)
-        _check(password, stored)
         old = doc["accounts"][stored]
+        if old.get("kind") == "directory":
+            raise WrongPassword(WRONG)                  # its directory keeps its password
+        _check(password, stored)
         doc["accounts"][stored], private = _account(stored, password, _key, old.get("created"), old.get("role", "Admin"))
         doc["throttle"] = {"fails": 0, "until": 0}
         return stored, private
@@ -382,13 +388,14 @@ def remove(name):
         stored = _stored(doc, name)
         if len(doc["accounts"]) == 1:
             raise LastAccount("Toner needs at least one account.")
-        del doc["accounts"][stored]
-    _change(drop, accounts=True)
+        return doc["accounts"].pop(stored)
+    drop_slot(_change(drop, accounts=True))
 
 
 def accounts():
     with _lock, _FileLock():  # (a writer's os.replace fails on Windows while this file is open)
-        return sorted(({"name": n, "kind": a["kind"], "created": a["created"], "role": a.get("role", "Admin")}
+        return sorted(({"name": n, "kind": a["kind"], "created": a["created"],
+                        "role": (a.get("groups_role") or "Tech") if a["kind"] == "directory" else a.get("role", "Admin")}
                        for n, a in _read()["accounts"].items()), key=lambda a: a["name"].casefold())
 
 
@@ -426,6 +433,110 @@ def new_recovery():
     if _name is None:                   # signed in with the recovery key: hold the new one's box key
         _box = private
     return shown
+
+
+# ---------------------------------------------------------------- directory accounts
+# The account's key in "accounts" is its User.name. Its PIN slot's id is its guid. Its seal ("sealed", made by roles.approve) holds
+# the data key and its box private under the slot. online_at and groups_role are written by the sign-in before the key is open,
+# so the rules don't sign them; approved_role, the attested box key and the directories are signed.
+def directory_account(name):
+    """The directory account's record (a copy), or None; online_at is never later than now."""
+    doc = read()
+    stored = _find(doc, _clean(name))
+    rec = doc["accounts"][stored] if stored else None
+    if rec is None or rec.get("kind") != "directory":
+        return None
+    rec["online_at"] = min(rec.get("online_at") or 0, time.time())     # a clock put back can't stretch the offline hour
+    return rec
+
+
+def start_directory_account(user, directory_id, slot):
+    """Write an unapproved record for `user` (a directory.User) with a new box key, whose private half is held until approval.
+    Refused (ValueError) when the name belongs to a local account, another directory or another person, or is approved."""
+    from core import directory
+    if slot._slot_id != user.guid:
+        raise ValueError("a directory account's PIN slot id is its guid")
+    private, public = envelope.new_box_key()
+
+    def start(doc):
+        cfg = next((d for d in doc.get("directories") or [] if d.get("id") == directory_id), None)
+        if cfg is None:
+            raise ValueError("no such directory")
+        stored = _find(doc, _clean(user.name))
+        if stored is not None:
+            old = doc["accounts"].pop(stored)
+            if (old.get("kind") != "directory" or old.get("directory") != directory_id or old.get("guid") != user.guid
+                    or old.get("sealed") or old.get("approved_role")):
+                raise NameTaken("That username is already taken.")
+        doc["accounts"][user.name] = {
+            "kind": "directory", "directory": directory_id, "guid": user.guid, "display": user.display,
+            "slot_kind": slot.rec["kind"], "slot": slot.rec, "sealed": None, "box_pub": _b64(public), "approved_role": None,
+            "online_at": time.time(), "groups_role": directory.role_for(cfg, user.groups),
+            "created": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+    _change(start, signed_in=False)
+    _started[user.guid] = private
+
+
+def _pin(name, pin):
+    """(the payload of the account's seal, its stored name, the failed tries counted before it); WrongPin, PinLocked or
+    SlotMissing from pinslot. A name with no seal is a wrong PIN."""
+    from core import pinslot
+    with _lock:
+        doc = read()
+        stored = _find(doc, _clean(name))
+        rec = doc["accounts"][stored] if stored else None
+        if rec is None or rec.get("kind") != "directory" or not rec.get("sealed"):
+            raise pinslot.WrongPin()
+        fails = (doc.get("throttle") or {}).get("fails", 0)
+        return pinslot.open(rec["slot"], rec["guid"], pin, rec["sealed"]), stored, fails
+
+
+def open_with_pin(name, pin):
+    """Opens the key; returns how many tries failed (for any name) since the last one that worked."""
+    payload, stored, fails = _pin(name, pin)
+    _open(payload, stored)
+    return fails
+
+
+def check_pin(name, pin):
+    """True when the PIN is right (for unlocking). Raises PinLocked the same way opening does."""
+    from core import pinslot
+    try:
+        _pin(name, pin)
+        return True
+    except pinslot.WrongPin:
+        return False
+
+
+def _set_directory_field(name, field, value):
+    def go(doc):
+        stored = _stored(doc, name)
+        if doc["accounts"][stored].get("kind") != "directory":
+            raise ValueError("There's no account with that username.")
+        doc["accounts"][stored][field] = value
+    _change(go, signed_in=False)
+
+
+def set_online(name, at):
+    _set_directory_field(name, "online_at", min(at, time.time()))
+
+
+def set_groups_role(name, role):
+    if role is not None and role not in ROLES:
+        raise ValueError("unknown role")
+    _set_directory_field(name, "groups_role", role)
+
+
+def drop_slot(rec):
+    """After a directory account's record is gone: delete its PIN slot's TPM key or pepper from this computer."""
+    if not rec or rec.get("kind") != "directory":
+        return
+    _started.pop(rec.get("guid"), None)
+    from core import pinslot
+    try:
+        pinslot.remove(rec["slot"], rec["guid"])
+    except Exception:                                   # the record is already gone; a key left behind opens nothing
+        quiet.ignored()
 
 
 def close():

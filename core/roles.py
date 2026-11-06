@@ -26,7 +26,12 @@ from core import audit, datakey, db, envelope, quiet, sqldb
 ROLES = ("Admin", "Engineer", "Tech")
 KINDS = ("rules", "backups")
 LAST_ADMIN = "Toner needs at least one Admin."
-_PART2 = ("roles", "rules_pub", "rules_sig", "backups_pub", "grants", "recovery_grants", "attested", "recovery_attested")
+_PART2 = ("roles", "rules_pub", "rules_sig", "backups_pub", "grants", "recovery_grants", "attested", "recovery_attested",
+          "directories")
+# a directory's settings as stored (core/directory.py's Config): never a secret, which lives in the OS store or the vault
+_DIRECTORY = {"id", "name", "kind", "servers", "port", "security", "ca_file", "base_dn", "netbios", "suffixes", "service_dn",
+              "groups", "duo"}
+_DUO = {"on", "host", "ikey"}
 _NOT_READY = ("no such table", "file is not a database")    # a first start signs in before the database is encrypted and set up
 
 _lock = threading.RLock()
@@ -62,12 +67,28 @@ def _aad(kind, name):
     return b"toner-role-key:" + kind.encode("ascii") + b":" + (name or "").encode("utf-8")
 
 
+def _directory(a):
+    return a.get("kind") == "directory"
+
+
+def _role(a):
+    """The role whose permissions the account has: a directory account's from its current groups (not signed)."""
+    if _directory(a):
+        return a.get("groups_role") if a.get("groups_role") in ROLES else "Tech"
+    return a.get("role", "Admin")
+
+
+def _keys_role(a):
+    """The role whose role keys the account is granted: a directory account's as an admin last approved it (None: not yet)."""
+    return a.get("approved_role") if _directory(a) else a.get("role", "Admin")
+
+
 def _accounts(doc):
-    return {n: a.get("role", "Admin") for n, a in doc["accounts"].items()}
+    return {n: _role(a) for n, a in doc["accounts"].items()}
 
 
 def _admins(doc):
-    return sum(r == "Admin" for r in _accounts(doc).values())
+    return sum(_keys_role(a) == "Admin" for a in doc["accounts"].values())
 
 
 def _attested(doc):
@@ -78,10 +99,21 @@ def _attested(doc):
 
 
 def _signed(doc):
+    """What the rules key signs. A directory account is in it once approved; its groups_role and online_at are not. The
+    directories are in it once the file has them (so a file without any signs as Part 2 did)."""
     att = doc.get("attested") or {}
-    return envelope.canonical({"roles": doc.get("roles"),
-                               "accounts": {n: {"role": a.get("role", "Admin"), "box_pub": att.get(n)} for n, a in doc["accounts"].items()},
-                               "recovery_box_pub": doc.get("recovery_attested"), "backups_pub": doc.get("backups_pub")})
+    accounts = {}
+    for n, a in doc["accounts"].items():
+        if not _directory(a):
+            accounts[n] = {"role": a.get("role", "Admin"), "box_pub": att.get(n)}
+        elif a.get("approved_role") is not None:
+            accounts[n] = {"approved_role": a["approved_role"], "box_pub": att.get(n), "directory": a.get("directory"),
+                           "guid": a.get("guid")}
+    body = {"roles": doc.get("roles"), "accounts": accounts, "recovery_box_pub": doc.get("recovery_attested"),
+            "backups_pub": doc.get("backups_pub")}
+    if "directories" in doc:
+        body["directories"] = doc["directories"]
+    return envelope.canonical(body)
 
 
 def _sign(doc):
@@ -125,7 +157,8 @@ def _landed(ok):
     """datakey's hook after each change: once the keys file has landed, keep what it signed (when that is new); when the change
     failed, keep nothing and hold the role keys held before it. If keeping it raises, datakey puts the old file back and calls
     this again with False."""
-    global _pending, _was
+    global _pending, _was, _cache
+    _cache = None                                       # (a directory sign-in's own write may have changed a groups role)
     if not ok:
         if _was is not None:
             _held.clear()
@@ -170,7 +203,8 @@ def _verifies(doc, pub):
 
 def _state_of(doc):
     if not _rules_key():                                # only a Part 1 file is unsigned; anything of Part 2's without the key is not
-        return "tampered" if any(k in doc for k in _PART2) or (_rules_key() == "" and _secrets_kept()) else "unsigned"
+        later = any(k in doc for k in _PART2) or any(_directory(a) for a in doc["accounts"].values())
+        return "tampered" if later or (_rules_key() == "" and _secrets_kept()) else "unsigned"
     try:
         pub = _unb64(doc["rules_pub"])
     except (KeyError, TypeError, ValueError, AttributeError):
@@ -300,11 +334,13 @@ def _sync(doc):
     grants = {}
     for name, rec in doc["accounts"].items():
         live = rec.get("box_pub")
-        if live and att.get(name) is None:
+        if live and att.get(name) is None and not _directory(rec):    # (a directory account's is vouched for by approve alone)
             att[name] = live
-        if not live or att[name] != live:               # a Part 1 account not upgraded yet, or a box key swapped in by hand
+        if not live or att.get(name) != live:           # a Part 1 account not upgraded yet, or a box key swapped in by hand
             continue
-        role = rec.get("role", "Admin")
+        role = _keys_role(rec)
+        if role not in ROLES:                           # a directory account not approved yet
+            continue
         want = {"rules": role == "Admin", "backups": _perms_in(doc.get("roles"), role)["unmasked"]}
         mine = old.get(name) if isinstance(old.get(name), dict) else {}
         g = {k: v for k, v in mine.items() if want.get(k)}
@@ -439,7 +475,7 @@ def unlock():
                     _held[kind] = key
             except (KeyError, TypeError, ValueError, AttributeError, InvalidTag):
                 pass                                    # no grant yet, or one that doesn't open
-        if st == "unsigned" and (name is None or rec.get("role", "Admin") == "Admin"):
+        if st == "unsigned" and (name is None or _keys_role(rec) == "Admin"):
             _upgrade_due = True                         # done by _load, now or once the database is ready
         elif st == "ok" and "rules" in _held:
             sync_grants()
@@ -577,6 +613,103 @@ def set_permissions(role, changes):
         _written(pub)
         for k in changed:
             audit.log("role permissions changed", f"{role}: {labels[k]} {'on' if changes[k] else 'off'}")
+        _trim()
+    _notify()
+
+
+# ---------------------------------------------------------------- directories and their accounts
+def needs_approval(name):
+    """"first" (no seal yet), "changed" (the groups' role may hold a role key the approved one may not: Admin, or unmasked) or
+    None. Read from the file as it stands, since it is asked before the key is open."""
+    doc = datakey.read()
+    stored = datakey._find(doc, name)
+    rec = doc["accounts"][stored] if stored else None
+    if rec is not None and not _directory(rec):
+        return None
+    if rec is None or not rec.get("sealed"):
+        return "first"
+    now, was = rec.get("groups_role"), rec.get("approved_role")
+
+    def unmasked(role):
+        return role in ROLES and _perms_in(doc.get("roles"), role)["unmasked"]
+    return "changed" if (now == "Admin" and was != "Admin") or (unmasked(now) and not unmasked(was)) else None
+
+
+def approve(name, slot=None):
+    """An Admin (who holds the rules key) or the recovery key approves a directory account: its approved role becomes its groups'
+    role, and the role keys follow. A first approval seals the data key and the account's box private (held since
+    start_directory_account) under `slot`, the one that start wrote, and vouches for its box key; a later one keeps the seal."""
+    from core import perms
+    with _lock:
+        if not _root and "rules" not in _held:
+            raise perms.Denied()
+
+        def go(doc):
+            repair = _may_write(doc)
+            stored = datakey._stored(doc, name)
+            rec = doc["accounts"][stored]
+            if not _directory(rec) or rec.get("groups_role") not in ROLES:
+                raise ValueError("only a directory account in a Toner group can be approved")
+            first = not rec.get("sealed")
+            if first or slot is not None:
+                if slot is None or slot.rec != rec.get("slot") or slot._slot_id != rec.get("guid"):
+                    raise ValueError("that isn't the account's PIN slot")
+            if first:
+                private = datakey._started.get(rec["guid"])
+                if private is None or _b64(_public("box", private)) != rec.get("box_pub"):
+                    raise ValueError("start the account again: its box key isn't held")
+                rec["sealed"] = slot.seal(datakey._key + private)
+            had = _admins(doc)
+            rec["approved_role"] = rec["groups_role"]
+            if had and not _admins(doc):
+                raise ValueError(LAST_ADMIN)
+            pub = _rekey(doc) if repair else None
+            if first:
+                _attested(doc)[stored] = rec["box_pub"]   # it made this box key at start; the approver vouches for it
+            _sync(doc)
+            return stored, rec["guid"], pub
+        stored, guid, pub = datakey.edit(go)
+        _written(pub)
+        datakey._started.pop(guid, None)
+        admin = datakey.signed_in_name() or audit.actor()
+        audit.log("sign-in approved", f"{stored}, approved by {admin}", who=admin)
+    _notify()
+
+
+def set_directories(directories):
+    """Admin only. Replaces the directories, signed. Removing one removes its accounts, and their PIN slots on this computer."""
+    from core import directory
+    new = {}
+    for d in directories:
+        if not d.get("id") or set(d) - _DIRECTORY or set(d.get("duo") or {}) - _DUO:
+            raise ValueError("unknown directory setting")
+        directory.check_config(d)                       # TLS only (InsecureConfig is a ValueError)
+        new[d["id"]] = json.loads(json.dumps(d))       # a copy, as the file will hold it (tuples as lists)
+    if len(new) != len(directories):
+        raise ValueError("two directories have one id")
+    with _lock:
+        def go(doc):
+            repair = _may_write(doc)
+            old = {d.get("id"): d for d in doc.get("directories") or []}
+            doc["directories"] = list(new.values())
+            had = _admins(doc)
+            gone = [n for n, a in doc["accounts"].items() if _directory(a) and a.get("directory") not in new]
+            dropped = [doc["accounts"].pop(n) for n in gone]
+            if had and not _admins(doc):
+                raise ValueError(LAST_ADMIN)
+            return old, dropped, _resign(doc, repair)
+        old, dropped, pub = datakey.edit(go)
+        _written(pub)
+        for i, d in new.items():
+            if i not in old:
+                audit.log("directory added", d.get("name", ""))
+            elif old[i] != d:
+                audit.log("directory changed", d.get("name", ""))
+        for i, d in old.items():
+            if i not in new:
+                audit.log("directory removed", d.get("name", ""))
+        for rec in dropped:
+            datakey.drop_slot(rec)
         _trim()
     _notify()
 
