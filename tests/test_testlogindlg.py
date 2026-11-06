@@ -97,6 +97,8 @@ from PySide6.QtWidgets import QApplication
 app = QApplication([])
 from ui import signinwindow as W
 from ui import testlogindlg as T
+from ui import status
+FAIL_INK = status.ink("FAIL")
 
 def pump(until, seconds=30):
     end = time.time() + seconds
@@ -127,7 +129,8 @@ def clear_wait():
 def test(d, login, pw):
     """Type and press Test; True once every Job has landed."""
     d.user.setText(login)
-    d.pw.setText(pw)
+    d.pw.setText("")
+    d.pw.insert(pw)                                     # typed: on the box's undo history
     d.test_btn.click()
     d.cleared_at_click = d.pw.text() == ""
     return pump(lambda: not d._jobs)
@@ -163,9 +166,13 @@ check("...one row", len(rows()) == n + 1)
 check("...the session, key and role keys in this process unchanged", held() == before)
 check("...the keys file byte-identical", datakey.path().read_bytes() == keys)
 check("...the finished test isn't kept", d.test is None)
+d.pw.undo()
+check("...undo can't bring the password back", d.pw.text() == "", d.pw.text())
+check("...a pass isn't styled as a failure", FAIL_INK not in d.result.styleSheet(), d.result.styleSheet())
 
 test(d, "bob@acme.com", "not bob's password")
 check("a wrong password: the approved sentence", d.result.text() == "That username or password isn't right.", d.result.text())
+check("...shown as a failure (signinwindow's error colour)", FAIL_INK in d.result.styleSheet(), d.result.styleSheet())
 test(d, "dave@acme.com", "pw-dave")
 check("an unmapped person: TEST_NOT_MAPPED", d.result.text() == S.TEST_NOT_MAPPED.format(name="dave@acme.com"), d.result.text())
 clear_wait()
@@ -214,7 +221,7 @@ d.use_code.click()
 check("Enter a code instead: the code page, the push cancelled", d.pages.currentWidget() is d.code_page and PUSHES[-1].is_set())
 pump(lambda: idle(d))
 check("...the cancelled push lands on nothing", d.pages.currentWidget() is d.code_page and len(rows()) == n + 1)
-d.code.setText(DUO["code"]); d.code_ok.click()
+d.code.insert(DUO["code"]); d.code_ok.click()
 check("...the code box empty at Sign in", d.code.text() == "")
 check("a right code: the first page, TEST_OK", pump(lambda: idle(d) and d.pages.currentWidget() is d.form_page)
       and d.result.text() == S.TEST_OK.format(name="bob@acme.com", role="Engineer"), d.result.text())
@@ -223,6 +230,9 @@ check("...one row for the test", len(rows()) == n + 2)
 d.user.setText("bob@acme.com"); d.pw.setText("pw-bob"); d.test_btn.click()
 pump(lambda: d.pages.currentWidget() is d.push_page)
 d.use_code.click()
+d.code.undo()
+check("the code page again: undo can't bring the last code back", d.pages.currentWidget() is d.code_page and d.code.text() == "",
+      d.code.text())
 d.code.setText("000000"); d.code_ok.click()
 check("a wrong code: the first page, its sentence", pump(lambda: idle(d) and d.pages.currentWidget() is d.form_page)
       and d.result.text() == S.WRONG_CODE, d.result.text())
@@ -234,6 +244,35 @@ d.duo_cancel.click()
 check("Cancel: the first page, no result", d.pages.currentWidget() is d.form_page and d.result.isHidden()
       and PUSHES[-1].is_set())
 check("...the push ends and lands on nothing, no row", pump(lambda: idle(d)) and d.result.isHidden() and len(rows()) == n)
+
+d.user.setText("bob@acme.com"); d.pw.setText("pw-bob"); d.test_btn.click()
+pump(lambda: d.pages.currentWidget() is d.push_page)
+d.use_code.click()
+check("the code page has Cancel", d.code_cancel.text() == "Cancel" and d.code_cancel.isVisible())
+d.code.setText("135"); d.code_cancel.click()
+check("...it goes back to the first page, no result, the box empty", d.pages.currentWidget() is d.form_page and d.result.isHidden()
+      and d.code.text() == "")
+check("...nothing lands, no row", pump(lambda: idle(d)) and d.result.isHidden() and len(rows()) == n and d.test is None)
+
+GOT = []
+real_hook, real_check = sys.excepthook, S.TestLogin.check_password
+sys.excepthook = lambda t, v, tb: GOT.append(v)
+def odd(self, login, password):
+    held_here = password                                # a frame that would keep the password
+    raise ZeroDivisionError("unexpected")
+S.TestLogin.check_password = odd
+d.user.setText("bob@acme.com"); d.pw.setText("pw-bob"); d.test_btn.click()
+pump(lambda: idle(d) and GOT)
+sys.excepthook, S.TestLogin.check_password = real_hook, real_check
+def frames(e):
+    tb = e.__traceback__
+    while tb is not None:
+        yield tb.tb_frame
+        tb = tb.tb_next
+check("an unexpected error: re-raised", len(GOT) == 1 and isinstance(GOT[0], ZeroDivisionError), GOT)
+check("...with no frame keeping the password", GOT and not any("pw-bob" in [v for v in f.f_locals.values() if isinstance(v, str)]
+                                                          for f in frames(GOT[0])))
+GOT.clear()
 
 d.user.setText("bob@acme.com"); d.pw.setText("pw-bob"); d.test_btn.click()
 pump(lambda: d.pages.currentWidget() is d.push_page)

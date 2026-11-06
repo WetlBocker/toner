@@ -3,11 +3,13 @@ directory has Duo on, the real Duo step, through dirsignin.TestLogin. Nothing is
 in this process. The password and code boxes are emptied at the click and on close. Each step runs on a Job; a result that lands
 after Cancel, a code instead, close or a newer Test is dropped, and an exception is dropped once its sentence is shown."""
 import threading
+import traceback
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QDialog, QStackedWidget, QVBoxLayout, QWidget
 
 from core import datakey, directory, dirsignin, perms
+from ui import status
 from ui.signinwindow import (DAMAGED, DAMAGED_ERRORS, DUO_TEXT, DUO_TITLE, SAID, Job, Wait, field, heading, link, primary, say,
                              words)
 
@@ -40,8 +42,9 @@ class TestLoginDialog(QDialog):
         self.use_code.clicked.connect(self._use_code)
 
         self.code_page, lay = self._page()
-        self.code, self.code_ok = field(lay, "Duo code"), primary("Sign in")
-        self._finish(lay, self.code_ok, self._duo_code)
+        self.code, self.code_ok, self.code_cancel = field(lay, "Duo code"), primary("Sign in"), link("Cancel")
+        self._finish(lay, self.code_ok, self._duo_code, self.code_cancel)
+        self.code_cancel.clicked.connect(self._duo_cancel)
         self.code.returnPressed.connect(self.code_ok.click)
 
         QVBoxLayout(self).addWidget(self.pages)
@@ -63,15 +66,14 @@ class TestLoginDialog(QDialog):
         button.clicked.connect(action)
 
     def _go(self, page, focus):
-        for box in (self.pw, self.code):                # no password or code outlives its page
-            box.clear()
+        self._wipe()
         self.pages.setCurrentWidget(page)
         focus.setFocus()
 
     # ---------------------------------------------------------------- the steps
     def _test(self):
         login, box = self.user.text().strip(), [self.pw.text()]     # (popped on the Job: no frame keeps the password)
-        self.pw.clear()
+        self.pw.setText("")
         say(self.result, "")
         self._turn += 1
         t = self.test = dirsignin.TestLogin(self.cfg)               # a fresh one each time: any failure ends a TestLogin
@@ -102,7 +104,7 @@ class TestLoginDialog(QDialog):
 
     def _duo_code(self):
         t, box = self.test, [self.code.text()]
-        self.code.clear()
+        self.code.setText("")
 
         def enter():
             try:
@@ -116,6 +118,7 @@ class TestLoginDialog(QDialog):
         """The first page with the test's sentence, or e's; the test is let go."""
         t, self.test, self._cancel = self.test, None, None
         self._go(self.form_page, self.pw)
+        self.result.setStyleSheet("" if e is None else f"color: {status.ink('FAIL')};")     # a failure as error_label shows one
         if e is None:
             return say(self.result, t.result)
         if isinstance(e, datakey.Throttled):
@@ -127,6 +130,7 @@ class TestLoginDialog(QDialog):
         elif isinstance(e, DAMAGED_ERRORS):
             say(self.result, DAMAGED)
         else:
+            traceback.clear_frames(e.__traceback__)     # (no frame left in sys.last_exc keeps a password or code)
             raise e
 
     def _drop(self):
@@ -163,6 +167,10 @@ class TestLoginDialog(QDialog):
         for job in list(self._jobs):
             job.wait()
         self._jobs.clear()
-        self.pw.clear()
-        self.code.clear()
+        self._wipe()
         super().done(r)
+
+    def _wipe(self):
+        """The password and code boxes emptied, their undo history too (clear() can be undone)."""
+        for box in (self.pw, self.code):
+            box.setText("")

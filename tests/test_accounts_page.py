@@ -280,7 +280,10 @@ check("menu items, in order", [a.text() for a in menu.actions()] == ["Test login
 check("Test login and Set up 2FA are on", menu.actions()[0].isEnabled() and menu.actions()[1].isEnabled())
 tested = []
 A.TestLoginDialog.exec = lambda self: tested.append((self.cfg, self.parent())) or 0
+deleted = []
+A.TestLoginDialog.deleteLater = lambda self: deleted.append(self)
 menu.actions()[0].trigger()
+check("...and the window is deleted after it closes", len(deleted) == 1)
 check("menu Test login opens on the selected identity, from the verified list",
       tested == [(page._dirs[1], page)] and tested[0][0]["name"] == "Corp LDAP", tested)
 check("Edit and Remove are on", menu.actions()[2].isEnabled() and menu.actions()[3].isEnabled())

@@ -314,7 +314,9 @@ class AccountsPage(Page):
     def _test_login(self):
         d = self._dir()
         if d is not None:
-            TestLoginDialog(d, self).exec()
+            dlg = TestLoginDialog(d, self)
+            dlg.exec()
+            dlg.deleteLater()
 
     def _set_up_2fa(self):
         d = self._dir()
