@@ -59,7 +59,7 @@ The mockups from the conversation are beside this document: `2026-11-04-user-sig
    - **Local:** a password.
 3. **Second step (AD and LDAP, when turned on).** A Duo push first, with "Enter a code instead" as the backup: a 6-digit code. The push screen reads "Approve on your phone" and waits, with Cancel. *(built in part 3)*
 4. **The Toner PIN** (directory and SSO users only). On the first sign-in to a copy, the person sets a PIN. After that, the full sign-in asks for it as well. The PIN is 6 digits, protected by the computer's security chip (see "Locking the data"). *(my call: the PIN comes last, after the directory or provider has said yes.)* *(directory part built in part 3; SSO in part 4)*
-5. **Admin approval, the first time only.** When a directory or SSO user signs in to a copy for the first time, an admin approves it at the laptop, by signing in or by using the recovery key. Nothing the user types can unlock the data yet. The directory only answers yes or no. The same approval is needed after a forgotten PIN, on a different computer, and when a group change moves someone into a role that can see unmasked backups. The owner decided this. *(directory part built in part 3; SSO in part 4)*
+5. **Admin approval, the first time only.** When a directory or SSO user signs in to a copy for the first time, an admin approves it at the laptop, by signing in or by using the recovery key. Nothing the user types can unlock the data yet. The directory only answers yes or no. The same approval is needed after a forgotten PIN, on a different computer, and when a group change moves someone into a role that can see unmasked backups. The owner decided this. *(directory part built in part 3; SSO in part 4)* *(directory admins approving: part 4)*
 6. Toner opens.
 
 **Lock screen (layout B).**
@@ -70,7 +70,7 @@ The mockups from the conversation are beside this document: `2026-11-04-user-sig
 - Locking with a keyboard shortcut is also available.
 
 **How often.**
-- *(my call: a full sign-in, with the directory and the second step, lasts the workday, 12 hours by default and set by an admin.)* Within that, idle locks only ask for the PIN or password. *(built in part 3)*
+- *(my call: a full sign-in, with the directory and the second step, lasts the workday, 12 hours by default and set by an admin.)* Within that, idle locks only ask for the PIN or password. *(the 12-hour workday built in part 3; the admin setting later)*
 - While online, Toner re-checks directory and SSO accounts quietly in the background. If an admin disables someone, or removes them from Toner's groups, that person's Toner locks at the next check. *(my call: about every 15 minutes. AD and LDAP need a service account the admin enters, kept in the vault. SSO uses the refresh token.)* *(directory part built in part 3; SSO in part 4)*
 
 **Offline.** A new full sign-in for a directory or SSO account needs a connection, or a successful online check in the last hour. Local accounts work offline. Within that hour, the PIN is what unlocks. *(directory part built in part 3; SSO in part 4)*
