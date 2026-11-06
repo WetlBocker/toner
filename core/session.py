@@ -70,8 +70,9 @@ def _opened(opener, action, who, kind="local", detail=""):
             audit.log(f"{fails} failed sign-in attempts since the last sign-in")
         while _soon:
             audit.log(*_soon.pop(0))
-        if roles.state() == "ok":                # the rules (and so the directories) verified: remember them here
-            dirpin.remember()
+        doc = roles.verified()
+        if doc is not None:                      # the rules (and so the directories) verified: remember that doc here
+            dirpin.remember(doc)
     _notify("open")
 
 

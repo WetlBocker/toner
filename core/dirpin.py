@@ -2,8 +2,10 @@
 
 A directory sign-in reads the list from netcheck.keys before anything can check its signature, so a hand-edited list could send a
 domain password to someone else's server. A login that matches a directory therefore needs the list to match the fingerprint
-remembered here: after a sign-in whose rules check out, and after an Admin changes the directories. The store's name comes from
-the keys file's own path, so two copies on one computer keep their own, and editing the file can't rename it. On Windows it is kept
+remembered here: after a sign-in whose rules check out, and after an Admin changes the directories (each passes the doc it verified
+or wrote, never a fresh read). A CA file is covered by the SHA-256 signed into the list (core/directory.py checks it at connect), so
+nothing here opens a file the list names. The store's name comes from the keys file's folder and name (not where a symlink points),
+so two copies on one computer keep their own, and editing or relinking the file can't rename it. On Windows it is kept
 in %APPDATA%\\Toner\\dirpins.json, outside the data folder (%APPDATA%\\NetCheck, a portable copy's, or NETCHECK_DB's), so whoever
 can write that folder can't delete it; elsewhere the Keychain or Secret Service is already outside it. No protected store: no guard (the owner's call)."""
 import hashlib
@@ -15,16 +17,8 @@ from core import datakey, osstore, passvault, quiet
 
 
 def fingerprint(dirs):
-    """SHA-256 over the list's canonical JSON, then each CA file's contents (a CA file can't be read: a fixed marker)."""
-    h = hashlib.sha256(json.dumps(dirs, sort_keys=True, separators=(",", ":")).encode("utf-8"))
-    for d in dirs:
-        if d.get("ca_file"):
-            try:
-                with open(d["ca_file"], "rb") as f:
-                    h.update(hashlib.sha256(f.read()).digest())
-            except OSError:
-                h.update(b"unreadable")
-    return h.hexdigest()
+    """SHA-256 over the list's canonical JSON. Opens no files."""
+    return hashlib.sha256(json.dumps(dirs, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
 _avail = None          # osstore.available(), asked once: a Secret Service nobody can unlock takes 3 seconds to say no
@@ -48,23 +42,36 @@ def pins_file():
 
 
 def store_name():
-    p = str(datakey.path().resolve())
+    k = datakey.path()
+    p = str(k.parent.resolve() / k.name)
     if sys.platform == "win32":
         p = p.casefold()
     return "dirs:" + hashlib.sha256(p.encode("utf-8")).hexdigest()
 
 
-def remember():
-    """Remember the list as it is now. Never raises: a store error never blocks a sign-in. With no store when first asked, look
-    again off this thread (a keyring unlocked since), so a later put isn't skipped for a stale answer."""
+def remember(doc):
+    """Remember the list in `doc`, the keys doc whose rules were just verified or written. Never raises: a store error never
+    blocks a sign-in. With no store when first asked, look again off this thread (a keyring unlocked since), so a later put
+    isn't skipped for a stale answer."""
     try:
-        name, value = store_name(), fingerprint(datakey.read().get("directories") or []).encode("ascii")
+        name, value = store_name(), fingerprint(doc.get("directories") or []).encode("ascii")
         if _store():
-            osstore.put(name, value, pins_file())
+            _put(name, value)
         elif _looking.acquire(blocking=False):
             threading.Thread(target=_look_again, args=(name, value), daemon=True).start()
     except Exception:
         quiet.ignored()
+
+
+def _put(name, value):
+    f = pins_file()
+    try:
+        osstore.put(name, value, f)
+    except Exception:
+        if f is None:
+            raise
+        f.unlink(missing_ok=True)              # a corrupt pins file: start a fresh one (its entries couldn't be read anyway)
+        osstore.put(name, value, f)
 
 
 def _look_again(name, value):
@@ -80,15 +87,23 @@ def _look_again(name, value):
 
 
 def changed(dirs):
-    """True when this computer remembers a different list. Nothing remembered yet: remember this one (first use)."""
+    """True when this computer remembers a different list. Nothing remembered yet: remember this one (first use).
+    A pins file that can't be read is a mismatch until an ok sign-in writes a fresh one; a keyring error is no store."""
+    if not _store():
+        return False
+    f = pins_file()
     try:
-        if not _store():
-            return False
-        stored = osstore.get(store_name(), pins_file())
-        now = fingerprint(dirs).encode("ascii")
-        if stored is None:
-            osstore.put(store_name(), now, pins_file())
-            return False
+        stored = osstore.get(store_name(), f)
     except passvault.NoKeyring:
+        return False
+    except Exception:
+        quiet.ignored()
+        return f is not None
+    now = fingerprint(dirs).encode("ascii")
+    if stored is None:
+        try:
+            osstore.put(store_name(), now, f)
+        except Exception:
+            quiet.ignored()
         return False
     return stored != now

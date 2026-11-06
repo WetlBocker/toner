@@ -13,6 +13,7 @@ Lock order: this module's lock, then datakey's. datakey's hooks (_accounts_chang
 never take this one and never read the file again.
 """
 import base64
+import hashlib
 import json
 import threading
 
@@ -34,13 +35,13 @@ _PART2 = ("roles", "rules_pub", "rules_sig", "backups_pub", "grants", "recovery_
           "directories")
 # a directory's settings as stored (core/directory.py's Config): never a secret, which lives in the OS store or the vault
 _DIRECTORY = {"id", "name", "kind", "servers", "port", "security", "ca_file", "base_dn", "netbios", "suffixes", "service_dn",
-              "groups", "duo"}
+              "groups", "duo", "ca_sha256"}
 _DUO = {"on", "host", "ikey"}
 _NOT_READY = ("no such table", "file is not a database")    # a first start signs in before the database is encrypted and set up
 
 _lock = threading.RLock()
 _held = {}           # kind -> the private role key this sign-in holds
-_cache = None        # what the file says, verified: {"state", "roles", "accounts", "backups_pub"}
+_cache = None        # what the file says, verified: {"state", "roles", "accounts", "backups_pub", "doc"}
 _rk = None           # the rules_key setting, read once
 _sk = None           # some database keeps backup passwords under a backups key, looked at once (only while rules_key is empty)
 _audited = False     # "roles were changed outside Toner" written this sign-in
@@ -257,7 +258,7 @@ def _load():
             doc, st = None, "tampered"
         c = {"state": st}
         if st == "ok":
-            c.update(roles=doc.get("roles"), accounts=_accounts(doc), backups_pub=_unb64(doc["backups_pub"]))
+            c.update(roles=doc.get("roles"), accounts=_accounts(doc), backups_pub=_unb64(doc["backups_pub"]), doc=doc)
         if st == "tampered" and datakey.is_open() and not _audited:
             _audited = audit.log("roles were changed outside Toner", who=datakey.signed_in_name())
         if _rules_key() is not None:                    # else look again next time: the database may be ready by then
@@ -282,6 +283,11 @@ def _notify():
 def state():
     """"off" (no keys file), "unsigned" (a Part 1 file no Admin has opened since), "ok" or "tampered"."""
     return _load()["state"]
+
+
+def verified():
+    """The keys doc whose rules checked out ("ok"), as it was checked; else None."""
+    return _load().get("doc")
 
 
 def role_of(name):
@@ -708,7 +714,14 @@ def set_directories(directories):
         if not d.get("id") or set(d) - _DIRECTORY or set(d.get("duo") or {}) - _DUO:
             raise ValueError("unknown directory setting")
         directory.check_config(d)                       # TLS only (InsecureConfig is a ValueError)
-        new[d["id"]] = json.loads(json.dumps(d))       # a copy, as the file will hold it (tuples as lists)
+        c = new[d["id"]] = json.loads(json.dumps(d))   # a copy, as the file will hold it (tuples as lists)
+        c.pop("ca_sha256", None)
+        if c.get("ca_file"):                            # signed with the list: connect refuses a CA file changed since
+            try:
+                with open(c["ca_file"], "rb") as f:
+                    c["ca_sha256"] = hashlib.sha256(f.read()).hexdigest()
+            except OSError:
+                raise ValueError("the CA file can't be read") from None
     if len(new) != len(directories):
         raise ValueError("two directories have one id")
     for field in ("netbios", "suffixes"):              # classify must find one directory for a name, never two
@@ -726,10 +739,10 @@ def set_directories(directories):
             dropped = [doc["accounts"].pop(n) for n in gone]
             if had and not _admins(doc):
                 raise ValueError(LAST_ADMIN)
-            return old, dropped, _resign(doc, repair)
-        old, dropped, pub = datakey.edit(go)
+            return old, dropped, _resign(doc, repair), doc
+        old, dropped, pub, wrote = datakey.edit(go)
         _written(pub)
-        dirpin.remember()                               # signed and landed: this computer's remembered list follows
+        dirpin.remember(wrote)                          # signed and landed: this computer's remembered list follows
         for i, d in new.items():
             if i not in old:
                 audit.log("directory added", d.get("name", ""))

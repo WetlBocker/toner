@@ -34,7 +34,7 @@ def tree(entries):
     c = ldap3.Connection(srv, client_strategy=ldap3.MOCK_SYNC)
     for dn, attrs in entries: c.strategy.add_entry(dn, attrs)
     c.bind()
-    D._make_server = lambda cfg, host: srv
+    D._make_server = lambda cfg, host, *_: srv
     return srv
 
 # --- AD: alice is in Eng-Team, which is in Network-Admins (nested); Tech-Desk is a separate group; bob is disabled
@@ -174,6 +174,47 @@ import inspect; src = inspect.getsource(D)
 check("certificates are required, never disabled", "CERT_REQUIRED" in src and "CERT_NONE" not in src)
 tls = REAL_MAKE_SERVER(dict(AD, ca_file=""), "h").tls
 check("the real server object validates certificates", tls.validate == __import__("ssl").CERT_REQUIRED)
+
+print("== the CA file: signed into the list as ca_sha256, read once at connect")
+import builtins, hashlib, pathlib
+mock = D._make_server
+seen, reads = [], []
+def recording(cfg, host, *ca):
+    seen.append(REAL_MAKE_SERVER(cfg, host, *ca).tls.ca_certs_data)
+    raise OSError("stop before the network")
+real_open, real_read_bytes, real_path_open = builtins.open, pathlib.Path.read_bytes, pathlib.Path.open
+def counting(real):
+    def fn(f, *a, **k):
+        if "ca-" in str(f): reads.append(str(f))
+        return real(f, *a, **k)
+    return fn
+def connect_with(cfg):
+    seen.clear(); reads.clear()
+    D._make_server = recording
+    builtins.open, pathlib.Path.read_bytes, pathlib.Path.open = counting(real_open), counting(real_read_bytes), counting(real_path_open)
+    try:
+        return raises(D.InsecureConfig, D.connect, cfg, "x@corp.example", "pw")
+    finally:
+        builtins.open, pathlib.Path.read_bytes, pathlib.Path.open = real_open, real_read_bytes, real_path_open
+        D._make_server = mock
+der, pem = os.path.join(SP, "ca-der.cer"), os.path.join(SP, "ca-pem.pem")
+DER = bytes.fromhex("3082") + b"not really DER"
+PEM = b"-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
+with open(der, "wb") as f: f.write(DER)
+with open(pem, "wb") as f: f.write(PEM)
+two = dict(AD, servers=["dc1.corp.example", "dc2.corp.example"])
+connect_with(dict(two, ca_file=der, ca_sha256=hashlib.sha256(DER).hexdigest()))
+check("ldap3.Tls gets the checked bytes as ca_certs_data, for every server", seen == [DER, DER], seen)
+check("...read once, not once per server", len(reads) == 1, reads)
+connect_with(dict(two, ca_file=pem, ca_sha256=hashlib.sha256(PEM).hexdigest()))
+check("a PEM file goes to ldap3.Tls as its text (ssl's cadata takes PEM only as text)", seen == [PEM.decode("ascii")] * 2, seen)
+connect_with(dict(AD, ca_file=""))
+check("no CA file: the system store (no ca_certs_data)", seen == [None], seen)
+for what, cfg in (("a CA file whose contents changed", dict(AD, ca_file=der, ca_sha256=hashlib.sha256(b"other").hexdigest())),
+                  ("a CA file with no ca_sha256", dict(AD, ca_file=der)),
+                  ("a CA file that can't be read", dict(AD, ca_file=os.path.join(SP, "ca-missing.pem"),
+                                                        ca_sha256=hashlib.sha256(DER).hexdigest()))):
+    check("%s is refused before any server is made" % what, connect_with(cfg) is not None and seen == [], seen)
 
 print("== unreachable (no mock)")
 D._STRATEGY = ldap3.SYNC; D._make_server = REAL_MAKE_SERVER

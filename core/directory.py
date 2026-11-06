@@ -1,6 +1,6 @@
 """Directory client: binds to Active Directory or LDAP over TLS, reads a person's groups and state, maps groups to roles.
 No user-facing text lives here; exception messages are internal and never contain a password."""
-import re, ssl, uuid
+import hashlib, ssl, uuid
 from dataclasses import dataclass
 
 import ldap3
@@ -45,8 +45,23 @@ def check_config(cfg):
         raise InsecureConfig("port 389 is not LDAPS")
 
 
-def _make_server(cfg, host):
-    tls = ldap3.Tls(validate=ssl.CERT_REQUIRED, ca_certs_file=cfg.get("ca_file") or None)
+def _ca(cfg):
+    """The CA file's contents for ldap3, read once and checked against the SHA-256 signed into the list (roles.set_directories),
+    so a changed file is refused, not trusted. No CA file: None (the system store)."""
+    if not cfg.get("ca_file"):
+        return None
+    try:
+        with open(cfg["ca_file"], "rb") as f:
+            data = f.read()
+    except OSError:
+        raise InsecureConfig("the CA file can't be read") from None
+    if hashlib.sha256(data).hexdigest() != cfg.get("ca_sha256"):
+        raise InsecureConfig("the CA file isn't the one signed")
+    return data.decode("ascii", "ignore") if b"-----BEGIN" in data else data     # ssl's cadata takes PEM as text, DER as bytes
+
+
+def _make_server(cfg, host, ca=None):
+    tls = ldap3.Tls(validate=ssl.CERT_REQUIRED, ca_certs_data=ca)
     return ldap3.Server(host, port=int(cfg["port"]), use_ssl=cfg["security"] == "ldaps", tls=tls,
                         connect_timeout=CONNECT_TIMEOUT, get_info=ldap3.NONE)
 
@@ -55,11 +70,12 @@ def connect(cfg, who, password):
     check_config(cfg)
     if not who or not password:      # an empty password makes a SIMPLE bind anonymous, which "succeeds"
         raise BadCredentials("empty identity or password")
+    ca = _ca(cfg)
     down = None
     for host in cfg["servers"]:
         conn = None
         try:      # auto_referrals off: ldap3 would follow an ldap:// referral in clear text with the same user and password
-            conn = ldap3.Connection(_make_server(cfg, host), user=who, password=password, authentication=ldap3.SIMPLE,
+            conn = ldap3.Connection(_make_server(cfg, host, ca), user=who, password=password, authentication=ldap3.SIMPLE,
                                     client_strategy=_STRATEGY, receive_timeout=RECEIVE_TIMEOUT, raise_exceptions=True, auto_referrals=False)
             conn.open()
             if cfg["security"] == "starttls" and not (conn.start_tls() and conn.tls_started):

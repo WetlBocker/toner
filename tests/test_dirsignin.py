@@ -14,7 +14,7 @@ STORE = {}
 keyring.set_password = lambda s, u, p: STORE.__setitem__((s, u), p)
 keyring.get_password = lambda s, u: STORE.get((s, u))
 keyring.delete_password = lambda s, u: STORE.pop((s, u), None)
-import http.server, json, pathlib, threading, urllib.parse, uuid
+import builtins, hashlib, http.server, json, pathlib, threading, urllib.parse, uuid
 import ldap3
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
@@ -126,8 +126,8 @@ for dn, attrs in [
 for upn, cn in (("bob@acme.com", "Bob"), ("carol@acme.com", "Carol"), ("dave@acme.com", "Dave")):
     ldap.dit[upn] = ldap.dit["CN=%s,OU=Users,%s" % (cn, BASE)]       # AD binds by UPN; the mock only knows DNs
 directory._who_am_i = lambda conn: "u:ACME\\" + conn.server.dit[conn.user]["sAMAccountName"][0].decode()
-UP = lambda cfg, host: ldap
-def DOWN(cfg, host): raise OSError("no route")
+UP = lambda cfg, host, *_: ldap
+def DOWN(cfg, host, *_): raise OSError("no route")
 directory._make_server = UP
 
 ACME = {"id": "d1", "name": "ACME", "kind": "ad", "servers": ["dc1.acme.com"], "port": 636, "security": "ldaps", "ca_file": "",
@@ -480,22 +480,35 @@ session.sign_out()
 # ---------------------------------------------------------------- a hand-edited directories list pauses directory sign-in
 PAUSED = "Directory sign-in is paused on this computer. An admin needs to sign in first."
 binds = []
-def COUNTING(cfg, host): binds.append(host); return ldap
+def COUNTING(cfg, host, *_): binds.append(host); return ldap
 directory._make_server = COUNTING
 good = datakey.path().read_bytes()
 
 def edited(change):
     d = doc(); change(d["directories"][0]); datakey.path().write_text(json.dumps(d), encoding="utf-8")
 
+opened = []
+real_open, real_read_bytes, real_path_open = builtins.open, pathlib.Path.read_bytes, pathlib.Path.open
+def recording(real):
+    def fn(f, *a, **k):
+        if "evil" in str(f):
+            opened.append(str(f)); raise OSError("would block")
+        return real(f, *a, **k)
+    return fn
 for what, change in (("a server", lambda c: c.update(servers=["ldap.evil.example"])),
                      ("a suffix", lambda c: c["suffixes"].append("evil.example")),
-                     ("the CA file", lambda c: c.update(ca_file=os.path.join(SP, "evil-ca.pem")))):
+                     ("the CA file", lambda c: c.update(ca_file=r"\\evil\x"))):
     edited(change)
-    e = raises(lambda: S.begin("bob@acme.com", "pw-bob"), S.Paused)
+    builtins.open, pathlib.Path.read_bytes, pathlib.Path.open = recording(real_open), recording(real_read_bytes), recording(real_path_open)
+    try:
+        e = raises(lambda: S.begin("bob@acme.com", "pw-bob"), S.Paused)
+    finally:
+        builtins.open, pathlib.Path.read_bytes, pathlib.Path.open = real_open, real_read_bytes, real_path_open
     check("editing %s pauses directory sign-in, with the approved sentence, and binds nothing" % what,
           e is not None and str(e) == PAUSED and binds == [])
     check("...a local login still classifies", S.classify("admin") == ("local", "admin"))
     datakey.path().write_bytes(good)
+check("...an edited CA path is never opened (a UNC path could block, or reach someone else)", opened == [], opened)
 check("the list as remembered signs in again", S.begin("bob@acme.com", "pw-bob").stage == "password" and len(binds) == 1)
 
 ca = os.path.join(SP, "acme-ca.pem")
@@ -504,13 +517,27 @@ as_("Admin1", PW)
 roles.set_directories([{**ACME, "ca_file": ca}])
 session.sign_out()
 check("set_directories remembers the new list (with its CA file)", S.classify("bob@acme.com")[0] == "directory")
+check("...and signs the CA file's SHA-256 into it", doc()["directories"][0].get("ca_sha256") == hashlib.sha256(b"one CA").hexdigest())
 with open(ca, "w") as f: f.write("another CA")
-check("changing the CA file's contents pauses", str(raises(lambda: S.classify("bob@acme.com"), S.Paused)) == PAUSED)
-with open(ca, "w") as f: f.write("one CA")
-check("...putting them back resumes", S.classify("bob@acme.com")[0] == "directory")
+binds.clear()
+check("changing only the CA file's contents: connect refuses it and nothing binds",
+      raises(lambda: S.begin("bob@acme.com", "pw-bob"), directory.InsecureConfig) is not None and binds == [], binds)
 as_("Admin1", PW)
+session.sign_out()
+check("...a local Admin's 'ok' sign-in doesn't make it work again",
+      raises(lambda: S.begin("bob@acme.com", "pw-bob"), directory.InsecureConfig) is not None and binds == [], binds)
+as_("Admin1", PW)
+roles.set_directories([{**ACME, "ca_file": ca}])
+session.sign_out()
+check("...set_directories again does", S.begin("bob@acme.com", "pw-bob").stage == "password" and len(binds) == 1, binds)
+as_("Admin1", PW)
+before = datakey.path().read_bytes()
+check("a CA file that can't be read is refused", raises(lambda: roles.set_directories(
+    [{**ACME, "ca_file": os.path.join(SP, "no-such-ca.pem")}]), ValueError) is not None)
+check("...before anything is written", datakey.path().read_bytes() == before)
 roles.set_directories([ACME])
 session.sign_out()
+check("no CA file: no ca_sha256 kept", "ca_sha256" not in doc()["directories"][0])
 good = datakey.path().read_bytes()
 
 edited(lambda c: c.update(servers=["ldap.evil.example"]))
@@ -526,6 +553,37 @@ check("a local Admin's sign-in with the rules ok remembers the list", roles.stat
       and DIRS.get(dirpin.store_name()) == dirpin.fingerprint([ACME]).encode())
 session.sign_out()
 check("...and directory sign-in works again", S.classify("bob@acme.com")[0] == "directory")
+
+real_remember = dirpin.remember
+def swap_first(*a, **k):                                         # the file changes after roles verified it, before the refresh
+    edited(lambda c: c.update(servers=["ldap.evil.example"]))
+    return real_remember(*a, **k)
+dirpin.remember = swap_first
+as_("Admin1", PW)
+dirpin.remember = real_remember
+session.sign_out()
+check("a keys file swapped between the rules check and the refresh isn't pinned",
+      DIRS.get(dirpin.store_name()) == dirpin.fingerprint([ACME]).encode()
+      and raises(lambda: S.classify("bob@acme.com"), S.Paused) is not None)
+datakey.path().write_bytes(good)
+DIRS[dirpin.store_name()] = dirpin.fingerprint([ACME]).encode()
+
+kp, other = datakey.path(), datakey.path().with_name("other.keys")
+name = dirpin.store_name()
+d = json.loads(good); d["directories"][0]["servers"] = ["ldap.evil.example"]; other.write_text(json.dumps(d), encoding="utf-8")
+kp.unlink()
+try:
+    os.symlink(other, kp)
+except (OSError, NotImplementedError):
+    kp.write_bytes(good)
+    print("  (skipped: symlinks can't be made here)")
+else:
+    check("netcheck.keys replaced by a symlink to another file keeps the folder's store name, and pauses",
+          dirpin.store_name() == name and raises(lambda: S.classify("bob@acme.com"), S.Paused) is not None)
+    kp.unlink(); kp.write_bytes(good)
+other.unlink()
+for k in [k for k in DIRS if k != name]: del DIRS[k]
+check("...the real file again signs in", S.classify("bob@acme.com")[0] == "directory")
 
 if sys.platform == "win32":
     check("Windows: the fingerprint file is outside the data folder, under %APPDATA%",
@@ -544,13 +602,30 @@ if sys.platform == "win32":
           REAL_GET("dirs:test", dirpin.pins_file()) == b"a fingerprint" and dirpin.pins_file().exists()
           and b"a fingerprint" not in dirpin.pins_file().read_bytes()
           and (store.read_bytes() if store.exists() else None) == before and REAL_GET("dirs:test") is None)
+    fake_put, fake_get = osstore.put, osstore.get
+    osstore.put = lambda n, v, file=None: REAL_PUT(n, v, file) if file else PEPPERS.__setitem__(n, v)
+    osstore.get = lambda n, file=None: REAL_GET(n, file) if file else PEPPERS.get(n)
+    as_("Admin1", PW)
+    session.sign_out()
+    dirpin.pins_file().write_bytes(b"{not json")
+    check("Windows: a corrupt dirpins.json pauses", raises(lambda: S.classify("bob@acme.com"), S.Paused) is not None)
+    as_("Admin1", PW)
+    session.sign_out()
+    check("...until an ok sign-in writes a fresh one", S.classify("bob@acme.com")[0] == "directory"
+          and json.loads(dirpin.pins_file().read_text("utf-8")).keys() == {dirpin.store_name()})
+    osstore.put, osstore.get = fake_put, fake_get
 else:
     check("elsewhere: the keyring, no file", dirpin.pins_file() is None)
+    real_get = osstore.get
+    def keyring_broke(name, file=None): raise RuntimeError("the Secret Service went away")
+    osstore.get = keyring_broke
+    check("elsewhere: a keyring error other than NoKeyring is no store (unguarded)", S.classify("bob@acme.com")[0] == "directory")
+    osstore.get = real_get
 
 name = dirpin.store_name()
 DIRS.pop(name, None)
 dirpin._avail = False                                            # no store when this process first asked; one came since
-dirpin.remember()
+dirpin.remember(doc())
 check("a stale 'no store' doesn't skip the put: it looks again off the thread",
       dirpin._looking.acquire(timeout=10) and DIRS.get(name) == dirpin.fingerprint([ACME]).encode() and dirpin._avail is True)
 dirpin._looking.release()
