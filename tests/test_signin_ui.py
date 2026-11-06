@@ -273,6 +273,37 @@ db.set_home(globex)
 check("a clean, empty read marks it done, for the whole installation (not one organization)",
       db.get_setting("credential_manager_carried") is True)
 db.set_home(db.GLOBAL)
+
+print("== keyring's default chains the vault in front of Credential Manager: carrying never deletes from the vault")
+class VaultKeyring:                                        # Toner's vault as keyring sees it, by name and behaviour
+    def get_password(self, service, name): return passvault.get(name)
+    def delete_password(self, service, name):
+        if not passvault.remove(name): raise KeyError(name)
+vault_kr = VaultKeyring()
+class OldStore:
+    def __init__(self): self.d = {"service:proxy": "old-copy-1"}
+    def get_password(self, service, name): return self.d.get(name)
+    def delete_password(self, service, name): self.d.pop(name)
+class ChainerBackend:                                      # keyring's chain, by name and behaviour: first backend that answers
+    def __init__(self, backends): self.backends = backends
+    def get_password(self, service, name):
+        return next((v for v in (b.get_password(service, name) for b in self.backends) if v is not None), None)
+    def delete_password(self, service, name):
+        for b in self.backends:
+            try: return b.delete_password(service, name)
+            except Exception: pass
+cm = OldStore()
+passvault.put("service:ssh-tunnel", "kept-in-vault-1")
+check("set-up: the vault holds a password Toner knows", passvault.get("service:ssh-tunnel") == "kept-in-vault-1")
+passvault._old_backend = ChainerBackend([vault_kr, cm])
+check("without_vault takes Credential Manager out of the chain", passvault.without_vault(passvault._old_backend) is cm)
+db.set_setting("credential_manager_carried", False)
+setupdlg.carry_credential_manager()
+check("the vault's own password is still there", passvault.get("service:ssh-tunnel") == "kept-in-vault-1")
+check("Credential Manager's password moved into the vault and left Credential Manager",
+      passvault.get("service:proxy") == "old-copy-1" and "service:proxy" not in cm.d)
+passvault._old_backend = vault_kr
+check("the vault alone is never taken for Credential Manager", passvault.without_vault(passvault._old_backend) is None)
 passvault.sys, passvault._old_backend = real_sys, real_backend
 
 print("== the lock screen over Toner's window")

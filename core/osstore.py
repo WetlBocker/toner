@@ -19,8 +19,8 @@ def _backend():
     b = passvault._old_backend
     if b is None:
         import keyring
-        b = keyring.get_keyring()
-        if b.__class__.__name__ == "VaultKeyring":
+        b = passvault.without_vault(keyring.get_keyring())
+        if b is None:
             return None
     return None if "fail" in b.__class__.__module__ else b     # keyring.backends.fail: no Secret Service
 

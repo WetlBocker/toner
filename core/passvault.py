@@ -491,10 +491,22 @@ def install():
                 raise keyring.errors.PasswordDeleteError("not in the vault")
             _tell_manager(username, "delete")
 
-    current = keyring.get_keyring()
-    if current.__class__.__name__ != "VaultKeyring":
+    current = without_vault(keyring.get_keyring())
+    if current is not None:
         _old_backend = current
     keyring.set_keyring(VaultKeyring())
+
+
+def without_vault(backend):
+    """The system's own store from what keyring picked, never Toner's vault. keyring builds its default from every backend
+    class defined so far, so once VaultKeyring exists the default can be a chain with the vault first: reading "Credential
+    Manager" through it reads the vault, and deleting through it deletes from the vault (that emptied vaults on 2026-11-06)."""
+    if backend is None or backend.__class__.__name__ == "VaultKeyring":
+        return None
+    if backend.__class__.__name__ == "ChainerBackend":
+        rest = [b for b in getattr(backend, "backends", []) if b.__class__.__name__ != "VaultKeyring"]
+        return rest[0] if rest else None
+    return backend
 
 
 def _memory_only(name):
@@ -529,7 +541,7 @@ def left_in_credential_manager():
     from core import vault
     if sys.platform != "win32":                          # (only Windows' Toner ever used Credential Manager)
         return {}
-    backend = _old_backend
+    backend = without_vault(_old_backend)                # (never the vault itself: see without_vault)
     if backend is None:
         raise Unreadable({})
     out, failed = {}, False
@@ -549,6 +561,8 @@ def forget_credential_manager(names_):
     """Remove the moved passwords from Credential Manager (each one only once it is in the vault)."""
     for name in names_:
         try:
-            _old_backend.delete_password(db.SERVICE, name)
+            backend = without_vault(_old_backend)
+            if backend is not None:                     # deleting through the vault would delete the password itself
+                backend.delete_password(db.SERVICE, name)
         except Exception:
             quiet.ignored()
