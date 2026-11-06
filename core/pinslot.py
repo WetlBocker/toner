@@ -79,8 +79,7 @@ def _pepper_name(slot_id):
 
 
 def _kek(rec, pin, pepper=None):
-    kdf = KDF[rec["kind"]]
-    k = Scrypt(salt=_unb64(rec["salt"]), length=32, n=kdf["n"], r=kdf["r"], p=kdf["p"]).derive(pin.encode("utf-8"))
+    k = Scrypt(salt=_unb64(rec["salt"]), length=32, n=rec["n"], r=rec["r"], p=rec["p"]).derive(pin.encode("utf-8"))
     if pepper is None:
         return k
     return HKDF(hashes.SHA256(), 32, salt=None, info=b"toner-pinslot:store").derive(k + pepper)
@@ -153,6 +152,8 @@ def _try(rec, slot_id, pin, sealed):
         except tpm_windows.LockedOut as e:
             raise PinLocked(e.seconds) from None
         return _unbox(kek, sealed["box"], slot_id)        # (a damaged box: InvalidTag, not a wrong PIN)
+    if any(int(rec.get(f, 0)) < KDF[kind][f] for f in ("n", "r", "p")):
+        raise SlotMissing()                               # a record made cheaper to guess was tampered with
     pepper = None
     if kind == "store":
         try:
@@ -168,7 +169,13 @@ def _try(rec, slot_id, pin, sealed):
 
 
 def open(rec, slot_id, pin, sealed):
-    """The sealed secret. Every wrong PIN counts on netcheck.keys' shared counter, read and written under its lock."""
+    """The sealed secret. Every wrong PIN counts on netcheck.keys' shared counter, read and written under its lock; raises
+    FileNotFoundError when there is no keys file.
+
+    On the chip, Windows locks a user out of every TPM PIN once they have its threshold of failures (4) in 8 hours, so Toner
+    lets one fewer reach the chip: the (threshold - 1)th wrong PIN starts Toner's wait, and the next try waits before the chip
+    sees it."""
+    free = max(tpm_windows.lockout_threshold() - 2, 0) if rec["kind"] == "chip" else datakey.FREE_TRIES
     with datakey._lock, datakey._FileLock():
         doc = datakey._read()
         counter = doc.setdefault("throttle", {"fails": 0, "until": 0})
@@ -178,7 +185,7 @@ def open(rec, slot_id, pin, sealed):
             try:
                 secret = _try(rec, slot_id, pin or "", sealed)
             except WrongPin:
-                datakey._failed(doc, counter, now)
+                datakey._failed(doc, counter, now, free)
                 raise
         except datakey.Throttled as e:
             raise PinLocked(e.seconds) from None

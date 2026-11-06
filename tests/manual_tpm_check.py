@@ -71,6 +71,9 @@ finally:
     pinslot.remove({"kind": "chip"}, slot_id)
 r = outcome(lambda: tpm_windows.decrypt(name, PIN, b"x" * 256))
 check("delete: the key is gone (FileNotFoundError)", isinstance(r, FileNotFoundError), repr(r))
-r = outcome(lambda: pinslot.open({"kind": "chip"}, slot_id, PIN, sealed))
-check("remove: the slot's key is gone (SlotMissing)", isinstance(r, pinslot.SlotMissing), repr(r))
+if sealed is None:
+    check("remove: the slot was never made, so its removal can't be checked (see the failures above)", False)
+else:
+    r = outcome(lambda: pinslot.open({"kind": "chip"}, slot_id, PIN, sealed))
+    check("remove: the slot's key is gone (SlotMissing)", isinstance(r, pinslot.SlotMissing), repr(r))
 print(f"\n{ok} passed, {bad} failed  ({time.time() - started:.0f} s)"); sys.exit(1 if bad else 0)

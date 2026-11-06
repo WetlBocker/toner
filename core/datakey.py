@@ -216,10 +216,11 @@ def _gate(doc, counter, now):
         raise Throttled(math.ceil(counter["until"] - now))
 
 
-def _failed(doc, counter, now):
-    """After a wrong try, under the lock: count it and write; raises Throttled once past the free tries."""
+def _failed(doc, counter, now, free=FREE_TRIES):
+    """After a wrong try, under the lock: count it and write; raises Throttled once past the `free` tries (a PIN on the
+    security chip has fewer, so Toner's wait comes before Windows' lockout)."""
     counter["fails"] = counter.get("fails", 0) + 1
-    over = counter["fails"] - FREE_TRIES
+    over = counter["fails"] - free
     if over > 0:
         counter["until"] = now + _wait(over)
     _write(doc)

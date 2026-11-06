@@ -57,16 +57,27 @@ def _check(r, what):
     raise OSError(f"{what} failed (0x{r:08X})")
 
 
-def _lockout_wait():
-    """The longest Windows' lockout can last: a standard user's TPM failures count for the "Standard User Lockout Duration"
-    policy (480 minutes unless set). The time left can't be read without admin rights."""
+def _policy(name):
+    """A TPM Group Policy value (HKLM, under SOFTWARE/Policies/Microsoft/Tpm), or None when it isn't set (or not Windows)."""
     try:
         import winreg
         with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Policies\Microsoft\Tpm") as k:
-            minutes = int(winreg.QueryValueEx(k, "StandardUserAuthorizationFailureDuration")[0])
-        return minutes * 60 if minutes > 0 else DEFAULT_WAIT
-    except (OSError, ValueError):
-        return DEFAULT_WAIT
+            return int(winreg.QueryValueEx(k, name)[0])
+    except (ImportError, OSError, ValueError):
+        return None
+
+
+def _lockout_wait():
+    """The longest Windows' lockout can last: a standard user's TPM failures count for the "Standard User Lockout Duration"
+    policy (480 minutes unless set). The time left can't be read without admin rights."""
+    minutes = _policy("StandardUserAuthorizationFailureDuration")
+    return minutes * 60 if minutes and minutes > 0 else DEFAULT_WAIT
+
+
+def lockout_threshold():
+    """How many failures in that window lock a standard user out ("Standard User Individual Lockout Threshold", 4 unless set)."""
+    n = _policy("StandardUserAuthorizationFailureIndividualThreshold")
+    return n if n is not None and n >= 0 else 4
 
 
 def _provider():
@@ -112,22 +123,29 @@ def create(name, pin):
     from ctypes import wintypes as W
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import rsa
-    nc, prov = _nc(), _provider()
-    k = ctypes.c_size_t()
+    prov = _provider()                     # first: off Windows, FileNotFoundError (ctypes has no WinDLL there)
+    nc, k = _nc(), ctypes.c_size_t()
     try:
         _check(nc.NCryptCreatePersistedKey(prov, ctypes.byref(k), "RSA", name, 0, OVERWRITE), "create key")
+        finalized = False
         try:
             _check(nc.NCryptSetProperty(k, "Length", ctypes.byref(W.DWORD(2048)), 4, 0), "set length")
             _check(nc.NCryptSetProperty(k, "Key Usage", ctypes.byref(W.DWORD(ALLOW_DECRYPT)), 4, 0), "set usage")
             if pin is not None:
                 _set_pin(k, pin)
             _check(nc.NCryptFinalizeKey(k, SILENT), "finalize key")
+            finalized = True
             n = W.DWORD()
             _check(nc.NCryptExportKey(k, 0, "RSAPUBLICBLOB", None, None, 0, ctypes.byref(n), 0), "export key")
             blob = ctypes.create_string_buffer(n.value)
             _check(nc.NCryptExportKey(k, 0, "RSAPUBLICBLOB", None, blob, n.value, ctypes.byref(n), 0), "export key")
+        except BaseException:
+            if finalized and nc.NCryptDeleteKey(k, 0) == 0:     # the key is on the chip now: don't leave it there
+                k = None                                        # (a delete that works frees the handle)
+            raise
         finally:
-            nc.NCryptFreeObject(k)
+            if k is not None:
+                nc.NCryptFreeObject(k)
     finally:
         nc.NCryptFreeObject(prov)
     raw = blob.raw[:n.value]               # BCRYPT_RSAKEY_BLOB: six ULONGs, then the exponent and the modulus, big-endian
@@ -142,7 +160,8 @@ def decrypt(name, pin, data):
 
     class OaepInfo(ctypes.Structure):
         _fields_ = [("pszAlgId", W.LPCWSTR), ("pbLabel", ctypes.c_void_p), ("cbLabel", W.ULONG)]
-    nc, prov = _nc(), _provider()
+    prov = _provider()                     # first: off Windows, FileNotFoundError (ctypes has no WinDLL there)
+    nc = _nc()
     try:
         k = _open(prov, name)
         try:

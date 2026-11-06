@@ -43,7 +43,11 @@ D.create("admin", "correct horse battery staple")
 class FakeTpm:
     """Keys by name, each an RSA key and its PIN; `locked` makes every decrypt refuse as the chip's lockout does."""
     LockedOut = tpm_windows.LockedOut
-    keys, locked, up = {}, None, True
+    keys, locked, up, calls, threshold = {}, None, True, 0, 4
+
+    @classmethod
+    def lockout_threshold(cls):
+        return cls.threshold
 
     @classmethod
     def available(cls):
@@ -59,6 +63,7 @@ class FakeTpm:
 
     @classmethod
     def decrypt(cls, name, pin, data):
+        cls.calls += 1
         if name not in cls.keys:
             raise FileNotFoundError(name)
         if cls.locked:
@@ -171,6 +176,49 @@ check("best_kind: no store means the PIN alone", P.best_kind() == "pin")
 osstore.available = osstore_available
 FakeTpm.up = True
 P.best_kind.cache_clear()
+
+# ---------------------------------------------------------------- the chip: Toner's wait comes before Windows' lockout
+# Windows refuses every PIN once a user has 4 failures in 8 hours, so Toner lets only 3 reach the chip: the third starts the
+# 30-second wait, and the 4th try waits without touching the chip.
+slot = P.new("chip", "guard", "135790")
+sealed = slot.seal(SECRET)
+FakeTpm.calls = 0
+r = [raises(lambda: P.open(slot.rec, "guard", "%06d" % (100000 + i), sealed), (P.WrongPin, P.PinLocked)) for i in range(3)]
+check("chip: two wrong PINs are WrongPin", all(isinstance(x, P.WrongPin) for x in r[:2]), r)
+check("chip: the third wrong PIN starts Toner's 30-second wait", isinstance(r[2], P.PinLocked) and r[2].seconds == 30, r[2])
+check("chip: three wrong PINs reached the chip", FakeTpm.calls == 3, FakeTpm.calls)
+e = raises(lambda: P.open(slot.rec, "guard", "135790", sealed), P.PinLocked)
+check("chip: the 4th try raises PinLocked(30) from Toner's wait", e is not None and e.seconds == 30, e and e.seconds)
+check("chip: ...before the chip is called", FakeTpm.calls == 3, FakeTpm.calls)
+reset()
+FakeTpm.threshold = 6
+r = [raises(lambda: P.open(slot.rec, "guard", "%06d" % (100000 + i), sealed), (P.WrongPin, P.PinLocked)) for i in range(5)]
+check("chip: the policy's threshold sets the free tries", [type(x).__name__ for x in r] == ["WrongPin"] * 4 + ["PinLocked"], r)
+FakeTpm.threshold = 4
+reset()
+P.remove(slot.rec, "guard")
+
+# ---------------------------------------------------------------- the real tpm_windows off Windows: a chip slot is missing here
+if sys.platform != "win32":
+    e = raises(lambda: tpm_windows.decrypt("Toner-x", "135790", b"x" * 256), FileNotFoundError)
+    check("off Windows the real decrypt raises FileNotFoundError", e is not None)
+    check("off Windows the real create raises FileNotFoundError", raises(lambda: tpm_windows.create("Toner-x", "135790"),
+                                                                        FileNotFoundError) is not None)
+    P.tpm_windows = tpm_windows
+    e = raises(lambda: P.open({"kind": "chip", "pub": ""}, "x", "135790", {"wrapped": "", "box": ""}), P.SlotMissing)
+    P.tpm_windows = FakeTpm
+    check("off Windows a chip slot raises SlotMissing", e is not None)
+    check("off Windows the threshold is Windows' default", tpm_windows.lockout_threshold() == 4)
+
+# ---------------------------------------------------------------- a record whose cost was lowered is refused
+for kind, pin in (("store", "long store pin"), ("pin", "long plain pin")):
+    slot = P.new(kind, "cheap-" + kind, pin)
+    sealed = slot.seal(SECRET)
+    for field in ("n", "r", "p"):
+        rec = dict(slot.rec, **{field: slot.rec[field] // 2})
+        check(f"{kind}: a lowered {field} is refused", raises(lambda: P.open(rec, "cheap-" + kind, pin, sealed), P.SlotMissing) is not None)
+    check(f"{kind}: refusals aren't counted", fails() == 0, fails())
+    P.remove(slot.rec, "cheap-" + kind)
 
 # ---------------------------------------------------------------- five wrong PINs, then the wait (kept in the file)
 slot = P.new("pin", "five", "long plain pin")
