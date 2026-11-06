@@ -106,7 +106,9 @@ session.sign_out()
 
 
 def sign_in_bob():
-    a = S.begin("bob@acme.com", "pw-bob"); S.after_password(a); S.finish(a, PIN)
+    a = S.begin("bob@acme.com", "pw-bob")
+    if a.stage == "password": S.after_password(a)     # (offline, it is at the PIN already)
+    S.finish(a, PIN)
 
 
 # ---------------------------------------------------------------- the lock screen
@@ -155,6 +157,24 @@ directory._make_server = FIRST_DOWN
 check("...trying them in order", directory.reachable({**ACME, "servers": ["x", "y"]}) is True and tried == ["x", "y"], tried)
 directory._make_server = UP
 check("connect still binds", directory.connect(ACME, "bob@acme.com", "pw-bob").bound and binds == [1], binds)
+ldap3.Connection.bind = real_bind
+made, RealConnection = [], ldap3.Connection
+class Spy(RealConnection):
+    def __init__(self, *a, **k): made.append(k); super().__init__(*a, **k)
+    ok_tls = True
+    def start_tls(self, *a, **k): started.append(1); self.tls_started = self.ok_tls; return self.ok_tls     # (the mock has no TLS)
+started = []
+ldap3.Connection = Spy
+ldap3.Connection.bind = lambda self, *a, **k: binds.append(1) or real_bind(self, *a, **k)
+binds.clear()
+check("LDAPS: the connection gets no user and no password", directory.reachable(ACME) is True and binds == []
+      and not made[-1].get("user") and not made[-1].get("password"), made)
+tls = {**ACME, "security": "starttls", "port": 389}
+check("StartTLS: it starts TLS, never binds, and sends no credential", directory.reachable(tls) is True and started and binds == []
+      and not made[-1].get("user") and not made[-1].get("password"), (started, binds, made[-1]))
+Spy.ok_tls = False
+check("StartTLS that fails: not reachable", directory.reachable(tls) is False and binds == [])
+ldap3.Connection = RealConnection
 ldap3.Connection.bind = real_bind
 
 print("== a directory user's lock screen")
@@ -249,6 +269,61 @@ check("the PIN is tried at once", spy == [PIN] and calls == [] and session.state
 session.sign_out(); app.processEvents()
 directory.reachable = real_reachable
 session.unlock_pin = real_unlock_pin
+
+print("== the probe and what happens meanwhile")
+def slow(up=True):
+    gate = threading.Event()
+    directory.reachable = lambda cfg: gate.wait(20) and up
+    return gate
+def relock():
+    session.sign_out(); app.processEvents(); sign_in_bob(); session._full_at = time.time() - 13 * 3600
+    session.lock(); app.processEvents()
+
+relock(); gate = slow()
+lock.pw.setText(PIN); lock.unlock.click()
+check("Sign in as someone else is off while the probe runs, with the field and Unlock",
+      not lock.other.isEnabled() and not lock.pw.isEnabled() and not lock.unlock.isEnabled())
+before = main.signed_out
+threading.Timer(0.3, gate.set).start()
+lock._sign_out()
+check("leaving waits for the probe to end first", not lock._jobs or all(j.isFinished() for j in lock._jobs) and main.signed_out == before + 1)
+pump(lambda: not lock._jobs)
+
+relock(); gate = slow(); spy.clear()
+lock.pw.setText(PIN); lock.unlock.click()
+session.lock(reason="refused"); app.processEvents()
+gate.set(); pump(lambda: not lock._jobs)
+check("refused during a probe stays refused, and the PIN isn't tried", shown(lock) == sorted([session.REFUSED, "Sign in as someone else"])
+      and spy == [] and session.state() == "locked", shown(lock))
+
+relock(); gate = slow(); spy.clear()
+lock.pw.setText(PIN); lock.unlock.click()
+session.sign_out(); app.processEvents(); sign_in_bob(); session._full_at = time.time() - 13 * 3600; session.lock(); app.processEvents()
+gate.set(); pump(lambda: not lock._jobs)
+check("a probe's answer after a new lock is ignored", lock.pw.isVisibleTo(lock) and not lock.again.isVisibleTo(lock) and spy == []
+      and lock.pw.isEnabled() and lock.other.isEnabled() and session.state() == "locked", shown(lock))
+
+relock(); directory.reachable = real_reachable; session._full_at = time.time()      # (inside the workday: no probe)
+FakeTpm.locked = 30
+lock.pw.setText(PIN); lock.unlock.click(); pump(lambda: lock.wait.timer.isActive())
+check("a PIN wait is running", lock.wait.timer.isActive() and "30 seconds" in lock.error.text(), lock.error.text())
+FakeTpm.locked = 0
+session.lock(reason="refused"); app.processEvents()
+check("the countdown stops on the refused screen", not lock.wait.timer.isActive() and lock.error.text() == "")
+
+directory._make_server = DOWN
+real_changed = dirpin.changed
+relock(); dirpin.changed = lambda dirs: True
+lock.pw.setText(PIN); lock.unlock.click(); pump(lambda: lock.again.isVisibleTo(lock))
+check("a changed directories list counts as reachable: Please sign in again.", shown(lock) == sorted(["Please sign in again.", "Sign in"]), shown(lock))
+dirpin.changed = real_changed
+relock(); real_account = datakey.directory_account
+datakey.directory_account = lambda name: {**real_account(name), "directory": "gone"}
+lock.pw.setText(PIN); lock.unlock.click(); pump(lambda: lock.again.isVisibleTo(lock))
+check("so does a directory config that can't be found", shown(lock) == sorted(["Please sign in again.", "Sign in"]), shown(lock))
+datakey.directory_account = real_account
+directory._make_server = UP
+session.sign_out(); app.processEvents()
 
 print("== a local account's lock screen is as it was")
 datakey.close()

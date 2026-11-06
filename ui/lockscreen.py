@@ -11,7 +11,7 @@ import time
 from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QVBoxLayout, QWidget
 
-from core import datakey, db, directory, pinslot, session
+from core import datakey, db, directory, dirpin, pinslot, session
 from ui import theme
 from ui.signinwindow import DAMAGED, DAMAGED_ERRORS, Job, Wait, card, centred, error_label, heading, link, primary, say, words
 
@@ -65,6 +65,7 @@ class LockScreen(QWidget):
         self.unlock.clicked.connect(self._unlock)
         self.other.clicked.connect(self._sign_out)
         self.again.clicked.connect(self._sign_out)
+        self._locks = 0                                  # counts the locks: a probe's answer belongs to the lock that asked
         self._jobs = set()                               # the directory probes running off this thread
         self.wait = Wait(self.error, self.unlock)
         centred(frame, QVBoxLayout(self))
@@ -135,6 +136,9 @@ class LockScreen(QWidget):
 
     def show_locked(self):
         user = session.user() or ""
+        self._locks += 1
+        for w in (self.pw, self.unlock, self.other):
+            w.setEnabled(True)
         minutes, self._idle_minutes = self._idle_minutes, None
         self.reason.setText(f"Locked after {minutes} minutes without use." if minutes else f"Locked by {user}.")
         directory_user = session.kind() == "directory"
@@ -163,6 +167,7 @@ class LockScreen(QWidget):
         self.again.setVisible(mode == "again")
         self.other.setVisible(mode != "again")
         if not full:
+            self.wait.timer.stop()                       # (a PIN countdown doesn't go on over these screens)
             say(self.error, "")
             self.pw.clear()
             self.reason.setText(session.REFUSED if mode == "refused" else "Please sign in again.")
@@ -233,29 +238,34 @@ class LockScreen(QWidget):
         probe runs on a Job, with the field off meanwhile."""
         if not session.workday_over():
             return self._try(session.unlock_pin, pin)
-        name = session.user()
+        name, turn = session.user(), self._locks
 
         def probe():
+            """Fails closed: a changed directories list or a missing config counts as reachable, so the full sign-in (which
+            pauses with its own words) decides."""
             rec = datakey.directory_account(name)
-            cfg = next(d for d in datakey.read().get("directories") or [] if d.get("id") == rec["directory"])
-            return directory.reachable(cfg)
+            dirs = datakey.read().get("directories") or []
+            cfg = next((d for d in dirs if d.get("id") == (rec or {}).get("directory")), None)
+            return cfg is None or dirpin.changed(dirs) or directory.reachable(cfg)
 
         def landed(job, up, _error):                     # (an error: no config to probe, so not reachable)
             job.wait()
             job.fn = None
             self._jobs.discard(job)
-            self.pw.setEnabled(True)
-            self.unlock.setEnabled(True)
-            if session.state() != "locked":
-                return
-            if up is True:
+            if turn != self._locks or session.state() != "locked":
+                return                                   # a later lock (or none) owns the screen now
+            for w in (self.pw, self.unlock, self.other):
+                w.setEnabled(True)
+            if session.refused():
+                self._arrange("refused")
+            elif up is True:
                 self._arrange("again")
             else:
                 self._try(session.unlock_pin, pin)
         job = Job(probe)
         job.done.connect(landed, Qt.ConnectionType.QueuedConnection)
-        self.pw.setEnabled(False)
-        self.unlock.setEnabled(False)
+        for w in (self.pw, self.unlock, self.other):
+            w.setEnabled(False)
         self._jobs.add(job)
         job.start()
 
@@ -276,6 +286,8 @@ class LockScreen(QWidget):
     def _sign_out(self):
         """Sign in as someone else: Main's closing questions (unsaved settings, a running playbook) must be answerable, so the
         lock steps aside for them, the windows staying covered; if one is refused, the lock comes back."""
+        for j in list(self._jobs):
+            j.wait()                                     # a probe must not outlive the window (as SignInWindow._stop)
         self._passing = True
         self.pw.clear()
         self.hide()
