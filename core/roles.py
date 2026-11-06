@@ -26,6 +26,10 @@ from core import audit, datakey, db, envelope, quiet, sqldb
 ROLES = ("Admin", "Engineer", "Tech")
 KINDS = ("rules", "backups")
 LAST_ADMIN = "Toner needs at least one Admin."
+
+
+class NotHeld(ValueError):
+    """A first approval whose started box key isn't held any more (Toner restarted since): start the account again."""
 _PART2 = ("roles", "rules_pub", "rules_sig", "backups_pub", "grants", "recovery_grants", "attested", "recovery_attested",
           "directories")
 # a directory's settings as stored (core/directory.py's Config): never a secret, which lives in the OS store or the vault
@@ -641,14 +645,15 @@ def needs_approval(name):
     return "changed" if (now == "Admin" and was != "Admin") or (unmasked(now) and not unmasked(was)) else None
 
 
-def approve(name, slot=None):
+def approve(name, slot=None, approved_by=None):
     """An Admin (who holds the rules key) or the recovery key approves a directory account: its approved role becomes its groups'
     role, and the role keys follow.
       first approval    `slot` is the one start_directory_account wrote: seals the data key and the box private held since then
                         under it, and vouches for that box key.
       new slot          (an approved account's new PIN, or another computer) `slot` is a new one: a new box key, vouched for and
                         sealed with the data key under it; the old slot is removed from this computer.
-      no slot           (an approved account whose groups changed) keeps the seal."""
+      no slot           (an approved account whose groups changed) keeps the seal.
+    approved_by names the approver in the audit (default: whoever is signed in)."""
     from core import perms
     with _lock:
         if not _root and "rules" not in _held:
@@ -666,7 +671,7 @@ def approve(name, slot=None):
                     raise ValueError("that isn't the account's PIN slot")
                 private = datakey._started.get(rec["slot_id"])
                 if private is None or _b64(_public("box", private)) != rec.get("box_pub"):
-                    raise ValueError("start the account again: its box key isn't held")
+                    raise NotHeld("start the account again: its box key isn't held")
             elif slot is not None:
                 datakey._fresh_slot(doc, slot)
                 old = dict(rec)
@@ -689,7 +694,7 @@ def approve(name, slot=None):
         _written(pub)
         datakey._started.pop(slot_id, None)
         datakey.drop_slot(old)
-        admin = datakey.signed_in_name() or audit.actor()
+        admin = approved_by or datakey.signed_in_name() or audit.actor()
         audit.log("sign-in approved", f"{stored}, approved by {admin}", who=admin)
         _trim()
     _notify()
@@ -706,6 +711,11 @@ def set_directories(directories):
         new[d["id"]] = json.loads(json.dumps(d))       # a copy, as the file will hold it (tuples as lists)
     if len(new) != len(directories):
         raise ValueError("two directories have one id")
+    for field in ("netbios", "suffixes"):              # classify must find one directory for a name, never two
+        seen = [str(v).casefold() for d in new.values() for v in ([d.get(field)] if field == "netbios" else d.get(field) or [])
+                if v]
+        if len(seen) != len(set(seen)):
+            raise ValueError(f"two directories share a {field} name")
     with _lock:
         def go(doc):
             repair = _may_write(doc)

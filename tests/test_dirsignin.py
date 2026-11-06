@@ -209,6 +209,9 @@ check("audited: signed in (with the directory), approved, PIN set",
       rows("signed in")[0]["actor"] == "bob@acme.com" and rows("signed in")[0]["detail"] == "directory ACME"
       and rows("sign-in approved")[0]["detail"] == "bob@acme.com, approved by Admin1"
       and len(rows("PIN set")) == 1 and rows("PIN set")[0]["detail"] == "bob@acme.com", rows("signed in")[:1])
+check("the wrong admin password before the approval is audited while the key was open",
+      any(r["actor"] == "Admin1" for r in rows("1 failed sign-in attempts since the last sign-in")),
+      rows("1 failed sign-in attempts since the last sign-in"))
 
 # ---------------------------------------------------------------- the session's own steps for a directory account
 session.lock()
@@ -246,13 +249,22 @@ session.sign_out()
 
 # ---------------------------------------------------------------- offline: within the hour the PIN alone, past it refused
 directory._make_server = DOWN
-datakey.set_online("bob@acme.com", time.time() - 600)
+checked = time.time() - 50 * 60
+datakey.set_online("bob@acme.com", checked)
+datakey.set_groups_role("bob@acme.com", "Engineer")            # a move up seen by the background check: "changed"
 a = S.begin("ACME\\bob", "anything")
 check("offline within the hour: the PIN", a.offline and a.stage == "pin" and a.user is None and not a.fresh)
 check("offline: no Forgot your PIN?", raises(lambda: S.restart_pin(a), RuntimeError) is not None and a.stage == "pin")
 S.finish(a, PIN)
-check("offline: the PIN opens", a.stage == "done" and session.user() == "bob@acme.com")
+check("offline: the PIN opens, never the approval (with the keys it already has)", a.stage == "done"
+      and session.user() == "bob@acme.com" and not roles.holds("backups"))
+real_time = time.time
+time.time = lambda: real_time() + 11 * 3600 + 15 * 60
+over = session.workday_over()
+time.time = real_time
+check("offline: the workday runs from the last online check, not the offline sign-in", over and not session.workday_over())
 session.sign_out()
+datakey.set_groups_role("bob@acme.com", "Tech")
 datakey.set_online("bob@acme.com", time.time() - 3700)
 e = raises(lambda: S.begin("bob@acme.com", "pw-bob"), directory.Unreachable)
 check("offline past the hour: Unreachable, with the approved sentence",
@@ -272,8 +284,18 @@ d = doc(); d["throttle"] = {"fails": 9, "until": time.time() + 100}; datakey.pat
 check("while a wait runs the directory isn't asked", raises(lambda: S.begin("bob@acme.com", "pw-bob"), datakey.Throttled) is not None)
 d = doc(); d["throttle"] = {"fails": 0, "until": 0}; datakey.path().write_text(json.dumps(d), encoding="utf-8")
 
+for _ in range(4):
+    raises(lambda: S.begin("bob@acme.com", "typo"), datakey.WrongPassword)
+check("four typos counted", fails() == 4, fails())
+a = to_pin()
+check("the full online check clears the count", fails() == 0, fails())
+S.finish(a, PIN)
+check("...and the earlier count is audited once", len(rows("4 failed sign-in attempts since the last sign-in")) == 1)
+session.sign_out()
+
 # ---------------------------------------------------------------- Duo: unreachable, deny, enroll, a code
 datakey.set_online("bob@acme.com", time.time() - 4000)
+datakey.set_groups_role("bob@acme.com", "Engineer")            # the directory says Tech: written only once Duo passes
 a = S.begin("bob@acme.com", "pw-bob")
 DUO["down"] = True
 e = raises(lambda: S.after_password(a), duo.Unavailable)
@@ -286,17 +308,28 @@ e = raises(lambda: S.duo_push(a, threading.Event()), duo.Denied)
 check("Duo deny: refused, with the approved sentence", e is not None and str(e) == "Duo didn't approve the sign-in."
       and a.stage == "duo")
 check("...the password alone doesn't start a new offline hour", time.time() - datakey.directory_account("bob@acme.com")["online_at"] > 3600)
+check("...nor writes the groups' role", datakey.directory_account("bob@acme.com")["groups_role"] == "Engineer")
 DUO["push"] = "allow"
 e = raises(lambda: S.duo_code(a, "000000"), duo.Denied)
 check("a wrong Duo code: refused", e is not None and str(e) == "That code isn't right." and a.stage == "duo")
 S.duo_code(a, DUO["code"])
-check("the right Duo code: the PIN, and a new offline hour", a.stage == "pin"
-      and time.time() - datakey.directory_account("bob@acme.com")["online_at"] < 60)
+check("the right Duo code: the PIN, a new offline hour and the groups' role", a.stage == "pin"
+      and time.time() - datakey.directory_account("bob@acme.com")["online_at"] < 60
+      and datakey.directory_account("bob@acme.com")["groups_role"] == "Tech")
 for result in ("deny", "enroll"):
     DUO["preauth"] = result
     a = S.begin("bob@acme.com", "pw-bob")
     check("preauth %s: refused" % result, raises(lambda: S.after_password(a), duo.Denied) is not None and a.stage == "password")
 DUO["preauth"] = "auth"
+a = S.begin("bob@acme.com", "pw-bob")
+S.after_password(a)
+real_push = duo.push
+def late_push(cfg, user, cancel):          # while the push waits, the person enters a code and moves on
+    cancel.set(); S.duo_code(a, DUO["code"]); S.restart_pin(a)
+duo.push = late_push
+S.duo_push(a, threading.Event())
+duo.push = real_push
+check("a push that comes back approved after the attempt moved on changes nothing", a.stage == "choose-pin" and a.reset)
 a = to_pin()
 S.finish(a, PIN)
 check("Duo's refusals are audited once the key opens", len(rows("Duo denied a sign-in")) == 4
@@ -308,6 +341,9 @@ session.sign_out()
 ldap.dit["bob@acme.com"]["memberOf"] = [ENGINEERS.encode()]
 a = to_pin()
 check("the groups' role is written at sign-in", datakey.directory_account("bob@acme.com")["groups_role"] == "Engineer")
+before = fails()
+check("changed: a wrong PIN is refused before the approval", raises(lambda: S.finish(a, "975310"), pinslot.WrongPin) is not None
+      and a.stage == "pin" and fails() == before + 1)
 S.finish(a, PIN)
 check("a role that may see unmasked backups: approval before the PIN opens", a.stage == "approve"
       and a.message == "Your access changed. Ask an admin to sign in here to approve it." and session.state() == "signed_out")
@@ -346,6 +382,8 @@ check("an Admin approves while Eng1 is signed in: Eng1's session is as it was",
 check("...the old slot is gone, the new one sealed", "Toner-" + old_slot not in FakeTpm.keys
       and datakey.directory_account("bob@acme.com")["slot_id"] != old_slot)
 check("...audited: PIN reset", len(rows("PIN reset")) == 1 and rows("PIN reset")[0]["detail"] == "bob@acme.com")
+check("...credited to the Admin who approved, not the session's user",
+      rows("sign-in approved")[0]["detail"] == "bob@acme.com, approved by Admin1" and rows("sign-in approved")[0]["actor"] == "Admin1")
 session.sign_out()
 check("the old PIN no longer opens", raises(lambda: S.finish(a, PIN), pinslot.WrongPin) is not None)
 S.finish(a, PIN2)
@@ -359,8 +397,12 @@ S.finish(a, PIN2)
 check("no key on this chip: choose a new PIN, with the access-changed text", a.stage == "choose-pin"
       and a.message == "Your access changed. Ask an admin to sign in here to approve it." and session.state() == "signed_out")
 S.choose_pin(a, PIN3)
+as_("Eng1", PW2)
 S.approve_recovery(a, recovery)
-check("the recovery key approves", a.stage == "pin" and not datakey.is_open())
+check("the recovery key approves while Eng1 is signed in", a.stage == "pin" and session.user() == "Eng1"
+      and datakey.signed_in_name() == "Eng1")
+check("...credited to the recovery key", rows("sign-in approved")[0]["detail"] == "bob@acme.com, approved by the recovery key")
+session.sign_out()
 S.finish(a, PIN3)
 check("the new PIN opens on this computer", a.stage == "done" and session.user() == "bob@acme.com")
 check("audited: PIN set again", len(rows("PIN set")) == pin_rows + 1)
@@ -377,13 +419,52 @@ directory._make_server = UP
 a = to_pin("carol@acme.com", "pw-carol")
 S.choose_pin(a, PIN)
 datakey._started.clear()
+dropped = "Toner-" + datakey.directory_account("carol@acme.com")["slot_id"]
 S.approve(a, "Admin1", PW)
 check("the started box key gone: choose the PIN again, nothing approved", a.stage == "choose-pin" and a.slot is None
       and datakey.directory_account("carol@acme.com")["sealed"] is None and not datakey.is_open())
+check("...the dropped slot's chip key is removed", dropped not in FakeTpm.keys)
 S.choose_pin(a, PIN2)
 S.approve(a, "Admin1", PW)
 S.finish(a, PIN2)
 check("...then approved and signed in", a.stage == "done" and session.user() == "carol@acme.com")
+session.sign_out()
+
+# ---------------------------------------------------------------- another approval error propagates; cleanup always runs
+a = to_pin("carol@acme.com", "pw-carol")
+S.restart_pin(a)
+S.choose_pin(a, PIN3)
+real_approve = roles.approve
+def last_admin(*args, **kw): raise ValueError(roles.LAST_ADMIN)
+roles.approve = last_admin
+real_release = db.release
+def broken_release(*args): raise RuntimeError("release failed")
+db.release = broken_release
+e = raises(lambda: S.approve(a, "Admin1", PW), ValueError)
+roles.approve, db.release = real_approve, real_release
+check("any other approval error propagates, the attempt stays at approve", e is not None and str(e) == roles.LAST_ADMIN
+      and a.stage == "approve" and a.slot is not None)
+check("...and the key is closed even when a cleanup step fails", not datakey.is_open() and not roles.holds("rules"))
+
+# ---------------------------------------------------------------- the waiting audit rows are capped
+session._soon.clear()
+for i in range(500):
+    session.audit_soon("Duo denied a sign-in", "x")
+check("rows waiting for a sign-in are capped", 0 < len(session._soon) <= 100, len(session._soon))
+session._soon.clear()
+
+# ---------------------------------------------------------------- two directories can't claim one suffix or NetBIOS name
+as_("Admin1", PW)
+before = datakey.path().read_bytes()
+check("two directories with one suffix are refused", raises(lambda: roles.set_directories(
+    [ACME, {**ACME, "id": "d2", "name": "Other", "netbios": "OTHER", "suffixes": ["other.com", "ACME.com"]}]), ValueError) is not None)
+check("two directories with one NetBIOS name are refused", raises(lambda: roles.set_directories(
+    [ACME, {**ACME, "id": "d2", "name": "Other", "netbios": "acme", "suffixes": ["other.com"]}]), ValueError) is not None)
+check("...nothing written", datakey.path().read_bytes() == before)
+roles.set_directories([ACME, {**ACME, "id": "d2", "name": "Other", "netbios": "", "suffixes": ["other.com"]},
+                       {**ACME, "id": "d3", "name": "Third", "netbios": "", "suffixes": ["third.com"]}])
+check("two with no NetBIOS name are fine", len(doc()["directories"]) == 3)
+roles.set_directories([ACME])
 session.sign_out()
 
 # ---------------------------------------------------------------- nothing secret anywhere

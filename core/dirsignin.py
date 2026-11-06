@@ -9,9 +9,10 @@
 
 Wrong directory passwords count on netcheck.keys' shared counter, as local passwords do. No password, PIN or Duo code is kept on
 an Attempt, logged or put in a message."""
+import threading
 import time
 
-from core import audit, datakey, db, directory, duo, perms, pinslot, roles, session
+from core import audit, datakey, db, directory, duo, perms, pinslot, quiet, roles, session
 
 OFFLINE_SECONDS = 3600
 UNREACHABLE = "Toner can't reach the directory. Connect to the network, then try again."
@@ -22,6 +23,9 @@ NOT_IN_GROUP = "Your account isn't in a Toner group. Ask an admin."
 CANNOT_APPROVE = "That account can't approve sign-ins."
 FIRST = "This is your first sign-in to this copy of Toner. Ask an admin to sign in here to approve it."
 CHANGED = "Your access changed. Ask an admin to sign in here to approve it."
+RECOVERY_APPROVER = "the recovery key"                     # {admin} in "sign-in approved" for the recovery key
+
+_steps = threading.Lock()       # a push finishing on a worker thread vs. the person moving on (a code, Forgot your PIN?)
 
 
 class NotInGroup(Exception):
@@ -38,6 +42,7 @@ class Attempt:
     def __init__(self, cfg, login):
         self.cfg, self.login = cfg, login
         self.user = None            # the directory's User; None offline
+        self.role = None            # the role its groups give now; None offline
         self.name = None            # the account's name in netcheck.keys
         self.stage = "password"
         self.offline = False
@@ -84,6 +89,18 @@ def _tries(failed=False):
             datakey._failed(doc, counter, now)
 
 
+def _clear_tries():
+    """After a full online check: the shared counter back to 0. Returns the count it had."""
+    with datakey._lock, datakey._FileLock():
+        doc = datakey._read()
+        counter = doc.setdefault("throttle", {"fails": 0, "until": 0})
+        fails = counter.get("fails", 0)
+        if fails or counter.get("until"):
+            counter["fails"], counter["until"] = 0, 0
+            datakey._write(doc)
+        return fails
+
+
 def _mine(a):
     """The account's record when it is this person's (this directory, this guid), else None."""
     rec = datakey.directory_account(a.name)
@@ -125,23 +142,29 @@ def begin(login, password):
     if role is None:
         _tries(failed=True)
         raise NotInGroup(NOT_IN_GROUP)
-    a.user, a.name = user, user.name
-    if _mine(a):
-        datakey.set_groups_role(a.name, role)
+    a.user, a.name, a.role = user, user.name, role
     return a
 
 
-def _onward(a):
-    """The password, and Duo when on, passed online: a new offline hour starts (not before Duo, or the password alone would
-    open the way to an offline PIN sign-in)."""
-    a.fresh = True
-    rec = _mine(a)
-    if rec:
-        datakey.set_online(a.name, time.time())
-    if rec and rec.get("sealed"):
-        a.stage = "pin"
-    else:
-        a.stage, a.message = "choose-pin", FIRST
+def _onward(a, stage):
+    """The password, and Duo when on, passed online: the full check. Only now are the offline hour, the groups' role and the
+    shared counter written (the password alone must not open the way to an offline PIN sign-in). Does nothing when the attempt
+    has moved on from that stage meanwhile (a push that ends after a code was entered)."""
+    with _steps:
+        if a.stage != stage:
+            return
+        a.fresh = True
+        rec = _mine(a)
+        if rec:
+            datakey.set_online(a.name, time.time())
+            datakey.set_groups_role(a.name, a.role)
+        fails = _clear_tries()
+        if fails:                                           # as a local sign-in audits them (the row waits for the key)
+            session.audit_soon(f"{fails} failed sign-in attempts since the last sign-in", who=a.user.name)
+        if rec and rec.get("sealed"):
+            a.stage = "pin"
+        else:
+            a.stage, a.message = "choose-pin", FIRST
 
 
 def _denied(a):
@@ -151,7 +174,7 @@ def _denied(a):
 def after_password(a):
     _expect(a, "password")
     if not (a.cfg.get("duo") or {}).get("on"):
-        return _onward(a)
+        return _onward(a, "password")
     try:
         r = duo.preauth(a.cfg, a.user.name)
     except duo.Unavailable:
@@ -160,7 +183,7 @@ def after_password(a):
         _denied(a)
         raise duo.Denied(DUO_DENIED)
     if r == "allow":                                        # Duo's bypass, set by its admin
-        return _onward(a)
+        return _onward(a, "password")
     a.stage = "duo"
 
 
@@ -174,7 +197,7 @@ def duo_push(a, cancel):
         if not cancel.is_set():                             # (cancelled: the person chose a code instead)
             _denied(a)
         raise duo.Denied(DUO_DENIED) from None
-    _onward(a)
+    _onward(a, "duo")
 
 
 def duo_code(a, code):
@@ -186,7 +209,7 @@ def duo_code(a, code):
     except duo.Denied:
         _denied(a)
         raise duo.Denied(WRONG_CODE) from None
-    _onward(a)
+    _onward(a, "duo")
 
 
 def choose_pin(a, pin):
@@ -199,9 +222,17 @@ def choose_pin(a, pin):
         try:
             datakey.start_directory_account(a.user, a.cfg["id"], slot)
         except BaseException:
-            pinslot.remove(slot.rec, slot.slot_id)
+            _drop(slot)
             raise
     a.slot, a.stage = slot, "approve"
+
+
+def _drop(slot):
+    """A slot that will never be sealed: its TPM key or pepper goes from this computer."""
+    try:
+        pinslot.remove(slot.rec, slot.slot_id)
+    except Exception:
+        quiet.ignored()
 
 
 def approve(a, admin_name, admin_password):
@@ -214,42 +245,63 @@ def approve_recovery(a, recovery):
 
 def _approve(a, opener):
     """Open the key as the approver with no session change, approve, then put back whatever was open before (a signed-in
-    session keeps its keys) or close it all."""
+    session keeps its keys) or close it all. A cleanup failure never hides the approval's own error."""
     _expect(a, "approve")
     with session._lock:
         held = (datakey._key + datakey._box, datakey._name) if datakey.is_open() else None
         try:
-            opener()
-            roles.unlock()
+            _approve_as(a, opener)
+        except BaseException:
             try:
-                roles.approve(a.name, a.slot)
-            except perms.Denied:
-                raise CannotApprove(CANNOT_APPROVE) from None
-            except ValueError:
-                if a.slot is None:
-                    raise
-                a.stage, a.slot = "choose-pin", None        # the started box key isn't held any more: choose the PIN again
-                return
-            if a.slot is not None:
-                audit.log("PIN reset" if a.reset else "PIN set", a.name, who=a.name)
-        finally:
-            roles.close()
-            if held:
-                datakey._open(*held)
-                roles.unlock()
-            else:
-                db.release()
-                datakey.close()
+                _put_back(held)
+            except Exception:
+                quiet.ignored()
+            raise
+        _put_back(held)
+
+
+def _approve_as(a, opener):
+    fails = opener()
+    by = datakey.signed_in_name() or RECOVERY_APPROVER
+    roles.unlock()
+    if fails:                                               # counted in netcheck.keys; audited while the key is open
+        audit.log(f"{fails} failed sign-in attempts since the last sign-in", who=by)
+    try:
+        roles.approve(a.name, a.slot, approved_by=by)
+    except perms.Denied:
+        raise CannotApprove(CANNOT_APPROVE) from None
+    except roles.NotHeld:                                   # Toner restarted since the PIN was chosen: choose it again
+        _drop(a.slot)
+        a.stage, a.slot = "choose-pin", None
+        return
+    if a.slot is not None:
+        audit.log("PIN reset" if a.reset else "PIN set", a.name, who=a.name)
     a.slot, a.stage = None, "pin"
+
+
+def _put_back(held):
+    try:
+        roles.close()
+    finally:
+        if held:
+            datakey._open(*held)
+            roles.unlock()
+        else:
+            try:
+                db.release()
+            finally:
+                datakey.close()
 
 
 def finish(a, pin):
     _expect(a, "pin")
-    if roles.needs_approval(a.name) == "changed":
-        a.stage, a.message = "approve", CHANGED
-        return
     try:
-        session.sign_in_pin(a.name, pin)
+        if not a.offline and roles.needs_approval(a.name) == "changed":
+            if not datakey.check_pin(a.name, pin):          # the PIN first (counted), so a wrong one never reaches approval
+                raise pinslot.WrongPin()
+            a.stage, a.message = "approve", CHANGED
+            return
+        session.sign_in_pin(a.name, pin)                    # offline, "changed" signs in with the keys it already has
     except pinslot.SlotMissing:
         if not a.fresh:                                     # a new PIN needs the password checked online
             raise directory.Unreachable(UNREACHABLE) from None

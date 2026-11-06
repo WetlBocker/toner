@@ -11,10 +11,11 @@ REFUSED = "Your account can't sign in to Toner any more. Ask an admin."
 _lock = threading.RLock()
 _state, _user, _callbacks = "signed_out", None, []
 _kind = None          # "local", "directory" or "recovery" while signed in
-_full_at = None       # when a directory account last signed in in full (time.time())
+_full_at = None       # a directory account's last full check (directory and Duo): its online_at
 _refused = False      # lock(reason="refused"): no unlock until a new sign-in
 # shortcut: kept in memory, so rows waiting here are lost if Toner exits first; upgrade by counting them in netcheck.keys.
 _soon = []            # audit rows from while the key was closed (the audit table is encrypted), written at the next sign-in
+SOON_MAX = 100
 
 
 class Refused(RuntimeError):
@@ -60,7 +61,7 @@ def _opened(opener, action, who, kind="local", detail=""):
             who = who() if callable(who) else who
             detail = detail() if callable(detail) else detail
             _state, _user, _kind, _refused = "open", who, kind, False     # before the audit row, so it names the Toner user
-            _full_at = time.time() if kind == "directory" else None
+            _full_at = datakey.directory_account(who)["online_at"] if kind == "directory" else None
         except BaseException:
             _close()
             raise
@@ -115,7 +116,8 @@ def kind():
 
 
 def workday_over():
-    """True once a directory account's full sign-in is more than 12 hours old (or the clock went back past it)."""
+    """True once a directory account's last full check (directory and Duo) is more than 12 hours old (or the clock went back
+    past it): an offline PIN sign-in doesn't start a new workday."""
     return _full_at is not None and not 0 <= time.time() - _full_at <= WORKDAY
 
 
@@ -128,7 +130,7 @@ def audit_soon(action, detail="", who=None):
     with _lock:
         if datakey.is_open():
             audit.log(action, detail, who)
-        else:
+        elif len(_soon) < SOON_MAX:
             _soon.append((action, detail, who))
 
 
