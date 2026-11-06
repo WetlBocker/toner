@@ -275,6 +275,7 @@ session.sign_out()
 directory._make_server = DOWN
 checked = time.time() - 50 * 60
 datakey.set_online("bob@acme.com", checked)
+datakey.set_full("bob@acme.com", checked)
 datakey.set_groups_role("bob@acme.com", "Engineer")            # a move up seen by the background check: "changed"
 a = S.begin("ACME\\bob", "anything")
 check("offline within the hour: the PIN", a.offline and a.stage == "pin" and a.user is None and not a.fresh)
@@ -286,7 +287,7 @@ real_time = time.time
 time.time = lambda: real_time() + 11 * 3600 + 15 * 60
 over = session.workday_over()
 time.time = real_time
-check("offline: the workday runs from the last online check, not the offline sign-in", over and not session.workday_over())
+check("offline: the workday runs from the last full check, not the offline sign-in", over and not session.workday_over())
 session.sign_out()
 datakey.set_groups_role("bob@acme.com", "Tech")
 datakey.set_online("bob@acme.com", time.time() - 3700)

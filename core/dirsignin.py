@@ -190,7 +190,9 @@ def _onward(a, stage):
         a.fresh = True
         rec = _mine(a)
         if rec:
-            datakey.set_online(a.name, time.time())
+            now = time.time()
+            datakey.set_online(a.name, now)
+            datakey.set_full(a.name, now)
             datakey.set_groups_role(a.name, a.role)
         fails = _clear_tries()
         if fails:                                           # as a local sign-in audits them (the row waits for the key)

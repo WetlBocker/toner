@@ -307,8 +307,13 @@ at = datakey.directory_account("bob@acme.com")["online_at"]
 check("set_online an hour ahead is stored as now", 0 < at <= time.time() and doc()["accounts"]["bob@acme.com"]["online_at"] == at)
 d = doc(); d["accounts"]["bob@acme.com"]["online_at"] = time.time() + 3600; put(d)
 check("online_at edited an hour ahead reads as expired", datakey.directory_account("bob@acme.com")["online_at"] == 0)
+datakey.set_full("bob@acme.com", time.time() + 3600)
+at = datakey.directory_account("bob@acme.com")["full_at"]
+check("set_full an hour ahead is stored as now", 0 < at <= time.time() and doc()["accounts"]["bob@acme.com"]["full_at"] == at)
+d = doc(); d["accounts"]["bob@acme.com"]["full_at"] = time.time() + 3600; put(d)
+check("full_at edited an hour ahead reads as 0 (the workday is over)", datakey.directory_account("bob@acme.com")["full_at"] == 0)
 as_("Admin1", PW)
-check("online_at and groups_role aren't signed: still ok", roles.state() == "ok")
+check("online_at, full_at and groups_role aren't signed: still ok", roles.state() == "ok")
 session.sign_out()
 
 # ---------------------------------------------------------------- hand-edits of signed fields read "tampered"

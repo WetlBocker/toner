@@ -444,8 +444,9 @@ def new_recovery():
 # ---------------------------------------------------------------- directory accounts
 # The account's key in "accounts" is its User.name. Its PIN slot's id ("slot_id") is random (new_slot_id), never reused, so two
 # accounts or two copies of Toner on one computer never share a TPM key or pepper. Its seal ("sealed", made by roles.approve)
-# holds the data key, its box private and its name (seal_payload) under the slot. online_at and groups_role are written by the
-# sign-in before the key is open, so the rules don't sign them; approved_role, the attested box key and the directories are signed.
+# holds the data key, its box private and its name (seal_payload) under the slot. online_at (the last good check, by the sign-in or
+# the background check), full_at (the last password and Duo, which starts the workday) and groups_role are written before the key
+# is open, so the rules don't sign them; approved_role, the attested box key and the directories are signed.
 def new_slot_id():
     """The id for a new PIN slot: pinslot.new(kind, new_slot_id(), pin)."""
     return secrets.token_hex(16)
@@ -468,15 +469,16 @@ def seal_payload(name, private):
 
 
 def directory_account(name):
-    """The directory account's record (a copy), or None. An online_at later than now reads as 0 (expired): a clock put back
-    can't stretch the offline hour."""
+    """The directory account's record (a copy), or None. An online_at or full_at later than now reads as 0 (expired): a clock
+    put back can't stretch the offline hour or the workday."""
     doc = read()
     stored = _find(doc, _clean(name))
     rec = doc["accounts"][stored] if stored else None
     if rec is None or rec.get("kind") != "directory":
         return None
-    online = rec.get("online_at") or 0
-    rec["online_at"] = 0 if online > time.time() else online
+    for field in ("online_at", "full_at"):
+        at = rec.get(field) or 0
+        rec[field] = 0 if at > time.time() else at
     return rec
 
 
@@ -500,7 +502,8 @@ def start_directory_account(user, directory_id, slot):
         doc["accounts"][user.name] = {
             "kind": "directory", "directory": directory_id, "guid": user.guid, "display": user.display,
             "slot_kind": slot.rec["kind"], "slot": slot.rec, "slot_id": slot.slot_id, "sealed": None, "box_pub": _b64(public),
-            "approved_role": None, "online_at": time.time(), "groups_role": directory.role_for(cfg, user.groups),
+            "approved_role": None, "online_at": time.time(), "full_at": time.time(),     # (only after password and Duo)
+            "groups_role": directory.role_for(cfg, user.groups),
             "created": datetime.now(timezone.utc).isoformat(timespec="seconds")}
         return old
     replaced = _change(start, signed_in=False)
@@ -571,6 +574,11 @@ def _set_directory_field(name, field, value):
 
 def set_online(name, at):
     _set_directory_field(name, "online_at", min(at, time.time()))
+
+
+def set_full(name, at):
+    """The last full check (password and Duo), which starts the workday. Only a sign-in writes it, never the background check."""
+    _set_directory_field(name, "full_at", min(at, time.time()))
 
 
 def set_groups_role(name, role):

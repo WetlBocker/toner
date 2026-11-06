@@ -215,6 +215,24 @@ session.sign_in("Admin1", PW)
 check("a local session: skipped", dircheck.run_once() == "skipped" and session.state() == "open")
 session.sign_out()
 
+# ---------------------------------------------------------------- the background check doesn't extend the workday
+reopen()
+d = json.loads(datakey.path().read_text(encoding="utf-8"))
+d["accounts"]["bob@acme.com"]["full_at"] = time.time() - 13 * 3600          # password and Duo were 13 hours ago
+datakey.path().write_text(json.dumps(d), encoding="utf-8")
+check("a background check is ok", dircheck.run_once() == "ok")
+check("...and writes online_at only", datakey.directory_account("bob@acme.com")["full_at"] < time.time() - 12 * 3600)
+session.sign_out()
+real_make = directory._make_server
+def down(cfg, host, *_): raise OSError("no route")
+directory._make_server = down
+b = S.begin("bob@acme.com", "pw-bob")
+S.finish(b, PIN)
+directory._make_server = real_make
+check("an offline PIN sign-in after it doesn't start a new workday", b.offline and session.user() == "bob@acme.com"
+      and session.workday_over())
+session.sign_out()
+
 # ---------------------------------------------------------------- a demotion takes the role keys away at once
 from core import perms
 b = S.begin("ann@acme.com", "pw-ann"); S.after_password(b); S.choose_pin(b, PIN); S.approve(b, "Admin1", PW); S.finish(b, PIN)
