@@ -38,6 +38,11 @@ names = lambda: [a["name"] for a in datakey.accounts()]
 rows = lambda: [page.table.item(i, 0).text() for i in range(page.table.rowCount())]
 acts = lambda: [r["action"] for r in audit.recent()]
 check("lists the account", rows() == ["Admin"], rows())
+check("columns: Unlocks with is last; a local account unlocks with its Password",
+      [page.table.horizontalHeaderItem(j).text() for j in range(page.table.columnCount())] == ["Username", "Type", "Created", "Role", "Unlocks with"]
+      and page.table.item(0, 1).text() == "local" and page.table.item(0, 4).text() == "Password")
+check("the Directories section (tests/test_directorydlg.py covers it): empty, Add on", page.dirs.count() == 0 and page.add_dir.isEnabled()
+      and not page.edit_dir.isEnabled() and not page.remove_dir.isEnabled())
 
 shown = {}
 def fill(name, pw, confirm=None, role=None):

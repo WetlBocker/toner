@@ -1,9 +1,11 @@
 """Settings page: Accounts and sign-in. Account actions apply at once; the idle-lock minutes follow Save."""
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QAbstractItemView, QComboBox, QLabel, QMessageBox, QPushButton, QTableWidget, QTableWidgetItem
+from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QLabel, QListWidget, QMessageBox, QPushButton, QTableWidget,
+                               QTableWidgetItem)
 
-from core import audit, datakey, db, passwords, perms, roles, session
+from core import audit, datakey, db, osstore, passvault, passwords, perms, quiet, roles, session
+from ui.directorydlg import DirectoryDialog, service_key
 from ui.settings_base import Page, compact_row, note, spin
 from ui.setupdlg import RecoveryDialog, _CardDialog
 from ui.signinwindow import MISMATCH, error_label, field, primary, say
@@ -13,6 +15,27 @@ ROLES_NOTE = "Admins can do everything. Tick what Engineers and Techs can do."
 TAMPERED = ("The roles were changed outside Toner, so everyone has a Tech's permissions for now. "
             "Sign in with the recovery key, then save the roles to put them right.")
 NEW_KEY_ASK = "The old recovery key will stop working. Make a new one?"
+REMOVE_DIRECTORY = "Removing this directory signs out its accounts on this copy. Remove {name}?"
+UNLOCKS = {"chip": "PIN (security chip)", "store": "PIN (protected store)", "pin": "PIN"}
+
+
+def type_of(a):
+    """The Type column: a local account's kind as Part 2 showed it, a directory account's directory."""
+    if a["kind"] != "directory":
+        return a["kind"]
+    return {"ad": "Active Directory", "ldap": "LDAP"}.get(a.get("directory_kind"), "")
+
+
+def unlocks_with(a):
+    return UNLOCKS.get(a.get("slot_kind"), "") if a["kind"] == "directory" else "Password"
+
+
+def confirm(parent, title, text):
+    box = QMessageBox(QMessageBox.Icon.Question, title, text, parent=parent)
+    go = box.addButton("Remove", QMessageBox.ButtonRole.AcceptRole)
+    box.setDefaultButton(box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole))
+    box.exec()
+    return box.clickedButton() is go
 
 
 class AccountDialog(_CardDialog):
@@ -87,8 +110,8 @@ class AccountsPage(Page):
 
     def __init__(self):
         super().__init__()
-        self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(["Username", "Type", "Created", "Role"])
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(["Username", "Type", "Created", "Role", "Unlocks with"])
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -102,6 +125,17 @@ class AccountsPage(Page):
         self.reset.clicked.connect(self._reset)
         self.remove.clicked.connect(self._remove)
         self.recovery.clicked.connect(self._recovery)
+        self.table.itemSelectionChanged.connect(self._selection)
+        self._directory_rows = set()
+        self.dirs = QListWidget()
+        self.dirs.setAccessibleName("Directories")
+        self.dirs.setMaximumHeight(110)
+        self._dirs = None                               # the verified list; None: rules that don't check out, so no changes
+        self.add_dir, self.edit_dir, self.remove_dir = (QPushButton(t) for t in ("Add directory...", "Edit...", "Remove"))
+        self.add_dir.clicked.connect(self._add_dir)
+        self.edit_dir.clicked.connect(self._edit_dir)
+        self.remove_dir.clicked.connect(self._remove_dir)
+        self.dirs.itemSelectionChanged.connect(self._dir_buttons)
         self.banner = note(TAMPERED)
         self.perm_table = QTableWidget(len(perms.PERMISSIONS), 2)
         self.perm_table.setHorizontalHeaderLabels(["Engineer", "Tech"])
@@ -116,6 +150,7 @@ class AccountsPage(Page):
         self.form.addRow("Lock after", self.idle)
         for i, w in enumerate((self.banner, QLabel("<b>Accounts</b>"), note("Changes to accounts take effect right away."), self.table,
                                compact_row(self.add, self.change, self.reset, self.remove), compact_row(self.recovery),
+                               QLabel("<b>Directories</b>"), self.dirs, compact_row(self.add_dir, self.edit_dir, self.remove_dir),
                                QLabel("<b>Roles</b>"), note(ROLES_NOTE), self.perm_table, compact_row(self.save_roles))):
             self.lay.insertWidget(i, w)
 
@@ -128,10 +163,20 @@ class AccountsPage(Page):
 
     def refresh(self):
         self.table.setRowCount(0)
+        self._directory_rows = set()
         for a in (datakey.accounts() if datakey.exists() else []):      # (no keys file: sign-in is not set up yet)
             self.table.insertRow(self.table.rowCount())
-            for j, v in enumerate((a["name"], a["kind"], str(a["created"]), a["role"])):
+            for j, v in enumerate((a["name"], type_of(a), str(a["created"]), a["role"], unlocks_with(a))):
                 self.table.setItem(self.table.rowCount() - 1, j, QTableWidgetItem(v))
+            if a["kind"] == "directory":
+                self._directory_rows.add(a["name"])
+        self._selection()
+        doc = roles.verified()                          # only a list whose signature checked out is shown or changed here
+        self._dirs = list(doc.get("directories") or []) if doc is not None else None
+        self.dirs.clear()
+        self.dirs.addItems([d.get("name", "") for d in self._dirs or []])
+        self.add_dir.setEnabled(self._dirs is not None)
+        self._dir_buttons()
         self.banner.setVisible(roles.state() == "tampered")
         self._shown = {r: roles.stored_permissions(r) for r in ("Engineer", "Tech")}     # as stored, not the Tech fallback
         for i, (key, _) in enumerate(perms.PERMISSIONS):
@@ -145,6 +190,12 @@ class AccountsPage(Page):
         r = self.table.currentRow()
         return self.table.item(r, 0).text() if r >= 0 and self.table.selectedIndexes() else None
 
+    def _selection(self):
+        """A directory account's role comes from its groups and its password from its directory."""
+        local = self._selected() not in self._directory_rows
+        self.change.setEnabled(local)
+        self.reset.setEnabled(local)
+
     def _add(self):
         dlg = AccountDialog(parent=self)
         if dlg.exec():
@@ -153,7 +204,7 @@ class AccountsPage(Page):
 
     def _change(self):
         name = self._selected()
-        if not name:
+        if not name or name in self._directory_rows:
             return
         dlg = RoleDialog(self.table.item(self.table.currentRow(), 3).text(), self)
         if not dlg.exec():
@@ -175,7 +226,7 @@ class AccountsPage(Page):
 
     def _reset(self):
         name = self._selected()
-        if name and AccountDialog(name, self).exec():
+        if name and name not in self._directory_rows and AccountDialog(name, self).exec():
             audit.log("password reset", name)
 
     def _remove(self):
@@ -186,14 +237,10 @@ class AccountsPage(Page):
         if me and name.casefold() == me.casefold():
             QMessageBox.warning(self, self.title, OWN_ACCOUNT)
             return
-        box = QMessageBox(QMessageBox.Icon.Question, self.title, f"Remove {name}? They won't be able to sign in to this copy of Toner.", parent=self)
-        go = box.addButton("Remove", QMessageBox.ButtonRole.AcceptRole)
-        box.setDefaultButton(box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole))
-        box.exec()
-        if box.clickedButton() is not go:
+        if not confirm(self, self.title, f"Remove {name}? They won't be able to sign in to this copy of Toner."):
             return
         try:
-            datakey.remove(name)
+            datakey.remove(name)                        # a directory account's PIN slot on this computer goes with it
         except (ValueError, datakey.Locked, perms.Denied) as e:        # LastAccount, "Sign in first.", an account the file no longer has
             QMessageBox.warning(self, self.title, str(e))
             self.refresh()
@@ -211,3 +258,39 @@ class AccountsPage(Page):
             return
         audit.log("recovery key replaced")
         RecoveryDialog(key, self).exec()
+
+    # ---------------------------------------------------------------- directories
+    def _dir(self):
+        r = self.dirs.currentRow()
+        return self._dirs[r] if self._dirs and 0 <= r < len(self._dirs) and self.dirs.selectedItems() else None
+
+    def _dir_buttons(self):
+        on = self._dir() is not None
+        self.edit_dir.setEnabled(on)
+        self.remove_dir.setEnabled(on)
+
+    def _add_dir(self):
+        if self._dirs is not None and DirectoryDialog(self._dirs, None, self).exec():
+            self.refresh()
+
+    def _edit_dir(self):
+        d = self._dir()
+        if d is not None and DirectoryDialog(self._dirs, d, self).exec():
+            self.refresh()
+
+    def _remove_dir(self):
+        d = self._dir()
+        if d is None or not confirm(self, self.title, REMOVE_DIRECTORY.format(name=d.get("name", ""))):
+            return
+        try:
+            roles.set_directories([x for x in self._dirs if x is not d])     # its accounts and their PIN slots go too
+        except (ValueError, datakey.Locked, perms.Denied) as e:            # "Toner needs at least one Admin.", "Sign in first."
+            QMessageBox.warning(self, self.title, str(e))
+            self.refresh()
+            return
+        for forget in (lambda: passvault.remove(service_key(d["id"])), lambda: osstore.delete("duo:" + d["id"])):
+            try:
+                forget()
+            except Exception:                           # a locked vault or no protected store: nothing of it can be used now
+                quiet.ignored()
+        self.refresh()
