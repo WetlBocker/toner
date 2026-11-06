@@ -1,6 +1,6 @@
 # Run directly (python tests/test_x.py) or all together (python tests/run_all.py). Each test builds its own
 # throw-away database and uses a fake credential store, so nothing on this computer is touched.
-# Settings > Accounts and sign-in: add, reset and remove local accounts, a new recovery key, the idle-lock minutes, the audit rows.
+# Settings > Accounts: add, reset and remove local accounts, a new recovery key, the idle-lock minutes, the audit rows.
 import os as _os, sys as _sys, tempfile as _tmp
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
@@ -41,8 +41,8 @@ check("lists the account", rows() == ["Admin"], rows())
 check("columns: Unlocks with is last; a local account unlocks with its Password",
       [page.table.horizontalHeaderItem(j).text() for j in range(page.table.columnCount())] == ["Username", "Type", "Created", "Role", "Unlocks with"]
       and page.table.item(0, 1).text() == "local" and page.table.item(0, 4).text() == "Password")
-check("the Directories section (tests/test_directorydlg.py covers it): empty, Add on", page.dirs.count() == 0 and page.add_dir.isEnabled()
-      and not page.edit_dir.isEnabled() and not page.remove_dir.isEnabled())
+check("the Directories section (tests/test_directorydlg.py covers it): empty, Add on", page.idents.rowCount() == 0 and page.add_ident.isEnabled()
+      and not page.edit_ident.isEnabled() and not page.remove_ident.isEnabled())
 
 shown = {}
 def fill(name, pw, confirm=None, role=None):
@@ -205,7 +205,7 @@ session.sign_out(); session.sign_in("Enid", PW3)
 check("an Engineer signing in afterwards can't push", perms.allowed("push") is False)
 from types import SimpleNamespace
 from ui.settings import SettingsTab as Settings
-check("Accounts and sign-in is hidden from an Engineer", Settings._role_hidden(SimpleNamespace(pages=[page]), 0) is True)
+check("Accounts is hidden from an Engineer", Settings._role_hidden(SimpleNamespace(pages=[page]), 0) is True)
 session.sign_out(); session.sign_in("Admin", PW)
 check("...and shown to an Admin", Settings._role_hidden(SimpleNamespace(pages=[page]), 0) is False)
 session.sign_out(); session.sign_in("Enid", PW3)
@@ -258,6 +258,42 @@ check("session range 1-72", (page.session.minimum(), page.session.maximum()) == 
 check("session label", page.form.labelForField(page.session).text() == "Session length (hours)")
 
 from ui import settings
-check("page is listed", "Accounts and sign-in" in dict(settings.GROUPS)["Security and data"] and "Accounts and sign-in" in settings.GLOBAL_PAGES)
+
+# External Identities: the table, the 2FA column, the right-click menu
+def ident(i, name, kind, duo):
+    return {"id": i, "name": name, "kind": kind, "servers": ["dc.acme.test"], "port": 636, "security": "ldaps", "ca_file": "",
+            "base_dn": "DC=acme,DC=test", "netbios": name[:4].upper(), "suffixes": [], "service_dn": "CN=svc,DC=acme,DC=test",
+            "groups": {}, "duo": {"on": duo, "host": "api-x.duosecurity.com" if duo else "", "ikey": "DIX" if duo else ""}}
+check("title is Accounts", page.title == "Accounts")
+roles.set_directories([ident("a1", "ACME", "ad", True), ident("l1", "Corp LDAP", "ldap", False)])
+page.refresh()
+cell = lambda r, c: page.idents.item(r, c).text()
+check("External Identities: columns", [page.idents.horizontalHeaderItem(j).text() for j in range(3)] == ["Name", "Type", "2FA"])
+check("AD with Duo on", [cell(0, j) for j in range(3)] == ["ACME", "Active Directory", "On"], [cell(0, j) for j in range(3)])
+check("LDAP with Duo off", [cell(1, j) for j in range(3)] == ["Corp LDAP", "LDAP", "Off"], [cell(1, j) for j in range(3)])
+check("buttons", (page.add_ident.text(), page.edit_ident.text(), page.remove_ident.text()) == ("Add", "Edit...", "Remove"))
+check("heading", any(l.text() == "<b>External Identities</b>" for l in page.findChildren(A.QLabel)))
+check("no selection: Edit and Remove off", not page.edit_ident.isEnabled() and not page.remove_ident.isEnabled())
+page.idents.selectRow(1)
+menu = page._ident_menu(None)
+check("menu items, in order", [a.text() for a in menu.actions()] == ["Test login...", "Set up 2FA...", "Edit...", "Remove"], [a.text() for a in menu.actions()])
+check("Test login and Set up 2FA are off for now", not menu.actions()[0].isEnabled() and not menu.actions()[1].isEnabled())
+check("Edit and Remove are on", menu.actions()[2].isEnabled() and menu.actions()[3].isEnabled())
+edited = []
+A.DirectoryDialog.exec = lambda self: edited.append(self.orig["name"]) or 0
+menu.actions()[2].trigger()
+check("menu Edit opens the selected identity", edited == ["Corp LDAP"], edited)
+asked = []
+QMessageBox.exec = lambda self: (asked.append(self.text()), self.setDefaultButton(None))[0]
+menu.actions()[3].trigger()
+check("menu Remove asks the approved question", asked == ["Removing this directory signs out its accounts on this copy. Remove Corp LDAP?"], asked)
+check("...and Cancel kept it", len(roles.verified()["directories"]) == 2)
+real_verified = roles.verified
+roles.verified = lambda: None
+page.refresh()
+check("rules that don't check out: no rows, Add off", page.idents.rowCount() == 0 and not page.add_ident.isEnabled())
+roles.verified = real_verified
+roles.set_directories([]); page.refresh()
+check("page is listed", "Accounts" in dict(settings.GROUPS)["Security and data"] and "Accounts" in settings.GLOBAL_PAGES)
 
 print(f"\n{ok} passed, {bad} failed"); sys.exit(1 if bad else 0)

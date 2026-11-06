@@ -1,4 +1,4 @@
-"""The Directory dialog (Settings > Accounts and sign-in > Directories): one directory's settings. Test connection and Save talk
+"""The Directory dialog (Settings > Accounts > Directories): one directory's settings. Test connection and Save talk
 to the directory on a Job thread. Save turns the group names into the DNs the server writes (only those are stored), then signs
 the list with roles.set_directories. The service password goes to the vault and Duo's secret key to the OS protected store;
 neither is ever in netcheck.keys, a log, the audit or a message. An empty password box on Edit keeps the stored password. An

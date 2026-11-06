@@ -23,7 +23,7 @@ TOOLS = [("tool:command-runner", "Command Runner"), ("tool:api-tester", "API Tes
          ("tool:subnet", "Subnet Calculator"),
          ("tool:sessions", "Sessions (SSH, Telnet, serial)"), ("tool:rdp", "Remote desktop (RDP)"), ("tool:automation", "Automation (Ansible)")]
 
-# Every Settings page except "Accounts and sign-in" (admin only).
+# Every Settings page except "Accounts" (admin only).
 SETTINGS_PAGES = ["General", "Thresholds", "Checks", "Scanning", "Maintenance", "Connections", "Proxy", "Credentials", "Agents", "Demarc",
                   "Notifications", "Reports", "Config backups", "Ansible", "AI", "Appearance", "Terminal", "Security", "Audit log",
                   "Data and logs", "Organizations"]

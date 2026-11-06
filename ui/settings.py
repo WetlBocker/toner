@@ -47,14 +47,14 @@ GROUPS = [("Monitoring", ["General", "Thresholds", "Checks", "Scanning", "Mainte
           ("Alerts and reports", ["Notifications", "Reports", "Config backups"]),
           ("Automation", ["Ansible", "AI"]),
           ("Look and feel", ["Appearance", "Terminal"]),
-          ("Security and data", ["Security", "Accounts and sign-in", "Audit log", "Data and logs"]),
+          ("Security and data", ["Security", "Accounts", "Audit log", "Data and logs"]),
           ("Organizations", ["Organizations"])]
 
 
 DIRTY = Qt.ItemDataRole.UserRole + 1          # on a list entry: the page has edits that are not saved yet
 
 # Pages about this computer or the whole program: an organization sees them, read-only, as "Managed by Global".
-GLOBAL_PAGES = {"Proxy", "Ansible", "AI", "Scanning", "Appearance", "Terminal", "Security", "Accounts and sign-in", "Data and logs", "Demarc"}   # (Agents: only the receiver part)
+GLOBAL_PAGES = {"Proxy", "Ansible", "AI", "Scanning", "Appearance", "Terminal", "Security", "Accounts", "Data and logs", "Demarc"}   # (Agents: only the receiver part)
 GLOBAL_ONLY_PAGES = {"Organizations"}               # shown in Global only
 
 # What an organization's own value of a setting is called on its page's "Reset to Global" line.
@@ -409,17 +409,17 @@ class SettingsTab(QWidget):
         return self._role_hidden(i) or (db.home() != db.GLOBAL and self.pages[i].title in GLOBAL_ONLY_PAGES)
 
     def _role_hidden(self, i):
-        """Accounts and sign-in is for Admins; while the rules don't check out everyone is a Tech, so it shows (with its banner,
+        """Accounts is for Admins; while the rules don't check out everyone is a Tech, so it shows (with its banner,
         its actions refused) or an Admin could never see why."""
-        return self.pages[i].title == "Accounts and sign-in" and not perms.is_admin() and roles.state() != "tampered"
+        return self.pages[i].title == "Accounts" and not perms.is_admin() and roles.state() != "tampered"
 
     def _role_locked(self, i):
         t = self.pages[i].title
         return t in perms.SETTINGS_PAGES and not perms.allowed("settings:" + t)
 
     def apply_role(self):
-        """The signed-in role: a page it may not change is read-only under one banner (replacing "Managed by Global"), and Accounts and
-        sign-in is for Admins. Safe to call again."""
+        """The signed-in role: a page it may not change is read-only under one banner (replacing "Managed by Global"), and Accounts
+        is for Admins. Safe to call again."""
         self.apply_org()
 
     def apply_org(self):

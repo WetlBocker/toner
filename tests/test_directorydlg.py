@@ -1,6 +1,6 @@
 # Run directly (python tests/test_x.py) or all together (python tests/run_all.py). Each test builds its own
 # throw-away database and uses a fake credential store, so nothing on this computer is touched.
-# Settings > Accounts and sign-in, the Directories section and the Directory dialog, on ldap3's MOCK_SYNC, a fake protected store
+# Settings > Accounts, the External Identities section and the Directory dialog, on ldap3's MOCK_SYNC, a fake protected store
 # and a fake security chip: add, test, edit and remove a directory (the keys file, the audit, where the secrets go), group names,
 # duplicates, the CA file, plain LDAP and a closed port, Duo with no protected store, and a directory account in the accounts table.
 import os as _os, sys as _sys, tempfile as _tmp
@@ -158,17 +158,17 @@ def dialog(*a):
 
 page = A.AccountsPage()
 page.load()
-dir_rows = lambda: [page.dirs.item(i).text() for i in range(page.dirs.count())]
+dir_rows = lambda: [page.idents.item(i, 0).text() for i in range(page.idents.rowCount())]
 
 print("== the section")
-check("the heading and buttons, in the approved words", page.add_dir.text() == "Add directory..." and page.edit_dir.text() == "Edit..."
-      and page.remove_dir.text() == "Remove" and any(l.text() == "<b>Directories</b>" for l in page.findChildren(A.QLabel)))
-check("no directories yet; Add on, Edit and Remove off", dir_rows() == [] and page.add_dir.isEnabled()
-      and not page.edit_dir.isEnabled() and not page.remove_dir.isEnabled())
+check("the heading and buttons, in the approved words", page.add_ident.text() == "Add" and page.edit_ident.text() == "Edit..."
+      and page.remove_ident.text() == "Remove" and any(l.text() == "<b>External Identities</b>" for l in page.findChildren(A.QLabel)))
+check("no directories yet; Add on, Edit and Remove off", dir_rows() == [] and page.add_ident.isEnabled()
+      and not page.edit_ident.isEnabled() and not page.remove_ident.isEnabled())
 real_verified = roles.verified
 roles.verified = lambda: None
 page.refresh()
-check("rules that don't check out: no list, no changes", dir_rows() == [] and not page.add_dir.isEnabled())
+check("rules that don't check out: no list, no changes", dir_rows() == [] and not page.add_ident.isEnabled())
 roles.verified = real_verified
 page.refresh()
 
@@ -254,14 +254,14 @@ def add_with(**kw):
         said["msg"] = saved(dlg)
     return go
 DD.DirectoryDialog.exec = answers(add_with(admin="Nope"))
-page.add_dir.click()
+page.add_ident.click()
 check("an unknown group name: said, nothing written", said["msg"] == "Toner couldn't find a group named Nope." and not doc().get("directories"), said)
 DD.DirectoryDialog.exec = answers(add_with(engineer="Desk"))
-page.add_dir.click()
+page.add_ident.click()
 check("a group name used twice", said["msg"] == "More than one group is named Desk. Type its full DN instead." and not doc().get("directories"), said)
 DD.DirectoryDialog.exec = answers(add_with(second="Duo", host="api-1234.duosecurity.com", ikey="DIXXXXXXXXXXXXXXXXXX", skey=SKEY,
                                          admin="Toner Admins\n\n", tech="Toner Techs\n" + ENGINEERS))
-page.add_dir.click()
+page.add_ident.click()
 d = (doc().get("directories") or [{}])[0]
 check("saved: the list shows it", dir_rows() == ["ACME"], dir_rows())
 check("...the groups are the DNs the server wrote, not the names typed", d.get("groups") == {"Admin": [ADMINS], "Engineer": [ENGINEERS],
@@ -280,12 +280,12 @@ check("...nor anywhere in the database file", SVC.encode() not in open(db.base_p
 print("== duplicates")
 for kw, value in ((dict(netbios="acme"), "acme"), (dict(netbios="OTHER", suffixes="other.com, ACME.com"), "ACME.com")):
     DD.DirectoryDialog.exec = answers(add_with(name="Other", **kw))
-    page.add_dir.click()
+    page.add_ident.click()
     check(f"another directory's name: {value}", said["msg"] == f"Another directory already uses {value}." and len(doc()["directories"]) == 1, said)
 
 print("== edit")
-page.dirs.setCurrentRow(0)
-check("a selected directory: Edit and Remove on", page.edit_dir.isEnabled() and page.remove_dir.isEnabled())
+page.idents.selectRow(0)
+check("a selected directory: Edit and Remove on", page.edit_ident.isEnabled() and page.remove_ident.isEnabled())
 shown = {}
 def edit(dlg):
     shown.update(name=dlg.name.text(), pw=dlg.service_pw.text(), skey=dlg.duo_skey.text(), tech=dlg.groups["Tech"].toPlainText(),
@@ -294,7 +294,7 @@ def edit(dlg):
     said["msg"] = tested(dlg)
     said["save"] = saved(dlg)
 DD.DirectoryDialog.exec = answers(edit)
-page.edit_dir.click()
+page.edit_ident.click()
 check("Edit shows what is stored, the groups as DNs, and no secret", shown == {"name": "ACME", "pw": "", "skey": "", "tech": TECHS + "\n" + ENGINEERS,
       "servers": "dc1.acme.com, dc2.acme.com", "second": "Duo"}, shown)
 check("an empty password tests with the stored one", said["msg"] == "Connected. Found 5 groups.", said)
@@ -311,14 +311,14 @@ def with_ca(dlg):
     dlg.cert.setCurrentText("CA file...")
     said["save"] = saved(dlg)
 DD.DirectoryDialog.exec = answers(with_ca)
-page.dirs.setCurrentRow(0); page.edit_dir.click()
+page.idents.selectRow(0); page.edit_ident.click()
 check("a CA file is signed into the list", doc()["directories"][0].get("ca_file") == ca and doc()["directories"][0].get("ca_sha256"), said)
 with open(ca, "w") as f: f.write("another CA")
 def test_only(dlg):
     shown["cert"], shown["path"] = dlg.cert.currentText(), dlg.ca_label.text()
     said["msg"] = tested(dlg)
 DD.DirectoryDialog.exec = answers(test_only)
-page.dirs.setCurrentRow(0); page.edit_dir.click()
+page.idents.selectRow(0); page.edit_ident.click()
 check("Edit shows the CA file", shown["cert"] == "CA file..." and shown["path"] == ca, shown)
 check("the CA file changed since: Test connection says so", said["msg"] == "The directory's CA file changed. An admin needs to save the directory again.", said)
 e = None
@@ -331,9 +331,9 @@ page.refresh()
 def save_again(dlg):
     said["save"] = saved(dlg)
 DD.DirectoryDialog.exec = answers(save_again)
-page.dirs.setCurrentRow(0); page.edit_dir.click()
+page.idents.selectRow(0); page.edit_ident.click()
 DD.DirectoryDialog.exec = answers(test_only)
-page.dirs.setCurrentRow(0); page.edit_dir.click()
+page.idents.selectRow(0); page.edit_ident.click()
 check("saving the directory again signs the new file; Test connection works again", said["msg"] == "Connected. Found 5 groups.", said)
 def new_file(dlg):
     with open(ca, "w") as f: f.write("a third CA")
@@ -343,26 +343,26 @@ def new_file(dlg):
     dlg.cert.setCurrentText("System trust store"); dlg.cert.setCurrentText("CA file...")
     said["msg"] = tested(dlg)
 DD.DirectoryDialog.exec = answers(new_file)
-page.dirs.setCurrentRow(0); page.edit_dir.click()
+page.idents.selectRow(0); page.edit_ident.click()
 check("a CA file just chosen is tested with its own hash", said["msg"] == "Connected. Found 5 groups.", said)
 print("== saving or removing another directory keeps this one's CA hash (Ruling 32)")
 signed_a = doc()["directories"][0]["ca_sha256"]                      # (its file now holds "a third CA")
 DD.DirectoryDialog.exec = answers(add_with(name="Beta", netbios="BETA", suffixes="beta.com"))
-page.add_dir.click()
+page.add_ident.click()
 check("another directory saved: this one's hash is the one signed before", [d["name"] for d in doc()["directories"]] == ["ACME Corp", "Beta"]
       and doc()["directories"][0]["ca_sha256"] == signed_a, said)
 DD.DirectoryDialog.exec = answers(test_only)
-page.dirs.setCurrentRow(0); page.edit_dir.click()
+page.idents.selectRow(0); page.edit_ident.click()
 check("...so its Test connection still says the CA file changed", said["msg"] == "The directory's CA file changed. An admin needs to save the directory again.", said)
 def remove_box(self):
     [b for b in self.buttons() if b.text() == "Remove"][0].click()
 before_exec, QMessageBox.exec = QMessageBox.exec, remove_box
-page.dirs.setCurrentRow(1); page.remove_dir.click()
+page.idents.selectRow(1); page.remove_ident.click()
 QMessageBox.exec = before_exec
 check("removing the other directory re-hashes none", [d["name"] for d in doc()["directories"]] == ["ACME Corp"]
       and doc()["directories"][0]["ca_sha256"] == signed_a)
 DD.DirectoryDialog.exec = answers(lambda dlg: (dlg.cert.setCurrentText("System trust store"), saved(dlg)))
-page.dirs.setCurrentRow(0); page.edit_dir.click()
+page.idents.selectRow(0); page.edit_ident.click()
 check("back to the system trust store", doc()["directories"][0].get("ca_file") == "" and "ca_sha256" not in doc()["directories"][0])
 
 print("== a directory account in the accounts table")
@@ -406,13 +406,13 @@ a = S.begin("bob@acme.com", "pw-bob"); S.after_password(a); S.choose_pin(a, PIN)
 slot_key = "Toner-" + datakey.directory_account("bob@acme.com")["slot_id"]
 session.sign_out(); session.sign_in("Admin1", PW)
 OS[("duo:" + DID, None)] = SKEY.encode()
-page.refresh(); page.dirs.setCurrentRow(0)
+page.refresh(); page.idents.selectRow(0)
 asked.clear(); QMessageBox.exec = answer("Cancel")
-page.remove_dir.click()
+page.remove_ident.click()
 check("asks, in the approved words; Cancel keeps it", asked == ["Removing this directory signs out its accounts on this copy. Remove ACME Corp?"]
       and len(doc()["directories"]) == 1, asked)
 QMessageBox.exec = answer("Remove")
-page.remove_dir.click()
+page.remove_ident.click()
 check("Remove: gone from the list and the file", dir_rows() == [] and doc()["directories"] == [])
 check("...its accounts and their PIN keys go", datakey.directory_account("bob@acme.com") is None and slot_key not in FakeTpm.keys)
 check("...the service password and the Duo secret go", passvault.get(f"service:directory-{DID}") is None and ("duo:" + DID, None) not in OS)
@@ -426,12 +426,12 @@ fill(dlg, netbios="")
 check("Test connection fills it in", tested(dlg) == "Connected. Found 5 groups." and dlg.netbios.text() == "ACME", dlg.netbios.text())
 dlg.close()
 DD.DirectoryDialog.exec = answers(add_with(netbios=""))
-page.add_dir.click()
+page.add_ident.click()
 check("Save stores it", [d.get("netbios") for d in doc()["directories"]] == ["ACME"], said)
-QMessageBox.exec = answer("Remove"); page.refresh(); page.dirs.setCurrentRow(0); page.remove_dir.click(); QMessageBox.exec = real_exec
+QMessageBox.exec = answer("Remove"); page.refresh(); page.idents.selectRow(0); page.remove_ident.click(); QMessageBox.exec = real_exec
 directory._config_nc = lambda conn: None
 DD.DirectoryDialog.exec = answers(add_with(netbios=""))
-page.add_dir.click()
+page.add_ident.click()
 check("a lookup that fails: Save refuses, in the approved words", said["msg"] == "Toner couldn't connect: no NetBIOS name found"
       and doc()["directories"] == [], said)
 directory._config_nc = lambda conn: "CN=Configuration," + BASE
@@ -450,12 +450,12 @@ dlg2 = dialog([d], d); settle(dlg2)
 fill(dlg2, admin="Nope")
 check("a Save that fails turns the form on again", saved(dlg2) == "Toner couldn't find a group named Nope." and dlg2.name.isEnabled())
 dlg2.close()
-QMessageBox.exec = answer("Remove"); page.refresh(); page.dirs.setCurrentRow(0); page.remove_dir.click(); QMessageBox.exec = real_exec
+QMessageBox.exec = answer("Remove"); page.refresh(); page.idents.selectRow(0); page.remove_ident.click(); QMessageBox.exec = real_exec
 
 print("== an Engineer never reaches the page (Part 2)")
 from ui.settings import SettingsTab as Settings
 session.sign_out(); session.sign_in("Eng1", PW2)
-check("Accounts and sign-in is hidden from an Engineer", Settings._role_hidden(SimpleNamespace(pages=[page]), 0) is True)
+check("Accounts is hidden from an Engineer", Settings._role_hidden(SimpleNamespace(pages=[page]), 0) is True)
 session.sign_out(); session.sign_in("Admin1", PW)
 check("...and shown to an Admin", Settings._role_hidden(SimpleNamespace(pages=[page]), 0) is False)
 

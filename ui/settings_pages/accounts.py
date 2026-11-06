@@ -1,7 +1,7 @@
-"""Settings page: Accounts and sign-in. Account actions apply at once; the idle-lock minutes follow Save."""
+"""Settings page: Accounts. Account actions apply at once; the idle-lock minutes follow Save."""
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QLabel, QListWidget, QMessageBox, QPushButton, QTableWidget,
+from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QLabel, QMenu, QMessageBox, QPushButton, QTableWidget,
                                QTableWidgetItem)
 
 from core import audit, datakey, db, osstore, passvault, passwords, perms, quiet, roles, session
@@ -106,7 +106,7 @@ class RoleDialog(_CardDialog):
 
 
 class AccountsPage(Page):
-    title = "Accounts and sign-in"
+    title = "Accounts"
 
     def __init__(self):
         super().__init__()
@@ -127,15 +127,22 @@ class AccountsPage(Page):
         self.recovery.clicked.connect(self._recovery)
         self.table.itemSelectionChanged.connect(self._selection)
         self._directory_rows = set()
-        self.dirs = QListWidget()
-        self.dirs.setAccessibleName("Directories")
-        self.dirs.setMaximumHeight(110)
+        self.idents = QTableWidget(0, 3)
+        self.idents.setHorizontalHeaderLabels(["Name", "Type", "2FA"])
+        self.idents.horizontalHeader().setStretchLastSection(True)
+        self.idents.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.idents.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.idents.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.idents.setMaximumHeight(130)
+        self.idents.setAccessibleName("External Identities")
+        self.idents.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.idents.customContextMenuRequested.connect(lambda pos: self._ident_menu(pos).exec(self.idents.viewport().mapToGlobal(pos)))
         self._dirs = None                               # the verified list; None: rules that don't check out, so no changes
-        self.add_dir, self.edit_dir, self.remove_dir = (QPushButton(t) for t in ("Add directory...", "Edit...", "Remove"))
-        self.add_dir.clicked.connect(self._add_dir)
-        self.edit_dir.clicked.connect(self._edit_dir)
-        self.remove_dir.clicked.connect(self._remove_dir)
-        self.dirs.itemSelectionChanged.connect(self._dir_buttons)
+        self.add_ident, self.edit_ident, self.remove_ident = (QPushButton(t) for t in ("Add", "Edit...", "Remove"))
+        self.add_ident.clicked.connect(self._add_ident)
+        self.edit_ident.clicked.connect(self._edit_ident)
+        self.remove_ident.clicked.connect(self._remove_ident)
+        self.idents.itemSelectionChanged.connect(self._ident_buttons)
         self.banner = note(TAMPERED)
         self.perm_table = QTableWidget(len(perms.PERMISSIONS), 2)
         self.perm_table.setHorizontalHeaderLabels(["Engineer", "Tech"])
@@ -152,7 +159,7 @@ class AccountsPage(Page):
         self.form.addRow("Session length (hours)", self.session)
         for i, w in enumerate((self.banner, QLabel("<b>Accounts</b>"), note("Changes to accounts take effect right away."), self.table,
                                compact_row(self.add, self.change, self.reset, self.remove), compact_row(self.recovery),
-                               QLabel("<b>Directories</b>"), self.dirs, compact_row(self.add_dir, self.edit_dir, self.remove_dir),
+                               QLabel("<b>External Identities</b>"), self.idents, compact_row(self.add_ident, self.edit_ident, self.remove_ident),
                                QLabel("<b>Roles</b>"), note(ROLES_NOTE), self.perm_table, compact_row(self.save_roles))):
             self.lay.insertWidget(i, w)
 
@@ -177,10 +184,14 @@ class AccountsPage(Page):
         self._selection()
         doc = roles.verified()                          # only a list whose signature checked out is shown or changed here
         self._dirs = list(doc.get("directories") or []) if doc is not None else None
-        self.dirs.clear()
-        self.dirs.addItems([d.get("name", "") for d in self._dirs or []])
-        self.add_dir.setEnabled(self._dirs is not None)
-        self._dir_buttons()
+        self.idents.setRowCount(0)
+        for d in self._dirs or []:
+            self.idents.insertRow(self.idents.rowCount())
+            kind = {"ad": "Active Directory", "ldap": "LDAP"}.get(d.get("kind"), "")
+            for j, v in enumerate((d.get("name", ""), kind, "On" if (d.get("duo") or {}).get("on") else "Off")):     # (cfg only; "N/A" waits for a kind without 2FA)
+                self.idents.setItem(self.idents.rowCount() - 1, j, QTableWidgetItem(v))
+        self.add_ident.setEnabled(self._dirs is not None)
+        self._ident_buttons()
         self.banner.setVisible(roles.state() == "tampered")
         self._shown = {r: roles.stored_permissions(r) for r in ("Engineer", "Tech")}     # as stored, not the Tech fallback
         for i, (key, _) in enumerate(perms.PERMISSIONS):
@@ -265,24 +276,37 @@ class AccountsPage(Page):
 
     # ---------------------------------------------------------------- directories
     def _dir(self):
-        r = self.dirs.currentRow()
-        return self._dirs[r] if self._dirs and 0 <= r < len(self._dirs) and self.dirs.selectedItems() else None
+        r = self.idents.currentRow()
+        return self._dirs[r] if self._dirs and 0 <= r < len(self._dirs) and self.idents.selectedIndexes() else None
 
-    def _dir_buttons(self):
+    def _ident_buttons(self):
         on = self._dir() is not None
-        self.edit_dir.setEnabled(on)
-        self.remove_dir.setEnabled(on)
+        self.edit_ident.setEnabled(on)
+        self.remove_ident.setEnabled(on)
 
-    def _add_dir(self):
+    def _ident_menu(self, pos):
+        """The right-click menu, not shown: Tasks 6 and 7 enable and wire `test_login` and `set_up_2fa`."""
+        row = self.idents.rowAt(pos.y()) if pos is not None else -1
+        if row >= 0:
+            self.idents.selectRow(row)
+        m = QMenu(self.idents)
+        self.test_login, self.set_up_2fa = (m.addAction(t) for t in ("Test login...", "Set up 2FA..."))
+        self.test_login.setEnabled(False)
+        self.set_up_2fa.setEnabled(False)
+        m.addAction("Edit...", self._edit_ident).setEnabled(self.edit_ident.isEnabled())
+        m.addAction("Remove", self._remove_ident).setEnabled(self.remove_ident.isEnabled())
+        return m
+
+    def _add_ident(self):
         if self._dirs is not None and DirectoryDialog(self._dirs, None, self).exec():
             self.refresh()
 
-    def _edit_dir(self):
+    def _edit_ident(self):
         d = self._dir()
         if d is not None and DirectoryDialog(self._dirs, d, self).exec():
             self.refresh()
 
-    def _remove_dir(self):
+    def _remove_ident(self):
         d = self._dir()
         if d is None or not confirm(self, self.title, REMOVE_DIRECTORY.format(name=d.get("name", ""))):
             return

@@ -33,7 +33,7 @@ check("defaults cover exactly PERMISSIONS", set(t) == keys and set(e) == keys)
 check("no duplicate keys", len(keys) == len(P.PERMISSIONS))
 check("21 settings pages", len(P.SETTINGS_PAGES) == 21)
 titles = {n for _, ns in GROUPS for n in ns}
-check("each page title is in GROUPS", all(p in titles for p in P.SETTINGS_PAGES) and "Accounts and sign-in" not in P.SETTINGS_PAGES)
+check("each page title is in GROUPS", all(p in titles for p in P.SETTINGS_PAGES) and "Accounts" not in P.SETTINGS_PAGES)
 check("28 tools", len(P.TOOLS) == 28, len(P.TOOLS))
 check("labels", dict(P.PERMISSIONS)["push"] == "Push changes to devices" and dict(P.PERMISSIONS)["tool:ping"] == "Ping / Traceroute / DNS")
 check("denied default message", str(P.Denied()) == P.REASON == "Your role doesn't allow this. Ask an admin." and issubclass(P.Denied, PermissionError))

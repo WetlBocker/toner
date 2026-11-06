@@ -1,7 +1,7 @@
 # Run directly (python tests/test_x.py) or all together (python tests/run_all.py). Each test builds its own
 # throw-away database and uses a fake credential store, so nothing on this computer is touched.
 # The window follows the signed-in role: Tools and the AI the role switched off are hidden, Settings pages it may not change are
-# read-only under one banner, and Accounts and sign-in is for Admins. With sign-in off nothing is hidden.
+# read-only under one banner, and Accounts is for Admins. With sign-in off nothing is hidden.
 import os as _os, sys as _sys, tempfile as _tmp
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
@@ -57,10 +57,10 @@ w = build(); st = w.settings
 check("off: every tool is listed", len(tool_names(w)) == 25, tool_names(w))
 check("off: every section is shown", section_names(w) == [w.tabs.tabText(i) for i in range(w.tabs.count())])
 check("off: no Settings page is locked", not st.locked and all(p.isEnabled() for p in st.pages))
-check("off: Accounts and sign-in is listed", "Accounts and sign-in" in st.page_titles())
+check("off: Accounts is listed", "Accounts" in st.page_titles())
 check("off: no role banner shows", not any(lab.isVisibleTo(st) for lab in st.role_lines.values()))
 check("off: every Settings page title is a permission key (but Accounts)",
-      {p.title for p in st.pages} - {"Accounts and sign-in"} == set(perms.SETTINGS_PAGES), {p.title for p in st.pages} ^ set(perms.SETTINGS_PAGES))
+      {p.title for p in st.pages} - {"Accounts"} == set(perms.SETTINGS_PAGES), {p.title for p in st.pages} ^ set(perms.SETTINGS_PAGES))
 w._ai_state(True, "connected")
 w.show_assistant(True)
 check("off: the Assistant opens", w.ai_button.isVisibleTo(w) and w.assistant.isVisible())
@@ -79,7 +79,7 @@ roles.sync_grants()
 
 session.sign_out(); session.sign_in("Admin1", PW)
 w = build(); st = w.settings
-check("Admin: everything is shown", len(tool_names(w)) == 25 and "Sessions" in section_names(w) and "Accounts and sign-in" in st.page_titles())
+check("Admin: everything is shown", len(tool_names(w)) == 25 and "Sessions" in section_names(w) and "Accounts" in st.page_titles())
 check("Admin: no page is locked", not st.locked and all(p.isEnabled() for p in st.pages))
 w.close()
 
@@ -125,12 +125,12 @@ check("Tech: Security is locked, banner shown", st.pages[[p.title for p in st.pa
       and st.role_lines[[p.title for p in st.pages].index("Security")].isVisibleTo(st)
       and st.role_lines[[p.title for p in st.pages].index("Security")].text() == BANNER)
 check("Tech: Appearance is enabled", st.pages[[p.title for p in st.pages].index("Appearance")].isEnabled())
-check("Tech: Accounts and sign-in is not in the list", "Accounts and sign-in" not in st.page_titles())
-check("Tech: select_page refuses Accounts and sign-in", st.select_page("Accounts and sign-in") is False)
+check("Tech: Accounts is not in the list", "Accounts" not in st.page_titles())
+check("Tech: select_page refuses Accounts", st.select_page("Accounts") is False)
 st.search.setText("lock"); app.processEvents()
 check("Tech: Settings search for lock still finds Security", not st.nav.isRowHidden(page_row(st, "Security")))
 st.search.setText("accounts and sign-in"); app.processEvents()
-check("Tech: and never Accounts and sign-in", not any(st.nav.item(r).text() == "Accounts and sign-in" and not st.nav.isRowHidden(r) for r in range(st.nav.count())))
+check("Tech: and never Accounts", not any(st.nav.item(r).text() == "Accounts" and not st.nav.isRowHidden(r) for r in range(st.nav.count())))
 st.search.setText("")
 # a locked page is never written
 sec = [p.title for p in st.pages].index("Security")
@@ -162,8 +162,8 @@ w.close()
 
 session.sign_out(); session.sign_in("Eng1", PW3)
 w = build(); st = w.settings
-check("Engineer: Accounts and sign-in is the only Settings page missing",
-      (set(perms.SETTINGS_PAGES) | {"Accounts and sign-in"}) - set(st.page_titles()) == {"Accounts and sign-in"}, st.page_titles())
+check("Engineer: Accounts is the only Settings page missing",
+      (set(perms.SETTINGS_PAGES) | {"Accounts"}) - set(st.page_titles()) == {"Accounts"}, st.page_titles())
 check("Engineer: every Settings page is enabled, no banner", not st.locked and all(p.isEnabled() for p in st.pages)
       and not any(lab.isVisibleTo(st) for lab in st.role_lines.values()))
 check("Engineer: every tool and section is shown", len(tool_names(w)) == 25 and "Sessions" in section_names(w) and "Automation/AI" in section_names(w))
@@ -178,12 +178,12 @@ datakey.add_local("Admin2", PW, role="Admin")
 w = build(); st = w.settings
 titles = [p.title for p in st.pages]
 sec = titles.index("Security")
-check("Admin before: Accounts and sign-in listed, Security open, SNMP listed", not st.nav.isRowHidden(page_row(st, "Accounts and sign-in"))
+check("Admin before: Accounts listed, Security open, SNMP listed", not st.nav.isRowHidden(page_row(st, "Accounts"))
       and sec not in st.locked and "SNMP" in tool_names(w))
 roles.set_role("Admin1", "Tech"); app.processEvents()
 st.select_page("Security"); app.processEvents()
-check("own demotion to Tech: Accounts and sign-in hidden, Security locked under the banner, SNMP gone (Tech's)",
-      st.nav.isRowHidden(page_row(st, "Accounts and sign-in")) and sec in st.locked and not st.pages[sec].isEnabled()
+check("own demotion to Tech: Accounts hidden, Security locked under the banner, SNMP gone (Tech's)",
+      st.nav.isRowHidden(page_row(st, "Accounts")) and sec in st.locked and not st.pages[sec].isEnabled()
       and st.role_lines[sec].isVisibleTo(st) and "SNMP" not in tool_names(w), (sorted(st.locked), tool_names(w)))
 import threading
 where = []
@@ -229,10 +229,10 @@ datakey.path().write_text(json.dumps(d), encoding="utf-8")
 session.sign_in("Admin1", PW)
 check("tampered: the rules don't check out", roles.state() == "tampered", roles.state())
 w = build(); st = w.settings
-check("tampered: an Admin still has Accounts and sign-in", "Accounts and sign-in" in st.page_titles()
-      and st.select_page("Accounts and sign-in") is True and st.current_title() == "Accounts and sign-in", st.page_titles())
+check("tampered: an Admin still has Accounts", "Accounts" in st.page_titles()
+      and st.select_page("Accounts") is True and st.current_title() == "Accounts", st.page_titles())
 app.processEvents()
-page = st.pages[[p.title for p in st.pages].index("Accounts and sign-in")]
+page = st.pages[[p.title for p in st.pages].index("Accounts")]
 check("...and its tamper banner", page.banner.isVisibleTo(st) and page.banner.text().startswith("The roles were changed outside Toner"))
 w.close()
 session.sign_out()
