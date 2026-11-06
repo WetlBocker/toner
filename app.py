@@ -9,7 +9,7 @@ from pathlib import Path
 from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence, QPainter, QPixmap, QShortcut
 from PySide6.QtWidgets import QApplication, QMainWindow, QMenu, QMessageBox, QSplitter, QSystemTrayIcon
-from core import agents, audit, checks, db, demarc, display, legacyssh, notify, paths, perms, reports, roles, session, sessionlog, sessions, trends, trust, tunnel, updates
+from core import agents, audit, checks, db, demarc, dircheck, display, legacyssh, notify, paths, perms, reports, roles, session, sessionlog, sessions, trends, trust, tunnel, updates
 from ui import theme
 from ui.about import AboutTab
 from ui.configs import ConfigsTab
@@ -316,6 +316,9 @@ class Main(QMainWindow):
         self.lock_screen = LockScreen(self)             # last, so it is above everything else in the window
         self.apply_permissions()
         roles.on_change(lambda: (self.apply_permissions(), self.settings.apply_role()))    # e.g. an Admin changing their own role
+        session.on_change(lambda st: dircheck.stop() if st == "signed_out" else dircheck.start())   # the directory check runs while a session is open or locked
+        if session.state() != "signed_out":
+            dircheck.start()
 
     def apply_permissions(self):
         """Once the window is built, and again whenever the rules change (safe to call again): what the signed-in role may not use is
