@@ -203,6 +203,12 @@ check("...one audit row", acts().count("role permissions changed") == n + 1, act
 check("...the table keeps it", page.perm_table.item(PUSH, 0).checkState() == Qt.CheckState.Unchecked)
 session.sign_out(); session.sign_in("Enid", PW3)
 check("an Engineer signing in afterwards can't push", perms.allowed("push") is False)
+from types import SimpleNamespace
+from ui.settings import SettingsTab as Settings
+check("Accounts and sign-in is hidden from an Engineer", Settings._role_hidden(SimpleNamespace(pages=[page]), 0) is True)
+session.sign_out(); session.sign_in("Admin", PW)
+check("...and shown to an Admin", Settings._role_hidden(SimpleNamespace(pages=[page]), 0) is False)
+session.sign_out(); session.sign_in("Enid", PW3)
 session.sign_out(); session.sign_in("Admin", PW)
 
 # a refused write is said in roles' or perms' words
