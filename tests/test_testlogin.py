@@ -442,5 +442,5 @@ check("every row is a name and the sentence shown", all(r["detail"].split(", ", 
        S.DUO_DOWN) for r in rows()))
 session.sign_out()
 
-print(f"\n{ok} ok, {bad} failed")
+print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

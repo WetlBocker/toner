@@ -277,7 +277,12 @@ check("no selection: Edit and Remove off", not page.edit_ident.isEnabled() and n
 page.idents.selectRow(1)
 menu = page._ident_menu(None)
 check("menu items, in order", [a.text() for a in menu.actions()] == ["Test login...", "Set up 2FA...", "Edit...", "Remove"], [a.text() for a in menu.actions()])
-check("Test login is off for now, Set up 2FA is on", not menu.actions()[0].isEnabled() and menu.actions()[1].isEnabled())
+check("Test login and Set up 2FA are on", menu.actions()[0].isEnabled() and menu.actions()[1].isEnabled())
+tested = []
+A.TestLoginDialog.exec = lambda self: tested.append((self.cfg, self.parent())) or 0
+menu.actions()[0].trigger()
+check("menu Test login opens on the selected identity, from the verified list",
+      tested == [(page._dirs[1], page)] and tested[0][0]["name"] == "Corp LDAP", tested)
 check("Edit and Remove are on", menu.actions()[2].isEnabled() and menu.actions()[3].isEnabled())
 edited = []
 A.IdentityWizard.exec = lambda self: edited.append(self.orig["name"]) or 0
@@ -292,6 +297,8 @@ real_verified = roles.verified
 roles.verified = lambda: None
 page.refresh()
 check("rules that don't check out: no rows, Add off", page.idents.rowCount() == 0 and not page.add_ident.isEnabled())
+page.idents.clearSelection()
+check("no row: Test login off", not page._ident_menu(None).actions()[0].isEnabled())
 roles.verified = real_verified
 roles.set_directories([]); page.refresh()
 check("page is listed", "Accounts" in dict(settings.GROUPS)["Security and data"] and "Accounts" in settings.GLOBAL_PAGES)

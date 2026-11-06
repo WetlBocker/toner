@@ -108,7 +108,7 @@ check("no secret in the audit or keys file at the end", SECRET not in text_of_fi
 # the page menu
 page.refresh(); page.idents.selectRow(1)
 menu = page._ident_menu(None)
-check("menu: Set up 2FA on, Test login still off", menu.actions()[1].isEnabled() and not menu.actions()[0].isEnabled())
+check("menu: Set up 2FA and Test login on", menu.actions()[1].isEnabled() and menu.actions()[0].isEnabled())
 opened = []
 A.TwoFactorDialog.exec = lambda self: opened.append(self.cfg["name"]) or 1
 menu.actions()[1].trigger()
