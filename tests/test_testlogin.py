@@ -268,6 +268,43 @@ check("unreachable: the approved sentence", e is not None and str(e) == S.UNREAC
       and last_row(S.UNREACHABLE) and not password_in_frames(e))
 directory._make_server = lambda cfg, host, *_: ldap
 
+# ---------------------------------------------------------------- the CA file changed since the list was signed
+def ca_changed(cfg, who, password): raise directory.CaChanged("CA file changed")
+directory.connect = ca_changed
+t = S.TestLogin(cfg())
+e = raises(lambda: t.check_password("bob@acme.com", "pw-bob"), S.CaChanged)
+directory.connect = counting_connect
+finished += 1
+check("a changed CA file: the approved sentence, one row", e is not None and str(e) == S.CA_CHANGED and t.result == S.CA_CHANGED
+      and last_row(S.CA_CHANGED) and len(rows()) == finished)
+
+# ---------------------------------------------------------------- the audit name: the typed login on one plain line
+typed = "bob@acme.com\r\nforged row\t" + chr(127) + "x" * 300
+t = S.TestLogin(cfg())
+raises(lambda: t.check_password(typed, "not bob's password"), datakey.WrongPassword)
+finished += 1
+clean = ("bob@acme.comforged row" + "x" * 300)[:256]
+check("a login with control characters: removed, cut to 256", len(rows()) == finished and last_row(datakey.WRONG, clean)
+      and not any(ch < " " or ch == chr(127) for ch in rows()[0]["detail"]), repr(rows()[0]["detail"][:60]))
+
+# ---------------------------------------------------------------- the test's own wrong password starts the wait
+d = json.loads(datakey.path().read_text(encoding="utf-8"))
+d["throttle"] = {"fails": datakey.FREE_TRIES, "until": 0}
+datakey.path().write_text(json.dumps(d), encoding="utf-8")
+t = S.TestLogin(cfg())
+e = raises(lambda: t.check_password("bob@acme.com", "not bob's password"), datakey.Throttled)
+finished += 1
+wait_text = str(e)
+check("a wrong password past the free tries: the wait's sentence shown and audited", e is not None
+      and wait_text.startswith("Too many tries. Wait ") and t.result == wait_text and last_row(wait_text) and len(rows()) == finished)
+binds, t = len(BINDS), S.TestLogin(cfg())
+check("...and the wait is honoured by the next test: no bind, no row",
+      raises(lambda: t.check_password("bob@acme.com", "pw-bob"), datakey.Throttled) is not None and len(BINDS) == binds
+      and len(rows()) == finished)
+d = json.loads(datakey.path().read_text(encoding="utf-8"))
+d["throttle"] = {"fails": 0, "until": 0}
+datakey.path().write_text(json.dumps(d), encoding="utf-8")
+
 # ---------------------------------------------------------------- Duo on
 roles.set_directories([dict(ACME, duo=DUO_ON)], edited="d1")
 keys, count = keys_bytes(), fails()
@@ -319,6 +356,30 @@ t.duo_push(threading.Event())
 duo.push = real_push
 finished += 1
 check("a push that comes back after a code finished the test: still one row", t.result == ok_text() and len(rows()) == finished)
+def late_deny(cfg, user, cancel):          # the code finishes the test, then the push comes back refused
+    t.duo_code(DUO["code"])
+    raise duo.Denied("push not approved")
+duo.push = late_deny
+t = S.TestLogin(cfg())
+t.check_password("bob@acme.com", "pw-bob")
+e = raises(lambda: t.duo_push(threading.Event()), duo.Denied)
+duo.push = real_push
+finished += 1
+check("a push refused after a code finished the test: one row, the result stays a pass", e is not None
+      and t.result == ok_text() and t.stage == "done" and len(rows()) == finished and last_row(ok_text()))
+def cancelled_down(cfg, user, cancel):     # the Admin chose a code just as Duo stopped answering the push
+    cancel.set()
+    raise duo.Unavailable("no answer")
+duo.push = cancelled_down
+t = S.TestLogin(cfg())
+t.check_password("bob@acme.com", "pw-bob")
+e = raises(lambda: t.duo_push(threading.Event()), duo.Unavailable)
+duo.push = real_push
+check("a cancelled push that can't reach Duo: no row, still at Duo", e is not None and t.stage == "duo" and t.result is None
+      and len(rows()) == finished)
+t.duo_code(DUO["code"])
+finished += 1
+check("...a code then works, one row", t.result == ok_text() and len(rows()) == finished)
 
 for result in ("deny", "enroll"):
     DUO["preauth"] = result
@@ -377,7 +438,8 @@ texts = [x for e in RAISED for x in chain(e)]
 check("...nor in any exception's text or arguments", not [s for s in SECRETS if any(s in x for x in texts)])
 check("...nor in the frames a failed test's exception holds", not any(password_in_frames(e) for e in RAISED))
 check("every row is a name and the sentence shown", all(r["detail"].split(", ", 1)[1] in
-      (ok_text(), datakey.WRONG, not_mapped, S.UNREACHABLE, S.DUO_DENIED, S.WRONG_CODE, S.DUO_DOWN) for r in rows()))
+      (ok_text(), datakey.WRONG, not_mapped, S.UNREACHABLE, S.CA_CHANGED, wait_text, S.DUO_DENIED, S.WRONG_CODE,
+       S.DUO_DOWN) for r in rows()))
 session.sign_out()
 
 print(f"\n{ok} ok, {bad} failed")

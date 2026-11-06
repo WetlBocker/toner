@@ -274,23 +274,23 @@ class TestLogin:
         finally:
             del password
         if failed is directory.Unreachable:                 # no offline path: a test needs the directory
-            self._fail(login, directory.Unreachable(UNREACHABLE))
+            self._fail("password", login, directory.Unreachable(UNREACHABLE))
         if failed is directory.CaChanged:
-            self._fail(login, CaChanged(CA_CHANGED))
+            self._fail("password", login, CaChanged(CA_CHANGED))
         if user is None or not user.enabled:
-            self._fail(login, datakey.WrongPassword(datakey.WRONG), count=True)
+            self._fail("password", login, datakey.WrongPassword(datakey.WRONG), count=True)
         role = directory.role_for(self.cfg, user.groups, user.dn)
         if role is None:                                    # counted, as begin counts it
-            self._fail(user.name, NotInGroup(TEST_NOT_MAPPED.format(name=user.name)), count=True)
+            self._fail("password", user.name, NotInGroup(TEST_NOT_MAPPED.format(name=user.name)), count=True)
         self.name, self.role = user.name, role
         if not (self.cfg.get("duo") or {}).get("on"):
             return self._passed("password")
         try:
             r = duo.preauth(self.cfg, self.name)
         except duo.Unavailable:
-            self._fail(self.name, duo.Unavailable(DUO_DOWN))
+            self._fail("password", self.name, duo.Unavailable(DUO_DOWN))
         if r in ("deny", "enroll"):
-            self._fail(self.name, duo.Denied(DUO_DENIED))
+            self._fail("password", self.name, duo.Denied(DUO_DENIED))
         if r == "allow":                                    # Duo's bypass, set by its admin
             return self._passed("password")
         self.stage = "duo"
@@ -300,11 +300,13 @@ class TestLogin:
         try:
             duo.push(self.cfg, self.name, cancel)
         except duo.Unavailable:
-            self._fail(self.name, duo.Unavailable(DUO_DOWN))
-        except duo.Denied:
             if cancel.is_set():                             # the Admin chose a code instead: the test goes on
+                raise duo.Unavailable(DUO_DOWN) from None
+            self._fail("duo", self.name, duo.Unavailable(DUO_DOWN))
+        except duo.Denied:
+            if cancel.is_set():
                 raise duo.Denied(DUO_DENIED) from None
-            self._fail(self.name, duo.Denied(DUO_DENIED))
+            self._fail("duo", self.name, duo.Denied(DUO_DENIED))
         self._passed("duo")
 
     def duo_code(self, code):
@@ -312,21 +314,22 @@ class TestLogin:
         try:
             duo.passcode(self.cfg, self.name, code)
         except duo.Unavailable:
-            self._fail(self.name, duo.Unavailable(DUO_DOWN))
+            self._fail("duo", self.name, duo.Unavailable(DUO_DOWN))
         except duo.Denied:
-            self._fail(self.name, duo.Denied(WRONG_CODE))
+            self._fail("duo", self.name, duo.Denied(WRONG_CODE))
         self._passed("duo")
 
     def _passed(self, stage):
         self._end(stage, self.name, TEST_OK.format(name=self.name, role=self.role))
 
-    def _fail(self, name, exc, count=False):
+    def _fail(self, stage, name, exc, count=False):
+        """Ends the test from `stage` with exc's sentence, then raises exc (also when the test had already ended)."""
         if count:
             try:
                 _tries(failed=True)
             except datakey.Throttled as e:                  # past the free tries the wait is what the window shows
                 exc = e
-        self._end(self.stage, name, str(exc))
+        self._end(stage, name, str(exc))
         raise exc from None
 
     def _end(self, stage, name, sentence):
@@ -335,6 +338,7 @@ class TestLogin:
             if self.stage != stage:
                 return
             self.stage, self.result = "done", sentence
+        name = "".join(ch for ch in str(name) if ch >= " " and ch != chr(127))[:256]    # a typed login: one plain line
         audit.log("test login", f"{name}, {sentence}")
 
 
