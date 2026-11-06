@@ -12,7 +12,7 @@ an Attempt, logged or put in a message."""
 import threading
 import time
 
-from core import audit, datakey, db, directory, duo, perms, pinslot, quiet, roles, session
+from core import audit, datakey, db, directory, dirpin, duo, perms, pinslot, quiet, roles, session
 
 OFFLINE_SECONDS = 3600
 UNREACHABLE = "Toner can't reach the directory. Connect to the network, then try again."
@@ -23,6 +23,7 @@ NOT_IN_GROUP = "Your account isn't in a Toner group. Ask an admin."
 CANNOT_APPROVE = "That account can't approve sign-ins."
 FIRST = "This is your first sign-in to this copy of Toner. Ask an admin to sign in here to approve it."
 CHANGED = "Your access changed. Ask an admin to sign in here to approve it."
+PAUSED = "Directory sign-in is paused on this computer. An admin needs to sign in first."
 RECOVERY_APPROVER = "the recovery key"                     # {admin} in "sign-in approved" for the recovery key
 
 _steps = threading.Lock()       # a push finishing on a worker thread vs. the person moving on (a code, Forgot your PIN?)
@@ -34,6 +35,10 @@ class NotInGroup(Exception):
 
 class CannotApprove(Exception):
     pass
+
+
+class Paused(Exception):
+    """The directories list isn't the one this computer last saw verified (core/dirpin.py)."""
 
 
 class Attempt:
@@ -61,16 +66,21 @@ def _directories():
 
 def classify(login):
     """("directory", cfg, login) for DOMAIN\\user with a directory's NetBIOS name or user@suffix with a suffix a directory lists;
-    else ("local", login). Read from netcheck.keys without the data key."""
+    else ("local", login). Read from netcheck.keys without the data key, so a match needs the list this computer remembers
+    (Paused otherwise)."""
     login = (login or "").strip()
-    cfg = None
+    dirs, cfg = _directories(), None
     if "\\" in login:
         dom = login.split("\\", 1)[0].casefold()
-        cfg = next((d for d in _directories() if dom and str(d.get("netbios") or "").casefold() == dom), None)
+        cfg = next((d for d in dirs if dom and str(d.get("netbios") or "").casefold() == dom), None)
     elif "@" in login:
         suffix = login.split("@", 1)[1].casefold()
-        cfg = next((d for d in _directories() if suffix in [str(s).casefold() for s in d.get("suffixes") or []]), None)
-    return ("directory", cfg, login) if cfg else ("local", login)
+        cfg = next((d for d in dirs if suffix in [str(s).casefold() for s in d.get("suffixes") or []]), None)
+    if cfg is None:
+        return "local", login
+    if dirpin.changed(dirs):
+        raise Paused(PAUSED)
+    return "directory", cfg, login
 
 
 def _expect(a, stage):

@@ -13,11 +13,11 @@ STORE = {}
 keyring.set_password = lambda s, u, p: STORE.__setitem__((s, u), p)
 keyring.get_password = lambda s, u: STORE.get((s, u))
 keyring.delete_password = lambda s, u: STORE.pop((s, u), None)
-import http.server, json, threading, urllib.parse, uuid
+import http.server, json, pathlib, threading, urllib.parse, uuid
 import ldap3
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
-from core import audit, datakey, db, directory, duo, osstore, pinslot, roles, session, tpm_windows
+from core import audit, datakey, db, directory, dirpin, duo, osstore, passvault, pinslot, roles, session, tpm_windows
 from core import dirsignin as S
 
 ok = bad = 0
@@ -172,7 +172,12 @@ check("classify a plain name: local", S.classify(" admin ") == ("local", "admin"
 check("a local name can't begin a directory sign-in", raises(lambda: S.begin("admin", PW), ValueError) is not None)
 
 # ---------------------------------------------------------------- the first sign-in: password, Duo push, choose a PIN, approval, PIN
+check("set_directories remembers the list on this computer",
+      PEPPERS.get(dirpin.store_name()) == dirpin.fingerprint([ACME]).encode())
+PEPPERS.pop(dirpin.store_name())
+check("a local login never looks at it", S.classify("admin") == ("local", "admin") and dirpin.store_name() not in PEPPERS)
 a = S.begin("ACME\\bob", "pw-bob")
+check("the first directory sign-in remembers the list", PEPPERS.get(dirpin.store_name()) == dirpin.fingerprint([ACME]).encode())
 check("begin: the password is checked online", a.stage == "password" and not a.offline and a.user.name == "bob@acme.com"
       and a.cfg["id"] == "d1", vars(a))
 check("begin writes nothing before a PIN is chosen", datakey.directory_account("bob@acme.com") is None)
@@ -466,6 +471,81 @@ roles.set_directories([ACME, {**ACME, "id": "d2", "name": "Other", "netbios": ""
 check("two with no NetBIOS name are fine", len(doc()["directories"]) == 3)
 roles.set_directories([ACME])
 session.sign_out()
+
+# ---------------------------------------------------------------- a hand-edited directories list pauses directory sign-in
+PAUSED = "Directory sign-in is paused on this computer. An admin needs to sign in first."
+binds = []
+def COUNTING(cfg, host): binds.append(host); return ldap
+directory._make_server = COUNTING
+good = datakey.path().read_bytes()
+
+def edited(change):
+    d = doc(); change(d["directories"][0]); datakey.path().write_text(json.dumps(d), encoding="utf-8")
+
+for what, change in (("a server", lambda c: c.update(servers=["ldap.evil.example"])),
+                     ("a suffix", lambda c: c["suffixes"].append("evil.example")),
+                     ("the CA file", lambda c: c.update(ca_file=os.path.join(SP, "evil-ca.pem")))):
+    edited(change)
+    e = raises(lambda: S.begin("bob@acme.com", "pw-bob"), S.Paused)
+    check("editing %s pauses directory sign-in, with the approved sentence, and binds nothing" % what,
+          e is not None and str(e) == PAUSED and binds == [])
+    check("...a local login still classifies", S.classify("admin") == ("local", "admin"))
+    datakey.path().write_bytes(good)
+check("the list as remembered signs in again", S.begin("bob@acme.com", "pw-bob").stage == "password" and len(binds) == 1)
+
+ca = os.path.join(SP, "acme-ca.pem")
+with open(ca, "w") as f: f.write("one CA")
+as_("Admin1", PW)
+roles.set_directories([{**ACME, "ca_file": ca}])
+session.sign_out()
+check("set_directories remembers the new list (with its CA file)", S.classify("bob@acme.com")[0] == "directory")
+with open(ca, "w") as f: f.write("another CA")
+check("changing the CA file's contents pauses", str(raises(lambda: S.classify("bob@acme.com"), S.Paused)) == PAUSED)
+with open(ca, "w") as f: f.write("one CA")
+check("...putting them back resumes", S.classify("bob@acme.com")[0] == "directory")
+as_("Admin1", PW)
+roles.set_directories([ACME])
+session.sign_out()
+good = datakey.path().read_bytes()
+
+edited(lambda c: c.update(servers=["ldap.evil.example"]))
+as_("Admin1", PW)
+check("a hand-edited file is tampered, and a sign-in doesn't remember it", roles.state() == "tampered"
+      and raises(lambda: S.classify("bob@acme.com"), S.Paused) is not None)
+session.sign_out()
+datakey.path().write_bytes(good)
+PEPPERS[dirpin.store_name()] = b"a list remembered before"
+check("a list changed elsewhere pauses here", raises(lambda: S.classify("bob@acme.com"), S.Paused) is not None)
+as_("Admin1", PW)
+check("a local Admin's sign-in with the rules ok remembers the list", roles.state() == "ok"
+      and PEPPERS.get(dirpin.store_name()) == dirpin.fingerprint([ACME]).encode())
+session.sign_out()
+check("...and directory sign-in works again", S.classify("bob@acme.com")[0] == "directory")
+
+PEPPERS[dirpin.store_name()] = b"a list remembered before"
+osstore.available = lambda: False
+dirpin._store.cache_clear()
+check("no protected store: sign-in goes on unguarded", S.classify("bob@acme.com")[0] == "directory")
+osstore.available = lambda: True
+dirpin._store.cache_clear()
+real_get = osstore.get
+def no_keyring(name): raise passvault.NoKeyring("no keyring")
+osstore.get = no_keyring
+check("no keyring: sign-in goes on unguarded", S.classify("bob@acme.com")[0] == "directory")
+osstore.get = real_get
+del PEPPERS[dirpin.store_name()]
+
+real_path = datakey.path
+datakey.path = lambda: pathlib.Path(SP) / "one" / "netcheck.keys"
+one = dirpin.store_name()
+datakey.path = lambda: pathlib.Path(SP) / "two" / "netcheck.keys"
+two = dirpin.store_name()
+datakey.path = lambda: pathlib.Path(SP.upper()) / "ONE" / "NETCHECK.KEYS"
+upper = dirpin.store_name()
+datakey.path = real_path
+check("two keys files get two store names", one != two and one.startswith("dirs:") and len(one) == 5 + 64)
+check("...the same file in another case is the same one on Windows", (upper == one) == (sys.platform == "win32"))
+directory._make_server = UP
 
 # ---------------------------------------------------------------- nothing secret anywhere
 as_("Admin1", PW)

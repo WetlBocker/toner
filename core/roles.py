@@ -21,7 +21,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
-from core import audit, datakey, db, envelope, quiet, sqldb
+from core import audit, datakey, db, dirpin, envelope, quiet, sqldb
 
 ROLES = ("Admin", "Engineer", "Tech")
 KINDS = ("rules", "backups")
@@ -729,6 +729,7 @@ def set_directories(directories):
             return old, dropped, _resign(doc, repair)
         old, dropped, pub = datakey.edit(go)
         _written(pub)
+        dirpin.remember()                               # signed and landed: this computer's remembered list follows
         for i, d in new.items():
             if i not in old:
                 audit.log("directory added", d.get("name", ""))

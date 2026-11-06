@@ -3,7 +3,7 @@ worker threads still need the database); it only hides the window until the pass
 import threading
 import time
 
-from core import audit, datakey, db, passvault, pinslot, quiet, roles, sqldb
+from core import audit, datakey, db, dirpin, passvault, pinslot, quiet, roles, sqldb
 
 WORKDAY = 12 * 3600
 REFUSED = "Your account can't sign in to Toner any more. Ask an admin."
@@ -70,6 +70,8 @@ def _opened(opener, action, who, kind="local", detail=""):
             audit.log(f"{fails} failed sign-in attempts since the last sign-in")
         while _soon:
             audit.log(*_soon.pop(0))
+        if roles.state() == "ok":                # the rules (and so the directories) verified: remember them here
+            dirpin.remember()
     _notify("open")
 
 
