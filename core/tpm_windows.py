@@ -74,6 +74,9 @@ def _lockout_wait():
     return minutes * 60 if minutes and minutes > 0 else DEFAULT_WAIT
 
 
+lockout_window = _lockout_wait                                   # how long Windows counts a failure (core/pinslot.py's record)
+
+
 def lockout_threshold():
     """How many failures in that window lock a standard user out ("Standard User Individual Lockout Threshold", 4 unless set)."""
     n = _policy("StandardUserAuthorizationFailureIndividualThreshold")

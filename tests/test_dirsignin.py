@@ -54,16 +54,20 @@ DIRS = _box(dirpin.pins_file())         # where the directories fingerprint live
 
 class FakeTpm:
     LockedOut = tpm_windows.LockedOut
-    keys = {}
+    keys, locked = {}, 0
 
     @classmethod
     def lockout_threshold(cls): return 4
+    @classmethod
+    def lockout_window(cls): return 28800
 
     @classmethod
     def available(cls): return True
 
     @classmethod
     def create(cls, name, pin):
+        if cls.locked:
+            raise tpm_windows.LockedOut(cls.locked)
         k = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         cls.keys[name] = (k, pin)
         return k.public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
@@ -145,6 +149,8 @@ def rows(action):
 
 def fails():
     return doc()["throttle"]["fails"]
+
+CHIPFAILS = pathlib.Path(os.environ["APPDATA"], "Toner", "chipfails.json")      # Windows' wrong chip PINs, as Toner counts them
 
 def as_(name, pw):
     session.sign_out()
@@ -354,6 +360,7 @@ check("the groups' role is written at sign-in", datakey.directory_account("bob@a
 before = fails()
 check("changed: a wrong PIN is refused before the approval", raises(lambda: S.finish(a, "975310"), pinslot.WrongPin) is not None
       and a.stage == "pin" and fails() == before + 1)
+CHIPFAILS.unlink()                                      # (three wrong chip PINs so far: the next try would wait for hours)
 S.finish(a, PIN)
 check("a role that may see unmasked backups: approval before the PIN opens", a.stage == "approve"
       and a.message == "Your access changed. Ask an admin to sign in here to approve it." and session.state() == "signed_out")
@@ -426,6 +433,38 @@ a = S.begin("bob@acme.com", "pw-bob")
 check("offline with no key on the chip: Unreachable (a new PIN needs the directory)",
       raises(lambda: S.finish(a, PIN3), directory.Unreachable) is not None and a.stage == "pin")
 directory._make_server = UP
+
+# ---------------------------------------------------------------- the chip can't be used: Forgot your PIN? falls back to the store
+LONG, LONG2 = "a long store pin 1", "a long store pin 2"
+CHIPFAILS.parent.mkdir(parents=True, exist_ok=True)
+CHIPFAILS.write_text(json.dumps([time.time()] * 3), "utf-8")      # one more wrong PIN could lock the chip for hours
+a = to_pin()
+S.restart_pin(a)
+check("the next chip PIN could lock it: Choose a PIN asks for the store's PIN", S.pin_kind(a) == "store")
+e = raises(lambda: S.choose_pin(a, PIN), ValueError)
+check("...a 6-digit PIN is refused with the 8-character rule", e is not None and str(e) == "Use at least 8 characters."
+      and a.stage == "choose-pin")
+S.choose_pin(a, LONG)
+check("...a store slot, then approval as today", a.stage == "approve" and a.slot.rec["kind"] == "store")
+S.approve(a, "Admin1", PW)
+S.finish(a, LONG)
+check("...and it signs in", a.stage == "done" and datakey.directory_account("bob@acme.com")["slot_kind"] == "store")
+session.sign_out()
+CHIPFAILS.unlink()
+FakeTpm.locked = 1234                                  # Windows refuses even a new chip key while it is locked out
+a = to_pin()
+S.restart_pin(a)
+check("a locked chip isn't known until it refuses a new key", S.pin_kind(a) == "chip")
+e = raises(lambda: S.choose_pin(a, PIN2), ValueError)
+check("...then the 6-digit PIN gets the 8-character rule", e is not None and str(e) == "Use at least 8 characters."
+      and S.pin_kind(a) == "store" and a.stage == "choose-pin")
+S.choose_pin(a, LONG2)
+check("...a store slot, with approval", a.stage == "approve" and a.slot.rec["kind"] == "store")
+S.approve(a, "Admin1", PW)
+S.finish(a, LONG2)
+check("...and it signs in", a.stage == "done" and datakey.directory_account("bob@acme.com")["slot_kind"] == "store")
+FakeTpm.locked = 0
+session.sign_out()
 
 # ---------------------------------------------------------------- the held box key lost before approval (Toner restarted)
 a = to_pin("carol@acme.com", "pw-carol")
@@ -676,7 +715,7 @@ directory._make_server = UP
 # ---------------------------------------------------------------- nothing secret anywhere
 as_("Admin1", PW)
 text = datakey.path().read_text(encoding="utf-8") + json.dumps(audit.recent(5000)) + " ".join(MESSAGES)
-secrets = [PW, PW2, PIN, PIN2, PIN3, "pw-bob", "pw-carol", "pw-dave", "not it at all", DUO["code"], "000000", SKEY, recovery]
+secrets = [PW, PW2, PIN, PIN2, PIN3, LONG, LONG2, "pw-bob", "pw-carol", "pw-dave", "not it at all", DUO["code"], "000000", SKEY, recovery]
 check("no password, PIN, Duo code or key in the keys file, the audit or a message", not any(s in text for s in secrets),
       [s for s in secrets if s in text])
 session.sign_out()

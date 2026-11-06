@@ -541,9 +541,14 @@ class SignInWindow(QDialog):
         self.pin2.clear()
 
         def choose():                                    # best_kind can take seconds the first time on Windows
-            why = pinslot.problem(pinslot.best_kind(), pin) or (PIN_MISMATCH if pin != again else None)
+            why = pinslot.problem(dirsignin.pin_kind(a), pin) or (PIN_MISMATCH if pin != again else None)
             if why is None:
-                dirsignin.choose_pin(a, pin)
+                try:
+                    dirsignin.choose_pin(a, pin)
+                except ValueError:
+                    why = pinslot.problem(dirsignin.pin_kind(a), pin)    # the chip refused a new key: the next kind's rule
+                    if why is None:
+                        raise
             return why
 
         def landed(why, e):

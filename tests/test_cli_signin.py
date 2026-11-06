@@ -240,6 +240,8 @@ class FakeTpm:
     @classmethod
     def lockout_threshold(cls): return 4
     @classmethod
+    def lockout_window(cls): return 28800
+    @classmethod
     def available(cls): return True
     @classmethod
     def create(cls, name, pin):

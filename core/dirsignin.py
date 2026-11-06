@@ -71,6 +71,7 @@ class Attempt:
         self.message = None         # the approval page's text
         self.slot = None            # a new PIN slot waiting for its approval
         self.reset = False          # "Forgot your PIN?"
+        self.kind = None            # the PIN slot kind once the chip refused a new key (pin_kind)
 
 
 def _directories():
@@ -240,11 +241,27 @@ def duo_code(a, code):
     _onward(a, "duo")
 
 
+def pin_kind(a):
+    """The kind of PIN choose_pin makes, so the page asks for the right one: the strongest here, except the chip when it
+    refused a new key or when one more wrong PIN could lock it (Windows' lockout lasts hours); then the store or the PIN alone."""
+    if a.kind is not None:
+        return a.kind
+    kind = pinslot.best_kind()
+    return pinslot.fallback_kind() if kind == "chip" and pinslot.chip_wait() else kind
+
+
 def choose_pin(a, pin):
     """A new slot. A first sign-in writes the unapproved account with it; an approved account keeps its old slot until the
     approval re-seals under the new one."""
     _expect(a, "choose-pin")
-    slot = pinslot.new(pinslot.best_kind(), datakey.new_slot_id(), pin)
+    kind = pin_kind(a)
+    try:
+        slot = pinslot.new(kind, datakey.new_slot_id(), pin)
+    except pinslot.PinLocked:
+        if kind != "chip":
+            raise
+        a.kind = pinslot.fallback_kind()                    # the chip is locked out: its 6-digit PIN won't do for the next kind
+        slot = pinslot.new(a.kind, datakey.new_slot_id(), pin)
     rec = _mine(a)
     if not (rec and rec.get("sealed")):
         try:

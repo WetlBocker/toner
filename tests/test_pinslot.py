@@ -50,6 +50,10 @@ class FakeTpm:
         return cls.threshold
 
     @classmethod
+    def lockout_window(cls):
+        return 28800
+
+    @classmethod
     def available(cls):
         return cls.up
 
@@ -91,8 +95,13 @@ def fails():
     return D.read()["throttle"]["fails"]
 
 
+CHIPFAILS = os.path.join(SP, "Toner", "chipfails.json")
+
+
 def reset():
     D.edit(lambda doc: doc.__setitem__("throttle", {"fails": 0, "until": 0}))
+    if os.path.exists(CHIPFAILS):
+        os.remove(CHIPFAILS)
 
 
 SECRET = os.urandom(64)
@@ -197,6 +206,55 @@ check("chip: the policy's threshold sets the free tries", [type(x).__name__ for 
 FakeTpm.threshold = 4
 reset()
 P.remove(slot.rec, "guard")
+
+# ---------------------------------------------------------------- the chip: Windows' failures, which a right PIN doesn't clear
+# Windows counts every wrong chip PIN for 8 hours, right PINs or not; Toner keeps its own record of them per Windows user.
+import json
+class CountingTpm(FakeTpm):
+    wrong = []                                           # times the chip saw a wrong PIN
+
+    @classmethod
+    def decrypt(cls, name, pin, data):
+        try:
+            return FakeTpm.decrypt(name, pin, data)
+        except PermissionError:
+            cls.wrong.append(time.time())
+            raise
+P.tpm_windows = CountingTpm
+reset()
+slot = P.new("chip", "daylong", "135790")
+sealed = slot.seal(SECRET)
+seen = []
+for i in range(8):                                       # wrong, right, wrong, right ... across a day
+    pin = "135790" if i % 2 else "%06d" % (200000 + i)
+    try:
+        P.open(slot.rec, "daylong", pin, sealed); seen.append("ok")
+    except P.WrongPin:
+        seen.append("wrong")
+    except P.PinLocked as e:
+        seen.append(e.seconds)
+    D.edit(lambda doc: doc.__setitem__("throttle", {"fails": 0, "until": 0}))     # (Toner's own counter isn't the point here)
+check("interleaved: the chip never sees a 4th wrong PIN in its window", len(CountingTpm.wrong) == 3, (CountingTpm.wrong, seen))
+check("interleaved: then every try waits, the right PIN too", isinstance(seen[-1], int) and isinstance(seen[-2], int), seen)
+check("a right PIN doesn't clear the record", len(json.load(open(CHIPFAILS))) == 3)
+now = time.time()
+json.dump([now - 1000, now - 500, now - 100], open(CHIPFAILS, "w"))
+calls = CountingTpm.calls
+e = raises(lambda: P.open(slot.rec, "daylong", "135790", sealed), P.PinLocked)
+check("the wait counts down from the oldest failure", e is not None and abs(e.seconds - (28800 - 1000)) <= 2, e and e.seconds)
+check("...without touching the chip", CountingTpm.calls == calls)
+json.dump([now - 30000, now - 500, now - 100], open(CHIPFAILS, "w"))
+check("failures older than the window don't count", P.open(slot.rec, "daylong", "135790", sealed) == SECRET)
+check("a success records nothing", len(json.load(open(CHIPFAILS))) == 3)
+open(CHIPFAILS, "w").write("{not json")
+e = raises(lambda: P.open(slot.rec, "daylong", "135790", sealed), P.PinLocked)
+check("a corrupt record waits", e is not None and e.seconds >= 28800 - 2, e and e.seconds)
+check("...without touching the chip", CountingTpm.calls == calls + 1)
+check("chip_wait reads the record", P.chip_wait() >= 28800 - 2)
+reset()
+check("no record: no wait", P.chip_wait() == 0)
+P.remove(slot.rec, "daylong")
+P.tpm_windows = FakeTpm
 
 # ---------------------------------------------------------------- the real tpm_windows off Windows: a chip slot is missing here
 if sys.platform != "win32":

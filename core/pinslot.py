@@ -12,6 +12,7 @@ password: five are free, then 30 seconds, doubling up to 15 minutes. The chip co
 """
 import base64
 import functools
+import json
 import os
 import sys
 import time
@@ -23,7 +24,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
-from core import datakey, osstore, passvault, tpm_windows
+from core import datakey, osstore, passvault, quiet, tpm_windows
 
 KDF = {"store": {"n": 2 ** 15, "r": 8, "p": 1}, "pin": {"n": 2 ** 16, "r": 8, "p": 1}}
 WRONG = "That PIN isn't right."
@@ -90,7 +91,52 @@ def best_kind():
     """The strongest kind this computer offers (asked once a process: the chip's test makes a key)."""
     if sys.platform == "win32" and tpm_windows.available():
         return "chip"
+    return fallback_kind()
+
+
+def fallback_kind():
+    """The kind to use when the chip can't be: the protected store, else the PIN alone."""
     return "store" if osstore.available() else "pin"
+
+
+def _fails_file():
+    """This Windows user's wrong chip PINs (Windows counts per user, across every copy), beside dirpins.json."""
+    from core.platforms import user_data_root
+    return user_data_root() / "Toner" / "chipfails.json"
+
+
+def _chip_fails(now):
+    """The times of wrong chip PINs still inside Windows' lockout window, oldest first. A record that can't be read counts as
+    one fewer than the threshold, all now: Toner waits rather than risk locking the chip."""
+    window = tpm_windows.lockout_window()
+    try:
+        times = json.loads(_fails_file().read_text("utf-8"))
+        if not isinstance(times, list) or not all(isinstance(t, (int, float)) and not isinstance(t, bool) for t in times):
+            raise ValueError("not a list of times")
+    except FileNotFoundError:
+        times = []
+    except (OSError, ValueError):
+        times = [now] * max(tpm_windows.lockout_threshold() - 1, 0)
+    return sorted(min(t, now) for t in times if t > now - window)     # (a time in the future: the clock went back; now)
+
+
+def chip_wait(now=None):
+    """Seconds before the chip may see another PIN: 0, or while one more wrong PIN could reach Windows' threshold, until the
+    oldest failure in the window leaves it."""
+    now = time.time() if now is None else now
+    times = _chip_fails(now)
+    if not times or len(times) < tpm_windows.lockout_threshold() - 1:
+        return 0
+    return max(int(times[0] + tpm_windows.lockout_window() - now) + 1, 1)
+
+
+def _chip_failed(now):
+    try:
+        f = _fails_file()
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(_chip_fails(now) + [now]), "utf-8")
+    except OSError:
+        quiet.ignored()                    # Toner's shared counter still waits after the threshold - 1
 
 
 def problem(kind, pin):
@@ -178,7 +224,8 @@ def open(rec, slot_id, pin, sealed):
 
     On the chip, Windows locks a user out of every TPM PIN once they have its threshold of failures (4) in 8 hours, so Toner
     lets one fewer reach the chip: the (threshold - 1)th wrong PIN starts Toner's wait, and the next try waits before the chip
-    sees it."""
+    sees it. A right PIN clears Toner's counter but not Windows', so the chip's failures are also kept per Windows user
+    (chip_wait): with threshold - 1 of them in the window, no PIN reaches the chip until the oldest leaves it."""
     free = max(tpm_windows.lockout_threshold() - 2, 0) if rec["kind"] == "chip" else datakey.FREE_TRIES
     with datakey._lock, datakey._FileLock():
         doc = datakey._read()
@@ -186,9 +233,13 @@ def open(rec, slot_id, pin, sealed):
         now = time.time()
         try:
             datakey._gate(doc, counter, now)
+            if rec["kind"] == "chip" and (wait := chip_wait(now)):
+                raise PinLocked(wait)
             try:
                 secret = _try(rec, slot_id, pin or "", sealed)
             except WrongPin:
+                if rec["kind"] == "chip":
+                    _chip_failed(now)
                 datakey._failed(doc, counter, now, free)
                 raise
         except datakey.Throttled as e:

@@ -51,12 +51,16 @@ class FakeTpm:
 
     @classmethod
     def lockout_threshold(cls): return 4
+    @classmethod
+    def lockout_window(cls): return 28800
 
     @classmethod
     def available(cls): return True
 
     @classmethod
     def create(cls, name, pin):
+        if cls.locked:
+            raise tpm_windows.LockedOut(cls.locked)
         k = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         cls.keys[name] = (k, pin)
         return k.public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
@@ -373,6 +377,28 @@ check("...and Sign in comes back when it ends", w.pin_ok.isEnabled() and w.pin_e
 w.pin.setText(PIN3); w.pin_ok.click(); settle(w)
 check("...then the PIN signs in", w.result() == Accepted)
 session.sign_out()
+
+print("== the chip can't be used: Choose a PIN asks for 8 characters")
+import pathlib
+CHIPFAILS = pathlib.Path(os.environ["APPDATA"], "Toner", "chipfails.json")
+CHIPFAILS.parent.mkdir(parents=True, exist_ok=True)
+for locked, record, pin in ((0, [time.time()] * 3, "a long store pin 1"), (1234, [], "a long store pin 2")):
+    CHIPFAILS.write_text(json.dumps(record), "utf-8")   # one more wrong PIN could lock it / Windows refuses a new chip key
+    FakeTpm.locked = locked
+    w = start("bob@acme.com", "pw-bob")
+    w.forgot.click(); w.pw.setText("pw-bob"); w.sign_in.click(); settle(w)
+    w.pin1.setText(PIN); w.pin2.setText(PIN); w.choose_ok.click(); settle(w)
+    check(f"chip {'locked' if locked else 'at risk'}: a 6-digit PIN gets the 8-character rule", at(w) == "choose"
+          and w.choose_error.text() == "Use at least 8 characters.", w.choose_error.text())
+    w.pin1.setText(pin); w.pin2.setText(pin); w.choose_ok.click(); settle(w)
+    check("...a longer one goes to approval", at(w) == "approve", at(w))
+    w.admin.setText("Admin1"); w.admin_pw.setText(PW); w.approve_ok.click(); settle(w)
+    w.pin.setText(pin); w.pin_ok.click(); settle(w)
+    check("...and signs in with the protected store", w.result() == Accepted
+          and datakey.directory_account("bob@acme.com")["slot_kind"] == "store")
+    session.sign_out()
+FakeTpm.locked = 0
+CHIPFAILS.unlink()
 
 print("== paused")
 remembered = DIRS[dirpin.store_name()]
