@@ -1570,6 +1570,26 @@ def device_checks():
         return out
     return _per_device(here)
 
+def device_all_checks():
+    """{device: [check, ...]} for every check that has history, numeric or not (device_checks has the numeric ones only)."""
+    def here():
+        out = {}
+        with connect() as c:
+            for r in c.execute("SELECT DISTINCT device, check_name FROM results ORDER BY device, check_name"):
+                out.setdefault(r["device"], []).append(r["check_name"])
+        return out
+    return _per_device(here)
+
+def check_rows(device, check, limit=200):
+    """A check's stored rows, oldest first: [{'t', 'value', 'status', 'numeric'}]. `device` can be a key from the Global view."""
+    device, org = split_key(device)
+    with within(org if (org is not None or not everything()) else GLOBAL):
+        with connect() as c:
+            rows = c.execute("SELECT runs.started_at AS t, results.value AS value, results.status AS status, results.numeric AS numeric "
+                             "FROM results JOIN runs ON runs.id = results.run_id WHERE results.device=? AND results.check_name=? "
+                             "ORDER BY results.run_id DESC LIMIT ?", (device, check, limit)).fetchall()
+    return [dict(r) for r in reversed(rows)]
+
 AGENT_COLUMNS = {"cpu": "cpu", "memory": "memory", "disks": "disk", "uptime": "uptime_h"}     # check name -> agent_metrics column
 
 

@@ -473,7 +473,14 @@ class HistoryTab(QWidget):
         for w in (self.dev, self.chk):               # share the width, and wrap when the pane is narrow
             w.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         rl.addLayout(flow("Device", self.dev, "Check", self.chk))
-        rl.addWidget(self.chart, 1)
+        self.over_chart = ChartView(min_height=240)                        # a status check: how often each status happened, by day
+        self.over_chart.setAccessibleName("Values over time")
+        self.over_table = _table(["Device", "Value", "Checked"])           # a text check: one row each time the value changed
+        self.over_table.setAccessibleName("Values over time")
+        self.over_stack = QStackedWidget()
+        for w_ in (self.chart, self.over_chart, self.over_table):
+            self.over_stack.addWidget(w_)
+        rl.addWidget(self.over_stack, 1)
         # Across devices: the run chosen on the left, one bar per device for the check picked here, coloured by its status
         self.compare_check = QComboBox()
         self.compare_check.setToolTip("A check with a number: every device's value in the chosen run, worst first")
@@ -560,7 +567,7 @@ class HistoryTab(QWidget):
             self.runs.selectRow(0)                                          # the latest run, so the lower table is never blank
         names = self._group_names()
         with db.including_archived(wants_archived(self.funnel)):
-            checks = db.device_checks()
+            checks = db.device_all_checks()
         self.map = {d: c for d, c in checks.items() if names is None or self._base(d) in names}
         cur = self.dev.currentData()
         self.dev.blockSignals(True)
@@ -605,7 +612,7 @@ class HistoryTab(QWidget):
             self.draw_failures()
 
     def restyle(self):
-        for c in (self.compare_chart, self.fail_when, self.fail_where):
+        for c in (self.over_chart, self.compare_chart, self.fail_when, self.fail_where):
             c.restyle()
 
     def _fill_compare(self):
@@ -776,11 +783,31 @@ class HistoryTab(QWidget):
     def draw(self, *_):
         d = self.dev.currentData()
         picked = [self.check_keys[k] for k in self.chk.selected() if k in self.check_keys]
-        series = [(c, db.series(d, c)) for c in picked] if d else []
+        rows = {c: db.check_rows(d, c) for c in picked} if d else {}
+        kind = chart_kind(next(iter(rows.values()))) if len(rows) == 1 else "line"       # several checks: the numeric ones, as lines
+        self.over_stack.setCurrentWidget({"status": self.over_chart, "table": self.over_table}.get(kind, self.chart))
+        if kind == "status":
+            rs = next(iter(rows.values()))
+            days = sorted({r["t"][:10] for r in rs})
+            bars = [(s, [sum(1 for r in rs if r["t"][:10] == day and r["status"] == s) for day in days]) for s in chartspec.STATUSES
+                      if any(r["status"] == s for r in rs)]
+            title = display.check_name(picked[0])
+            self.over_chart.draw(lambda p: chartspec.grouped_bars(p, days, bars, title=title, stacked=True))
+        elif kind == "table":
+            changes = []
+            for r in next(iter(rows.values())):
+                if not changes or changes[-1]["value"] != r["value"]:
+                    changes.append(r)
+            changes.reverse()                                              # newest first
+            with filling(self.over_table):
+                self.over_table.setRowCount(len(changes))
+                for i, r in enumerate(changes):
+                    for j, v in enumerate([db.label_org(d), display.value(r["value"]), r["t"]]):
+                        self.over_table.setItem(i, j, QTableWidgetItem(v))
+        series = [(c, db.series(d, c)) for c in picked] if kind in ("line", "bar") else []     # one run so far is still a line
         with db.within(db.split_key(d or "")[1]):                         # that organization's limits
             th = db.get_thresholds()
         self.chart.set_series(series, th.get(picked[0].split(" (")[0]) if picked else None)
-
 
     def screen_context(self):
         """What the Assistant is told about this page: the chosen run and its rows, and the device and checks on the chart."""

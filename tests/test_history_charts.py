@@ -60,5 +60,22 @@ check("table: the Checked column holds the run time", t.item(0, 2).text() == w.r
 pick("CPU")
 check("back to a chart", w.compare_stack.currentWidget() is w.compare_chart)
 
+print("== Over time")
+for v, st in (("7.0.2", "OK"), ("7.0.2", "OK"), ("7.1.0", "WARN")):
+    db.save_run([Result("sw0", "firmware", st, v), Result("sw0", "link", st, "connected" if st == "OK" else "down"), Result("sw0", "cpu", "OK", "5%", numeric=5.0)])
+    time.sleep(1.05)
+w.refresh(); w.dev.setCurrentIndex(w.dev.findData("sw0"))
+w.chk.set_selected(["Link"]); w.chk._toggled()
+opt = w.over_chart._builder(p)
+check("Over time: a status check -> stacked status bars", w.over_stack.currentWidget() is w.over_chart and all(s.get("stack") for s in opt["series"])
+      and {s["name"] for s in opt["series"]} == {"OK", "WARN"}, opt)
+w.chk.set_selected(["Firmware"]); w.chk._toggled()
+t = w.over_table
+check("Over time: a text check -> the change table, no chart", w.over_stack.currentWidget() is t)
+rows_ = [t.item(i, 1).text() for i in range(t.rowCount())]
+check("two versions over time -> two change rows, newest first", rows_ == ["7.1.0", "7.0.2"], rows_)
+w.chk.set_selected(["CPU"]); w.chk._toggled()
+check("Over time: a number -> the line chart as before", w.over_stack.currentWidget() is w.chart and len(w.chart.series) == 1)
+
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)
