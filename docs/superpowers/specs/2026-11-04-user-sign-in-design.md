@@ -40,7 +40,7 @@ Success means two things:
 ## Who decides what
 
 - **Admin.** Sets up each copy: the local accounts, the directory and SSO connections, which groups map to which roles, and the role permissions. Keeps the recovery key.
-- **Directory and SSO users.** Their role comes from group membership in AD, LDAP, Entra, Okta, Google Workspace or Duo SSO. They can't change it.
+- **Directory and SSO users.** Their role comes from group membership in AD, LDAP, Entra, Okta, Google Workspace or Duo SSO. They can't change it. *(OUs as well as groups, owner 2026-11-06)*
 - **Local users.** Their role is set by an admin on that copy.
 
 ## Signing in (the owner chose this layout)
@@ -70,7 +70,7 @@ The mockups from the conversation are beside this document: `2026-11-04-user-sig
 - Locking with a keyboard shortcut is also available.
 
 **How often.**
-- *(my call: a full sign-in, with the directory and the second step, lasts the workday, 12 hours by default and set by an admin.)* Within that, idle locks only ask for the PIN or password. *(the 12-hour workday built in part 3; the admin setting later)*
+- *(my call: a full sign-in, with the directory and the second step, lasts the workday, 12 hours by default and set by an admin.)* Within that, idle locks only ask for the PIN or password. *(the 12-hour workday built in part 3; the session length is now an Admin setting, owner 2026-11-06)*
 - While online, Toner re-checks directory and SSO accounts quietly in the background. If an admin disables someone, or removes them from Toner's groups, that person's Toner locks at the next check. *(my call: about every 15 minutes. AD and LDAP need a service account the admin enters, kept in the vault. SSO uses the refresh token.)* *(directory part built in part 3; SSO in part 4)*
 
 **Offline.** A new full sign-in for a directory or SSO account needs a connection, or a successful online check in the last hour. Local accounts work offline. Within that hour, the PIN is what unlocks. *(directory part built in part 3; SSO in part 4)*

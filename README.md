@@ -135,12 +135,12 @@ recovery key can't open anything.
 
 Toner locks after 15 minutes without use, or at once with **Ctrl+Shift+L**. Your name in the sidebar under Search opens a menu
 with **Lock** and **Sign out**. Change the
-time, add accounts, reset passwords or make a new recovery key in **Settings > Accounts and sign-in**. Copies that had a master password ask for it
+time, add accounts, reset passwords or make a new recovery key in **Settings > Accounts**. Copies that had a master password ask for it
 once, then it is gone.
 
-Every account has a role: Admin, Engineer or Tech. Admins can do everything. An admin chooses what Engineers and Techs can do in **Settings > Accounts and sign-in**: push changes to devices, see passwords in config backups, the AI assistant, each tool and each Settings page. A tool or the AI that a role can't use is hidden, an action it can't take is greyed out, and a Settings page it can't change shows read-only. Passwords in config backups are encrypted separately, so a role that can't see them really can't.
+Every account has a role: Admin, Engineer or Tech. Admins can do everything. An admin chooses what Engineers and Techs can do in **Settings > Accounts**: push changes to devices, see passwords in config backups, the AI assistant, each tool and each Settings page. A tool or the AI that a role can't use is hidden, an action it can't take is greyed out, and a Settings page it can't change shows read-only. Passwords in config backups are encrypted separately, so a role that can't see them really can't.
 
-People can also sign in with their Active Directory or LDAP account. An admin adds the directory in **Settings > Accounts and sign-in** and maps its groups to Admin, Engineer and Tech. Duo push or a Duo code can be required as a second step. The first time someone signs in on a computer, they choose a PIN for it (6 digits protected by the security chip on Windows, at least 8 characters elsewhere), and an admin approves it at that computer. If the directory turns an account off, Toner locks within 15 minutes.
+People can also sign in with their Active Directory or LDAP account. An admin adds the directory in **Settings > Accounts** and maps its groups to Admin, Engineer and Tech. Duo push or a Duo code can be required as a second step. The first time someone signs in on a computer, they choose a PIN for it (6 digits protected by the security chip on Windows, at least 8 characters elsewhere), and an admin approves it at that computer. If the directory turns an account off, Toner locks within 15 minutes.
 
 On the command line, Toner asks for a username and password, and for directory accounts also Duo and the PIN. A first sign-in on a computer has to happen in the window. The scheduled service (`cli service`) is off while sign-in is set up.
 
