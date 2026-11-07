@@ -132,7 +132,7 @@ DEFAULT_SETTINGS = {
                    "autostart": False},
     # Windows agents (see core/agents.py): Toner listens for their reports while this is on
     "agent_cert_warned": "", "trend_schedule": "", "trend_per_org": False, "trend_last": "", "tls_sweep": False, "tls_sweep_ports": "443", "agent_enabled": False, "agent_enroll": False, "agent_token_days": 0, "agent_port": 8750, "agent_minutes": 5, "agent_push_minutes": False, "agent_bind": "0.0.0.0", "agent_address": "",
-    "vault_provider": "toner", "vault_config": {}, "vault_direct": False, "update_direct": False, "vault_keep_copies": True,   # (the last two: ignore the proxy)             # where passwords are kept: Toner's vault, or a password manager (core/extstore.py)
+    "vault_provider": "toner", "vault_config": {}, "vault_collections_migrated": {}, "vault_direct": False, "update_direct": False, "vault_keep_copies": True,   # (the last two: ignore the proxy)             # where passwords are kept: Toner's vault, or a password manager (core/extstore.py)
     # Demarc (see core/demarc.py): this install's permanent ID, and the Demarc it sends to (its token is in the vault)
     "install_uid": "", "demarc": {"address": "", "pin": "", "trusted": False, "enabled": False, "history": "all"},
     # Tools > API Tester (see core/apitool.py): how many sent requests History keeps
@@ -147,7 +147,7 @@ DEFAULT_SETTINGS = {
 }
 # Per-machine state that must not travel in an exported settings file (channel secrets stay in
 # the vault, so an imported channel would be broken).
-NOT_PORTABLE = {"vault_provider", "vault_config", "org_current", "window_geometry", "splitters", "inventory_details_hidden", "ansible_distro", "ansible_playbooks", "ansible_server", "ansible_server_device", "sidebar_collapsed", "sessions_list_hidden", "settings_list_hidden", "tools_list_hidden", "automation_list_hidden", "acks", "client_scope", "onboarding_done", "inventory_columns", "results_columns", "scanning_columns", "topology_last", "topology_prev", "topology_positions", "topology_top", "notify_channels", "notify_snooze_until", "inventory_expanded", "snippets", "fileserver", "iperf_path", "openssl_path",
+NOT_PORTABLE = {"vault_provider", "vault_config", "vault_collections_migrated", "org_current", "window_geometry", "splitters", "inventory_details_hidden", "ansible_distro", "ansible_playbooks", "ansible_server", "ansible_server_device", "sidebar_collapsed", "sessions_list_hidden", "settings_list_hidden", "tools_list_hidden", "automation_list_hidden", "acks", "client_scope", "onboarding_done", "inventory_columns", "results_columns", "scanning_columns", "topology_last", "topology_prev", "topology_positions", "topology_top", "notify_channels", "notify_snooze_until", "inventory_expanded", "snippets", "fileserver", "iperf_path", "openssl_path",
                 "update_last_check", "update_skip", "update_pending", "sessions_expanded", "agent_enabled", "agent_enroll", "agent_bind",
                 "agent_address", "install_uid", "demarc", "assistant_button", "credential_manager_carried", "rules_key", "rules_signed",
                 "signin_session_hours", "signin_idle_minutes"}
@@ -1158,7 +1158,7 @@ GLOBAL_ONLY = {"credential_manager_carried", "rules_key", "rules_signed", "windo
                "ansible_check_default", "ansible_keep_runs", "fileserver", "iperf_path", "openssl_path", "snippets",
                "ssh_log_days",
                "agent_cert_warned", "agent_enabled", "agent_token_days", "agent_port", "agent_bind", "agent_address",
-               "vault_provider", "vault_config", "vault_direct", "update_direct", "vault_keep_copies", "install_uid", "demarc",
+               "vault_provider", "vault_config", "vault_collections_migrated", "vault_direct", "update_direct", "vault_keep_copies", "install_uid", "demarc",
                "ai_provider", "ai_model", "ai_depth", "ai_spend_limit", "ai_run_commands", "ai_search", "assistant_button",
                "signin_session_hours", "signin_idle_minutes"}
 # (agent sign-up, its interval and whether installed agents are told it are each organization's own: Settings > Agents)

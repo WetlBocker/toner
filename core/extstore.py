@@ -88,30 +88,41 @@ def secrets(kind):
     return {f: secret(kind, f) for f in extvault.SECRET_FIELDS.get(kind, ())}
 
 
-def default_container(org):
-    return db.org_name(org) if org else "Global"
+def migrated(kind):
+    return bool((db.get_setting("vault_collections_migrated") or {}).get(kind))
+
+
+def default_container(org, kind=None):
+    """The name used when none is stored: the plain name, but 'Toner - <name>' until the move away from that prefix has run once
+    against this manager (see _keep_old_default_names), so an existing collection is never left behind."""
+    name = db.org_name(org) if org else "Global"
+    return name if migrated(kind or active()) else f"Toner - {name}"
 
 
 def container_name(kind, org):
     """The collection (vault, shared folder) a Toner organization's passwords go to."""
     chosen = (config(kind).get("containers") or {}).get(str(org or 0))
-    return (chosen or "").strip() or default_container(org)
+    return (chosen or "").strip() or default_container(org, kind)
 
 
 def _keep_old_default_names(kind, orgs, have):
     """Before 'Toner - ' left the default name: an organization with no stored name whose collection exists under the old default
-    keeps writing there (its name is recorded), instead of starting a new one and orphaning the old."""
+    keeps writing there (its name is recorded), instead of starting a new one and orphaning the old. Then the flag is set: from now
+    on the default is the plain name."""
     cfg = config(kind)
     names = dict(cfg.get("containers") or {})
     lower = {n.lower() for n in have}
     changed = False
     for org in orgs:
-        old = f"Toner - {default_container(org)}"
+        old = "Toner - " + (db.org_name(org) if org else "Global")
         if not (names.get(str(org or 0)) or "").strip() and old.lower() in lower:
             names[str(org or 0)], changed = old, True
     if changed:
         cfg["containers"] = names
         set_config(kind, cfg)
+    done = dict(db.get_setting("vault_collections_migrated") or {})
+    done[kind] = True
+    db.set_setting("vault_collections_migrated", done)
 
 
 def connector(kind=None):
@@ -320,12 +331,18 @@ def queue_drop(container):
 def forget_org(org):
     """An organization is being removed (core/orgs.py, while its row still exists): its collection in the manager goes too, and the
     deletes of its passwords, which would otherwise wait for ever (the round looks only at organizations that exist)."""
-    if not org or active() == "toner":
+    if not org:
         return
     try:
-        queue_drop(container_name(active(), org))
+        if active() != "toner":
+            queue_drop(container_name(active(), org))
     except Exception:
         quiet.ignored()
+    allc = dict(db.get_setting("vault_config") or {})            # its chosen collection name goes too: an id may be given again
+    for kind, cfg in allc.items():
+        if str(org) in (cfg.get("containers") or {}):
+            allc[kind] = {**cfg, "containers": {k: v for k, v in cfg["containers"].items() if k != str(org)}}
+    db.set_setting("vault_config", allc)
 
 
 def drop_containers(names):
@@ -553,7 +570,7 @@ def test(kind, cfg, secrets_):
         found = 0
         have = conn.containers()
         for org in [db.GLOBAL] + [r["id"] for r in db.org_rows()]:
-            name = ((cfg.get("containers") or {}).get(str(org)) or "").strip() or default_container(org)
+            name = ((cfg.get("containers") or {}).get(str(org)) or "").strip() or default_container(org, kind)
             cid = next((c for n, c in have.items() if n.lower() == name.lower()), None)
             if cid:
                 found += len(conn.items(cid))

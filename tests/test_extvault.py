@@ -96,9 +96,17 @@ SERVER["online"] = False
 ok_, text, _c = extstore.test("bitwarden", {}, {})
 check("...or why it couldn't connect", not ok_ and text == "Couldn't connect to Bitwarden: the server did not answer", text)
 SERVER["online"] = True
+check("until the move from the 'Toner - ' prefix has run, the old default is the default", not extstore.migrated("bitwarden") and extstore.container_name("bitwarden", acme) == "Toner - Acme"
+      and extstore.container_name("bitwarden", db.GLOBAL) == "Toner - Global")
 extstore.use("bitwarden")
 check("before the first round the status says it is connecting", extstore.status_text() == "Connecting to Bitwarden...", extstore.status_text())
+SERVER["online"] = False
+extstore.sync_once()
+check("unreachable: nothing has run, the old default stands", not extstore.migrated("bitwarden") and extstore.container_name("bitwarden", acme) == "Toner - Acme")
+SERVER["online"] = True
 st = extstore.sync_once()
+check("a fresh install's first sync sets the flag and the plain names", extstore.migrated("bitwarden") and extstore.container_name("bitwarden", acme) == "Acme"
+      and not (extstore.config("bitwarden").get("containers") or {}))
 check("every saved password is sent", st["connected"] and st["sent"] == 3 and len(SERVER["items"]) == 3, (st, SERVER["items"]))
 check("each organization has its own collection, named after it", sorted(SERVER["containers"].values()) == ["Acme", "Global"])
 by_tid = {i["tid"]: i for i in SERVER["items"].values()}
@@ -157,6 +165,7 @@ SERVER["may_create"] = True
 
 print("== collections that already exist under the old default")
 check("item titles carry no 'Toner - ' prefix", not any(i["title"].startswith("Toner - ") for i in SERVER["items"].values()))
+db.set_setting("vault_collections_migrated", {})           # (as before the upgrade)
 delta = orgs.create("Delta", "DELTA")
 with db.within(delta):
     db.save_device(dev("delta-sw"))
@@ -168,6 +177,7 @@ kept = extstore.config("bitwarden").get("containers") or {}
 check("an organization with no stored name and an old-default collection records that name", kept.get(str(delta)) == "Toner - Delta", kept)
 check("...and keeps writing there, with no new 'Delta' collection", "Delta" not in SERVER["containers"].values()
       and any(i["cid"] == "cdel" and i["tid"] == f"org{delta}/delta-sw" for i in SERVER["items"].values()))
+check("the first successful sync sets the flag", extstore.migrated("bitwarden"))
 check("a stored name is never replaced", kept.get(str(beta)) == "Beta passwords", kept)
 check("organizations whose old-default collection does not exist get the new default", str(acme) not in kept and extstore.container_name("bitwarden", acme) == "Acme"
       and str(db.GLOBAL) not in kept and extstore.container_name("bitwarden", db.GLOBAL) == "Global", kept)
@@ -176,8 +186,8 @@ check("a stored 'Toner - Global' is used as it is", extstore.container_name("bit
 cfg["containers"].pop(str(db.GLOBAL)); extstore.set_config("bitwarden", cfg)
 SERVER["containers"].pop("cbeta")
 orgs.remove(delta)
+check("removing an organization clears its stored collection name", str(delta) not in (extstore.config("bitwarden").get("containers") or {}))
 extstore.sync_once()
-cfg = extstore.config("bitwarden"); cfg["containers"].pop(str(delta), None); extstore.set_config("bitwarden", cfg)   # (a new organization may be given its id)
 
 print("== removing an organization")
 gamma = orgs.create("Gamma", "GAMMA")
@@ -410,6 +420,9 @@ check("...and covers the text beneath (an opaque box), so nothing is drawn twice
 ed.setText("Typed name"); from PySide6.QtTest import QTest; QTest.keyClick(ed, Qt.Key.Key_Return); app.processEvents()
 check("what is typed is kept", v.table.item(1, 1).text() == "Typed name")
 v._fill_table("bitwarden"); app.processEvents()
+db.set_setting("vault_collections_migrated", {}); v._fill_table("bitwarden")
+check("before the move has run, the table shows the old default and saving it stores nothing", v.table.item(1, 1).text() == "Toner - Acme" and set(v._values()[1]["containers"]) <= {str(beta)})
+db.set_setting("vault_collections_migrated", {"bitwarden": True}); v._fill_table("bitwarden")
 for kind, word in (("onepassword", "Vault"), ("keeper", "Shared folder")):
     v.kind.setCurrentIndex(v.kind.findData(kind)); app.processEvents()
     check(f"{extvault.LABELS[kind]} calls it {word}", v.table.horizontalHeaderItem(1).text() == word)

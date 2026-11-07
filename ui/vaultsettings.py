@@ -318,7 +318,7 @@ class VaultSection(QWidget):
             org.setFlags(org.flags() & ~Qt.ItemFlag.ItemIsEditable)
             org.setData(Qt.ItemDataRole.UserRole, oid)
             self.table.setItem(i, 0, org)
-            self.table.setItem(i, 1, QTableWidgetItem(chosen.get(str(oid)) or extstore.default_container(oid)))
+            self.table.setItem(i, 1, QTableWidgetItem(chosen.get(str(oid)) or extstore.default_container(oid, kind)))
         self.table.resizeColumnToContents(0)
 
     def show_status(self):
@@ -330,8 +330,8 @@ class VaultSection(QWidget):
     def _values(self):
         kind = self.chosen()
         cfg, secrets = self.fields[kind].values()
-        cfg["containers"] = {str(self.table.item(i, 0).data(Qt.ItemDataRole.UserRole)): self.table.item(i, 1).text().strip()
-                             for i in range(self.table.rowCount())}
+        typed = {self.table.item(i, 0).data(Qt.ItemDataRole.UserRole): self.table.item(i, 1).text().strip() for i in range(self.table.rowCount())}
+        cfg["containers"] = {str(o): t for o, t in typed.items() if t != extstore.default_container(o, kind)}   # (the default stays a default)
         return kind, cfg, secrets
 
     def _keep(self, kind, cfg, secrets):
