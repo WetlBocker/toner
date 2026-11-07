@@ -83,6 +83,7 @@ check("Over time: only text/status ticked -> the first ticked check's table, not
       w.over_stack.currentWidget() is w.over_table and w.over_table.rowCount() == 2, w.over_stack.currentIndex())
 w.chk.set_selected(["CPU"]); w.chk._toggled()
 check("Over time: a number -> the line chart as before", w.over_stack.currentWidget() is w.chart and len(w.chart.series) == 1)
+check("the check picker's tooltip", w.compare_check.toolTip() == "The check to chart", w.compare_check.toolTip())
 
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

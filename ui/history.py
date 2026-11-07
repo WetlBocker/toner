@@ -520,7 +520,7 @@ class HistoryTab(QWidget):
         rl.addWidget(self.over_stack, 1)
         # Across devices: the run chosen on the left, one bar per device for the check picked here, coloured by its status
         self.compare_check = QComboBox()
-        self.compare_check.setToolTip("A check with a number: every device's value in the chosen run, worst first")
+        self.compare_check.setToolTip("The check to chart")
         self.compare_check.currentIndexChanged.connect(lambda _i: self.draw_compare())
         self.compare_chart = ChartView(min_height=240)
         self.compare_chart.setAccessibleName("Values across devices")

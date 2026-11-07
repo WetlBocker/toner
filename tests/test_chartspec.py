@@ -53,9 +53,8 @@ hm = js(cs.heatmap(p, ["00", "01"], ["Mon", "Tue"], [(0, 0, 3), (1, 1, 1)]))
 check("cells are [x, y, value] and the colour scale runs to the FAIL colour", hm["series"][0]["data"] == [[0, 0, 3], [1, 1, 1]] and hm["visualMap"]["max"] == 3
       and hm["visualMap"]["inRange"]["color"][-1] == p["status"]["FAIL"])
 
-print("== histogram")
-hist = js(cs.histogram(p, [1, 3.9, 4, 7.5, 9, 10, 10], [0, 4, 7, 9, 10]))
-check("values fall in their bins, the last bin keeps its top edge", [x["value"] for x in hist["series"][0]["data"]] == [2, 1, 1, 3] and hist["xAxis"]["data"][-1] == "9–10")
+print("== no histogram (the CVSS scores are a pie)")
+check("chartspec has no histogram any more", not hasattr(cs, "histogram"))
 
 print("== pie")
 pi = js(cs.pie(p, [("0–4", 2, "#111111"), ("4–7", 0, "#222222"), ("7–9", 1, "#333333"), ("9–10", 3, "#444444")], title="CVSS scores"))

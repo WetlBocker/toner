@@ -10,7 +10,7 @@ from ui import motion, theme
 from ui import status as st
 
 LABELS_UP_TO = 12               # names are drawn when there are no more devices than this (else on hover)
-DOWN = ("FAIL", "ERROR")         # drawn with a ring, in its status colour; only one Toner could not reach counts as down (is_down)
+DOWN = ("FAIL", "ERROR")         # drawn with a pulsing ring in its status colour (is_down, below, is the narrower 'could not reach')
 DOWN_TIP = "Down: Toner could not connect to it in the last run."
 
 

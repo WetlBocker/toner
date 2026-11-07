@@ -1,6 +1,6 @@
 """Who an IP address belongs to, from the registries' own RDAP service (the successor to whois): rdap.org sends the question on to
 the right registry (ARIN, RIPE, APNIC, LACNIC, AFRINIC). No key, no sign-up. The WHOIS Lookup window shows this first, and the
-ipstack location under it when a key is saved (core/iplookup.py)."""
+location from the IP lookup provider under it when a key is saved (core/iplookup.py)."""
 import ipaddress
 import json
 import urllib.error

@@ -40,7 +40,7 @@ check("at most 20% of samples fall within 5% of an edge", sum(map(near, allq)) <
 check("every dot stays on the page", all(0 <= q[0] <= 1 and 0 <= q[1] <= 1 for q in allq))
 check("different dots take different paths", len({tuple(p[-1]) for p in paths}) == len(paths) and len({tuple(p[100]) for p in paths}) == len(paths))
 steps = [abs(b[0] - a[0]) * W for p in paths for a, b in zip(p, p[1:])]
-check("no single step jumps more than 2% of the width (and it is slow: under 0.2%)", max(steps) <= 0.002 * W, max(steps))
+check("no single step moves more than 0.2% of the width (slow and smooth)", max(steps) <= 0.002 * W, max(steps))
 check("the same seed gives the same path, another seed another", run(1) == paths and runs[1] != paths)
 crossing = sum(abs(b[0] - a[0]) for p in paths for a, b in zip(p, p[1:])) / len(paths) / FRAMES
 check("a dot takes about a minute or more to cross the page", 1 / crossing / 15 >= 50, 1 / crossing / 15)

@@ -70,5 +70,13 @@ root = fresh(); pick(root, 1); S.join_up(); app.processEvents()
 check("one subnet does nothing", len(names(root)) == 4 and not SAID)
 check("Join is off for one subnet, on for two", (not S.join.isEnabled()) and (pick(root, 0, 1) or S.join.isEnabled()))
 
+check("Join's tooltip says what it does now", S.join.toolTip() == "Join the selected subnets into one network", S.join.toolTip())
+check("the note above the tree says how to join", S.split_note.text() == "Choose a network in the tree, then split it into smaller subnets; select subnets and Join to merge them.", S.split_note.text())
+readme = open(_os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "README.md"), encoding="utf-8").read()
+check("README: Join merges the subnets you select", "Join to merge the subnets you select" in readme and "Join to put them back" not in readme)
+check("README: the Look up uses your IP lookup provider", "a **Look up** with your IP lookup provider (the API URL and key go under Settings > Connections)" in readme
+      and "at ipstack.com (location" not in readme)
+check("README: WHOIS shows where it is with an IP lookup key", "and, with an IP lookup key, where it is" in readme and "with an ipstack key" not in readme)
+
 print(f"{ok} passed, {bad} failed")
 raise SystemExit(1 if bad else 0)

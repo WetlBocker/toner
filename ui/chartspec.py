@@ -203,22 +203,6 @@ def heatmap(p, xlabels, ylabels, cells, title="", unit="", worst=None):
     return opt
 
 
-def histogram(p, values, bins, title="", unit="", edges_as_labels=True, color_by=None):
-    """Values grouped into `bins` (a list of edges, ascending): one bar per bin. `color_by(low, high)` may pick a bar's colour."""
-    if not values or len(bins) < 2:
-        return empty("Nothing to show yet")
-    counts = [0] * (len(bins) - 1)
-    for v in values:
-        for i in range(len(bins) - 1):
-            last = i == len(bins) - 2
-            if bins[i] <= v < bins[i + 1] or (last and v == bins[i + 1]):
-                counts[i] += 1
-                break
-    labels = [f"{bins[i]:g}–{bins[i + 1]:g}" if edges_as_labels else str(i) for i in range(len(bins) - 1)]
-    colors = [color_by(bins[i], bins[i + 1]) for i in range(len(bins) - 1)] if color_by else None
-    return bars(p, labels, counts, title=title, unit=unit, colors=colors)
-
-
 def gauge(p, value, warn=None, fail=None, title="", unit="%", maximum=100, lower_is_worse=False):
     """One reading against its limits: a half ring, coloured by the band the value is in. `lower_is_worse` for uptime-like readings."""
     if value is None:
