@@ -236,6 +236,7 @@ class VaultSection(QWidget):
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.DoubleClicked | QAbstractItemView.EditTrigger.SelectedClicked
                                    | QAbstractItemView.EditTrigger.EditKeyPressed)
         self.table.setItemDelegateForColumn(1, _CollectionDelegate(self.table))
+        self.table.itemChanged.connect(lambda it: it.column() == 1 and it.setData(Qt.ItemDataRole.UserRole, None))   # typed: no longer a default
         self.table.setMinimumHeight(110)
         self.test_btn, self.use_btn = QPushButton("Test connection"), QPushButton("Use this vault")
         self.test_btn.clicked.connect(self.test)
@@ -313,6 +314,7 @@ class VaultSection(QWidget):
         chosen = extstore.config(kind).get("containers") or {}
         rows = [(db.GLOBAL, "Global")] + [(o["id"], o["name"]) for o in orgs.list_orgs()]
         self.table.setRowCount(len(rows))
+        self.table.blockSignals(True)                         # filling is not typing (setItem says itemChanged)
         for i, (oid, name) in enumerate(rows):
             org = QTableWidgetItem(name)
             org.setFlags(org.flags() & ~Qt.ItemFlag.ItemIsEditable)
@@ -321,6 +323,7 @@ class VaultSection(QWidget):
             cell = QTableWidgetItem(chosen.get(str(oid)) or extstore.default_container(oid, kind))
             cell.setData(Qt.ItemDataRole.UserRole, None if chosen.get(str(oid)) else cell.text())     # the default it shows, if it shows one
             self.table.setItem(i, 1, cell)
+        self.table.blockSignals(False)
         self.table.resizeColumnToContents(0)
 
     def show_status(self):
@@ -334,8 +337,17 @@ class VaultSection(QWidget):
         cfg, secrets = self.fields[kind].values()
         # a stored name stays stored, and so does any name typed, even one equal to the default (an organization renamed later keeps
         # its collection); an untouched default stays a default
-        cells = [(self.table.item(i, 0).data(Qt.ItemDataRole.UserRole), self.table.item(i, 1)) for i in range(self.table.rowCount())]
-        cfg["containers"] = {str(o): c.text().strip() for o, c in cells if c.text().strip() and c.text().strip() != c.data(Qt.ItemDataRole.UserRole)}
+        # an untouched default leaves whatever is stored now alone (a name Toner recorded while the page was open stays)
+        names = dict(extstore.config(kind).get("containers") or {})
+        for i in range(self.table.rowCount()):
+            org, cell = str(self.table.item(i, 0).data(Qt.ItemDataRole.UserRole)), self.table.item(i, 1)
+            if cell.data(Qt.ItemDataRole.UserRole) is not None:
+                continue
+            if cell.text().strip():
+                names[org] = cell.text().strip()
+            else:
+                names.pop(org, None)
+        cfg["containers"] = names
         return kind, cfg, secrets
 
     def _keep(self, kind, cfg, secrets):
