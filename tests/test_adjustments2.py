@@ -49,8 +49,8 @@ check("a public address is told from a private one", subnets.is_public(subnets.p
 check("version() says 4, 6 or None", subnets.version("1.2.3.4") == 4 and subnets.version("::1") == 6 and subnets.version("nope") is None)
 kids = subnets.children(subnets.parse("10.0.0.0/24").network, 26)
 check("a /24 splits into four /26s", [str(k) for k in kids] == ["10.0.0.0/26", "10.0.0.64/26", "10.0.0.128/26", "10.0.0.192/26"])
-check("the Split tree's row: network, first, last, hosts", subnets.row(kids[1]) == ("10.0.0.64/26", "10.0.0.65", "10.0.0.126", "62"), subnets.row(kids[1]))
-check("a /31 keeps both addresses; a /32 one", subnets.row(subnets.parse("10.0.0.0/31").network)[3] == "2" and subnets.row(subnets.parse("10.0.0.7/32").network) == ("10.0.0.7/32", "10.0.0.7", "10.0.0.7", "1"))
+check("the Split tree's row: network, first, last, hosts", subnets.row(kids[1])[:4] == ("10.0.0.64/26", "10.0.0.65", "10.0.0.126", "62"), subnets.row(kids[1]))
+check("a /31 keeps both addresses; a /32 one", subnets.row(subnets.parse("10.0.0.0/31").network)[3] == "2" and subnets.row(subnets.parse("10.0.0.7/32").network)[:4] == ("10.0.0.7/32", "10.0.0.7", "10.0.0.7", "1"))
 for text, prefix, why in (("10.0.0.0/24", 24, "not longer"), ("10.0.0.0/24", 33, "past /32"), ("10.0.0.0/8", 24, "too many at once")):
     try:
         subnets.children(subnets.parse(text).network, prefix); bad_split = False
@@ -166,8 +166,10 @@ check("Split in two halves the chosen network", root.childCount() == 2 and root.
 S.tree.setCurrentItem(root.child(0)); S.split_to(root.child(0), 27); app.processEvents()
 check("Split into... a longer prefix makes the subnets under it", root.child(0).childCount() == 4 and root.child(0).child(3).text(0) == "8.8.8.96/27" and root.child(0).child(3).text(3) == "30")
 check("the tree ends under its rows", S.tree.maximumHeight() < 16777215 and S.tree.maximumHeight() < 400, S.tree.maximumHeight())
-S.tree.setCurrentItem(root.child(0).child(1)); S.join_up(); app.processEvents()
-check("Join on a subnet puts its siblings back together", root.child(0).childCount() == 0 and S.tree.currentItem() is root.child(0))
+S.tree.clearSelection()
+for _i in range(4): root.child(0).child(_i).setSelected(True)
+S.join_up(); app.processEvents()
+check("Join on all of a network's subnets puts them back together",root.child(0).childCount() == 0 and S.tree.currentItem() is root.child(0))
 S.inp.setText("2001:db8::1/48"); app.processEvents()
 check("an IPv6 address switches the IPv4 | IPv6 segment by itself, and is not looked up", S.mode.value() == "v6" and "Addresses" in S.facts.text() and not S.lookup_box.isVisible())
 S.inp.setText("192.168.1.10/24"); app.processEvents()

@@ -88,7 +88,20 @@ def children(net, new_prefix):
 
 
 def row(net):
-    """(network, first address, last address, hosts) as the Split tree shows them."""
+    """(network, first, last, hosts, broadcast, subnet mask, wildcard mask) as the Split tree shows them; the last three are IPv4 only, as in facts()."""
     rng = host_range(net)
     first, last = (str(rng[0]), str(rng[1])) if rng else ("", "")
-    return f"{net.network_address}/{net.prefixlen}", first, last, f"{max(hosts_in(net), 0):,}"
+    v4 = net.version == 4
+    return (f"{net.network_address}/{net.prefixlen}", first, last, f"{max(hosts_in(net), 0):,}",
+            str(net.broadcast_address) if v4 else "", str(net.netmask) if v4 else "", str(net.hostmask) if v4 else "")
+
+
+def join(networks):
+    """The one network these exactly fill (no gap, no overlap), or None."""
+    nets = list(networks)
+    if len(nets) < 2:
+        return None
+    merged = list(ipaddress.collapse_addresses(nets))
+    if len(merged) != 1 or merged[0].num_addresses != sum(n.num_addresses for n in nets):
+        return None
+    return merged[0]

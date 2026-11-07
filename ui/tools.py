@@ -465,7 +465,7 @@ class SubnetTab(QWidget):
     the network into smaller subnets (core/subnets.py does the sums)."""
     NET = Qt.ItemDataRole.UserRole
     PLACEHOLDER = {"v4": "192.168.1.10/24   or   10.0.0.0/255.255.255.0", "v6": "2001:db8::1/64   or   2001:db8::/48"}
-    COLS = ["Network", "First address", "Last address", "Hosts"]
+    COLS = ["Network", "First address", "Last address", "Hosts", "Broadcast", "Subnet mask", "Wildcard mask"]
 
     def __init__(self):
         super().__init__()
@@ -515,6 +515,7 @@ class SubnetTab(QWidget):
         self.tree = QTreeWidget()
         self.tree.setColumnCount(len(self.COLS))
         self.tree.setHeaderLabels(self.COLS)
+        self.tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.tree.setRootIsDecorated(True)
         self.tree.setAlternatingRowColors(False)
         self.tree.header().setStretchLastSection(True)
@@ -616,9 +617,13 @@ class SubnetTab(QWidget):
         self.lookup_out.setText(self._table(self.iplookup.summary(res)))
 
     # ---- the Split tree
-    def _item(self, parent, net):
+    def _make_item(self, net):
         it = QTreeWidgetItem(list(self.subnets.row(net)))
         it.setData(0, self.NET, str(net))
+        return it
+
+    def _item(self, parent, net):
+        it = self._make_item(net)
         if parent is None:
             self.tree.addTopLevelItem(it)
         else:
@@ -640,7 +645,7 @@ class SubnetTab(QWidget):
         can_split = net is not None and net.prefixlen < top
         self.split2.setEnabled(can_split)
         self.splitn.setEnabled(can_split)
-        self.join.setEnabled(it is not None and (it.childCount() > 0 or it.parent() is not None))
+        self.join.setEnabled(len(self.tree.selectedItems()) > 1)
 
     def split(self, more):
         it = self._chosen()
@@ -676,14 +681,23 @@ class SubnetTab(QWidget):
         self._sized()
 
     def join_up(self):
-        it = self._chosen()
-        if it is None:
+        picked = self.tree.selectedItems()
+        if len(picked) < 2:
             return
-        target = it if it.childCount() else it.parent()
-        if target is None:
+        parent = picked[0].parent()
+        joined = self.subnets.join([self._net(i) for i in picked]) if all(i.parent() is parent for i in picked) and parent is not None else None
+        if joined is None:                                 # shortcut: only siblings are joined, a join across branches is refused
+            from ui.toast import toast
+            toast(self, "These subnets can't be joined into one network.")
             return
-        target.takeChildren()
-        self.tree.setCurrentItem(target)
+        at = min(parent.indexOfChild(i) for i in picked)
+        for i in picked:
+            parent.removeChild(i)
+        if joined == self._net(parent):
+            self.tree.setCurrentItem(parent)
+        else:
+            parent.insertChild(at, self._make_item(joined))
+            self.tree.setCurrentItem(parent.child(at))
         self._sized()
 
     def _sized(self):
