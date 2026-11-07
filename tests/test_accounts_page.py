@@ -20,6 +20,10 @@ def check(name, cond, extra=""):
     global ok, bad
     if cond: ok += 1
     else: bad += 1; print("FAIL", name, extra)
+def undone(box):
+    """What undo brings back into a box (Password mode hides undo, so it is read as a show-password switch would)."""
+    mode = box.echoMode(); box.setEchoMode(box.EchoMode.Normal); box.undo(); text = box.text(); box.setEchoMode(mode)
+    return text
 
 from PySide6.QtWidgets import QApplication, QMessageBox
 app = QApplication([])
@@ -318,6 +322,25 @@ check("rules that don't check out: no rows, Add off", page.idents.rowCount() == 
 page.idents.clearSelection()
 check("no row: Test login off", not page._ident_menu(None).actions()[0].isEnabled())
 roles.verified = real_verified
+page.refresh()
+
+dlg = AccountDialog()
+dlg.pw.setText(PW2); dlg.confirm.setText(PW2); dlg.reject()
+check("the account dialog empties both password boxes when it closes, undo history too",
+      [b.text() for b in (dlg.pw, dlg.confirm)] == ["", ""] and [undone(b) for b in (dlg.pw, dlg.confirm)] == ["", ""])
+gone = []
+A.osstore.available = lambda: False                     # (Set up 2FA's probe: no real protected store)
+for cls in (A.AccountDialog, A.IdentityWizard, A.TwoFactorDialog):
+    cls.exec = lambda self: self.done(0) or 0
+    cls.deleteLater = lambda self: gone.append(type(self).__name__)
+page.add.click()
+page.table.selectRow(rows().index("Admin")); page.reset.click()
+page.add_ident.click()
+page.idents.selectRow(0)
+menu = page._ident_menu(None)
+menu.actions()[2].trigger(); menu.actions()[1].trigger()
+check("Add account, Reset password, Add, Edit and Set up 2FA delete their window after it closes",
+      gone == ["AccountDialog", "AccountDialog", "IdentityWizard", "IdentityWizard", "TwoFactorDialog"], gone)
 roles.set_directories([]); page.refresh()
 check("page is listed", "Accounts" in dict(settings.GROUPS)["Security and data"] and "Accounts" in settings.GLOBAL_PAGES)
 

@@ -30,6 +30,10 @@ def check(name, cond, extra=""):
     global ok, bad
     if cond: ok += 1; print("  ok  ", name)
     else: bad += 1; print("  FAIL", name, extra)
+def undone(box):
+    """What undo brings back into a box (Password mode hides undo, so it is read as a show-password switch would)."""
+    mode = box.echoMode(); box.setEchoMode(box.EchoMode.Normal); box.undo(); text = box.text(); box.setEchoMode(mode)
+    return text
 
 
 # ---------------------------------------------------------------- fakes (as tests/test_dirsignin.py)
@@ -233,6 +237,7 @@ check("the PIN signs in and the window accepts", w.result() == Accepted and sess
       and session.kind() == "directory")
 check("the pages, in order", w.seen == ["name", "password", "duo", "choose", "approve", "pin"], w.seen)
 check("no password, PIN or code left in any box", secrets_left(w, "pw-bob", PIN, PIN2, PW, PW2, "not it at all") == [])
+check("...nor in any box's undo history", [undone(b) for b in (w.pw, w.pin, w.pin1, w.pin2, w.admin_pw)] == [""] * 5)
 session.sign_out()
 
 print("== a second sign-in: password, push, PIN")
@@ -260,6 +265,7 @@ w.code.setText("000000"); w.code_ok.click(); settle(w)
 check("a wrong code", at(w) == "code" and w.code_error.text() == "That code isn't right." and w.code.text() == "", w.code_error.text())
 w.code.setText(DUO["code"]); w.code_ok.click(); settle(w)
 check("the right code: the PIN", at(w) == "pin")
+check("...and undo can't bring the Duo code back", undone(w.code) == "")
 w.pin.setText(PIN); w.pin_ok.click(); settle(w)
 check("...and signs in", w.result() == Accepted and session.user() == "bob@acme.com")
 session.sign_out()

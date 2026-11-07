@@ -16,6 +16,10 @@ def check(name, cond, extra=""):
     global ok, bad
     if cond: ok += 1; print("  ok  ", name)
     else: bad += 1; print("  FAIL", name, extra)
+def undone(box):
+    """What undo brings back into a box (Password mode hides undo, so it is read as a show-password switch would)."""
+    mode = box.echoMode(); box.setEchoMode(box.EchoMode.Normal); box.undo(); text = box.text(); box.setEchoMode(mode)
+    return text
 
 OS, AVAIL = {}, [True]
 osstore.available = lambda: AVAIL[0]
@@ -77,6 +81,7 @@ duo = roles.verified()["directories"][0]["duo"]
 check("host cleaned, saved", duo == {"on": True, "host": "api-x.duosecurity.com", "ikey": "DIX"}, duo)
 check("no secret in keys file or audit", SECRET not in text_of_files() and "typed-after-the-click" not in text_of_files())
 check("box cleared on close", (d.reject(), d.skey.text())[1] == "")
+check("...and undo can't bring the secret back", undone(d.skey) == "")
 
 page = A.AccountsPage(); page.load()
 check("column shows On", page.idents.item(0, 2).text() == "On" and page.idents.item(1, 2).text() == "Off")

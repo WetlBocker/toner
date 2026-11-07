@@ -88,7 +88,7 @@ class TwoFactorDialog(QDialog):
         host, ikey = clean_host(self.host.text()), self.ikey.text().strip()
         if duo and host is None:
             return
-        self.skey.clear()
+        self.skey.setText("")
         self.message.hide()
         new = dict(self.cfg)
         new["duo"] = {"on": True, "host": host, "ikey": ikey} if duo else {**(self.cfg.get("duo") or {}), "on": False}
@@ -132,5 +132,5 @@ class TwoFactorDialog(QDialog):
         for job in list(self._jobs):
             job.wait()
         self._jobs.clear()
-        self.skey.clear()
+        self.skey.setText("")
         super().done(r)

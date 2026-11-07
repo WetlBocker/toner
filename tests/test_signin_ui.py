@@ -27,6 +27,10 @@ def check(name, cond, extra=""):
     global ok, bad
     if cond: ok += 1; print("  ok  ", name)
     else: bad += 1; print("  FAIL", name, extra)
+def undone(box):
+    """What undo brings back into a box (Password mode hides undo, so it is read as a show-password switch would)."""
+    mode = box.echoMode(); box.setEchoMode(box.EchoMode.Normal); box.undo(); text = box.text(); box.setEchoMode(mode)
+    return text
 
 PW, PW2, PW3 = "violet staple orbit 42", "amber kettle meadow 77", "copper willow harbor 58"
 KEY_PATTERN = re.compile(r"^([A-Z2-7]{4}-){7}[A-Z2-7]{4}$")
@@ -69,6 +73,7 @@ def old_master(self):
     seen["upgrade_text"] = [l.text() for l in self.findChildren(setupdlg.QLabel)]
     self.pw.setText("not the master password"); self.ok.click()
     seen["wrong_master"] = (self.error.text(), self.result())
+    seen["wrong_master_undo"] = undone(self.pw)
     self.pw.setText("old master password!"); self.ok.click()
     return self.result()
 setupdlg.OldVaultDialog.exec = old_master
@@ -79,6 +84,7 @@ check("the upgrade asks for the old master password in the agreed words",
       "Enter the master password you used to unlock Toner's vault. Toner moves your saved passwords into the new account and won't ask for it again."
       in seen["upgrade_text"], seen["upgrade_text"])
 check("a wrong master password says so and stays", seen["wrong_master"] == ("That master password isn't right.", 0), seen["wrong_master"])
+check("...and undo can't bring the wrong one back into its box", seen["wrong_master_undo"] == "", seen["wrong_master_undo"])
 check("the saved password moved into the new vault", passvault.get("a") == "1")
 check("...which opens with the data key now", not passvault.uses_master())
 check("everything is encrypted", lockdown.pending() == [] and sqldb.is_encrypted(db.base_path()), lockdown.pending())
@@ -161,6 +167,7 @@ check("a damaged keys file: one clear sentence, no parser message", w.error.text
 datakey.path().write_bytes(keys)
 w.pw.setText(PW); w.sign_in.click()
 check("the right password signs in (any capitals in the name)", w.result() == SignInWindow.DialogCode.Accepted and session.user() == "Jordan")
+check("...and undo can't bring the password back into its box", undone(w.pw) == "")
 session.sign_out()
 
 print("== signing in with the recovery key")
@@ -328,6 +335,7 @@ check("a wrong password says so", lock.error.text() == datakey.WRONG and session
 lock.pw.setText(PW2); lock.unlock.click()
 check("the right password uncovers the window", session.state() == "open" and not lock.isVisible() and not lock.covers
       and QApplication.activeModalWidget() is None)
+check("...and undo can't bring the password back into the lock's box", undone(lock.pw) == "")
 
 print("== a dialog that was open when Toner locked")
 from PySide6.QtWidgets import QDialog, QLineEdit

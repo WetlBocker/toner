@@ -296,7 +296,7 @@ class SignInWindow(QDialog):
             if not wait.timer.isActive():
                 say(wait.label, "")
         for box in self._secrets:                        # no password, PIN or code outlives its page
-            box.clear()
+            box.setText("")
         self.pages.setCurrentWidget(page)
         self.pages.setFixedHeight(page.sizeHint().height())
         focus.setFocus()
@@ -317,7 +317,7 @@ class SignInWindow(QDialog):
             self.directory = False                       # the password step says what is wrong with the file, as before
         for lab in (self.who, self.code_who, self.pin_who):
             lab.setText(name)
-        self.pw.clear()
+        self.pw.setText("")
         self._go(self.password_page, self.pw)
 
     def _try(self, signing_in, error, wait, opener):
@@ -352,7 +352,7 @@ class SignInWindow(QDialog):
         if self.directory:
             return self._begin()
         name, pw = self.name.text().strip(), self.pw.text()
-        self.pw.clear()
+        self.pw.setText("")
         if self._try(lambda: session.sign_in(name, pw), self.error, self.sign_in_wait, lambda: datakey.open_with_password(name, pw)):
             self.accept()
         else:
@@ -363,7 +363,7 @@ class SignInWindow(QDialog):
         if not self._try(lambda: session.sign_in_recovery(key), self.recovery_error, self.recovery_wait,
                          lambda: datakey.open_with_recovery(key)):
             return
-        self.recovery.clear()
+        self.recovery.setText("")
         self.account.clear()
         self.account.addItems([a["name"] for a in datakey.accounts()])
         self._go(self.reset_page, self.new_pw)
@@ -472,7 +472,7 @@ class SignInWindow(QDialog):
 
     def _begin(self):
         login, pw = self.name.text().strip(), self.pw.text()
-        self.pw.clear()
+        self.pw.setText("")
 
         def begin():
             a = dirsignin.begin(login, pw)
@@ -511,7 +511,7 @@ class SignInWindow(QDialog):
 
     def _duo_code(self):
         a, code = self.attempt, self.code.text()
-        self.code.clear()
+        self.code.setText("")
 
         def enter():
             try:
@@ -523,7 +523,7 @@ class SignInWindow(QDialog):
 
     def _pin(self):
         a, pin = self.attempt, self.pin.text()
-        self.pin.clear()
+        self.pin.setText("")
         self._step(lambda: dirsignin.finish(a, pin), self.pin_error, self.pin_wait, self.pin)
 
     def _forgot_pin(self):
@@ -537,8 +537,8 @@ class SignInWindow(QDialog):
 
     def _choose(self):
         a, pin, again = self.attempt, self.pin1.text(), self.pin2.text()
-        self.pin1.clear()
-        self.pin2.clear()
+        self.pin1.setText("")
+        self.pin2.setText("")
 
         def choose():                                    # best_kind can take seconds the first time on Windows
             why = pinslot.problem(dirsignin.pin_kind(a), pin) or (PIN_MISMATCH if pin != again else None)
@@ -564,12 +564,12 @@ class SignInWindow(QDialog):
 
     def _approve(self):
         a, admin, pw = self.attempt, self.admin.text().strip(), self.admin_pw.text()
-        self.admin_pw.clear()
+        self.admin_pw.setText("")
         self._step(lambda: dirsignin.approve(a, admin, pw), self.approve_error, self.approve_wait, self.admin_pw)
 
     def _approve_key(self):
         a, key = self.attempt, self.approve_key.text()
-        self.approve_key.clear()
+        self.approve_key.setText("")
         self._step(lambda: dirsignin.approve_recovery(a, key), self.approve_key_error, self.approve_key_wait, self.approve_key)
 
     def _stop(self):

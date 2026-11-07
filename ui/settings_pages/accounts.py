@@ -33,6 +33,13 @@ def unlocks_with(a):
     return UNLOCKS.get(a.get("slot_kind"), "") if a["kind"] == "directory" else "Password"
 
 
+def ran(dlg):
+    """exec(), then delete the dialog, so nothing typed in it outlives it."""
+    result = dlg.exec()
+    dlg.deleteLater()
+    return result
+
+
 def confirm(parent, title, text):
     box = QMessageBox(QMessageBox.Icon.Question, title, text, parent=parent)
     go = box.addButton("Remove", QMessageBox.ButtonRole.AcceptRole)
@@ -89,6 +96,11 @@ class AccountDialog(_CardDialog):
             say(self.error, why)
             return
         super().accept()
+
+    def done(self, r):
+        for box in (self.pw, self.confirm):            # setText, not clear: no password left in a box's undo history
+            box.setText("")
+        super().done(r)
 
 
 class RoleDialog(_CardDialog):
@@ -218,7 +230,7 @@ class AccountsPage(Page):
 
     def _add(self):
         dlg = AccountDialog(parent=self)
-        if dlg.exec():
+        if ran(dlg):
             audit.log("account added", dlg.name.text().strip())
             self.refresh()
 
@@ -246,7 +258,7 @@ class AccountsPage(Page):
 
     def _reset(self):
         name = self._selected()
-        if name and name not in self._directory_rows and AccountDialog(name, self).exec():
+        if name and name not in self._directory_rows and ran(AccountDialog(name, self)):
             audit.log("password reset", name)
 
     def _remove(self):
@@ -305,24 +317,22 @@ class AccountsPage(Page):
         return m
 
     def _add_ident(self):
-        if self._dirs is not None and IdentityWizard(self._dirs, None, self).exec():
+        if self._dirs is not None and ran(IdentityWizard(self._dirs, None, self)):
             self.refresh()
 
     def _edit_ident(self):
         d = self._dir()
-        if d is not None and IdentityWizard(self._dirs, d, self).exec():
+        if d is not None and ran(IdentityWizard(self._dirs, d, self)):
             self.refresh()
 
     def _test_login(self):
         d = self._dir()
         if d is not None:
-            dlg = TestLoginDialog(d, self)
-            dlg.exec()
-            dlg.deleteLater()
+            ran(TestLoginDialog(d, self))
 
     def _set_up_2fa(self):
         d = self._dir()
-        if d is not None and TwoFactorDialog(self._dirs, d, self).exec():
+        if d is not None and ran(TwoFactorDialog(self._dirs, d, self)):
             self.refresh()
 
     def _remove_ident(self):

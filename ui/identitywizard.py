@@ -385,7 +385,7 @@ class IdentityWizard(QDialog):
             return self._say(CA_UNREADABLE if str(e) == "the CA file can't be read" else str(e))
         if typed:
             passvault.put(service_key(self.id), typed)
-        self.service_pw.clear()
+        self.service_pw.setText("")
         self.accept()
 
     # ---------------------------------------------------------------- Jobs
@@ -420,5 +420,5 @@ class IdentityWizard(QDialog):
             job.wait()
         self._jobs.clear()
         self._live = None
-        self.service_pw.clear()
+        self.service_pw.setText("")
         super().done(r)

@@ -137,7 +137,7 @@ class OldVaultDialog(_CardDialog):
             passvault.adopt(sqldb.current_key())
         except passvault.WrongPassword:
             say(self.error, WRONG_MASTER)
-            self.pw.clear()
+            self.pw.setText("")
             return
         except passvault.Locked:
             say(self.error, VAULT_CHANGED)

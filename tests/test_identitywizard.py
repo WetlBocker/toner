@@ -29,6 +29,10 @@ def check(name, cond, extra=""):
     global ok, bad
     if cond: ok += 1; print("  ok  ", name)
     else: bad += 1; print("  FAIL", name, extra)
+def undone(box):
+    """What undo brings back into a box (Password mode hides undo, so it is read as a show-password switch would)."""
+    mode = box.echoMode(); box.setEchoMode(box.EchoMode.Normal); box.undo(); text = box.text(); box.setEchoMode(mode)
+    return text
 
 
 # ---------------------------------------------------------------- fakes: the protected store, the chip, the directory
@@ -332,6 +336,7 @@ nxt(w)
 check("...and Next again keeps the roles chosen", list(w.role_boxes) == [OU_IT, ADMINS] and w.role_boxes[OU_IT].currentText() == "Engineer")
 w.reject()
 check("closing clears the password box", w.service_pw.text() == "")
+check("...and undo can't bring it back", undone(w.service_pw) == "")
 
 print("== duplicates")
 for kw, value in ((dict(netbios="acme"), "acme"), (dict(netbios="OTHER", suffixes="other.com, ACME.com"), "ACME.com")):

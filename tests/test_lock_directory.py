@@ -28,6 +28,10 @@ def check(name, cond, extra=""):
     global ok, bad
     if cond: ok += 1; print("  ok  ", name)
     else: bad += 1; print("  FAIL", name, extra)
+def undone(box):
+    """What undo brings back into a box (Password mode hides undo, so it is read as a show-password switch would)."""
+    mode = box.echoMode(); box.setEchoMode(box.EchoMode.Normal); box.undo(); text = box.text(); box.setEchoMode(mode)
+    return text
 
 
 # ---------------------------------------------------------------- fakes (as tests/test_dirsignin.py)
@@ -197,6 +201,7 @@ FakeTpm.locked = 0
 lock.wait.timer.stop(); lock.unlock.setEnabled(True)
 lock.pw.setText(PIN); lock.unlock.click(); app.processEvents()
 check("the right PIN unlocks, the field is empty", session.state() == "open" and lock.pw.text() == "" and not lock.locked)
+check("...and undo can't bring the PIN back", undone(lock.pw) == "")
 
 print("== a refused account")
 session.lock(reason="refused"); app.processEvents()

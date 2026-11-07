@@ -149,7 +149,7 @@ class LockScreen(QWidget):
         self.avatar.setStyleSheet(f"background: {t.get('surface2', '#12283d')}; border: 1px solid {t.get('edge', '#3d5a76')}; "
                                   f"border-radius: 22px; color: {t.get('accent_ink', '#22d3ee')}; font-weight: 600;")
         say(self.error, "")
-        self.pw.clear()
+        self.pw.setText("")
         self._arrange("refused" if session.refused() else "directory" if directory_user else "local")
         self.locked = True
         self._cover_all()
@@ -169,7 +169,7 @@ class LockScreen(QWidget):
         if not full:
             self.wait.timer.stop()                       # (a PIN countdown doesn't go on over these screens)
             say(self.error, "")
-            self.pw.clear()
+            self.pw.setText("")
             self.reason.setText(session.REFUSED if mode == "refused" else "Please sign in again.")
 
     def _cover_all(self):
@@ -213,7 +213,7 @@ class LockScreen(QWidget):
 
     def _uncover(self):
         self.locked = False
-        self.pw.clear()
+        self.pw.setText("")
         say(self.error, "")
         self.hide()
         for cover in self.covers.values():
@@ -228,7 +228,7 @@ class LockScreen(QWidget):
 
     def _unlock(self):
         pw = self.pw.text()
-        self.pw.clear()
+        self.pw.setText("")
         if session.kind() == "directory":
             return self._unlock_pin(pw)
         self._try(session.unlock, pw)
@@ -289,7 +289,7 @@ class LockScreen(QWidget):
         for j in list(self._jobs):
             j.wait()                                     # a probe must not outlive the window (as SignInWindow._stop)
         self._passing = True
-        self.pw.clear()
+        self.pw.setText("")
         self.hide()
         try:
             self.main.sign_out()
