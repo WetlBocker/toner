@@ -78,6 +78,7 @@ DEFAULT_SETTINGS = {
     "scanning_charts": True, "default_verify_ssl": True, "default_ssh_port": 22, "scan_confirm_over": 256,
     # connections
     "ssh_timeout": 20, "http_timeout": 15, "retries": 1, "retry_delay": 3,
+    "iplookup_url": "https://api.ipstack.com/{ip}?access_key={key}",       # the IP look-up provider (core/iplookup.py); its key is in the vault
     # checks
     "disabled_checks": [], "counter_mode": "total", "firmware_severity": "WARN",
     "threshold_overrides": [],
@@ -1151,7 +1152,7 @@ def ensure_folder_path(path):
 GLOBAL_ONLY = {"credential_manager_carried", "rules_key", "rules_signed", "window_geometry", "splitters", "sidebar_collapsed", "inventory_details_hidden", "sessions_list_hidden", "settings_list_hidden", "tools_list_hidden", "automation_list_hidden", "onboarding_done", "org_current",
                "theme", "look", "motion", "panels", "contrast", "custom_accent", "custom_base", "custom_tint", "panel_opacity", "vendor_icons_folder", "font_size", "color_preset", "status_colors",
                "term_font", "rdp_embedded", "term_font_size", "term_scrollback", "term_scheme", "term_syntax", "scan_enabled", "hardening_off", "paging_cmd",
-               "hostkey_mode", "ssh_legacy_algorithms", "run_in_background", "metrics_port", "proxy", "ssh_tunnel",
+               "hostkey_mode", "ssh_legacy_algorithms", "run_in_background", "iplookup_url", "metrics_port", "proxy", "ssh_tunnel",
                "update_check", "update_auto_install", "update_last_check", "update_skip", "update_pending",
                "ansible_backend", "ansible_distro", "ansible_command", "ansible_playbooks", "ansible_server_device", "ansible_server",
                "ansible_check_default", "ansible_keep_runs", "fileserver", "iperf_path", "openssl_path", "snippets",

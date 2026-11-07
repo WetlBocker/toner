@@ -71,7 +71,7 @@ def opener_401(req, timeout=0):
     if "api.ipstack.com" in req.full_url:
         raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized", {}, io.BytesIO(b'{"message":"No API key found in request"}'))
     return io.BytesIO(json.dumps(RECORD).encode())
-rec = iplookup.lookup("8.8.8.8", "k", opener=opener_401)
+rec = iplookup.lookup("8.8.8.8", "Zq91xv", opener=opener_401)
 check("an HTTP 401 from ipstack.com means a marketplace key: the same key goes to APILayer's own address, which answers", rec == RECORD and "api.ipstack.com" in calls[0] and "api.apilayer.net/ipstack/" in calls[-1], calls)
 def opener_105(req, timeout=0):
     calls.append(req.full_url)
@@ -79,12 +79,12 @@ def opener_105(req, timeout=0):
         return io.BytesIO(b'{"success":false,"error":{"code":105,"type":"https_access_restricted","info":"Access Restricted - Your current Subscription Plan does not support HTTPS Encryption."}}')
     return io.BytesIO(json.dumps(RECORD).encode())
 calls.clear()
-rec = iplookup.lookup("8.8.8.8", "k", opener=opener_105)
+rec = iplookup.lookup("8.8.8.8", "Zq91xv", opener=opener_105)
 check("a free ipstack.com key: https is refused with code 105, so the same question goes over plain http", rec == RECORD and [u[:5] for u in calls] == ["https", "http:"], calls)
 def opener_401_both(req, timeout=0):
     raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized", {}, io.BytesIO(b'{"error":{"code":101,"info":"You have not supplied a valid API Access Key."}}'))
 try:
-    iplookup.lookup("8.8.8.8", "k", opener=opener_401_both); said = ""
+    iplookup.lookup("8.8.8.8", "Zq91xv", opener=opener_401_both); said = ""
 except iplookup.LookupError_ as e:
     said = str(e)
 check("when every side refuses, the calculator shows each one's own words, not just the number", "401" in said and "valid API Access Key" in said and "ipstack.com:" in said and "apilayer.com:" in said, said)
@@ -105,21 +105,21 @@ def opener_old_gateway(req, timeout=0):
         raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized", {}, io.BytesIO(b'{"message":"Invalid authentication credentials"}'))
     return io.BytesIO(json.dumps(RECORD).encode())
 gw_calls.clear()
-rec = iplookup.lookup("8.8.8.8", "k", opener=opener_old_gateway)
-check("...and when that refuses too, the older gateway with the apikey header is the last try", rec == RECORD and gw_calls[-1][0] == "https://api.apilayer.com/ip_to_location/8.8.8.8" and gw_calls[-1][1] == "k", gw_calls)
+rec = iplookup.lookup("8.8.8.8", "Zq91xv", opener=opener_old_gateway)
+check("...and when that refuses too, the older gateway with the apikey header is the last try", rec == RECORD and gw_calls[-1][0] == "https://api.apilayer.com/ip_to_location/8.8.8.8" and gw_calls[-1][1] == "Zq91xv", gw_calls)
 def opener_all_refuse(req, timeout=0):
     if "api.ipstack.com" in req.full_url:
         return io.BytesIO(b'{"success":false,"error":{"code":101,"type":"invalid_access_key","info":"You have not supplied a valid API Access Key."}}')
     raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized", {}, io.BytesIO(b'{"message":"Invalid authentication credentials"}'))
 try:
-    iplookup.lookup("8.8.8.8", "k", opener=opener_all_refuse); said = ""
+    iplookup.lookup("8.8.8.8", "Zq91xv", opener=opener_all_refuse); said = ""
 except iplookup.LookupError_ as e:
     said = str(e)
 check("when every side refuses, the message says what each said", "ipstack.com: You have not supplied a valid API Access Key" in said and "api.apilayer.net: HTTP 401" in said and "api.apilayer.com: HTTP 401" in said and "Invalid authentication credentials" in said, said)
-okay, text = iplookup.test_key("k", opener=opener_401)
+okay, text = iplookup.test_key("Zq91xv", opener=opener_401)
 check("Test key: a working key says where 8.8.8.8 is", okay and text == "The key works: 8.8.8.8 is in Mountain View, United States.", text)
-okay, text = iplookup.test_key("k", opener=opener_401_both)
-check("Test key: a refused key says why, naming each side", not okay and text.startswith("ipstack refused: ipstack.com: HTTP 401") and "apilayer.com" in text, text)
+okay, text = iplookup.test_key("Zq91xv", opener=opener_401_both)
+check("Test key: a refused key says why, naming each side", not okay and text.startswith("ipstack.com: HTTP 401") and "apilayer.com" in text, text)
 cp = next(p for p in w.settings.pages if p.title == "Connections")
 check("Settings > Connections has the Test key button beside the key", cp.test_ipstack.text() == "Test key" and cp.ipstack_result.text() == "")
 

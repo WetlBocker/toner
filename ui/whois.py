@@ -1,4 +1,4 @@
-"""WHOIS Lookup: who an address belongs to (the registry's RDAP record) and, when an ipstack key is saved, where it is. Opened
+"""WHOIS Lookup: who an address belongs to (the registry's RDAP record) and, when an API key is saved, where it is. Opened
 from the right-click menu on any selected IP address (ui/ipmenu.py)."""
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QDialog, QDialogButtonBox, QLabel, QVBoxLayout
@@ -24,9 +24,9 @@ def gather(ip):
         out["rdap"] = f"Registry: {e}"
     if iplookup.has_key():
         try:
-            out["ipstack"] = iplookup.summary(iplookup.lookup(ip))
+            out["ipstack"] = iplookup.fields(iplookup.lookup(ip))
         except Exception as e:
-            out["ipstack"] = f"ipstack: {e}"
+            out["ipstack"] = f"{iplookup.host()}: {e}"
     else:
         out["ipstack"] = None
     return out
@@ -69,9 +69,9 @@ class WhoisDialog(QDialog):
             self.where.hide()
             return
         if not iplookup.has_key():
-            self.where.setText("<span style='color:gray'>Add an ipstack access key under Settings &gt; Connections to see where it is.</span>")
+            self.where.setText("<span style='color:gray'>Add an API key under Settings &gt; Connections to see where it is.</span>")
         else:
-            self.where.setText("Asking ipstack...")
+            self.where.setText(f"Asking {_esc(iplookup.host())}...")
         self.worker = Call(lambda: gather(self.ip))
         self.worker.done.connect(self._show)
         self.worker.start()

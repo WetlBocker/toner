@@ -60,8 +60,7 @@ for text, prefix, why in (("10.0.0.0/24", 24, "not longer"), ("10.0.0.0/24", 33,
 
 print("== where a public address is (ipstack)")
 check("the key lives in the vault", not iplookup.has_key() and (iplookup.set_key("abc123") or iplookup.get_key() == "abc123") and ("ipstack" in [u for _s, u in STORE]))
-check("the URL carries the address and the key, https first", iplookup.url("8.8.8.8", "abc123") == "https://api.ipstack.com/8.8.8.8?access_key=abc123"
-      and iplookup.url("8.8.8.8", "abc123", https=False).startswith("http://"))
+check("the default URL carries the address and the key, https first", iplookup.build(iplookup.get_url(), "8.8.8.8", "abc123") == "https://api.ipstack.com/8.8.8.8?access_key=abc123")
 RECORD = {"ip": "8.8.8.8", "type": "ipv4", "city": "Mountain View", "region_name": "California", "country_name": "United States", "latitude": 37.4, "longitude": -122.0,
           "connection": {"asn": 15169, "isp": "Google LLC"}, "time_zone": {"id": "America/Los_Angeles", "gmt_offset": -28800}}
 calls = []
@@ -74,9 +73,9 @@ def opener(req, timeout=0):
     return FakeReply(json.dumps(RECORD).encode())
 rec = iplookup.lookup("8.8.8.8", opener=opener)
 check("a free key: ipstack refuses https (code 105), so the same question goes over http", rec == RECORD and [u[:5] for u in calls] == ["https", "http:"], calls)
-rows = dict(iplookup.summary(rec))
-check("the summary: location, provider, network, time zone", rows["Location"] == "Mountain View, California, United States" and rows["Provider"] == "Google LLC"
-      and rows["Network"] == "AS15169" and rows["Time zone"] == "America/Los_Angeles  (UTC-08:00)", rows)
+rows = dict(iplookup.fields(rec))
+check("the answer as fields: nested keys joined with dots", rows["city"] == "Mountain View" and rows["connection.isp"] == "Google LLC"
+      and rows["time_zone.id"] == "America/Los_Angeles", rows)
 def refuse(req, timeout=0):
     return FakeReply(json.dumps({"success": False, "error": {"code": 101, "type": "invalid_access_key", "info": "You have not supplied a valid API Access Key."}}).encode())
 try:

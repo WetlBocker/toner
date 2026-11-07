@@ -461,7 +461,7 @@ class Call(QThread):
 
 
 class SubnetTab(QWidget):
-    """IPv4 or IPv6: the facts about an address and its network, a public address looked up at ipstack, and a Split tree that breaks
+    """IPv4 or IPv6: the facts about an address and its network, a public address looked up at the provider set under Settings > Connections, and a Split tree that breaks
     the network into smaller subnets (core/subnets.py does the sums)."""
     NET = Qt.ItemDataRole.UserRole
     PLACEHOLDER = {"v4": "192.168.1.10/24   or   10.0.0.0/255.255.255.0", "v6": "2001:db8::1/64   or   2001:db8::/48"}
@@ -484,10 +484,10 @@ class SubnetTab(QWidget):
         self.facts.setWordWrap(True)
         self.facts.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.facts.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        # a public address: where it is, by ipstack
+        # a public address: where it is, by the provider set under Settings > Connections
         self.lookup_btn = QPushButton("Look up")
-        self.lookup_btn.setToolTip("Ask ipstack.com where this public address is (your access key is under Settings > Connections)")
-        self.lookup_note = QLabel("Public address: looked up at ipstack.com with the key under Settings > Connections.")
+        self.lookup_btn.setToolTip("Ask where this public address is (your API key is under Settings > Connections)")
+        self.lookup_note = QLabel("Public address: looked up with the key under Settings > Connections.")
         self.lookup_note.setProperty("muted", True)
         self.lookup_note.setWordWrap(True)
         self.lookup_out = QLabel("")
@@ -600,11 +600,11 @@ class SubnetTab(QWidget):
         if not self.iface or (self.worker and self.worker.isRunning()):
             return
         if not self.iplookup.has_key():
-            self.lookup_out.setText("<span style='color:gray'>Add your ipstack access key under Settings > Connections first.</span>")
+            self.lookup_out.setText("<span style='color:gray'>Add your API key under Settings > Connections first.</span>")
             return
         ip = self.iface.ip
         self.lookup_btn.setEnabled(False)
-        self.lookup_out.setText(f"<span style='color:gray'>Asking ipstack about {ip}...</span>")
+        self.lookup_out.setText(f"<span style='color:gray'>Asking {self._esc(self.iplookup.host())} about {ip}...</span>")
         self.worker = Call(lambda: self.iplookup.lookup(ip))
         self.worker.done.connect(self._looked_up)
         self.worker.start()
@@ -612,9 +612,9 @@ class SubnetTab(QWidget):
     def _looked_up(self, res):
         self.lookup_btn.setEnabled(True)
         if isinstance(res, Exception):
-            self.lookup_out.setText(f"<span style='color:gray'>ipstack: {self._esc(res)}</span>")
+            self.lookup_out.setText(f"<span style='color:gray'>{self._esc(self.iplookup.host())}: {self._esc(res)}</span>")
             return
-        self.lookup_out.setText(self._table(self.iplookup.summary(res)))
+        self.lookup_out.setText(self._table(self.iplookup.fields(res)))
 
     # ---- the Split tree
     def _make_item(self, net):

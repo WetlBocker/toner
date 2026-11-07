@@ -1,14 +1,21 @@
-"""Where a public address is: the ipstack API (ipstack.com), with the access key kept in the vault. The Subnet Calculator offers it
-for a public address. A free ipstack key allows plain http only, so the address and the key travel unencrypted on that plan;
-Toner tries https first and falls back to http only when ipstack says the plan does not allow https."""
+"""Where a public address is: any provider's JSON API, given as an API URL with {ip} and {key} in it and an API key kept in the vault.
+The Subnet Calculator and WHOIS Lookup show the answer as a list of fields. ipstack (api.ipstack.com) is the default and the only
+provider with extras: a free ipstack key allows plain http only, so Toner tries https first and falls back to http only when ipstack
+says the plan does not allow https, and tries the APILayer gateways when ipstack.com refuses the key. Any other URL is called exactly as given."""
 import json
+import logging
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
 
 import keyring
 
-SECRET = "ipstack"                  # the key's name in the vault
+log = logging.getLogger("toner")
+SECRET = "ipstack"                  # the key's name in the vault (kept from when ipstack was the only provider)
+DEFAULT_URL = "https://api.ipstack.com/{ip}?access_key={key}"
+HINT = "Use {ip} where the address goes, and {key} for the key"
+MAX_ROWS = 200
 HOST = "api.ipstack.com"
 HTTPS_RESTRICTED = 105              # ipstack's code for "https is not on your plan"
 INVALID_KEY = 101                   # ipstack's code for a key it does not know: an APILayer marketplace key, most likely
@@ -38,33 +45,70 @@ def has_key():
     return bool(get_key())
 
 
-def url(ip, key, https=True):
-    return f"{'https' if https else 'http'}://{HOST}/{urllib.parse.quote(str(ip))}?" + urllib.parse.urlencode({"access_key": key})
+def get_url():
+    from core import db
+    return str(db.get_setting("iplookup_url") or "").strip() or DEFAULT_URL
+
+
+def check_url(url):
+    """The address as it may be saved: it needs {ip}, and only http or https is called. ValueError otherwise."""
+    url = (url or "").strip()
+    if "{ip}" not in url:
+        raise ValueError(HINT)
+    scheme = urllib.parse.urlsplit(url).scheme.lower()
+    if scheme not in ("http", "https"):
+        raise ValueError(f"unknown url type: {scheme}")                   # urllib's own words
+    return url
+
+
+def set_url(url):
+    from core import db
+    db.set_setting("iplookup_url", check_url(url))
+
+
+def build(template, ip, key):
+    return template.replace("{ip}", urllib.parse.quote(str(ip), safe="")).replace("{key}", urllib.parse.quote(str(key), safe=""))
+
+
+def host(template=None):
+    return urllib.parse.urlsplit(template or get_url()).hostname or ""
+
+
+def _hide(text, key):
+    """The text with the key (as typed and as URL-encoded) replaced by {key}: it must never reach a message or a log."""
+    text = str(text)
+    for k in {key, urllib.parse.quote(key, safe=""), urllib.parse.quote_plus(key)}:
+        if k:
+            text = text.replace(k, "{key}")
+    return text
 
 
 class LookupError_(Exception):
-    """ipstack said no, in its own words (the error's `info`); args[1] is its code (ipstack's, or the HTTP status)."""
+    """The provider said no, in its own words (the error's `info`); args[1] is its code (the provider's, or the HTTP status)."""
 
     def __str__(self):
-        return str(self.args[0]) if self.args else "ipstack refused the request"
+        return str(self.args[0]) if self.args else "the request was refused"
 
 
-def _call(ip, key, https, timeout, opener=None, gateway=None):
+def _call(ip, key, template, timeout, opener=None, gateway=None):
     headers = {"User-Agent": "Toner", "Accept": "application/json"}
     if gateway:                                                          # the APILayer marketplace: (address pattern, where the key goes)
         pattern, where = gateway
-        address = pattern.format(ip=urllib.parse.quote(str(ip)))
+        address = shown = pattern.format(ip=urllib.parse.quote(str(ip)))
+        who = pattern.split("/")[2]
         if where == "header":
             headers["apikey"] = key
         else:
             address += "?" + urllib.parse.urlencode({"access_key": key})
-        req = urllib.request.Request(address, headers=headers)
+            shown += "?access_key={key}"
     else:
-        req = urllib.request.Request(url(ip, key, https), headers=headers)
+        address, shown, who = build(template, ip, key), template.replace("{ip}", urllib.parse.quote(str(ip), safe="")), host(template)
+    log.info("IP look-up: GET %s", shown)                               # {key} stays as written: the key is never logged
+    req = urllib.request.Request(address, headers=headers)
     try:
         f = (opener or urllib.request.urlopen)(req, timeout=timeout)
         body = f.read().decode("utf-8", "replace")
-    except urllib.error.HTTPError as e:                                 # ipstack answered with an HTTP error: its words, not just the number
+    except urllib.error.HTTPError as e:                                 # the provider answered with an HTTP error: its words, not just the number
         try:
             body = e.read().decode("utf-8", "replace")
         except Exception:
@@ -74,7 +118,7 @@ def _call(ip, key, https, timeout, opener=None, gateway=None):
     try:
         data = json.loads(body)
     except ValueError:
-        raise LookupError_("ipstack gave an answer Toner could not read: " + " ".join(body.split())[:160], None) from None
+        raise LookupError_(f"{who} gave an answer Toner could not read: " + " ".join(body.split())[:160], None) from None
     if isinstance(data, dict) and data.get("success") is False:
         err = data.get("error") or {}
         raise LookupError_(f"{err.get('info') or err.get('type') or 'the request was refused'} (code {err.get('code', '?')})", err.get("code"))
@@ -95,28 +139,40 @@ def _said(body):
     return " ".join(str(body).split())[:160]
 
 
-def lookup(ip, key=None, timeout=10, opener=None):
-    """The ipstack record for an address, as the dict it returns. LookupError_ when ipstack refuses, ValueError without a key,
-    and the usual network errors when it cannot be reached. `opener` stands in for urlopen in tests. https is tried first; the free
-    plan (code 105, or an HTTP 401/403 for the same reason) is tried again over plain http."""
+def lookup(ip, key=None, timeout=10, opener=None, template=None):
+    """The provider's answer for an address, as the JSON it sent. LookupError_ when it refuses or cannot be reached, ValueError without a key.
+    `opener` stands in for urlopen in tests. Every message has the key replaced by {key}."""
     key = (key if key is not None else get_key()).strip()
     if not key:
-        raise ValueError("Add your ipstack access key under Settings > Connections first.")
+        raise ValueError("Add your API key under Settings > Connections first.")
+    template = check_url(template or get_url())
     try:
-        return _call(ip, key, True, timeout, opener)
+        return _lookup(ip, key, template, timeout, opener)
+    except LookupError_ as e:
+        raise LookupError_(_hide(e.args[0], key), *e.args[1:]) from None
+    except OSError as e:                                                 # a timeout, a refused connection, a name that does not resolve
+        raise LookupError_(f"Couldn't reach {host(template)}: " + _hide(getattr(e, "reason", None) or e, key), None) from None
+
+
+def _lookup(ip, key, template, timeout, opener):
+    if host(template) != HOST:                                           # another provider: exactly the URL given
+        return _call(ip, key, template, timeout, opener)
+    https, http = re.sub(r"^https?", "https", template, flags=re.I), re.sub(r"^https?", "http", template, flags=re.I)
+    try:
+        return _call(ip, key, https, timeout, opener)
     except LookupError_ as e:
         code = e.args[1] if len(e.args) > 1 else None
         if code in (HTTPS_RESTRICTED, 403):
             try:
-                return _call(ip, key, False, timeout, opener)        # the free plan on ipstack.com: plain http
+                return _call(ip, key, http, timeout, opener)             # the free plan on ipstack.com: plain http
             except LookupError_ as e2:
                 raise LookupError_(f"{e2.args[0]} (over http; over https: {e.args[0]})", e2.args[1] if len(e2.args) > 1 else None) from None
-        if code in (INVALID_KEY, 401):                                # a key from the APILayer marketplace: the same service at its gateway
+        if code in (INVALID_KEY, 401):                                    # a key from the APILayer marketplace: the same service at its gateway
             return _gateway(ip, key, timeout, opener, e)
         raise
     except urllib.error.URLError as e:
         if "ssl" in str(e).lower() or "certificate" in str(e).lower():
-            return _call(ip, key, False, timeout, opener)
+            return _call(ip, key, http, timeout, opener)
         raise
 
 
@@ -124,51 +180,45 @@ def _gateway(ip, key, timeout, opener, first):
     """The APILayer marketplace paths, in turn; when every one refuses, the message names what each side said."""
     said = [f"ipstack.com: {first.args[0]}"]
     for gateway in GATEWAYS:
-        host = gateway[0].split("/")[2]
+        who = gateway[0].split("/")[2]
         try:
-            return _call(ip, key, True, timeout, opener, gateway=gateway)
+            return _call(ip, key, None, timeout, opener, gateway=gateway)
         except LookupError_ as e:
             code = e.args[1] if len(e.args) > 1 else None
             if code == 404:
                 continue
-            said.append(f"{host}: {e.args[0]}")
+            said.append(f"{who}: {e.args[0]}")
             if code in (401, INVALID_KEY):
                 continue
             raise LookupError_("; ".join(said), code) from None
     raise LookupError_("; ".join(said) + " (the key was sent exactly as typed, trimmed of spaces)", 401) from None
 
 
-def test_key(key, timeout=10, opener=None):
-    """Settings' Test key: (ok, text) from one look-up of 8.8.8.8 with this key."""
+def test_key(key, timeout=10, opener=None, template=None):
+    """Settings' Test key: (ok, text) from one look-up of 8.8.8.8 with this key (and this URL, else the saved one)."""
     try:
-        rec = lookup("8.8.8.8", key, timeout, opener)
+        rec = lookup("8.8.8.8", key, timeout, opener, template)
     except (LookupError_, ValueError) as e:
-        return False, f"ipstack refused: {e}"
-    except Exception as e:
-        return False, f"Couldn't reach ipstack: {e}"
+        return False, str(e)
     place = ", ".join(x for x in (rec.get("city"), rec.get("country_name")) if x) if isinstance(rec, dict) else ""
-    return True, f"The key works: 8.8.8.8 is in {place or 'the record ipstack sent'}."
+    return True, "The key works" + (f": 8.8.8.8 is in {place}." if place else ".")
 
 
-def summary(data):
-    """[(label, value)] of what matters from a record: where, who provides it, the network, the time zone."""
-    if not isinstance(data, dict):
-        return []
-    place = ", ".join(x for x in (data.get("city"), data.get("region_name"), data.get("country_name")) if x)
-    conn = data.get("connection") or {}
-    tz = data.get("time_zone") or {}
-    rows = [("Address", f"{data.get('ip', '')}  ({data.get('type', '') or 'IP'})".strip()), ("Location", place or "unknown")]
-    if data.get("latitude") is not None and data.get("longitude") is not None:
-        rows.append(("Coordinates", f"{data['latitude']}, {data['longitude']}"))
-    if conn.get("isp"):
-        rows.append(("Provider", str(conn["isp"])))
-    if conn.get("asn"):
-        rows.append(("Network", f"AS{conn['asn']}"))
-    if tz.get("id"):
-        off = tz.get("gmt_offset")
-        rows.append(("Time zone", f"{tz['id']}" + (f"  (UTC{'+' if off >= 0 else '-'}{abs(off) // 3600:02d}:{abs(off) % 3600 // 60:02d})" if isinstance(off, (int, float)) else "")))
-    sec = data.get("security") or {}
-    if sec:
-        flags = [k.replace("is_", "") for k in ("is_proxy", "is_tor", "is_crawler") if sec.get(k)]
-        rows.append(("Security", ", ".join(flags) if flags else "nothing flagged"))
+def fields(data):
+    """[(label, value)] for every field of a JSON answer: nested keys joined with dots, list items numbered, at most MAX_ROWS."""
+    rows = []
+
+    def walk(prefix, v):
+        if len(rows) >= MAX_ROWS:
+            return
+        if isinstance(v, dict) and v:
+            for k, x in v.items():
+                walk(f"{prefix}.{k}" if prefix else str(k), x)
+        elif isinstance(v, list) and v:
+            for i, x in enumerate(v):
+                walk(f"{prefix}.{i}" if prefix else str(i), x)
+        else:
+            rows.append((prefix, v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)))
+
+    walk("", data)
     return rows
