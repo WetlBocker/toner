@@ -133,22 +133,17 @@ check("halfway through, the top row has landed, a middle row is on its way and t
 motion.stop(eff._anim); eff._done()
 tbl.close()
 
-print("== the constellation wanders round the page")
+print("== the constellation's dots drift across the page")
 from ui.backdrop import Backdrop
-bd = Backdrop(); bd.resize(1200, 800)
+from ui import backdrop as BD
+bd = Backdrop(seed=1); bd.resize(1200, 800)
 motion.force("Subtle")
 c, s = bd.constellation_centre()
 check("under Subtle it stays at the top right", c.x() == 880 and c.y() == 250 and s == 1.0, (c, s))
 motion.force("Lively")
-bd.orbit = 0.25; low, _ = bd.constellation_centre()
-bd.orbit = 0.75; high, _ = bd.constellation_centre()
-check("under Lively its place follows the lap: the bottom at a quarter, the top at three quarters", low.y() > 500 and high.y() < 300, (low, high))
-before = bd.orbit; bd._on_phase(0.2)
-check("each tick of the wash moves it on", bd.orbit != before)
-from ui import backdrop as BD
-a = bd.dot_drift(); bd.orbit = (bd.orbit + 0.05) % 1.0; b2 = bd.dot_drift()
-check("every dot has a path of its own (no two move alike), and there are more of them than the mockup's eleven",
-      len(BD._DOTS) >= 16 and all(a[i] != b2[i] for i in range(len(a))) and len({round(b2[i][0] - a[i][0], 4) for i in range(len(a))}) == len(a)
+a = bd.dot_positions(); bd._on_phase(0.2); b2 = bd.dot_positions()
+check("each tick of the wash moves every dot on, each its own way, and there are more of them than the mockup's eleven",
+      len(BD._DOTS) >= 16 and all(a[i] != b2[i] for i in range(len(a))) and len({round(b2[i][0] - a[i][0], 6) for i in range(len(a))}) == len(a)
       and all(max(i, j) < len(BD._DOTS) for i, j in BD._LINKS), (len(BD._DOTS), len(BD._LINKS)))
 motion.force(None)
 
