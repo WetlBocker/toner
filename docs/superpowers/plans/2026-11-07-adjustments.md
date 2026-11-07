@@ -50,7 +50,7 @@
 - "These subnets can't be joined into one network."
 - "API URL", "Use {ip} where the address goes, and {key} for the key", "API key"
 - "0–4", "4–7", "7–9", "9–10"
-- To approve with this plan (UniFi):
+- UniFi (approved 2026-11-07):
   - the Add dialog's site list heading "Sites";
   - a gone device's row: "{name} (not seen since {date})".
 
