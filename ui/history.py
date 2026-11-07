@@ -27,14 +27,18 @@ PCT_CHECKS = ("cpu", "memory")
 SERIES_COLORS = ["#f59e0b", "#10b981", "#ef4444", "#8b5cf6", "#06b6d4", "#ec4899", "#84cc16", "#f97316"]
 
 
+STATE_WORDS = {"up", "down", "ok", "warn", "warning", "fail", "failed", "error", "enabled", "disabled", "online", "offline", "connected",
+               "disconnected", "active", "inactive", "true", "false", "yes", "no", "present", "absent", "running", "stopped"}
+
+
 def chart_kind(rows):
     """How a check's rows are drawn: "line" (numbers over more than one time), "bar" (numbers at one time, one per device),
-    "status" (no numbers, and values that are only plain words or empty: how often each OK/WARN/FAIL happened) or "table" (text such
+    "status" (no numbers, and every value empty or a state word such as up or enabled: how often each OK/WARN/FAIL happened) or "table" (text such
     as a version or model). Rows are dicts with numeric, value, status and, over time, t."""
     if any(r.get("numeric") is not None for r in rows):
         return "line" if len({r.get("t") for r in rows}) > 1 else "bar"
-    words = all(re.fullmatch(r"[A-Za-z ]*", str(r.get("value") or "")) for r in rows)
-    return "status" if rows and words else "table"
+    states = all(str(r.get("value") or "").strip().lower() in STATE_WORDS | {""} for r in rows)
+    return "status" if rows and states else "table"
 
 
 def is_percent(check):
@@ -784,18 +788,21 @@ class HistoryTab(QWidget):
         d = self.dev.currentData()
         picked = [self.check_keys[k] for k in self.chk.selected() if k in self.check_keys]
         rows = {c: db.check_rows(d, c) for c in picked} if d else {}
-        kind = chart_kind(next(iter(rows.values()))) if len(rows) == 1 else "line"       # several checks: the numeric ones, as lines
+        kinds = {c: chart_kind(r) for c, r in rows.items()}
+        lines = any(k in ("line", "bar") for k in kinds.values())              # a number among the ticked checks: lines for those
+        first = picked[0] if picked else None
+        kind = "line" if lines or not first else kinds[first]                  # only text and status ticked: the first one's chart
         self.over_stack.setCurrentWidget({"status": self.over_chart, "table": self.over_table}.get(kind, self.chart))
         if kind == "status":
-            rs = next(iter(rows.values()))
+            rs = rows[first]
             days = sorted({r["t"][:10] for r in rs})
             bars = [(s, [sum(1 for r in rs if r["t"][:10] == day and r["status"] == s) for day in days]) for s in chartspec.STATUSES
                       if any(r["status"] == s for r in rs)]
-            title = display.check_name(picked[0])
+            title = display.check_name(first)
             self.over_chart.draw(lambda p: chartspec.grouped_bars(p, days, bars, title=title, stacked=True))
         elif kind == "table":
             changes = []
-            for r in next(iter(rows.values())):
+            for r in rows[first]:
                 if not changes or changes[-1]["value"] != r["value"]:
                     changes.append(r)
             changes.reverse()                                              # newest first

@@ -26,6 +26,10 @@ check("numbers at one time -> bar", H.chart_kind([row(numeric=1.0), row(numeric=
 check("plain-word values with statuses -> status", H.chart_kind([row(value="connected"), row(value="", status="FAIL")]) == "status")
 check("text values -> table", H.chart_kind([row(value="7.1.2"), row(value="Catalyst 9300")]) == "table")
 check("a firmware check with a WARN is still a table", H.chart_kind([row(value="7.1.2"), row(value="6.0", status="WARN")]) == "table")
+check("model names are text -> table", H.chart_kind([row(value="Catalyst"), row(value="Nexus")]) == "table")
+check("licence words are text -> table", H.chart_kind([row(value="Valid"), row(value="Expired")]) == "table")
+check("up/down without numbers -> status", H.chart_kind([row(value="up"), row(value="down")]) == "status")
+check("Enabled -> status", H.chart_kind([row(value="Enabled")]) == "status")
 check("no rows -> table", H.chart_kind([]) == "table")
 
 for i in range(3):
@@ -74,6 +78,9 @@ t = w.over_table
 check("Over time: a text check -> the change table, no chart", w.over_stack.currentWidget() is t)
 rows_ = [t.item(i, 1).text() for i in range(t.rowCount())]
 check("two versions over time -> two change rows, newest first", rows_ == ["7.1.0", "7.0.2"], rows_)
+w.chk.set_selected(["Firmware", "Link"]); w.chk._toggled()
+check("Over time: only text/status ticked -> the first ticked check's table, not a blank chart",
+      w.over_stack.currentWidget() is w.over_table and w.over_table.rowCount() == 2, w.over_stack.currentIndex())
 w.chk.set_selected(["CPU"]); w.chk._toggled()
 check("Over time: a number -> the line chart as before", w.over_stack.currentWidget() is w.chart and len(w.chart.series) == 1)
 
