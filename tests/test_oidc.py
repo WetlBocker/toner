@@ -129,6 +129,8 @@ CFG = {**CFG, "id": "c1", "groups_claim": "groups"}
 V = lambda t, nonce=None, **k: oidc.verify_id_token(CFG, t, nonce, **k)
 page = []
 
+LOOP = lambda b: b.redirect_uri.replace("localhost", "127.0.0.1")     # the listener is on 127.0.0.1 only
+
 def browse(url):
     def go():
         try:
@@ -150,12 +152,13 @@ seen = P.authorize_seen[-1]
 check("full flow returns Tokens", tok.claims["sub"] == "sub-1" and tok.access_token == "at-1" and tok.refresh_token == "rt-1" and tok.id_token)
 check("provider saw prompt=login and max_age=0", seen["prompt"] == "login" and seen["max_age"] == "0")
 check("... S256, nonce, hint, loopback redirect", seen["code_challenge_method"] == "S256" and seen["nonce"] == b.nonce and seen["login_hint"] == "ann@example.com"
-      and seen["redirect_uri"].startswith("http://127.0.0.1:") and seen["response_type"] == "code" and seen["client_id"] == "toner-app" and seen["state"])
+      and seen["redirect_uri"].startswith("http://localhost:") and seen["response_type"] == "code" and seen["client_id"] == "toner-app" and seen["state"])
+check("the code exchange used the identical redirect_uri", P.token_requests[-1]["redirect_uri"] == seen["redirect_uri"] == b.redirect_uri)
 check("PKCE verifier matched the challenge", P.pkce_ok is True)
 check("client secret from the store was sent", P.token_requests[-1].get("client_secret") == "the-secret")
 check("the browser got the approved page", oidc.SSO_DONE_PAGE == "You're signed in. You can close this tab and go back to Toner."
       and page[0][0] == 200 and oidc.SSO_DONE_PAGE in page[0][1] and "http" not in page[0][1])
-check("a second request to the port gets nothing (port closed)", raises(requests.ConnectionError, requests.get, b.redirect_uri, timeout=3, **oidc._DIRECT))
+check("a second request to the port gets nothing (port closed)", raises(requests.ConnectionError, requests.get, LOOP(b), timeout=3, **oidc._DIRECT))
 SECRETS.clear()
 flow()
 check("no stored secret: none sent", "client_secret" not in P.token_requests[-1])
@@ -173,7 +176,7 @@ b = oidc.BrowserSignIn(CFG, open_url=lambda u: None)
 port = int(b.redirect_uri.split(":")[2].rstrip("/"))
 cancel = threading.Event()
 threading.Timer(0.3, cancel.set).start()
-threading.Timer(0.1, lambda: page.append(requests.get(b.redirect_uri + "favicon.ico", timeout=3, **oidc._DIRECT).status_code)).start()
+threading.Timer(0.1, lambda: page.append(requests.get(LOOP(b) + "favicon.ico", timeout=3, **oidc._DIRECT).status_code)).start()
 page.clear()
 t0 = time.monotonic()
 check("Cancel raises Cancelled", raises(oidc.Cancelled, b.run, cancel, 30))

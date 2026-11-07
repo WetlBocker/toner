@@ -269,7 +269,7 @@ class BrowserSignIn:
         self._lock = threading.Lock()
         self._server = _LoopbackServer(("127.0.0.1", 0), _Redirect)
         self._server.owner = self
-        self.redirect_uri = f"http://127.0.0.1:{self._server.server_address[1]}/"
+        self.redirect_uri = f"http://localhost:{self._server.server_address[1]}/"     # the name providers register; the listener is 127.0.0.1 only
         q = {"response_type": "code", "client_id": cfg["client_id"], "redirect_uri": self.redirect_uri, "scope": scopes, "state": self._state,
              "nonce": self.nonce, "prompt": "login", "max_age": "0", "code_challenge_method": "S256",
              "code_challenge": base64.urlsafe_b64encode(hashlib.sha256(self._verifier.encode()).digest()).rstrip(b"=").decode()}
