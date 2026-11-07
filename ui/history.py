@@ -9,7 +9,7 @@ import pyqtgraph as pg
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy,
-                               QSplitter, QTabWidget, QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout, QWidget)
+                               QSplitter, QStackedWidget, QTabWidget, QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout, QWidget)
 from core import db, display, reports, scope, trends
 from core.reports import COLORS, fg_for
 from drivers.base import SEVERITY, Result
@@ -25,6 +25,16 @@ PCT_CHECKS = ("cpu", "memory")
 
 
 SERIES_COLORS = ["#f59e0b", "#10b981", "#ef4444", "#8b5cf6", "#06b6d4", "#ec4899", "#84cc16", "#f97316"]
+
+
+def chart_kind(rows):
+    """How a check's rows are drawn: "line" (numbers over more than one time), "bar" (numbers at one time, one per device),
+    "status" (no numbers, and values that are only plain words or empty: how often each OK/WARN/FAIL happened) or "table" (text such
+    as a version or model). Rows are dicts with numeric, value, status and, over time, t."""
+    if any(r.get("numeric") is not None for r in rows):
+        return "line" if len({r.get("t") for r in rows}) > 1 else "bar"
+    words = all(re.fullmatch(r"[A-Za-z ]*", str(r.get("value") or "")) for r in rows)
+    return "status" if rows and words else "table"
 
 
 def is_percent(check):
@@ -474,7 +484,12 @@ class HistoryTab(QWidget):
         al = QVBoxLayout(across)
         al.setContentsMargins(0, 8, 0, 0)
         al.addLayout(flow("Check", self.compare_check))
-        al.addWidget(self.compare_chart, 1)
+        self.compare_table = _table(["Device", "Value", "Checked"])       # a check of text (a version, a model) has no chart
+        self.compare_table.setAccessibleName("Values across devices")
+        self.compare_stack = QStackedWidget()
+        self.compare_stack.addWidget(self.compare_chart)
+        self.compare_stack.addWidget(self.compare_table)
+        al.addWidget(self.compare_stack, 1)
         # Failures: when problems happen (weekday by hour) and where (the devices with most), over the trend period
         self.fail_period = QComboBox()
         for label, days in trends.PERIODS:
@@ -594,12 +609,11 @@ class HistoryTab(QWidget):
             c.restyle()
 
     def _fill_compare(self):
-        """The checks of the chosen run that carry a number, for the Across devices box; the pick is kept when it still applies."""
+        """The checks of the chosen run, for the Across devices box; the pick is kept when it still applies."""
         rows = getattr(self, "_run_rows", [])
         names = {}
         for r in rows:
-            if display.value(r.get("value")) and self._numeric(r.get("value")) is not None:
-                names.setdefault(display.check_name(r["check_name"]), r["check_name"])
+            names.setdefault(display.check_name(r["check_name"]), r["check_name"])
         cur = self.compare_check.currentData()
         self.compare_check.blockSignals(True)
         self.compare_check.clear()
@@ -611,17 +625,26 @@ class HistoryTab(QWidget):
         if self.chart_tabs.currentIndex() == 1:
             self.draw_compare()
 
-    @staticmethod
-    def _numeric(value):
-        """The number in a stored value ('73 %', '12.5 ms', '3 of 48'): the first one, or None."""
-        m = re.search(r"-?\d+(?:\.\d+)?", str(value or ""))
-        return float(m.group(0)) if m else None
-
     def draw_compare(self):
         check = self.compare_check.currentData()
         rows = [r for r in getattr(self, "_run_rows", []) if r["check_name"] == check] if check else []
-        vals = [(db.label_org(r["device"]), self._numeric(r["value"]), r["status"]) for r in rows]
-        vals = [v for v in vals if v[1] is not None]
+        kind = chart_kind(rows) if rows else "bar"
+        self.compare_stack.setCurrentWidget(self.compare_table if kind == "table" else self.compare_chart)
+        title = display.check_name(check) if check else ""
+        if kind == "table":
+            when = self.runs.item(self.runs.currentRow(), 0)
+            with filling(self.compare_table):
+                self.compare_table.setRowCount(len(rows))
+                for i, r in enumerate(rows):
+                    for j, v in enumerate([db.label_org(r["device"]), display.value(r["value"]), when.text() if when else ""]):
+                        self.compare_table.setItem(i, j, QTableWidgetItem(v))
+            return
+        if kind == "status":
+            names = [db.label_org(r["device"]) for r in rows[:40]]
+            series = [(s, [1 if r["status"] == s else 0 for r in rows[:40]]) for s in chartspec.STATUSES if any(r["status"] == s for r in rows[:40])]
+            self.compare_chart.draw(lambda p: chartspec.grouped_bars(p, names, series, title=title, stacked=True))
+            return
+        vals = [(db.label_org(r["device"]), r["numeric"], r["status"]) for r in rows if r.get("numeric") is not None]
         if not vals:
             self.compare_chart.draw(lambda p: chartspec.empty("Choose a run on the left and a check with a number"))
             return
@@ -632,7 +655,6 @@ class HistoryTab(QWidget):
         m = re.search(r"\d\s*([%a-zA-Z/]+)\s*$", str(rows[0].get("value") or ""))
         if m and len(m.group(1)) <= 4:
             unit = (" " if m.group(1) != "%" else "") + m.group(1)
-        title = display.check_name(check)
         self.compare_chart.draw(lambda p: chartspec.bars(p, [v[0] for v in vals], [v[1] for v in vals], title=title, unit=unit, horizontal=True,
                                                          colors=[chartspec.status_color(p, v[2]) for v in vals], extra=[v[0] for v in vals]))
 
