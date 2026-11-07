@@ -10,7 +10,7 @@ NO_STORE = "This computer has no protected store, so Duo can't be turned on here
 TAKEN = "Another directory already uses {value}."
 CA_UNREADABLE = "Toner can't read that CA file."
 CA_CHANGED = "The directory's CA file changed. An admin needs to save the directory again."
-KINDS = (("Active Directory", "ad"), ("LDAP", "ldap"))
+KINDS = (("Active Directory", "ad"), ("LDAP", "ldap"), ("SSO (OpenID Connect)", "oidc"))
 SECURITY = (("LDAPS", "ldaps", 636), ("StartTLS", "starttls", 389))
 
 

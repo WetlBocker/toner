@@ -228,7 +228,7 @@ print("== the steps' words")
 w = wizard([], None)
 check("the five step titles, the first shown", IW.TITLES == ("Choose a type", "Server and service account", "Connection",
       "Who can sign in", "Roles") and w.title.text() == "Choose a type" and w.stack.count() == 5)
-check("step 1: Active Directory or LDAP, AD first", [r.text() for r in w.kinds] == ["Active Directory", "LDAP"] and w.kinds[0].isChecked())
+check("step 1: Active Directory, LDAP or SSO, AD first", [r.text() for r in w.kinds] == ["Active Directory", "LDAP", "SSO (OpenID Connect)"] and w.kinds[0].isChecked())
 check("buttons: Back, Next, Save", (w.back_btn.text(), w.next_btn.text(), w.save_btn.text()) == ("Back", "Next", "Save"))
 check("...step 1 has no Back and no Save", w.back_btn.isHidden() and w.save_btn.isHidden() and not w.next_btn.isHidden())
 nxt(w)

@@ -19,6 +19,7 @@ TAMPERED = ("The roles were changed outside Toner, so everyone has a Tech's perm
             "Sign in with the recovery key, then save the roles to put them right.")
 NEW_KEY_ASK = "The old recovery key will stop working. Make a new one?"
 REMOVE_DIRECTORY = "Removing this directory signs out its accounts on this copy. Remove {name}?"
+KIND_NAMES = {"ad": "Active Directory", "ldap": "LDAP", "oidc": "SSO"}
 UNLOCKS = {"chip": "PIN (security chip)", "store": "PIN (protected store)", "pin": "PIN"}
 
 
@@ -26,7 +27,7 @@ def type_of(a):
     """The Type column: a local account's kind as Part 2 showed it, a directory account's directory."""
     if a["kind"] != "directory":
         return a["kind"]
-    return {"ad": "Active Directory", "ldap": "LDAP"}.get(a.get("directory_kind"), "")
+    return KIND_NAMES.get(a.get("directory_kind"), "")
 
 
 def unlocks_with(a):
@@ -205,8 +206,9 @@ class AccountsPage(Page):
         self.idents.setRowCount(0)
         for d in self._dirs or []:
             self.idents.insertRow(self.idents.rowCount())
-            kind = {"ad": "Active Directory", "ldap": "LDAP"}.get(d.get("kind"), "")
-            for j, v in enumerate((d.get("name", ""), kind, "On" if (d.get("duo") or {}).get("on") else "Off")):     # (cfg only; "N/A" waits for a kind without 2FA)
+            kind = KIND_NAMES.get(d.get("kind"), "")
+            twofa = "N/A" if d.get("kind") == "oidc" else "On" if (d.get("duo") or {}).get("on") else "Off"
+            for j, v in enumerate((d.get("name", ""), kind, twofa)):
                 self.idents.setItem(self.idents.rowCount() - 1, j, QTableWidgetItem(v))
         self.add_ident.setEnabled(self._dirs is not None)
         self._ident_buttons()
@@ -314,6 +316,7 @@ class AccountsPage(Page):
         self.test_login.setEnabled(self._dir() is not None)
         self.test_login.triggered.connect(self._test_login)
         self.set_up_2fa.setEnabled(self._dir() is not None)
+        self.set_up_2fa.setVisible((self._dir() or {}).get("kind") != "oidc")      # the provider does its own 2FA
         self.set_up_2fa.triggered.connect(self._set_up_2fa)
         m.addAction("Edit...", self._edit_ident).setEnabled(self.edit_ident.isEnabled())
         m.addAction("Remove", self._remove_ident).setEnabled(self.remove_ident.isEnabled())

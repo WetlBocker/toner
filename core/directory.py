@@ -34,6 +34,16 @@ class User:
 
 
 def check_config(cfg):
+    if cfg.get("kind") == "oidc":                       # an SSO connection: no servers or LDAP TLS, but https and an email domain
+        from core import oidc
+        if not str(cfg.get("issuer") or "").startswith("https://") and not (
+                oidc._TEST_ALLOW_HTTP and str(cfg.get("issuer") or "").startswith("http://")):
+            raise InsecureConfig("the issuer must be https")
+        if not cfg.get("client_id"):
+            raise InsecureConfig("no client ID")
+        if not cfg.get("suffixes"):
+            raise InsecureConfig("no email domain")
+        return
     if not cfg.get("servers"):
         raise InsecureConfig("no servers")
     if cfg.get("kind") not in ("ad", "ldap"):
@@ -299,7 +309,7 @@ def role_for(cfg, groups, dn=""):
             return role
         if me and any(_under(me, _key(ou)) for ou in (cfg.get("ous") or {}).get(role, [])):
             return role
-    return None
+    return cfg.get("everyone") if cfg.get("everyone") in ROLE_ORDER else None
 
 
 def _under(me, ou):
