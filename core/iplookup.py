@@ -16,6 +16,7 @@ SECRET = "ipstack"                  # the key's name in the vault (kept from whe
 DEFAULT_URL = "https://api.ipstack.com/{ip}?access_key={key}"
 HINT = "Use {ip} where the address goes, and {key} for the key"
 MAX_ROWS = 200
+MAX_BODY = 2 * 1024 * 1024         # an answer or error body is read up to this many bytes
 HOST = "api.ipstack.com"
 HTTPS_RESTRICTED = 105              # ipstack's code for "https is not on your plan"
 INVALID_KEY = 101                   # ipstack's code for a key it does not know: an APILayer marketplace key, most likely
@@ -58,6 +59,11 @@ def check_url(url):
     scheme = urllib.parse.urlsplit(url).scheme.lower()
     if scheme not in ("http", "https"):
         raise ValueError(f"unknown url type: {scheme}")                   # urllib's own words
+    if any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in url):
+        raise ValueError(f"API URL: {HINT}")
+    authority = url.split("//", 1)[1].split("/", 1)[0] if "//" in url else ""
+    if "{ip}" in authority or "{key}" in authority or not urllib.parse.urlsplit(url.replace("{ip}", "x").replace("{key}", "x")).hostname:
+        raise ValueError(f"API URL: {HINT}")
     return url
 
 
@@ -83,6 +89,14 @@ def _hide(text, key):
     return text
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *a, **k):                                 # a 3xx is an HTTP error: the key is never forwarded to another address
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)                       # still honours the proxy settings, as urlopen did
+
+
 class LookupError_(Exception):
     """The provider said no, in its own words (the error's `info`); args[1] is its code (the provider's, or the HTTP status)."""
 
@@ -106,19 +120,22 @@ def _call(ip, key, template, timeout, opener=None, gateway=None):
     log.info("IP look-up: GET %s", shown)                               # {key} stays as written: the key is never logged
     req = urllib.request.Request(address, headers=headers)
     try:
-        f = (opener or urllib.request.urlopen)(req, timeout=timeout)
-        body = f.read().decode("utf-8", "replace")
+        f = (opener or _OPENER.open)(req, timeout=timeout)
+        raw = f.read(MAX_BODY + 1)
+        body = raw[:MAX_BODY].decode("utf-8", "replace")
     except urllib.error.HTTPError as e:                                 # the provider answered with an HTTP error: its words, not just the number
         try:
-            body = e.read().decode("utf-8", "replace")
+            body = e.read(MAX_BODY).decode("utf-8", "replace")
         except Exception:
             body = ""
         said = _said(body)
         raise LookupError_(f"HTTP {e.code} {e.reason or ''}".strip() + (f": {said}" if said else ""), e.code) from None
     try:
+        if len(raw) > MAX_BODY:
+            raise ValueError("too large")
         data = json.loads(body)
-    except ValueError:
-        raise LookupError_(f"{who} gave an answer Toner could not read: " + " ".join(body.split())[:160], None) from None
+    except (ValueError, RecursionError):
+        raise LookupError_(f"{who} gave an answer Toner could not read: " + " ".join(body[:400].split())[:160], None) from None
     if isinstance(data, dict) and data.get("success") is False:
         err = data.get("error") or {}
         raise LookupError_(f"{err.get('info') or err.get('type') or 'the request was refused'} (code {err.get('code', '?')})", err.get("code"))
@@ -152,6 +169,8 @@ def lookup(ip, key=None, timeout=10, opener=None, template=None):
         raise LookupError_(_hide(e.args[0], key), *e.args[1:]) from None
     except OSError as e:                                                 # a timeout, a refused connection, a name that does not resolve
         raise LookupError_(f"Couldn't reach {host(template)}: " + _hide(getattr(e, "reason", None) or e, key), None) from None
+    except Exception as e:                                               # anything else (a malformed address, say) may quote the address
+        raise LookupError_(_hide(e, key), None) from None
 
 
 def _lookup(ip, key, template, timeout, opener):
@@ -206,19 +225,15 @@ def test_key(key, timeout=10, opener=None, template=None):
 
 def fields(data):
     """[(label, value)] for every field of a JSON answer: nested keys joined with dots, list items numbered, at most MAX_ROWS."""
-    rows = []
-
-    def walk(prefix, v):
-        if len(rows) >= MAX_ROWS:
-            return
+    rows, stack = [], [("", data)]
+    while stack and len(rows) < MAX_ROWS:                                # a stack, not recursion: any depth is safe
+        prefix, v = stack.pop()
         if isinstance(v, dict) and v:
-            for k, x in v.items():
-                walk(f"{prefix}.{k}" if prefix else str(k), x)
+            items = [(f"{prefix}.{k}" if prefix else str(k), x) for k, x in v.items()]
         elif isinstance(v, list) and v:
-            for i, x in enumerate(v):
-                walk(f"{prefix}.{i}" if prefix else str(i), x)
+            items = [(f"{prefix}.{i}" if prefix else str(i), x) for i, x in enumerate(v)]
         else:
             rows.append((prefix, v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)))
-
-    walk("", data)
+            continue
+        stack.extend(reversed(items))
     return rows

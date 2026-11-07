@@ -604,7 +604,7 @@ class SubnetTab(QWidget):
             return
         ip = self.iface.ip
         self.lookup_btn.setEnabled(False)
-        self.lookup_out.setText(f"<span style='color:gray'>Asking {self._esc(self.iplookup.host())} about {ip}...</span>")
+        self.lookup_out.setText(f"<span style='color:gray'>Asking {self._esc(self.iplookup.host())}...</span>")
         self.worker = Call(lambda: self.iplookup.lookup(ip))
         self.worker.done.connect(self._looked_up)
         self.worker.start()

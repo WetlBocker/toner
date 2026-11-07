@@ -149,7 +149,7 @@ class ConnectionsPage(Page):
             from core import iplookup
             iplookup.check_url(self.api_url.text())
         except ValueError as e:
-            return [f"API URL: {e}"]
+            return [str(e) if str(e).startswith("API URL") else f"API URL: {e}"]
         return []
 
     def save(self):

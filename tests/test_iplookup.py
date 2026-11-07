@@ -147,6 +147,59 @@ iplookup.lookup("8.8.8.8", SECRETKEY, opener=serving(RECORD))
 lg.removeHandler(h)
 check("each request is logged with {key} masked", h.lines and all("sEcR3t" not in l and "%2F" not in l for l in h.lines) and any("https://geo.example.com/v1/8.8.8.8?token={key}" in l for l in h.lines), h.lines)
 
+print("== key safety")
+for t in ("https://x.test/a b/{ip}?k={key}", "https://x.test/{ip}\x01?k={key}", "https:///{ip}?k={key}"):
+    try:
+        iplookup.check_url(t); r = ""
+    except ValueError as e:
+        r = str(e)
+    check(f"a malformed URL is refused before saving: {t!r}", r == "API URL: " + HINT, r)
+try:
+    iplookup.lookup("8.8.8.8", "Zq91xv", template="https://x.test/{ip}?k={key}", opener=failing(ValueError("bad url https://x.test/8.8.8.8?k=Zq91xv"))); r = ""
+except Exception as e:
+    r = str(e)
+check("any other error naming the key is masked", r and "Zq91xv" not in r and "{key}" in r, r)
+for t in ("https://{key}.evil.test/{ip}", "https://{ip}.evil.test/x?k={key}", "https://u:{key}@evil.test/{ip}"):
+    try:
+        iplookup.check_url(t); r = ""
+    except ValueError as e:
+        r = str(e)
+    check(f"{{key}} or {{ip}} in the host part is refused: {t}", r == "API URL: " + HINT, r)
+import http.server, threading
+seen = []
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        seen.append(self.path)
+        if self.path.startswith("/start"):
+            self.send_response(302); self.send_header("Location", f"http://127.0.0.1:{self.server.other}/stolen?k=1"); self.end_headers()
+        else:
+            self.send_response(200); self.end_headers(); self.wfile.write(b"{}")
+    def log_message(self, *a): pass
+a, b = http.server.HTTPServer(("127.0.0.1", 0), H), http.server.HTTPServer(("127.0.0.1", 0), H)
+a.other = b.server_address[1]
+for srv in (a, b): threading.Thread(target=srv.serve_forever, daemon=True).start()
+try:
+    iplookup.lookup("8.8.8.8", "Zq91xv", template=f"http://127.0.0.1:{a.server_address[1]}/start/{{ip}}?k={{key}}"); r = ""
+except iplookup.LookupError_ as e:
+    r = str(e)
+check("a redirect is an HTTP error, not followed", r.startswith("HTTP 302") and seen == ["/start/8.8.8.8?k=Zq91xv"] and "Zq91xv" not in r, (r, seen))
+a.shutdown(); b.shutdown()
+big = b'{"a": "' + b"x" * (3 * 1024 * 1024) + b'"}'
+try:
+    iplookup.lookup("8.8.8.8", "Zq91xv", opener=serving(big)); r = ""
+except iplookup.LookupError_ as e:
+    r = str(e)
+check("a 3 MB body is refused with the could-not-read message", "could not read" in r, r[:100])
+deep = b"[" * 100000 + b"]" * 100000
+try:
+    iplookup.lookup("8.8.8.8", "Zq91xv", opener=serving(deep)); r = ""
+except iplookup.LookupError_ as e:
+    r = str(e)
+check("100,000-deep nesting gives the readable message", "could not read" in r, r[:100])
+d = cur = []
+for _ in range(50000): cur.append([]); cur = cur[0]
+check("fields() copes with any depth", isinstance(iplookup.fields(d), list))
+
 print("== the settings page")
 from ui.settings_pages.general import ConnectionsPage
 cp = ConnectionsPage(); cp.load()
