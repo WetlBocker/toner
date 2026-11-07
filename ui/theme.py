@@ -3,6 +3,7 @@
 The themes and the colour maths live in ui/themes.py. This module adds what Qt needs: the derived colours (hover row, selected
 row, soft accent), the shape and type tokens of each Look, the palette and the stylesheet, and `current()` for widgets that paint
 themselves."""
+import json, os
 from PySide6.QtCore import QEvent, QObject, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QPainterPath, QPalette, QRegion
 from PySide6.QtWidgets import QApplication, QMenu, QProxyStyle
@@ -354,6 +355,36 @@ def saved_look():
     from core import db
     look = {k: db.get_setting(k) for k in LOOK_KEYS}
     look["theme"] = themes.legacy_name(str(look.get("theme") or themes.SYSTEM))
+    return look
+
+
+def plain_path():
+    """The theme's name kept outside the encrypted database, so the windows shown before sign-in can wear it (owner decision 14)."""
+    from core import db
+    return db.base_path().with_suffix(".theme")
+
+
+def write_plain(name):
+    """Keep the theme's name, and only that, in plain. Written whole or not at all."""
+    p = plain_path()
+    tmp = p.with_name(p.name + ".tmp")
+    try:
+        tmp.write_text(json.dumps({"theme": str(name)}), encoding="utf-8")
+        os.replace(tmp, p)
+    except OSError:
+        quiet.ignored()                                  # the sign-in windows then use the default theme
+
+
+def plain_look():
+    """The look before sign-in: the default, with the theme's name from the plain copy when it names a theme. Nothing else is
+    taken from the file. Your colour needs its accent, which is in the database, so it (like any unknown name) gives System."""
+    look = dict(themes.DEFAULT_LOOK)
+    try:
+        name = json.loads(plain_path().read_text(encoding="utf-8")).get("theme")
+        name = themes.legacy_name(name) if isinstance(name, str) else themes.SYSTEM
+        look["theme"] = themes.SYSTEM if name == "Your colour" else name
+    except (OSError, ValueError, AttributeError):
+        pass
     return look
 
 

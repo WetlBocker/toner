@@ -93,8 +93,8 @@ def apply_look(app):
 
 
 def plain_look(app):
-    """The look before anyone signs in: the theme defaults, light or dark as the system is. Nothing is read from the database,
-    which stays encrypted until then."""
+    """The look before anyone signs in: the theme defaults, but for the theme's name, kept in plain beside netcheck.keys (nothing is
+    read from the database, which stays encrypted until then)."""
     from datetime import datetime
     from ui import themes
     try:
@@ -102,7 +102,7 @@ def plain_look(app):
     except Exception:
         dark = False
     hour = datetime.now().hour
-    theme.apply(app, dict(themes.DEFAULT_LOOK), ctx=dict(system_dark=dark, hour=hour, period=themes.period(hour), worst=None,
+    theme.apply(app, theme.plain_look(), ctx=dict(system_dark=dark, hour=hour, period=themes.period(hour), worst=None,
                                                           org_colour="", status=None))
     app.setWindowIcon(app_icon())
 
@@ -1192,6 +1192,7 @@ def main():
     except OSError:
         pass
     apply_look(app)
+    theme.write_plain(db.get_setting("theme"))    # (every start: existing users get the plain copy without visiting Settings)
     otpprompt.install()
     win = Main()
     if "--minimized" in sys.argv and win.background_mode():

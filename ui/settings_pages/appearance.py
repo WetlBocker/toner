@@ -205,6 +205,7 @@ class AppearancePage(Page):
         base = reports.COLOR_PRESETS.get(preset, reports.DEFAULT_COLORS)
         for key, value in self.look_dict().items():
             db.set_setting(key, value)
+        theme.write_plain(self.grid.current())      # the sign-in windows wear it
         db.set_setting("font_size", self.font.value())
         db.set_setting("vendor_icons_folder", self.icons_folder.text().strip())
         from ui import brandicons
