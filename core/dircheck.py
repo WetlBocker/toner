@@ -45,8 +45,6 @@ def run_once():
         return "offline"
     try:
         user = directory.look_up(cfg, acct["guid"], password)
-    except directory.NotFound:
-        user = None
     except Exception as e:     # unreachable, a refused service bind, a config problem: never a reason to lock anyone out
         log.info("directory check failed: %s", type(e).__name__)
         return "offline"

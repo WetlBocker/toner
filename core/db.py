@@ -552,6 +552,8 @@ def init():
         """)
         _migrate(c)
         _migrate_settings(c)
+        if target() != GLOBAL:                            # these two are Global's alone now; an old Import settings may have left rows here
+            c.execute("DELETE FROM settings WHERE key IN ('signin_session_hours', 'signin_idle_minutes')")
     _invalidate_folders()
     _forget_settings()
     if target() == GLOBAL:                                # bring every organization's file up to date too

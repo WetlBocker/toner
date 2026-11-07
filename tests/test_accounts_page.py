@@ -245,6 +245,7 @@ page.session.setValue(30); page.idle.setValue(99); page.save()
 check("tampered: a non-Admin's Settings save leaves the session length and idle lock alone",
       db.get_setting("signin_session_hours") == 12 and db.get_setting("signin_idle_minutes") == 15,
       (db.get_setting("signin_session_hours"), db.get_setting("signin_idle_minutes")))
+check("...and the two fields go back to the stored values", (page.session.value(), page.idle.value()) == (12, 15), (page.session.value(), page.idle.value()))
 session.sign_out(); session.sign_in_recovery(shownkey[0])
 page.refresh()
 page.perm_table.item(PUSH, 0).setCheckState(Qt.CheckState.Checked)
@@ -275,6 +276,19 @@ in_org = db.get_setting("signin_session_hours"), db.get_setting("signin_idle_min
 db.set_home(db.GLOBAL)
 check("set inside an organization, it is one value for everyone (Global's)", in_org == (5, 20)
       and (db.get_setting("signin_session_hours"), db.get_setting("signin_idle_minutes")) == (5, 20), in_org)
+
+with db.within(acme), db.connect() as c:             # an older Import settings inside an organization left rows in its own file
+    c.execute("INSERT OR REPLACE INTO settings(key, value) VALUES('signin_idle_minutes', '99')")
+    c.execute("INSERT OR REPLACE INTO settings(key, value) VALUES('signin_session_hours', '70')")
+db.forget_orgs(); db._forget_settings()
+with db.within(acme):
+    db.init()
+    left = db._settings_of(acme)
+db.set_home(acme)
+read_in_org = db.get_setting("signin_session_hours"), db.get_setting("signin_idle_minutes")
+db.set_home(db.GLOBAL)
+check("an organization's leftover session length and idle rows are removed once, and Global's values are read",
+      "signin_idle_minutes" not in left and "signin_session_hours" not in left and read_in_org == (5, 20), (left, read_in_org))
 
 from ui import settings
 

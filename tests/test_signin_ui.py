@@ -75,8 +75,12 @@ def old_master(self):
     seen["wrong_master"] = (self.error.text(), self.result())
     seen["wrong_master_undo"] = undone(self.pw)
     self.pw.setText("old master password!"); self.ok.click()
+    seen["master_after"] = (self.pw.text(), undone(self.pw))
     return self.result()
 setupdlg.OldVaultDialog.exec = old_master
+seen["deleted"] = 0
+_real_later = setupdlg.OldVaultDialog.deleteLater
+setupdlg.OldVaultDialog.deleteLater = lambda self: (seen.__setitem__("deleted", seen["deleted"] + 1), _real_later(self))[1]
 done = setupdlg.run_first_start()
 check("run_first_start finishes", done is True)
 check("the account exists and is signed in", datakey.exists() and session.state() == "open" and session.user() == "Admin")
@@ -86,6 +90,8 @@ check("the upgrade asks for the old master password in the agreed words",
 check("a wrong master password says so and stays", seen["wrong_master"] == ("That master password isn't right.", 0), seen["wrong_master"])
 check("...and undo can't bring the wrong one back into its box", seen["wrong_master_undo"] == "", seen["wrong_master_undo"])
 check("the saved password moved into the new vault", passvault.get("a") == "1")
+check("...and the master-password box is empty after the unlock, undo included", seen["master_after"] == ("", ""), seen["master_after"])
+check("...and the dialog is scheduled for deletion", seen["deleted"] > 0, seen["deleted"])
 check("...which opens with the data key now", not passvault.uses_master())
 check("everything is encrypted", lockdown.pending() == [] and sqldb.is_encrypted(db.base_path()), lockdown.pending())
 db.init()
@@ -191,6 +197,12 @@ w.name.setText("Jordan"); w.next.click(); w.use_recovery.click(); w.recovery.set
 w.reject()
 check("closing the window during the reset leaves no recovery session open", session.state() == "signed_out")
 
+w = SignInWindow(); w.show()
+w.name.setText("Jordan"); w.next.click(); w.use_recovery.click(); w.recovery.setText("AAAA-BBBB")
+w.recovery_page.findChildren(type(w.not_you))[-1].click()          # the link under the box goes back to the name
+check("going back from the recovery page leaves its box empty, and undo can't restore it", w.recovery.text() == "" and undone(w.recovery) == "", undone(w.recovery))
+w.reject()
+
 print("== a first start that stopped before the old vault moved over")
 use("halfway")
 db.init(); db.release()
@@ -222,6 +234,7 @@ session.sign_in = real_sign_in
 check("...and if a wait started anyway, the password step shows the countdown with the name filled in",
       w.pages.currentWidget() is w.password_page and w.who.text() == "Jordan" and not w.sign_in.isEnabled()
       and w.error.text() == "Too many tries. Wait 30 seconds, then try again." and session.state() == "signed_out", w.error.text())
+check("...and the new password boxes are empty, undo included", w.new_pw.text() == w.confirm.text() == "" and undone(w.new_pw) == undone(w.confirm) == "")
 w.sign_in_wait.timer.stop(); w.sign_in.setEnabled(True)
 w.pw.setText(PW2); w.sign_in.click()
 check("...after which signing in works", w.result() == SignInWindow.DialogCode.Accepted and session.user() == "Jordan")

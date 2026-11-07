@@ -198,14 +198,11 @@ check("a new sign-in opens again", session.state() == "open" and not session.ref
 # ---------------------------------------------------------------- not found, disabled, no group
 directory.look_up = lambda *a: None
 check("not found: refused", dircheck.run_once() == "refused" and session.refused())
-reopen()
-directory.look_up = boom(directory.NotFound("x"))
-check("NotFound raised: refused", dircheck.run_once() == "refused" and session.refused())
 for label, kw in (("disabled", {"enabled": False}), ("no group", {"groups": ()})):
     reopen()
     directory.look_up = real_look_up; lookup_as(**kw)
     check(label + ": refused", dircheck.run_once() == "refused" and session.state() == "locked" and session.refused())
-check("every refusal audited", len(rows(REFUSED_ROW)) == 5, len(rows(REFUSED_ROW)))
+check("every refusal audited", len(rows(REFUSED_ROW)) == 4, len(rows(REFUSED_ROW)))
 check("an already-locked screen is refused again", dircheck.run_once() == "refused" and session.refused() and session.state() == "locked")
 directory.look_up = real_look_up
 

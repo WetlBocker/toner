@@ -147,6 +147,10 @@ class OldVaultDialog(_CardDialog):
             return
         super().accept()
 
+    def done(self, result):
+        self.pw.setText("")                              # the password is read in accept(); none outlives the dialog
+        super().done(result)
+
     def _dont_know(self):
         if QMessageBox.warning(self, TITLE, LOST, QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
                                QMessageBox.StandardButton.Cancel) != QMessageBox.StandardButton.Ok:
@@ -170,7 +174,11 @@ def adopt_old_vault(parent=None):
             return True
         except (passvault.Locked, *DAMAGED_ERRORS):      # changed or unwritable since it was read: the dialog says which
             passvault.lock()
-    return bool(OldVaultDialog(parent).exec())
+    dialog = OldVaultDialog(parent)
+    try:
+        return bool(dialog.exec())
+    finally:
+        dialog.deleteLater()                             # parented to the sign-in window, it would otherwise live as long as that
 
 
 class EncryptDialog(_CardDialog):

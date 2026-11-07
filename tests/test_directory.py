@@ -119,7 +119,7 @@ check("a name with nothing for the user is BadCredentials", all(raises(D.BadCred
 print("== group names are no longer typed (step 4 lists what the server has)")
 from ui import directorydlg
 check("the name lookup and its messages are gone", not any(hasattr(D, n) for n in ("resolve_groups", "Ambiguous"))
-      and not any(hasattr(directorydlg, n) for n in ("NO_GROUP", "TWO_GROUPS")) and hasattr(D, "NotFound"))
+      and not any(hasattr(directorydlg, n) for n in ("NO_GROUP", "TWO_GROUPS")) and not any(hasattr(D, n) for n in ("NotFound", "_is_dn")))
 
 print("== Who Am I answers")
 for me, want in (("u:CORP\\alice", ("sam", "alice")), ("u:corp\\alice", ("sam", "alice")), ("dn:CN=A,DC=x", ("dn", "CN=A,DC=x"))):

@@ -185,6 +185,7 @@ class AccountsPage(Page):
 
     def save(self):
         if not perms.is_admin():                        # tampered rules show this page to everyone; only an Admin changes these
+            self.load()                                 # ...and the boxes show what is stored, not what was typed
             return
         db.set_setting("signin_session_hours", self.session.value())
         db.set_setting("signin_idle_minutes", self.idle.value())

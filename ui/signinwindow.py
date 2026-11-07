@@ -260,7 +260,8 @@ class SignInWindow(QDialog):
         self.approve_wait = Wait(self.approve_error, self.approve_ok)
         self.approve_key_wait = Wait(self.approve_key_error, self.approve_key_ok)
         self._waits = (self.pin_wait, self.choose_wait, self.approve_wait, self.approve_key_wait)
-        self._secrets = (self.pw, self.code, self.pin, self.pin1, self.pin2, self.admin, self.admin_pw, self.approve_key)
+        self._secrets = (self.pw, self.code, self.pin, self.pin1, self.pin2, self.admin, self.admin_pw, self.approve_key,
+                         self.recovery, self.new_pw, self.confirm)
         outer = QVBoxLayout(self)
         centred(self.pages, outer)
         self._go(self.name_page, self.name)

@@ -21,7 +21,6 @@ class Unreachable(Exception): pass
 class BadCredentials(Exception): pass
 class InsecureConfig(ValueError): pass
 class CaChanged(InsecureConfig): pass     # the CA file isn't the one signed into the list: an admin saves the directory again
-class NotFound(Exception): pass       # no group has that name
 
 
 @dataclass(frozen=True)
@@ -162,14 +161,6 @@ def _key(dn):
     """DNs compared are only ever ones the server wrote; no unescaping, so no two different DNs meet. Only ASCII letters fold:
     str.casefold would make "STRASSE" match "Straße" and a Kelvin sign match K, which a directory keeps apart."""
     return str(dn).translate(_ASCII_LOWER)
-
-
-def _is_dn(text):
-    try:
-        parse_dn(text)
-        return True
-    except (lx.LDAPInvalidDnError, ValueError, TypeError):
-        return False
 
 
 def _groups(conn, cfg, dn, direct, uid=None):
