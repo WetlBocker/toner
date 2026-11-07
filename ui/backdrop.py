@@ -18,8 +18,10 @@ _LINKS = [(0, 1), (1, 2), (2, 3), (3, 4), (1, 5), (2, 5), (5, 6), (3, 7), (7, 2)
           (6, 11), (11, 0), (9, 12), (12, 6), (9, 13), (13, 7), (13, 14), (14, 8), (8, 15), (15, 10), (3, 16), (16, 1)]
 AURORA = ("#38bdf8", "#8b5cf6", "#2dd4bf")
 PERIOD_MS = 30000
-SPEED = (0.0040, 0.0060)    # a dot's step per frame, as a share of the page (about 11 to 17 seconds to cross it at 15 frames a second)
+SPEED = (0.0008, 0.0014)    # a dot's step per frame, as a share of the page (about 50 to 85 seconds to cross it at 15 frames a second)
 TURN = 0.14                 # the most a heading is nudged at random each frame, in radians: a slow, smooth curve
+LINK_NEAR = 0.18            # dots closer than this share of the page's shorter side are joined, fainter the further apart they are
+MAX_LINKS = 30
 MARGIN = 0.12               # within this share of an edge a dot is steered back in
 
 
@@ -82,6 +84,18 @@ class Backdrop(QWidget):
             d[0] = min(0.99, max(0.01, d[0] + self._speed[i] * math.cos(h)))
             d[1] = min(0.99, max(0.01, d[1] + self._speed[i] * math.sin(h)))
 
+    def links(self):
+        """The lines to draw now, as (a, b, strength 0 to 1): dots near each other, the nearest MAX_LINKS pairs, fading with distance."""
+        w, h = self.width(), self.height()
+        reach = LINK_NEAR * min(w, h)
+        near = []
+        for a in range(len(self._dots)):
+            for b in range(a + 1, len(self._dots)):
+                d = math.hypot((self._dots[a][0] - self._dots[b][0]) * w, (self._dots[a][1] - self._dots[b][1]) * h)
+                if d < reach:
+                    near.append((d, a, b))
+        return [(a, b, 1 - d / reach) for d, a, b in sorted(near)[:MAX_LINKS]]
+
     def constellation_centre(self):
         """Where the constellation's box is centred when it keeps still: at the top right."""
         w, h = self.width(), self.height()
@@ -119,17 +133,18 @@ class Backdrop(QWidget):
 
     def _constellation(self, p, t):
         """A faint set of linked dots: at the top right, or, under Lively, each drifting on a path of its own across the page
-        (the lines between them stay joined)."""
+        (lines join the dots that come near each other)."""
         centre, s = self.constellation_centre()
         if motion.lively():
             w, h = self.width(), self.height()
             pts = [QPointF(x * w, y * h) for x, y in self._dots]
         else:
             pts = [QPointF(centre.x() + (x - 320) * s, centre.y() + (y - 210) * s) for x, y in _DOTS]
-        pen = QPen(_rgba(t["accent"], 0.09))
+        pen = QPen()
         pen.setWidthF(1.0)
-        p.setPen(pen)
-        for a, b in _LINKS:
+        for a, b, k in (self.links() if motion.lively() else [(a, b, 1.0) for a, b in _LINKS]):
+            pen.setColor(_rgba(t["accent"], 0.09 * k))
+            p.setPen(pen)
             p.drawLine(pts[a], pts[b])
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(_rgba(t["accent"], 0.20))
