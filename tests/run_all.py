@@ -18,6 +18,8 @@ env.setdefault("TONER_NO_WEBCHARTS", "1")               # the charts' browser en
 if sys.platform != "win32":                       # never the desktop's own keyring (a build machine has none); tests that store fake it
     env.setdefault("PYTHON_KEYRING_BACKEND", "keyring.backends.null.Keyring")
 env.pop("SP", None)                               # each file makes its own throw-away folder
+env["PYTHONFAULTHANDLER"] = "1"                   # a file that crashes says where (Python's stack at the crash, on stderr)
+LIMITS = {"test_render_themes.py": 900}           # draws every theme: on a slow build machine it takes twice its usual 3 to 4 minutes
 
 args = sys.argv[1:]
 jobs = max(1, min(4, (os.cpu_count() or 2) // 2))     # each file starts a Qt app of its own: a few at a time is plenty
@@ -35,12 +37,18 @@ def run(f):
     name = os.path.basename(f)
     started = time.time()
     try:
-        r = subprocess.run([sys.executable, "-u", f], capture_output=True, text=True, timeout=420, env=env, encoding="utf-8", errors="replace")
+        r = subprocess.run([sys.executable, "-u", f], capture_output=True, text=True, timeout=LIMITS.get(name, 420), env=env, encoding="utf-8", errors="replace")
         m = re.findall(r"(\d+) passed, (\d+) failed", r.stdout)
         p, b = (int(m[-1][0]), int(m[-1][1])) if m else (0, 1)
         note = "" if m and r.returncode == 0 and not b else "  <-- " + (r.stdout.strip().splitlines() or r.stderr.strip().splitlines() or ["no output"])[-1][:100]
         if note:                                              # say which checks failed (a CI log shows nothing else)
-            for line in [l for l in r.stdout.splitlines() if l.lstrip().startswith("FAIL")][:6] + r.stderr.strip().splitlines()[-4:]:
+            err = r.stderr.strip().splitlines()
+            crash = next((i for i, l in enumerate(err) if l.startswith("Fatal Python error")), None)
+            tail = err[-4:]
+            if crash is not None:                             # Python's stack only (3.14 adds the C stack after it)
+                end = next((i for i in range(crash + 1, len(err)) if "C stack" in err[i] or err[i].startswith("Extension modules")), len(err))
+                tail = [l for l in err[crash:end] if l.strip()][:16]
+            for line in [l for l in r.stdout.splitlines() if l.lstrip().startswith("FAIL")][:6] + tail:
                 note += "\n        " + line.strip()[:200]
     except subprocess.TimeoutExpired:
         p, b, note = 0, 1, "  <-- timed out"

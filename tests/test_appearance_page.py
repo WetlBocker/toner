@@ -30,7 +30,16 @@ w.go("Settings"); w.settings.select_page("Appearance"); app.processEvents()
 page = next(p for p in w.settings.pages if p.title == "Appearance")
 shown = []
 w.settings.look_preview.connect(lambda look: shown.append(dict(look)))
-settle = lambda: (app.processEvents(), time.sleep(0.2), app.processEvents())
+def settle():
+    """Until the page's preview timer has fired (a slow machine's Windows timer can wait behind queued events), at most 10 s."""
+    app.processEvents(); time.sleep(0.2)
+    end = time.time() + 10
+    while True:
+        app.processEvents()
+        if not page._debounce.isActive() or time.time() > end:
+            break
+        time.sleep(0.02)
+    app.processEvents()
 
 print("== the cards")
 check("one card per theme, grouped, System first", list(page.grid.cards) == themes.NAMES and page.grid.cards["System"].isChecked())
