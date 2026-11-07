@@ -74,4 +74,11 @@ ai.model.setCurrentIndex(ai.model.findData("zz-other")); S.check_dirty()
 check("AI: another model picked: dirty", S._dirty.get(k))
 ai.model.setCurrentIndex(ai.model.findData(base)); S.check_dirty()
 check("AI: the original picked again: clean", not S._dirty.get(k) and S.pending_changes() == [])
+print("== the Save list shows a drop-down's label, not its key")
+from PySide6.QtWidgets import QComboBox
+from ui import settings_diff as SD
+an = page("Ansible")
+check("Ansible's 'where' reads as its label", SD._value(an.where) == an.where.currentText() and SD._value(an.where) not in ("wsl", "server"), SD._value(an.where))
+org = QComboBox(); org.addItem("Global", 0); org.addItem("Acme", 7); org.setCurrentIndex(1)
+check("an organization drop-down reads as the name", SD._value(org) == "Acme")
 print(f"\n{ok} ok, {bad} failed"); sys.exit(1 if bad else 0)

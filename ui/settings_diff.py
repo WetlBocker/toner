@@ -56,8 +56,7 @@ def _value(w):
     if isinstance(w, QAbstractButton):
         return "on" if w.isChecked() else "off"
     if isinstance(w, QComboBox):
-        c = chosen(w)
-        return (c if isinstance(c, str) else w.currentText()) or "(none)"
+        return w.currentText() or "(none)"
     if isinstance(w, QAbstractSpinBox):
         return w.text()
     text = w.toPlainText().strip()
