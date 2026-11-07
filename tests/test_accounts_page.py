@@ -237,6 +237,10 @@ check("tampered: the table shows what is stored", page.perm_table.item(PUSH, 0).
 msgs.clear()
 page.save_roles.click()
 check("tampered: an ordinary sign-in can't save, says why", msgs == [perms.REASON], msgs)
+page.session.setValue(30); page.idle.setValue(99); page.save()
+check("tampered: a non-Admin's Settings save leaves the session length and idle lock alone",
+      db.get_setting("signin_session_hours") == 12 and db.get_setting("signin_idle_minutes") == 15,
+      (db.get_setting("signin_session_hours"), db.get_setting("signin_idle_minutes")))
 session.sign_out(); session.sign_in_recovery(shownkey[0])
 page.refresh()
 page.perm_table.item(PUSH, 0).setCheckState(Qt.CheckState.Checked)
@@ -256,6 +260,17 @@ page.session.setValue(8); page.save()
 check("session length saves", db.get_setting("signin_session_hours") == 8)
 check("session range 1-72", (page.session.minimum(), page.session.maximum()) == (1, 72))
 check("session label", page.form.labelForField(page.session).text() == "Session length (hours)")
+db.import_settings({"signin_session_hours": 72, "signin_idle_minutes": 240})
+check("Import settings can't set the session length or idle lock", db.get_setting("signin_session_hours") == 8
+      and db.get_setting("signin_idle_minutes") == 30, (db.get_setting("signin_session_hours"), db.get_setting("signin_idle_minutes")))
+from core import orgs
+acme = orgs.create("Acme Charter Schools", "acme")
+db.set_home(acme)
+page.session.setValue(5); page.idle.setValue(20); page.save()
+in_org = db.get_setting("signin_session_hours"), db.get_setting("signin_idle_minutes")
+db.set_home(db.GLOBAL)
+check("set inside an organization, it is one value for everyone (Global's)", in_org == (5, 20)
+      and (db.get_setting("signin_session_hours"), db.get_setting("signin_idle_minutes")) == (5, 20), in_org)
 
 from ui import settings
 

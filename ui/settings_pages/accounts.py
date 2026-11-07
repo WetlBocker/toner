@@ -1,4 +1,4 @@
-"""Settings page: Accounts. Account actions apply at once; the idle-lock minutes follow Save."""
+"""Settings page: Accounts. Account actions apply at once; the idle-lock minutes and the session length follow Save."""
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QLabel, QMenu, QMessageBox, QPushButton, QTableWidget,
@@ -172,6 +172,8 @@ class AccountsPage(Page):
         self.refresh()
 
     def save(self):
+        if not perms.is_admin():                        # tampered rules show this page to everyone; only an Admin changes these
+            return
         db.set_setting("signin_session_hours", self.session.value())
         db.set_setting("signin_idle_minutes", self.idle.value())
 
