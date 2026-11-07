@@ -3,7 +3,8 @@
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import base64, hashlib, hmac, json, time
+import base64, hashlib, hmac, json, threading, time
+import requests
 from core import oidc
 from fake_oidc import FakeProvider
 
@@ -98,6 +99,124 @@ check("an endpoint that is not https is refused", raises(B, oidc.discover, ISS))
 P.meta_extra = {}
 oidc._meta_cache.clear()
 check("discovery works again, and is cached", oidc.discover(ISS)["issuer"] == ISS and oidc.discover(ISS) is oidc.discover(ISS))
+print("== 5xx and 429 are an outage (Unreachable), other 4xx stay BadAnswer")
+SECRETS = {}
+oidc.osstore.get = lambda n, file=None: SECRETS.get(n)    # never the real store
+oidc._meta_cache.clear()
+P.force = 503
+check("discovery 503", raises(oidc.Unreachable, oidc.discover, ISS))
+P.force = 429
+check("discovery 429", raises(oidc.Unreachable, oidc.discover, ISS))
+P.force = 404
+check("discovery 404 is BadAnswer", raises(B, oidc.discover, ISS))
+P.force = None
+oidc.discover(ISS)
+P.force = 502
+check("keys 502 (unknown kid forces a fetch)", raises(oidc.Unreachable, V, P.token(_kid="ghost2")))
+check("token endpoint 503", raises(oidc.Unreachable, oidc.refresh, dict(CFG, id="c1"), "rt-1"))
+P.force = 400
+check("token endpoint 400 without invalid_grant is BadAnswer", raises(B, oidc.refresh, dict(CFG, id="c1"), "rt-1"))
+P.force = None
+
+print("== numbers must be finite; PS256")
+for name, kw in [("auth_time NaN", {"auth_time": float("nan")}), ("auth_time Infinity", {"auth_time": float("inf")}),
+                 ("exp Infinity", {"exp": float("inf")}), ("exp NaN", {"exp": float("nan")})]:
+    check(name, raises(B, V, P.token(**kw)))
+check("PS256 accepted (the provider's key says PS256)", V(P.token_ps256(sub="ps"))["sub"] == "ps")
+
+print("== browser sign-in")
+CFG = {**CFG, "id": "c1", "groups_claim": "groups"}
+V = lambda t, nonce=None, **k: oidc.verify_id_token(CFG, t, nonce, **k)
+page = []
+
+def browse(url):
+    def go():
+        try:
+            r = requests.get(url, timeout=10, **oidc._DIRECT)
+            page.append((r.status_code, r.text))
+        except requests.RequestException:
+            page.append(None)
+    threading.Thread(target=go, daemon=True).start()
+
+def flow(**k):
+    page.clear()
+    b = oidc.BrowserSignIn(CFG, open_url=browse, **k)
+    b.open()
+    return b, b.run(threading.Event(), timeout=10)
+
+SECRETS["oidc:c1"] = b"the-secret"
+b, tok = flow(login_hint="ann@example.com")
+seen = P.authorize_seen[-1]
+check("full flow returns Tokens", tok.claims["sub"] == "sub-1" and tok.access_token == "at-1" and tok.refresh_token == "rt-1" and tok.id_token)
+check("provider saw prompt=login and max_age=0", seen["prompt"] == "login" and seen["max_age"] == "0")
+check("... S256, nonce, hint, loopback redirect", seen["code_challenge_method"] == "S256" and seen["nonce"] == b.nonce and seen["login_hint"] == "ann@example.com"
+      and seen["redirect_uri"].startswith("http://127.0.0.1:") and seen["response_type"] == "code" and seen["client_id"] == "toner-app" and seen["state"])
+check("PKCE verifier matched the challenge", P.pkce_ok is True)
+check("client secret from the store was sent", P.token_requests[-1].get("client_secret") == "the-secret")
+check("the browser got the approved page", oidc.SSO_DONE_PAGE == "You're signed in. You can close this tab and go back to Toner."
+      and page[0][0] == 200 and oidc.SSO_DONE_PAGE in page[0][1] and "http" not in page[0][1])
+check("a second request to the port gets nothing (port closed)", raises(requests.ConnectionError, requests.get, b.redirect_uri, timeout=3, **oidc._DIRECT))
+SECRETS.clear()
+flow()
+check("no stored secret: none sent", "client_secret" not in P.token_requests[-1])
+check("a given nonce is used", flow(nonce="mine")[0].nonce == "mine" and P.authorize_seen[-1]["nonce"] == "mine")
+P.id_claims = {"auth_time": now - 1000}
+check("a stale auth_time from the provider is NotFresh", raises(oidc.NotFresh, flow))
+P.id_claims = {}
+P.mode = "bad_state"
+check("wrong state is BadAnswer", raises(B, flow))
+P.mode = "denied"
+check("error=access_denied is Refused", raises(oidc.Refused, flow))
+P.mode = "ok"
+
+b = oidc.BrowserSignIn(CFG, open_url=lambda u: None)
+port = int(b.redirect_uri.split(":")[2].rstrip("/"))
+cancel = threading.Event()
+threading.Timer(0.3, cancel.set).start()
+threading.Timer(0.1, lambda: page.append(requests.get(b.redirect_uri + "favicon.ico", timeout=3, **oidc._DIRECT).status_code)).start()
+page.clear()
+t0 = time.monotonic()
+check("Cancel raises Cancelled", raises(oidc.Cancelled, b.run, cancel, 30))
+check("... within 1.5 s of the click", time.monotonic() - t0 < 1.5, time.monotonic() - t0)
+check("a stray path got 404 and did not end the wait", page == [404])
+import socket
+s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+try:
+    s.bind(("127.0.0.1", port)); freed = True
+except OSError:
+    freed = False
+s.close()
+check("... and the port is free again", freed)
+check("a timeout also raises Cancelled", raises(oidc.Cancelled, oidc.BrowserSignIn(CFG, open_url=lambda u: None).run, threading.Event(), 0.3))
+
+print("== refresh")
+tk = oidc.refresh(CFG, "rt-1")
+check("refresh gives new tokens", tk.access_token == "at-2" and tk.refresh_token == "rt-2" and tk.claims["sub"] == "sub-1")
+P.revoked.add("rt-1")
+check("a revoked refresh token is Refused", raises(oidc.Refused, oidc.refresh, CFG, "rt-1"))
+P.revoked.clear()
+
+print("== groups, user_from, search_groups")
+oidc.GRAPH = ISS + "/graph"
+check("groups from the claim", oidc.groups(CFG, {"groups": ["a", "b"]}, "at-1") == ("a", "b"))
+check("no claim name: no groups", oidc.groups({**CFG, "groups_claim": ""}, {"groups": ["a"]}, "at-1") == ())
+ptr = {"_claim_names": {"groups": "src1"}, "oid": "oid-1"}
+check("a _claim_names pointer is fetched from Graph", oidc.groups(CFG, ptr, "at-1") == ("g-1", "g-2")
+      and P.graph_seen[-1][0] == "/graph/me/getMemberObjects")
+P.graph_me_id = "someone-else"
+check("Graph /me for another person is BadAnswer", raises(B, oidc.groups, CFG, ptr, "at-1"))
+P.graph_me_id = "oid-1"
+u = oidc.user_from({**CFG, "id_claim": "oid"}, {"sub": "s", "oid": "o1", "preferred_username": "Ann@Example.com", "name": "Ann A"}, ["g"])
+check("user_from with id_claim=oid", u.guid == "o1" and u.name == "ann@example.com" and u.display == "Ann A" and u.groups == ("g",) and u.enabled)
+u = oidc.user_from(CFG, {"sub": "s", "email": "B@x.org"}, ())
+check("user_from defaults: sub, email, display is name", u.guid == "s" and u.name == "b@x.org" and u.display == "b@x.org")
+check("search_groups returns (id, name)", oidc.search_groups("at-1", "Al") == [("id-a", "Alpha"), ("id-b", "Beta")])
+path, q, hdr = P.graph_seen[-1]
+check("... with $search and ConsistencyLevel", q["$search"] == '"displayName:Al"' and hdr.get("ConsistencyLevel") == "eventual" and q["$select"] == "id,displayName")
+oidc.search_groups("at-1", "")
+check("empty text: first page, no $search", "$search" not in P.graph_seen[-1][1])
+check("search_groups cap", len(oidc.search_groups("at-1", "", cap=1)) == 1)
+
 print("== unreachable")
 P.stop()
 oidc._meta_cache.clear()
