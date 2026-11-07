@@ -367,72 +367,88 @@ class Main(QMainWindow):
         self.automation.assistant_page.refresh()
         self._place_ai_button()
 
+    PANEL_MS = 220                                                      # the panel's slide and fade
+
     def show_assistant(self, on=True):
         """Open the panel (the sections get narrower, never covered) or close it."""
         on = bool(on) and perms.allowed("ai")
+        from ui import motion
+        motion.stop(getattr(self, "_panel_slide", None))                # a slide under way ends at once, where it was going
+        if getattr(self, "_panel_finish", None):
+            self._panel_finish()
         if on == self.assistant.isVisible():
             return
-        from ui import motion
-        motion.stop(getattr(self, "_panel_slide", None))
+        width = 0
         if on:
-            self.assistant.setVisible(True)
-            sizes = self.body.sizes()
             remembered = (db.get_setting("splitters") or {}).get("assistant_panel")
-            if len(sizes) == 2 and (not remembered or sizes[1] < self.assistant.minimumWidth()):
-                total = sum(sizes)
-                self.body.setSizes([max(300, total - PANEL_WIDTH), PANEL_WIDTH])
-            self._slide_panel(0, self.body.sizes()[1])
-            self.assistant.input.setFocus()
-        else:
-            self._slide_panel(self.body.sizes()[1], 0, then=lambda: self.assistant.setVisible(False))
+            width = remembered[1] if remembered and len(remembered) == 2 and remembered[1] >= self.assistant.minimumWidth() else PANEL_WIDTH
+        self._slide_panel(on, width)
         self.ai_button.setChecked(on)
         self._place_ai_button()
 
-    def _slide_panel(self, start, end, then=None):
-        """The Assistant panel slides open or shut with a small bounce at the end (at once with motion off). While it slides a snapshot
-        of the panel stands in for it, so a long conversation is not laid out again on every frame (that stuttered)."""
-        from PySide6.QtCore import QEasingCurve
-        from PySide6.QtWidgets import QLabel
+    def _slide_panel(self, on, width):
+        """The panel's picture slides in from the right edge over the page, fading in (or out), ease-out, no bounce. The splitter is
+        set once: at the end when opening, at the start when closing, so the page is not laid out again on every frame. With motion off
+        it all happens at once."""
+        from PySide6.QtCore import QEasingCurve, QPoint
+        from PySide6.QtWidgets import QGraphicsOpacityEffect, QLabel
         from ui import motion
         total = sum(self.body.sizes())
         least = self.assistant.minimumWidth()
-        self.assistant.setMinimumWidth(0)                           # the panel may be narrower than usual while on its way
-        if not motion.enabled() or not self.isVisible():
-            self.body.setSizes([max(0, total - end), end])
+        animated = motion.enabled() and self.isVisible()
+        if animated:
+            if on:
+                self.assistant.resize(width, self.body.height())        # laid out at its full width once, then photographed
+                self.assistant.layout().activate()
+            else:
+                width = self.assistant.width()
+            shot = self.assistant.grab()
+
+        def settle():
+            self.assistant.setMinimumWidth(0)                           # (the splitter may take it to nothing)
+            if on:
+                self.assistant.setVisible(True)
+                self.body.setSizes([max(0, total - width), width])
+            else:
+                self.body.setSizes([total, 0])
+                self.assistant.setVisible(False)
             self.assistant.setMinimumWidth(least)
-            if then:
-                then()
             self._place_ai_button()
+            if on:
+                self.assistant.input.setFocus()
+        if not animated:
+            settle()
             return
-        full = max(start, end)
-        self.assistant.resize(full, self.body.height())           # laid out at its full width once, then photographed
-        self.assistant.layout().activate()
-        stand_in = QLabel()
-        stand_in.setPixmap(self.assistant.grab())
-        stand_in.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-        stand_in.setMinimumWidth(0)
-        self._panel_stand_in = stand_in
-        self.body.replaceWidget(1, stand_in)                        # the real panel is out of the splitter while the picture slides
-        stand_in.show()
+        cover = QLabel(self)                                            # a child of the window, not of the splitter (which would adopt it)
+        cover.setObjectName("assistantSlide")
+        cover.setPixmap(shot)
+        cover.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        fade = QGraphicsOpacityEffect(cover)
+        cover.setGraphicsEffect(fade)
+        fade.setOpacity(0.0 if on else 1.0)
+        top = self.body.mapTo(self, QPoint(0, 0))
+        edge = top.x() + self.body.width()
+        cover.setGeometry(edge - (width if not on else 0), top.y(), width, self.body.height())
+        cover.show()
+        self.ai_button.raise_()
+        if not on:
+            settle()                                                    # the page takes its width back; the picture leaves over it
 
         def step(p):
-            w = max(0, round(start + (end - start) * p))
-            self.body.setSizes([max(0, total - w), w])
-            self._place_ai_button()
+            q = p if on else 1 - p                                      # q: how far in
+            cover.move(round(edge - width * q), top.y())
+            fade.setOpacity(q)
 
         def done():
-            self.body.replaceWidget(1, self.assistant)
-            self.assistant.show()
-            self.body.setSizes([max(0, total - end), end])
-            stand_in.deleteLater()
-            self._panel_stand_in = None
-            self.assistant.setMinimumWidth(least)
-            if then:
-                then()
-            self._place_ai_button()
-        curve = QEasingCurve(QEasingCurve.Type.OutBack)
-        curve.setOvershoot(0.8)
-        self._panel_slide = motion.animate(self, 380, step, curve=curve, on_done=done)
+            if self._panel_finish is not done:
+                return
+            self._panel_slide = self._panel_finish = None
+            cover.setParent(None)
+            cover.deleteLater()
+            if on:
+                settle()
+        self._panel_finish = done
+        self._panel_slide = motion.animate(self, self.PANEL_MS, step, curve=QEasingCurve.Type.OutCubic, on_done=done)
 
     def open_assistant_conversation(self, conv_id, org):
         """Automation/AI > Assistant > Open: that conversation in the panel (its organization is picked first when it is another)."""

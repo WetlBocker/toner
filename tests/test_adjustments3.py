@@ -180,13 +180,14 @@ print("== the Assistant panel slides as a snapshot")
 motion.force("Lively")
 from PySide6.QtWidgets import QLabel as _QL
 w.show_assistant(True); spin(60)
-check("while it opens, a picture of the panel is in the splitter instead of the panel", isinstance(w.body.widget(1), _QL) and w.body.widget(1) is w._panel_stand_in and not w.body.widget(1).pixmap().isNull())
+cover = lambda: [c for c in w.findChildren(_QL) if c.objectName() == "assistantSlide"]
+check("while it opens, a picture of the panel slides over the page while the panel waits outside the splitter's view", len(cover()) == 1 and not cover()[0].pixmap().isNull() and not w.assistant.isVisible())
 spin(700)
-check("...and the panel itself is back once it has settled, open", w.body.widget(1) is w.assistant and w.assistant.isVisible() and w._panel_stand_in is None and w.body.sizes()[1] > 100, w.body.sizes())
+check("...and the panel itself is there once it has settled, open, the picture gone", w.body.widget(1) is w.assistant and w.assistant.isVisible() and not cover() and w.body.sizes()[1] > 100, w.body.sizes())
 w.show_assistant(False); spin(60)
-check("closing slides the picture too", isinstance(w.body.widget(1), _QL))
+check("closing slides the picture too", len(cover()) == 1)
 spin(700)
-check("...and ends with the panel hidden", w.body.widget(1) is w.assistant and not w.assistant.isVisible())
+check("...and ends with the panel hidden", w.body.widget(1) is w.assistant and not w.assistant.isVisible() and not cover())
 motion.force(None)
 
 print("== Results and Scanning open closed")
