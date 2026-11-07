@@ -69,7 +69,7 @@ spin(700)
 check("...and settles at the folded width, the fold button on its edge", n.side.width() == nav.SIDE_FOLDED and n.fold.x() < nav.SIDE_FOLDED < n.fold.x() + n.fold.width(), (n.side.width(), n.fold.pos()))
 n.setCollapsed(False); spin(700)
 check("...and back", n.side.width() == nav.SIDE_WIDTH)
-w.show_assistant(True); app.processEvents()
+w.show_assistant(True); spin(w.PANEL_MS + 100)                   # the splitter takes the width when the slide ends
 check("the Assistant panel slides open too", 0 < w.body.sizes()[1] < w.assistant.minimumWidth() or w.body.sizes()[1] >= w.assistant.minimumWidth(), w.body.sizes())
 spin(700)
 check("...and ends at its full width, with its usual least width back", w.body.sizes()[1] >= w.assistant.minimumWidth() == 320, w.body.sizes())
