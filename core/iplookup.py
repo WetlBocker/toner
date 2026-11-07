@@ -38,8 +38,12 @@ def set_key(key):
     key = (key or "").strip()
     if key:
         db.set_secret(SECRET, key)
-    else:
-        db.delete_secret(SECRET)
+        return
+    try:
+        keyring.delete_password(db.SERVICE, SECRET)
+    except Exception:
+        if get_key():                       # the vault kept it: say so, so a new URL is never saved beside the old key
+            raise
 
 
 def has_key():
@@ -65,6 +69,14 @@ def check_url(url):
     if "{ip}" in authority or "{key}" in authority or not urllib.parse.urlsplit(url.replace("{ip}", "x").replace("{key}", "x")).hostname:
         raise ValueError(f"API URL: {HINT}")
     return url
+
+
+def same_url(a, b):
+    """The same address, ignoring what does not change where it goes: capitals in the scheme and host, and a trailing '/'."""
+    def norm(u):
+        p = urllib.parse.urlsplit((u or "").strip())
+        return p.scheme.lower(), p.netloc.lower(), p.path.rstrip("/"), p.query, p.fragment
+    return norm(a) == norm(b)
 
 
 def set_url(url):
@@ -116,8 +128,8 @@ def _call(ip, key, template, timeout, opener=None, gateway=None):
             address += "?" + urllib.parse.urlencode({"access_key": key})
     else:
         address, who = build(template, ip, key), host(template)
-    part = urllib.parse.urlsplit(address)                                # never the query (a key may have been pasted there), nor the key
-    log.info("IP look-up: GET %s://%s%s", part.scheme, part.hostname or "", _hide(part.path, key))
+    part = urllib.parse.urlsplit(address)                                # scheme and host only: a key may have been pasted anywhere after them
+    log.info("IP look-up: GET %s://%s", part.scheme, part.hostname or "")
     req = urllib.request.Request(address, headers=headers)
     try:
         f = (opener or _OPENER.open)(req, timeout=timeout)
@@ -131,6 +143,8 @@ def _call(ip, key, template, timeout, opener=None, gateway=None):
             body = e.read(MAX_BODY).decode("utf-8", "replace")
         except Exception:
             body = ""
+        finally:
+            e.close()
         said = _said(body)
         raise LookupError_(f"HTTP {e.code} {e.reason or ''}".strip() + (f": {said}" if said else ""), e.code) from None
     try:

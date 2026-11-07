@@ -579,12 +579,11 @@ class SettingsTab(QWidget):
             self.select_page(self.pages[first_bad].title)
             QMessageBox.warning(self, "Cannot save", "Please fix:\n\n" + "\n".join(f"\u2022 {p}" for p in problems))
             return
-        for i, p in enumerate(self.pages):
-            if i not in self.locked:
-                p.save()
+        held = {i for i, p in enumerate(self.pages) if i not in self.locked and p.save() is False}   # False: the page kept its edits back
         audit.log("settings saved")
-        self._dirty = {}
-        self.rebase()
+        self._dirty = {i: True for i in held}
+        self.rebase(only=set(range(len(self.pages))) - held)
         self.show_own()
-        self.status.setText(f"Saved at {datetime.now():%H:%M:%S}")
+        if not held:
+            self.status.setText(f"Saved at {datetime.now():%H:%M:%S}")
         self.changed.emit()

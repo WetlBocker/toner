@@ -145,10 +145,20 @@ except iplookup.LookupError_:
     pass
 iplookup.lookup("8.8.8.8", SECRETKEY, opener=serving(RECORD))
 iplookup.lookup("8.8.8.8", SECRETKEY, opener=serving(RECORD), template="https://geo.example.com/v1/{ip}?token=PaStEd99&lang=en")
+iplookup.lookup("8.8.8.8", SECRETKEY, opener=serving(RECORD), template="https://geo.example.com/PaThKeY77/{ip}?lang=en")
 lg.removeHandler(h)
-check("each request is logged as its scheme, host and path only", h.lines and all("sEcR3t" not in l and "%2F" not in l for l in h.lines)
-      and any(l.endswith("GET https://geo.example.com/v1/8.8.8.8") for l in h.lines) and not any("?" in l for l in h.lines), h.lines)
-check("a key pasted straight into the URL is not logged", h.lines and not any("PaStEd99" in l or "token" in l for l in h.lines), h.lines)
+check("each request is logged as its scheme and host only", h.lines and all("sEcR3t" not in l and "%2F" not in l for l in h.lines)
+      and any(l.endswith("GET https://geo.example.com") for l in h.lines) and not any("?" in l or "8.8.8.8" in l for l in h.lines), h.lines)
+check("a key pasted straight into the URL is not logged, in the query or the path", h.lines and not any("PaStEd99" in l or "token" in l or "PaThKeY77" in l for l in h.lines), h.lines)
+class ErrBody(io.BytesIO):
+    pass
+err_fp = ErrBody(b'{"error": {"info": "no"}}')
+try:
+    iplookup.lookup("8.8.8.8", SECRETKEY, template="https://geo.example.com/v1/{ip}?token={key}",
+                    opener=failing(urllib.error.HTTPError("https://geo.example.com/", 500, "Server Error", {}, err_fp)))
+except iplookup.LookupError_:
+    pass
+check("an HTTP error's answer is closed too", err_fp.closed)
 held = []
 def holding(req, timeout=0):
     held.append(Reply(json.dumps(RECORD).encode()))
@@ -240,9 +250,38 @@ cp.confirm_url_change = lambda: (asked.append(1), answer[0])[1]
 iplookup.set_url(GEO); iplookup.set_key("savedKEY1"); cp.load()
 cp.save()
 check("the URL unchanged: no question, the key stays", asked == [] and iplookup.get_key() == "savedKEY1")
-cp.api_url.setText(OTHER); cp.save()
+cp.api_url.setText(OTHER); cp.ipstack.setText("typedKEY9"); held_back = cp.save()
 check("a new URL with a key saved asks first; Cancel saves nothing for IP lookup", asked == [1] and iplookup.get_url() == GEO and iplookup.get_key() == "savedKEY1",
       (asked, iplookup.get_url()))
+check("...and the page says it held its edits back, leaving them in the boxes", held_back is False and cp.api_url.text() == OTHER and cp.ipstack.text() == "typedKEY9")
+cp.ipstack.clear(); asked.clear()
+for same in ("https://GEO.Example.com/v1/{ip}?token={key}", "HTTPS://geo.example.com/v1/{ip}/?token={key}"):
+    cp.load(); cp.api_url.setText(same); cp.save()
+    check(f"capitals in the host or a trailing '/' are the same URL: no question, the key stays ({same})", asked == [] and iplookup.get_key() == "savedKEY1", asked)
+iplookup.set_url(GEO)
+real_delete = keyring.delete_password
+def stuck(s, u):
+    raise keyring.errors.PasswordDeleteError("The vault would not delete the key")
+import keyring.errors
+keyring.delete_password = stuck
+cp.load(); cp.api_url.setText(OTHER); answer[0] = True; asked.clear(); held_back = cp.save()
+check("Continue, but the vault keeps the key: the new URL is not saved beside it, and the vault's words are shown", held_back is False and iplookup.get_url() == GEO
+      and iplookup.get_key() == "savedKEY1" and cp.ipstack_result.text() == "The vault would not delete the key", (held_back, iplookup.get_url(), cp.ipstack_result.text()))
+cp._forget_ipstack()
+check("Forget key when the vault keeps it shows the vault's words and keeps the placeholder", iplookup.get_key() == "savedKEY1" and cp.ipstack.placeholderText() == cp.KEY_SAVED)
+keyring.delete_password = real_delete
+answer[0] = False; asked.clear()
+import ui.settings as ST
+S = ST.SettingsTab(); S.show(); app.processEvents()
+page = next(p for p in S.pages if isinstance(p, ConnectionsPage))
+page.confirm_url_change = lambda: False
+S.select_page(page.title); page.api_url.setText(OTHER); S.save(); app.processEvents()
+check("after Cancel, Settings does not say Saved and the page keeps its unsaved-changes dot", S.status.text() == "" and S.pages.index(page) in S.dirty_pages()
+      and S.unsaved.text() == "Unsaved changes on 1 page", (S.status.text(), S.dirty_pages(), S.unsaved.text()))
+S.check_dirty(True)
+check("...and stays marked when looked at again", S.pages.index(page) in S.dirty_pages())
+S.hide(); S.reload(announce=False)
+cp.load(); answer[0] = False
 cp.load(); cp.api_url.setText(OTHER); answer[0] = True; cp.save()
 check("Continue saves the new URL and removes the saved key", iplookup.get_url() == OTHER and not iplookup.has_key())
 asked.clear(); cp.api_url.setText(GEO); cp.save()

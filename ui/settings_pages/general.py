@@ -113,7 +113,11 @@ class ConnectionsPage(Page):
 
     def _forget_ipstack(self):
         from core import iplookup
-        iplookup.set_key("")
+        try:
+            iplookup.set_key("")
+        except Exception as e:
+            self.ipstack_result.setText(str(e))
+            return
         self.ipstack.clear()
         self.ipstack.setPlaceholderText("")
         self.ipstack_result.setText("")
@@ -123,7 +127,7 @@ class ConnectionsPage(Page):
         from core import iplookup
         from ui.tools import Call
         url = self.api_url.text().strip() or iplookup.DEFAULT_URL
-        key = self.ipstack.text().strip() or (iplookup.get_key() if url == iplookup.get_url() else "")   # the saved key goes only where it was saved for
+        key = self.ipstack.text().strip() or (iplookup.get_key() if iplookup.same_url(url, iplookup.get_url()) else "")   # the saved key goes only where it was saved for
         if not key:
             self.ipstack_result.setText("Type the key first.")
             return
@@ -171,15 +175,18 @@ class ConnectionsPage(Page):
                        ("retries", self.retries), ("retry_delay", self.delay)):
             db.set_setting(key, w.value())
         typed = self.ipstack.text().strip()
-        moved = iplookup.check_url(self.api_url.text()) != iplookup.get_url() and iplookup.has_key()
-        if moved and not self.confirm_url_change():               # Cancel: nothing is saved for IP lookup
-            self.api_url.setText(iplookup.get_url())
-            return
-        if moved:                                                  # a key is never sent to a provider it was not saved for
-            iplookup.set_key("")
-        iplookup.set_url(self.api_url.text())
-        if typed:
+        moved = not iplookup.same_url(iplookup.check_url(self.api_url.text()), iplookup.get_url()) and iplookup.has_key()
+        if moved and not self.confirm_url_change():               # Cancel: nothing is saved for IP lookup, and the edits stay unsaved
+            return False
+        if typed:                                                  # the typed key replaces the saved one before the URL moves
             iplookup.set_key(typed)
+        elif moved:                                                # a key is never sent to a provider it was not saved for
+            try:
+                iplookup.set_key("")
+            except Exception as e:                                 # the vault kept the key: the URL is not saved beside it
+                self.ipstack_result.setText(str(e))
+                return False
+        iplookup.set_url(self.api_url.text())
         self.ipstack.clear()
         self.ipstack.setPlaceholderText(self.KEY_SAVED if iplookup.has_key() else "")
 
