@@ -293,6 +293,10 @@ Add a device with vendor *UniFi* and pick **How to monitor**:
   field picks a Network site (`default`, a name, or `*` for all). A console running both gets two devices.
 - **Site Manager in the cloud**: one key reads every console and site on the account through api.ui.com; the Site field can narrow it.
 
+Each device the API reports is listed under its console in the Inventory, with its own page. A device that stops being reported stays
+listed, greyed out, until you remove it. For Site Manager, adding the key lists the account's sites, and each site you tick becomes its
+own entry.
+
 In import files that is `vendor: unifi` with `platform: login`, `network`, `protect` or `cloud`. Each type has its own checks and limits.
 
 ### API keys from the device
