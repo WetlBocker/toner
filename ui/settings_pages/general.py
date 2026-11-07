@@ -122,12 +122,12 @@ class ConnectionsPage(Page):
         """One look-up with the key typed here, or the saved one, off the window thread; the answer goes under the box."""
         from core import iplookup
         from ui.tools import Call
-        key = self.ipstack.text().strip() or iplookup.get_key()
+        url = self.api_url.text().strip() or iplookup.DEFAULT_URL
+        key = self.ipstack.text().strip() or (iplookup.get_key() if url == iplookup.get_url() else "")   # the saved key goes only where it was saved for
         if not key:
             self.ipstack_result.setText("Type the key first.")
             return
         self.test_ipstack.setEnabled(False)
-        url = self.api_url.text().strip() or iplookup.DEFAULT_URL
         self.ipstack_result.setText(f"Asking {iplookup.host(url)}...")
         self._tester = Call(lambda: iplookup.test_key(key, template=url))
         self._tester.done.connect(self._tested_ipstack)
@@ -136,6 +136,16 @@ class ConnectionsPage(Page):
     def _tested_ipstack(self, res):
         self.test_ipstack.setEnabled(True)
         self.ipstack_result.setText(str(res) if isinstance(res, Exception) else res[1])
+
+    def confirm_url_change(self):
+        """The one question before a new API URL removes the saved key (the tests answer it)."""
+        from PySide6.QtWidgets import QMessageBox
+        box = QMessageBox(QMessageBox.Icon.Warning, "Change the API URL?", "Changing the API URL removes the saved API key, so it is never sent "
+                          "to a different provider. Enter the new provider's key after saving.", parent=self)
+        go = box.addButton("Continue", QMessageBox.ButtonRole.AcceptRole)
+        box.setDefaultButton(box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole))
+        box.exec()
+        return box.clickedButton() is go
 
     def load(self):
         from core import iplookup
@@ -160,8 +170,14 @@ class ConnectionsPage(Page):
         for key, w in (("ssh_timeout", self.ssh), ("http_timeout", self.http),
                        ("retries", self.retries), ("retry_delay", self.delay)):
             db.set_setting(key, w.value())
-        iplookup.set_url(self.api_url.text())
         typed = self.ipstack.text().strip()
+        moved = iplookup.check_url(self.api_url.text()) != iplookup.get_url() and iplookup.has_key()
+        if moved and not self.confirm_url_change():               # Cancel: nothing is saved for IP lookup
+            self.api_url.setText(iplookup.get_url())
+            return
+        if moved:                                                  # a key is never sent to a provider it was not saved for
+            iplookup.set_key("")
+        iplookup.set_url(self.api_url.text())
         if typed:
             iplookup.set_key(typed)
         self.ipstack.clear()

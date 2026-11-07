@@ -216,6 +216,53 @@ check("the page has API URL and API key, and the approved hint", "API URL" in [c
       and "API key" in [cp.form.itemAt(i, cp.form.ItemRole.LabelRole).widget().text() for i in range(cp.form.rowCount()) if cp.form.itemAt(i, cp.form.ItemRole.LabelRole) and cp.form.itemAt(i, cp.form.ItemRole.LabelRole).widget()]
       and any(HINT in w.text() for w in cp.findChildren(__import__("PySide6.QtWidgets", fromlist=["QLabel"]).QLabel)))
 check("it shows the saved URL", cp.api_url.text() == "https://geo.example.com/v1/{ip}?token={key}")
+
+print("== changing the API URL removes the saved key")
+from PySide6.QtCore import QTimer
+from PySide6.QtWidgets import QMessageBox
+GEO, OTHER = "https://geo.example.com/v1/{ip}?token={key}", "https://other.test/{ip}?k={key}"
+box_seen = {}
+def answer_box(tries=[0]):
+    b = QApplication.activeModalWidget()
+    if isinstance(b, QMessageBox):
+        box_seen.update(title=b.windowTitle(), text=b.text(), buttons=sorted(x.text() for x in b.buttons()))
+        next(x for x in b.buttons() if x.text() == "Cancel").click()
+    elif tries[0] < 200:
+        tries[0] += 1
+        QTimer.singleShot(20, answer_box)
+QTimer.singleShot(20, answer_box)
+said_yes = cp.confirm_url_change()
+check("the question has the approved title, text and buttons", box_seen.get("title") == "Change the API URL?"
+      and box_seen.get("text") == "Changing the API URL removes the saved API key, so it is never sent to a different provider. Enter the new provider's key after saving."
+      and box_seen.get("buttons") == ["Cancel", "Continue"] and said_yes is False, box_seen)
+asked, answer = [], [False]
+cp.confirm_url_change = lambda: (asked.append(1), answer[0])[1]
+iplookup.set_url(GEO); iplookup.set_key("savedKEY1"); cp.load()
+cp.save()
+check("the URL unchanged: no question, the key stays", asked == [] and iplookup.get_key() == "savedKEY1")
+cp.api_url.setText(OTHER); cp.save()
+check("a new URL with a key saved asks first; Cancel saves nothing for IP lookup", asked == [1] and iplookup.get_url() == GEO and iplookup.get_key() == "savedKEY1",
+      (asked, iplookup.get_url()))
+cp.load(); cp.api_url.setText(OTHER); answer[0] = True; cp.save()
+check("Continue saves the new URL and removes the saved key", iplookup.get_url() == OTHER and not iplookup.has_key())
+asked.clear(); cp.api_url.setText(GEO); cp.save()
+check("no key saved: no question", asked == [] and iplookup.get_url() == GEO)
+iplookup.set_key("savedKEY1"); cp.load(); cp.api_url.setText(OTHER); cp.ipstack.setText("newKEY2"); cp.save()
+check("a key typed in the same save is kept as the new key", asked == [1] and iplookup.get_url() == OTHER and iplookup.get_key() == "newKEY2")
+sent, real_test = [], iplookup.test_key
+iplookup.test_key = lambda key, template=None, **k: (sent.append(key), (True, "The key works"))[1]
+def run_test():
+    cp._test_ipstack()
+    end = time.time() + 5
+    while getattr(cp, "_tester", None) is not None and cp._tester.isRunning() and time.time() < end:
+        app.processEvents(); time.sleep(0.02)
+    app.processEvents()
+cp.load(); cp.api_url.setText(GEO); run_test()
+check("Test with a changed URL and no typed key does not send the saved key", "newKEY2" not in sent and cp.ipstack_result.text() == "Type the key first.", (sent, cp.ipstack_result.text()))
+cp.api_url.setText(OTHER); run_test()
+check("...while with the saved URL it tests the saved key", sent == ["newKEY2"], sent)
+iplookup.test_key = real_test
+cp.load()
 from PySide6.QtWidgets import QLabel
 HTTP_NOTE = "This URL uses http, so the address and key travel unencrypted."
 notes = [w for w in cp.findChildren(QLabel) if w.text() == HTTP_NOTE]
