@@ -100,10 +100,10 @@ extstore.use("bitwarden")
 check("before the first round the status says it is connecting", extstore.status_text() == "Connecting to Bitwarden...", extstore.status_text())
 st = extstore.sync_once()
 check("every saved password is sent", st["connected"] and st["sent"] == 3 and len(SERVER["items"]) == 3, (st, SERVER["items"]))
-check("each organization has its own collection, named after it", sorted(SERVER["containers"].values()) == ["Toner - Acme", "Toner - Global"])
+check("each organization has its own collection, named after it", sorted(SERVER["containers"].values()) == ["Acme", "Global"])
 by_tid = {i["tid"]: i for i in SERVER["items"].values()}
 acme_fw = by_tid[f"org{acme}/edge-fw"]
-check("an organization's password is in its collection", SERVER["containers"][acme_fw["cid"]] == "Toner - Acme")
+check("an organization's password is in its collection", SERVER["containers"][acme_fw["cid"]] == "Acme")
 check("items have readable titles and user names", acme_fw["title"] == "edge-fw (Acme) – Password" and acme_fw["user"] == "fwadmin"
       and by_tid["core-sw"]["title"] == "core-sw – Password" and by_tid["service:proxy"]["title"] == "Toner proxy password", by_tid)
 check("Toner's own name is in the hidden field, so titles can change", acme_fw["tid"] == f"org{acme}/edge-fw")
@@ -146,7 +146,7 @@ with db.within(beta):
     db.set_secret(db.secret_name("beta-sw"), "beta-pw")
 SERVER["may_create"] = False
 st = extstore.sync_once()
-check("is said, in the agreed words", "Toner - Beta doesn't exist and Toner isn't allowed to create it. Create it in Bitwarden, or pick another." in extstore.status_text(),
+check("is said, in the agreed words", "Beta doesn't exist and Toner isn't allowed to create it. Create it in Bitwarden, or pick another." in extstore.status_text(),
       extstore.status_text())
 check("the other organizations still sync", st["connected"])
 SERVER["containers"]["cx"] = "Beta passwords"
@@ -155,17 +155,41 @@ st = extstore.sync_once()
 check("another collection can be picked for an organization", any(i["cid"] == "cx" and i["tid"] == f"org{beta}/beta-sw" for i in SERVER["items"].values()))
 SERVER["may_create"] = True
 
+print("== collections that already exist under the old default")
+check("item titles carry no 'Toner - ' prefix", not any(i["title"].startswith("Toner - ") for i in SERVER["items"].values()))
+delta = orgs.create("Delta", "DELTA")
+with db.within(delta):
+    db.save_device(dev("delta-sw"))
+    db.set_secret(db.secret_name("delta-sw"), "delta-pw")
+SERVER["containers"]["cdel"] = "Toner - Delta"
+SERVER["containers"]["cbeta"] = "Toner - Beta"
+extstore.sync_once()
+kept = extstore.config("bitwarden").get("containers") or {}
+check("an organization with no stored name and an old-default collection records that name", kept.get(str(delta)) == "Toner - Delta", kept)
+check("...and keeps writing there, with no new 'Delta' collection", "Delta" not in SERVER["containers"].values()
+      and any(i["cid"] == "cdel" and i["tid"] == f"org{delta}/delta-sw" for i in SERVER["items"].values()))
+check("a stored name is never replaced", kept.get(str(beta)) == "Beta passwords", kept)
+check("organizations whose old-default collection does not exist get the new default", str(acme) not in kept and extstore.container_name("bitwarden", acme) == "Acme"
+      and str(db.GLOBAL) not in kept and extstore.container_name("bitwarden", db.GLOBAL) == "Global", kept)
+cfg = extstore.config("bitwarden"); cfg["containers"] = {**kept, str(db.GLOBAL): "Toner - Global"}; extstore.set_config("bitwarden", cfg)
+check("a stored 'Toner - Global' is used as it is", extstore.container_name("bitwarden", db.GLOBAL) == "Toner - Global")
+cfg["containers"].pop(str(db.GLOBAL)); extstore.set_config("bitwarden", cfg)
+SERVER["containers"].pop("cbeta")
+orgs.remove(delta)
+extstore.sync_once()
+cfg = extstore.config("bitwarden"); cfg["containers"].pop(str(delta), None); extstore.set_config("bitwarden", cfg)   # (a new organization may be given its id)
+
 print("== removing an organization")
 gamma = orgs.create("Gamma", "GAMMA")
 with db.within(gamma):
     db.save_device(dev("gamma-sw"))
     db.set_secret(db.secret_name("gamma-sw"), "gamma-pw")
 extstore.sync_once()
-gamma_cid = next(c for c, n in SERVER["containers"].items() if n == "Toner - Gamma")
+gamma_cid = next(c for c, n in SERVER["containers"].items() if n == "Gamma")
 check("the organization's collection and item are in the manager", any(i["cid"] == gamma_cid for i in SERVER["items"].values()))
 orgs.remove(gamma)
 waiting = extstore.pending()
-check("removing it queues its collection for removal, beside the deletes of its passwords", waiting.get(extstore.DROP + "Toner - Gamma") == "drop"
+check("removing it queues its collection for removal, beside the deletes of its passwords", waiting.get(extstore.DROP + "Gamma") == "drop"
       and waiting.get(f"org{gamma}/gamma-sw") == "delete", waiting)
 st = extstore.sync_once()
 check("the next round deletes the items and the collection, and the queue is empty (before, the deletes of a removed organization waited for ever)",
@@ -188,9 +212,9 @@ SERVER["may_delete"] = True
 extstore.drop_containers(["Toner - Old client"])
 extstore.sync_once()
 check("...and with permission the collection goes too", "cold" not in SERVER["containers"] and "cmine" in SERVER["containers"])
-extstore.drop_containers(["Toner - Acme"])
+extstore.drop_containers(["Acme"])
 extstore.sync_once()
-check("a collection an organization still uses is never deleted, even if asked", "Toner - Acme" in SERVER["containers"].values() and extstore.pending() == {})
+check("a collection an organization still uses is never deleted, even if asked", "Acme" in SERVER["containers"].values() and extstore.pending() == {})
 
 print("== links")
 SERVER["items"]["team-1"] = {"cid": "c1", "tid": "", "title": "Core switch (team)", "user": "admin", "pw": "team-pw"}
@@ -361,8 +385,31 @@ v.kind.setCurrentIndex(v.kind.findData("bitwarden")); app.processEvents()
 f = v.fields["bitwarden"]
 labels = [lab.text() for i in range(f.form.rowCount()) for lab in [f.form.labelForField(f.form.itemAt(i, f.form.ItemRole.FieldRole).widget())] if lab and lab.text()]
 check("Bitwarden asks for its region, API key, master password, organization and CLI", labels == ["Region", "Client ID", "Client secret", "Master password", "Organization", "Bitwarden CLI"], labels)
-check("the table: an organization per row, its collection named after it", v.table.horizontalHeaderItem(1).text() == "Collection" and v.table.item(1, 1).text() == "Toner - Acme"
+check("the table: an organization per row, its collection named after it", v.table.horizontalHeaderItem(1).text() == "Collection" and v.table.item(1, 1).text() == "Acme" and v.table.item(0, 1).text() == "Global"
       and v.where.text() == "<b>Where each organization's passwords go</b>")
+from ui.apitool import CellEditDelegate
+v.resize(700, 500); v.show(); app.processEvents()
+dlg = v.table.itemDelegateForColumn(1)
+check("the Collection column edits through the house cell editor", isinstance(dlg, CellEditDelegate))
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QLineEdit
+v.table.setCurrentCell(1, 1); app.processEvents()
+shot = v.table.viewport().grab().toImage()
+def edge_px(row, col):
+    r = v.table.visualRect(v.table.model().index(row, col))
+    return shot.pixelColor(r.left() + 2, r.center().y()).name(), shot.pixelColor(r.center().x(), r.center().y() + r.height() // 2 - 2).name()
+v.table.clearSelection(); v.table.setCurrentCell(-1, -1); app.processEvents()
+shot = v.table.viewport().grab().toImage()
+check("the Collection cell shows an edit cue that the Organization cell does not", edge_px(1, 1) != edge_px(1, 0), (edge_px(1, 1), edge_px(1, 0)))
+v.table.editItem(v.table.item(1, 1)); app.processEvents()
+ed = v.table.viewport().findChild(QLineEdit)
+cell = v.table.visualRect(v.table.model().index(1, 1))
+g = ed.geometry()
+check("its editor lines up with the cell, to 2 px", ed.isVisible() and all(abs(a - b) <= 2 for a, b in ((g.x(), cell.x()), (g.y(), cell.y()), (g.width(), cell.width()), (g.height(), cell.height()))), (g, cell))
+check("...and covers the text beneath (an opaque box), so nothing is drawn twice", ed.autoFillBackground() or "background" in ed.styleSheet())
+ed.setText("Typed name"); from PySide6.QtTest import QTest; QTest.keyClick(ed, Qt.Key.Key_Return); app.processEvents()
+check("what is typed is kept", v.table.item(1, 1).text() == "Typed name")
+v._fill_table("bitwarden"); app.processEvents()
 for kind, word in (("onepassword", "Vault"), ("keeper", "Shared folder")):
     v.kind.setCurrentIndex(v.kind.findData(kind)); app.processEvents()
     check(f"{extvault.LABELS[kind]} calls it {word}", v.table.horizontalHeaderItem(1).text() == word)

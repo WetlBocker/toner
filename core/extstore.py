@@ -6,8 +6,8 @@ when the manager cannot be reached. With a manager chosen (Settings > Security >
   * every change Toner makes is queued (the queue is kept in the vault, so it survives a restart) and sent as soon as the manager
     can be reached; Toner tries when it starts, after each change, and every 5 minutes;
   * what changed in the manager is copied back (a change still waiting in Toner's queue wins: it is the newer edit);
-  * each Toner organization has its own collection (a vault in 1Password, a shared folder in Keeper), 'Toner - Acme' unless
-    another is chosen; Global's is 'Toner - Global';
+  * each Toner organization has its own collection (a vault in 1Password, a shared folder in Keeper), 'Acme' unless
+    another is chosen; Global's is 'Global' (collections already named 'Toner - ...' keep their name);
   * a password can be linked to an item that already exists in the manager (Link...): Toner reads the linked item, keeps it as
     its stored copy (in its vault and as its own item), and falls back on that copy when the linked item cannot be read.
 
@@ -88,10 +88,30 @@ def secrets(kind):
     return {f: secret(kind, f) for f in extvault.SECRET_FIELDS.get(kind, ())}
 
 
+def default_container(org):
+    return db.org_name(org) if org else "Global"
+
+
 def container_name(kind, org):
     """The collection (vault, shared folder) a Toner organization's passwords go to."""
     chosen = (config(kind).get("containers") or {}).get(str(org or 0))
-    return (chosen or "").strip() or f"Toner - {db.org_name(org) if org else 'Global'}"
+    return (chosen or "").strip() or default_container(org)
+
+
+def _keep_old_default_names(kind, orgs, have):
+    """Before 'Toner - ' left the default name: an organization with no stored name whose collection exists under the old default
+    keeps writing there (its name is recorded), instead of starting a new one and orphaning the old."""
+    cfg = config(kind)
+    names = dict(cfg.get("containers") or {})
+    lower = {n.lower() for n in have}
+    changed = False
+    for org in orgs:
+        old = f"Toner - {default_container(org)}"
+        if not (names.get(str(org or 0)) or "").strip() and old.lower() in lower:
+            names[str(org or 0)], changed = old, True
+    if changed:
+        cfg["containers"] = names
+        set_config(kind, cfg)
 
 
 def connector(kind=None):
@@ -367,6 +387,7 @@ def _sync_once():
         keep_new_secrets(kind, conn)
         st["connected"] = True
         orgs = [db.GLOBAL] + [r["id"] for r in db.org_rows()]
+        _keep_old_default_names(kind, orgs, conn.containers())
         cids, remote = {}, {}
         for org in orgs:
             try:
@@ -532,7 +553,7 @@ def test(kind, cfg, secrets_):
         found = 0
         have = conn.containers()
         for org in [db.GLOBAL] + [r["id"] for r in db.org_rows()]:
-            name = ((cfg.get("containers") or {}).get(str(org)) or "").strip() or f"Toner - {db.org_name(org) if org else 'Global'}"
+            name = ((cfg.get("containers") or {}).get(str(org)) or "").strip() or default_container(org)
             cid = next((c for n, c in have.items() if n.lower() == name.lower()), None)
             if cid:
                 found += len(conn.items(cid))

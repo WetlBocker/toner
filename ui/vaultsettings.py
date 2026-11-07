@@ -4,16 +4,29 @@ how it signs in to that manager, and which collection each organization's passwo
 Everything here acts through its own buttons (Test connection, Use this vault), not through Save changes, so its boxes are marked
 notSetting. Secret fields are never shown: they read 'saved in the vault - leave blank to keep it' when one is kept."""
 from PySide6.QtCore import QThread, QTimer, Qt, QUrl, Signal
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout,
                                QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QStackedWidget,
                                QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from core import audit, db, extstore, extvault, orgs, passvault
 from core.platforms import exe as platform_exe
+from ui import theme
+from ui.apitool import CellEditDelegate
 from ui.brandicons import vault_icon
 
 KEPT = "saved in the vault - leave blank to keep it"
+
+
+class _CollectionDelegate(CellEditDelegate):
+    """The house cell editor, and a thin box around each cell so it reads as something to type into."""
+
+    def paint(self, painter, option, index):
+        super().paint(painter, option, index)
+        painter.save()
+        painter.setPen(QColor((theme.current() or {}).get("edge", "#888888")))
+        painter.drawRect(option.rect.adjusted(2, 2, -3, -3))
+        painter.restore()
 
 
 def _quiet(w):
@@ -222,6 +235,7 @@ class VaultSection(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.DoubleClicked | QAbstractItemView.EditTrigger.SelectedClicked
                                    | QAbstractItemView.EditTrigger.EditKeyPressed)
+        self.table.setItemDelegateForColumn(1, _CollectionDelegate(self.table))
         self.table.setMinimumHeight(110)
         self.test_btn, self.use_btn = QPushButton("Test connection"), QPushButton("Use this vault")
         self.test_btn.clicked.connect(self.test)
@@ -304,7 +318,7 @@ class VaultSection(QWidget):
             org.setFlags(org.flags() & ~Qt.ItemFlag.ItemIsEditable)
             org.setData(Qt.ItemDataRole.UserRole, oid)
             self.table.setItem(i, 0, org)
-            self.table.setItem(i, 1, QTableWidgetItem(chosen.get(str(oid)) or f"Toner - {name}"))
+            self.table.setItem(i, 1, QTableWidgetItem(chosen.get(str(oid)) or extstore.default_container(oid)))
         self.table.resizeColumnToContents(0)
 
     def show_status(self):
