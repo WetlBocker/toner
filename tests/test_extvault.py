@@ -44,10 +44,9 @@ class FakeManager(extvault.Provider):
         cid = f"c{len(SERVER['containers']) + 1}"
         SERVER["containers"][cid] = name
         return cid
-    def items(self, cid):
-        return {i["tid"]: extvault.Item(ref=r, title=i["title"], username=i["user"], value=i["pw"], toner_id=i["tid"],
-                                        container=SERVER["containers"][cid], raw=i)
-                for r, i in SERVER["items"].items() if i["cid"] == cid and i["tid"]}
+    def all_items(self, cid):
+        return [extvault.Item(ref=r, title=i["title"], username=i["user"], value=i["pw"], toner_id=i["tid"], container=SERVER["containers"][cid], raw=i)
+                for r, i in SERVER["items"].items() if i["cid"] == cid]
     def put(self, cid, toner_id, title, username, value, item=None):
         SERVER["calls"].append(("put", toner_id))
         ref = item.ref if item else f"i{(SERVER.__setitem__('seq', SERVER['seq'] + 1) or SERVER['seq'])}"
@@ -188,6 +187,44 @@ SERVER["containers"].pop("cbeta")
 orgs.remove(delta)
 check("removing an organization clears its stored collection name", str(delta) not in (extstore.config("bitwarden").get("containers") or {}))
 extstore.sync_once()
+SERVER["containers"]["ctacme"] = "Toner - Acme"
+extstore.sync_once()
+check("once the move has run, a later 'Toner - Acme' is not taken over: Acme stays 'Acme'", extstore.container_name("bitwarden", acme) == "Acme"
+      and str(acme) not in (extstore.config("bitwarden").get("containers") or {}), extstore.config("bitwarden").get("containers"))
+SERVER["containers"].pop("ctacme")
+
+print("== never share a collection")
+SERVER["containers"]["cecho"] = "Echo"
+SERVER["items"]["theirs-1"] = {"cid": "cecho", "tid": "", "title": "Team router", "user": "admin", "pw": "team-pw"}
+echo = orgs.create("Echo", "ECHO")
+with db.within(echo):
+    db.save_device(dev("echo-sw"))
+    db.set_secret(db.secret_name("echo-sw"), "echo-pw")
+extstore.sync_once()
+techo = next((c for c, n in SERVER["containers"].items() if n == "Toner - Echo"), None)
+mine = next((i for i in SERVER["items"].values() if i["tid"] == f"org{echo}/echo-sw"), {})
+check("an existing 'Echo' holding someone else's item is left alone: Toner makes and uses 'Toner - Echo'", techo and mine.get("cid") == techo
+      and not any(i["cid"] == "cecho" and i["tid"] for i in SERVER["items"].values()) and SERVER["items"]["theirs-1"]["cid"] == "cecho", (SERVER["containers"], mine))
+check("...and stores that name, so it stays put", (extstore.config("bitwarden").get("containers") or {}).get(str(echo)) == "Toner - Echo"
+      and extstore.container_name("bitwarden", echo) == "Toner - Echo")
+extstore.sync_once()
+check("the next round still uses it", extstore.container_name("bitwarden", echo) == "Toner - Echo" and [n for n in SERVER["containers"].values() if "Echo" in n].count("Toner - Echo") == 1)
+SERVER["containers"]["cfox"] = "Foxtrot"
+fox = orgs.create("Foxtrot", "FOX")
+with db.within(fox):
+    db.save_device(dev("fox-sw"))
+    db.set_secret(db.secret_name("fox-sw"), "fox-pw")
+golf = orgs.create("Golf", "GOLF")
+with db.within(golf):
+    db.save_device(dev("golf-sw"))
+    db.set_secret(db.secret_name("golf-sw"), "golf-pw")
+SERVER["containers"]["cgolf"] = "Golf"
+SERVER["items"]["golf-1"] = {"cid": "cgolf", "tid": f"org{golf}/golf-sw", "title": "golf-sw (Golf) – Password", "user": "admin", "pw": "golf-pw"}
+extstore.sync_once()
+check("an empty 'Foxtrot' is used", any(i["cid"] == "cfox" and i["tid"] == f"org{fox}/fox-sw" for i in SERVER["items"].values())
+      and "Toner - Foxtrot" not in SERVER["containers"].values() and extstore.container_name("bitwarden", fox) == "Foxtrot")
+check("a 'Golf' holding only Toner's items is used", SERVER["items"]["golf-1"]["cid"] == "cgolf" and "Toner - Golf" not in SERVER["containers"].values()
+      and extstore.container_name("bitwarden", golf) == "Golf")
 
 print("== removing an organization")
 gamma = orgs.create("Gamma", "GAMMA")
@@ -225,6 +262,23 @@ check("...and with permission the collection goes too", "cold" not in SERVER["co
 extstore.drop_containers(["Acme"])
 extstore.sync_once()
 check("a collection an organization still uses is never deleted, even if asked", "Acme" in SERVER["containers"].values() and extstore.pending() == {})
+SERVER["containers"]["cshared"] = "Toner - Shared old"
+SERVER["items"]["old2"] = {"cid": "cshared", "tid": "org556/old-sw", "title": "old-sw – Password", "user": "u", "pw": "p"}
+SERVER["items"]["theirs-2"] = {"cid": "cshared", "tid": "", "title": "Their switch", "user": "u", "pw": "p"}
+SERVER["calls"].clear()
+extstore.drop_containers(["Toner - Shared old"])
+st = extstore.sync_once()
+check("dropping a collection that also holds someone else's items deletes Toner's items only, and leaves the collection, quietly",
+      "old2" not in SERVER["items"] and "theirs-2" in SERVER["items"] and "cshared" in SERVER["containers"]
+      and ("delete_container", "cshared") not in SERVER["calls"] and not st["problems"] and extstore.pending() == {}, (st["problems"], SERVER["calls"]))
+check("...and the orphan list still shows it", ("Toner - Shared old", 0) in extstore.orphan_containers(), extstore.orphan_containers())
+SERVER["containers"].pop("cshared"); SERVER["items"].pop("theirs-2")
+writes, real_set = [], db.set_setting
+db.set_setting = lambda k, v: (writes.append(k) if k == "vault_config" else None, real_set(k, v))[1]
+hotel = orgs.create("Hotel", "HOTEL")
+orgs.remove(hotel)
+db.set_setting = real_set
+check("removing an organization with no stored collection name leaves the settings alone", "vault_config" not in writes, writes)
 
 print("== links")
 SERVER["items"]["team-1"] = {"cid": "c1", "tid": "", "title": "Core switch (team)", "user": "admin", "pw": "team-pw"}
@@ -421,8 +475,23 @@ ed.setText("Typed name"); from PySide6.QtTest import QTest; QTest.keyClick(ed, Q
 check("what is typed is kept", v.table.item(1, 1).text() == "Typed name")
 v._fill_table("bitwarden"); app.processEvents()
 db.set_setting("vault_collections_migrated", {}); v._fill_table("bitwarden")
-check("before the move has run, the table shows the old default and saving it stores nothing", v.table.item(1, 1).text() == "Toner - Acme" and set(v._values()[1]["containers"]) <= {str(beta)})
+check("before the move has run, the table shows the old default and saving it stores nothing", v.table.item(1, 1).text() == "Toner - Acme" and set(v._values()[1]["containers"]) <= {str(beta), str(echo)})
 db.set_setting("vault_collections_migrated", {"bitwarden": True}); v._fill_table("bitwarden")
+was_cfg = extstore.config("bitwarden")
+cfg = dict(was_cfg); cfg["containers"] = {**(was_cfg.get("containers") or {}), str(acme): "Acme", str(beta): "Beta passwords"}; extstore.set_config("bitwarden", cfg)
+v._fill_table("bitwarden")
+def cell(org):
+    return next(v.table.item(i, 1) for i in range(v.table.rowCount()) if v.table.item(i, 0).data(Qt.ItemDataRole.UserRole) == org)
+cell(beta).setText("Beta")
+kept = v._values()[1]["containers"]
+check("after the move, a stored 'Acme' (typed when the default was 'Toner - Acme') stays stored, though it is now the default", kept.get(str(acme)) == "Acme", kept)
+check("a name typed to equal the default is stored too", kept.get(str(beta)) == "Beta", kept)
+check("an untouched default stays a default", str(db.GLOBAL) not in kept, kept)
+v._keep(*v._values())
+orgs.update(acme, "Acme Corp", "ACME", "")
+check("renaming the organization keeps the stored name", extstore.container_name("bitwarden", acme) == "Acme", extstore.container_name("bitwarden", acme))
+orgs.update(acme, "Acme", "ACME", "")
+extstore.set_config("bitwarden", was_cfg); v._fill_table("bitwarden")
 for kind, word in (("onepassword", "Vault"), ("keeper", "Shared folder")):
     v.kind.setCurrentIndex(v.kind.findData(kind)); app.processEvents()
     check(f"{extvault.LABELS[kind]} calls it {word}", v.table.horizontalHeaderItem(1).text() == word)

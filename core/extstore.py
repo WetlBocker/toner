@@ -108,7 +108,9 @@ def container_name(kind, org):
 def _keep_old_default_names(kind, orgs, have):
     """Before 'Toner - ' left the default name: an organization with no stored name whose collection exists under the old default
     keeps writing there (its name is recorded), instead of starting a new one and orphaning the old. Then the flag is set: from now
-    on the default is the plain name."""
+    on the default is the plain name. It runs once per manager: after that, a stored name is the person's choice."""
+    if migrated(kind):
+        return
     cfg = config(kind)
     names = dict(cfg.get("containers") or {})
     lower = {n.lower() for n in have}
@@ -123,6 +125,23 @@ def _keep_old_default_names(kind, orgs, have):
     done = dict(db.get_setting("vault_collections_migrated") or {})
     done[kind] = True
     db.set_setting("vault_collections_migrated", done)
+
+
+def _collection(kind, conn, org):
+    """(id, {toner_id: Item}) of the organization's collection, made when missing. Never shared: when the default name is in use and
+    that collection already holds someone else's items and none of Toner's, it is left alone; 'Toner - <name>' is used instead and
+    stored, so it stays put."""
+    cid = conn.ensure(container_name(kind, org))
+    every = conn.all_items(cid)
+    mine = {it.toner_id: it for it in every if it.toner_id}
+    if every and not mine and migrated(kind) and not ((config(kind).get("containers") or {}).get(str(org or 0)) or "").strip():
+        name = "Toner - " + (db.org_name(org) if org else "Global")
+        cfg = config(kind)
+        cfg["containers"] = {**(cfg.get("containers") or {}), str(org or 0): name}
+        set_config(kind, cfg)
+        cid = conn.ensure(name)
+        mine = conn.items(cid)
+    return cid, mine
 
 
 def connector(kind=None):
@@ -339,10 +358,13 @@ def forget_org(org):
     except Exception:
         quiet.ignored()
     allc = dict(db.get_setting("vault_config") or {})            # its chosen collection name goes too: an id may be given again
+    changed = False
     for kind, cfg in allc.items():
         if str(org) in (cfg.get("containers") or {}):
             allc[kind] = {**cfg, "containers": {k: v for k, v in cfg["containers"].items() if k != str(org)}}
-    db.set_setting("vault_config", allc)
+            changed = True
+    if changed:
+        db.set_setting("vault_config", allc)
 
 
 def drop_containers(names):
@@ -408,12 +430,12 @@ def _sync_once():
         cids, remote = {}, {}
         for org in orgs:
             try:
-                cids[org] = conn.ensure(container_name(kind, org))
+                cids[org], mine = _collection(kind, conn, org)
             except extvault.NotAllowed as e:
                 if any(org_of(n) == org for n in local_names()):
                     st["problems"].append(str(e))
                 continue
-            for tid, item in conn.items(cids[org]).items():
+            for tid, item in mine.items():
                 remote[tid] = (org, cids[org], item)
         st["found"] = len(remote)
         waiting = pending()
@@ -423,11 +445,14 @@ def _sync_once():
             if name.lower() not in current:                           # (an organization that took the same name keeps it)
                 cid = next((c for n, c in conn.containers().items() if n.lower() == name.lower()), None)
                 if cid:
-                    for item in list(conn.items(cid).values()):
-                        conn.delete(item)
+                    every = conn.all_items(cid)
+                    for item in every:
+                        if item.toner_id:
+                            conn.delete(item)
                     remote = {t: v for t, v in remote.items() if v[1] != cid}
                     try:
-                        conn.delete_container(cid)
+                        if all(item.toner_id for item in every):      # someone else's items are still in it: never delete it
+                            conn.delete_container(cid)
                     except extvault.ExtError as e:
                         st["problems"].append(f"The items in {name} were deleted, but not the {extvault.CONTAINER_WORD[kind].lower()} itself: {e}")
                     st["sent"] += 1

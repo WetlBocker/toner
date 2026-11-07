@@ -91,6 +91,10 @@ class Provider:
 
     def items(self, cid):
         """{toner_id: Item} of Toner's items in one container."""
+        return {it.toner_id: it for it in self.all_items(cid) if it.toner_id}
+
+    def all_items(self, cid):
+        """[Item] of everything in one container, Toner's and anyone else's (toner_id '')."""
         raise NotImplementedError
 
     def put(self, cid, toner_id, title, username, value, item=None):
@@ -291,14 +295,8 @@ class Bitwarden(_Cli):
         return Item(ref=r["id"], title=r.get("name") or "", username=login.get("username") or "", value=login.get("password"),
                     toner_id=tid, container=cname, raw=r)
 
-    def items(self, cid):
-        rows = self.run_json("list", "items", "--collectionid", cid, "--organizationid", self.org_id) or []
-        out = {}
-        for r in rows:
-            it = self._item(r)
-            if it.toner_id:
-                out[it.toner_id] = it
-        return out
+    def all_items(self, cid):
+        return [self._item(r) for r in self.run_json("list", "items", "--collectionid", cid, "--organizationid", self.org_id) or []]
 
     def put(self, cid, toner_id, title, username, value, item=None):
         if item is not None:
@@ -385,17 +383,11 @@ class OnePassword(_Cli):
         return Item(ref=f"{vault.get('id', '')}/{r['id']}", title=r.get("title") or "", username=self._field(r, "USERNAME") or "",
                     value=self._field(r, "PASSWORD"), toner_id=self._field(r, label=TAG) or "", container=vault.get("name") or "", raw=r)
 
-    def items(self, cid):
+    def all_items(self, cid):
         rows = self.run_json("item", "list", "--vault", cid, "--format", "json") or []
         if not rows:
-            return {}
-        full = _json_stream(self.run("item", "get", "-", "--format", "json", stdin=json.dumps(rows)))   # every item in one call
-        out = {}
-        for r in full:
-            it = self._item(r)
-            if it.toner_id:
-                out[it.toner_id] = it
-        return out
+            return []
+        return [self._item(r) for r in _json_stream(self.run("item", "get", "-", "--format", "json", stdin=json.dumps(rows)))]   # every item in one call
 
     def put(self, cid, toner_id, title, username, value, item=None):
         body = {"title": title, "category": "LOGIN", "fields": [
@@ -491,14 +483,8 @@ class Keeper(Provider):
         return Item(ref=r.uid, title=r.title or "", username=user, value=r.password, toner_id=tid,
                     container=(names or {}).get(where, ""), raw=r)
 
-    def items(self, cid):
-        out = {}
-        for r in self._all():
-            if (r.inner_folder_uid or r.folder_uid) == cid:
-                it = self._item(r)
-                if it.toner_id:
-                    out[it.toner_id] = it
-        return out
+    def all_items(self, cid):
+        return [self._item(r) for r in self._all() if (r.inner_folder_uid or r.folder_uid) == cid]
 
     def put(self, cid, toner_id, title, username, value, item=None):
         from keeper_secrets_manager_core.dto.dtos import RecordCreate, RecordField

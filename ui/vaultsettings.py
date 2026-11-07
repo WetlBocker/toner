@@ -318,7 +318,9 @@ class VaultSection(QWidget):
             org.setFlags(org.flags() & ~Qt.ItemFlag.ItemIsEditable)
             org.setData(Qt.ItemDataRole.UserRole, oid)
             self.table.setItem(i, 0, org)
-            self.table.setItem(i, 1, QTableWidgetItem(chosen.get(str(oid)) or extstore.default_container(oid, kind)))
+            cell = QTableWidgetItem(chosen.get(str(oid)) or extstore.default_container(oid, kind))
+            cell.setData(Qt.ItemDataRole.UserRole, None if chosen.get(str(oid)) else cell.text())     # the default it shows, if it shows one
+            self.table.setItem(i, 1, cell)
         self.table.resizeColumnToContents(0)
 
     def show_status(self):
@@ -330,8 +332,10 @@ class VaultSection(QWidget):
     def _values(self):
         kind = self.chosen()
         cfg, secrets = self.fields[kind].values()
-        typed = {self.table.item(i, 0).data(Qt.ItemDataRole.UserRole): self.table.item(i, 1).text().strip() for i in range(self.table.rowCount())}
-        cfg["containers"] = {str(o): t for o, t in typed.items() if t != extstore.default_container(o, kind)}   # (the default stays a default)
+        # a stored name stays stored, and so does any name typed, even one equal to the default (an organization renamed later keeps
+        # its collection); an untouched default stays a default
+        cells = [(self.table.item(i, 0).data(Qt.ItemDataRole.UserRole), self.table.item(i, 1)) for i in range(self.table.rowCount())]
+        cfg["containers"] = {str(o): c.text().strip() for o, c in cells if c.text().strip() and c.text().strip() != c.data(Qt.ItemDataRole.UserRole)}
         return kind, cfg, secrets
 
     def _keep(self, kind, cfg, secrets):
