@@ -306,6 +306,8 @@ class AccountsPage(Page):
         row = self.idents.rowAt(pos.y()) if pos is not None else -1
         if row >= 0:
             self.idents.selectRow(row)
+        elif pos is not None:                           # empty space: the items act on nothing
+            self.idents.clearSelection()
         m = QMenu(self.idents)
         self.test_login, self.set_up_2fa = (m.addAction(t) for t in ("Test login...", "Set up 2FA..."))
         self.test_login.setEnabled(self._dir() is not None)

@@ -395,6 +395,8 @@ class Main(QMainWindow):
         from ui import motion
         total = sum(self.body.sizes())
         least = self.assistant.minimumWidth()
+        if on:
+            width = min(width, max(least, total - 300))                 # the page keeps at least 300 px (a remembered width may not fit)
         animated = motion.enabled() and self.isVisible()
         if animated:
             if on:

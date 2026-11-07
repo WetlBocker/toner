@@ -122,7 +122,7 @@ class TwoFactorDialog(QDialog):
         job.wait()
         landed, job.fn, job.landed = job.landed, None, None
         self._jobs.discard(job)
-        if not self._closed:                            # (a Save landing after Close writes nothing)
+        if not self._closed:                            # (after Close a store write in flight still completes; only set_directories is skipped)
             landed(result, error)
             self._fields()
 

@@ -293,8 +293,10 @@ check("LDAP with Duo off", [cell(1, j) for j in range(3)] == ["Corp LDAP", "LDAP
 check("buttons", (page.add_ident.text(), page.edit_ident.text(), page.remove_ident.text()) == ("Add", "Edit...", "Remove"))
 check("heading", any(l.text() == "<b>External Identities</b>" for l in page.findChildren(A.QLabel)))
 check("no selection: Edit and Remove off", not page.edit_ident.isEnabled() and not page.remove_ident.isEnabled())
-page.idents.selectRow(1)
-menu = page._ident_menu(None)
+from PySide6.QtCore import QPoint
+row_at = lambda r: page.idents.visualRect(page.idents.model().index(r, 0)).center()
+menu = page._ident_menu(row_at(1))
+check("right-click on a row selects it", page.idents.currentRow() == 1 and page.idents.selectedIndexes() != [])
 check("menu items, in order", [a.text() for a in menu.actions()] == ["Test login...", "Set up 2FA...", "Edit...", "Remove"], [a.text() for a in menu.actions()])
 check("Test login and Set up 2FA are on", menu.actions()[0].isEnabled() and menu.actions()[1].isEnabled())
 tested = []
@@ -315,6 +317,10 @@ QMessageBox.exec = lambda self: (asked.append(self.text()), self.setDefaultButto
 menu.actions()[3].trigger()
 check("menu Remove asks the approved question", asked == ["Removing this directory signs out its accounts on this copy. Remove Corp LDAP?"], asked)
 check("...and Cancel kept it", len(roles.verified()["directories"]) == 2)
+page.idents.selectRow(1)
+menu = page._ident_menu(QPoint(5, 10000))
+check("right-click below the rows: nothing selected, every item off", not page.idents.selectedIndexes()
+      and not any(a.isEnabled() for a in menu.actions()), [a.isEnabled() for a in menu.actions()])
 real_verified = roles.verified
 roles.verified = lambda: None
 page.refresh()
@@ -336,8 +342,7 @@ for cls in (A.AccountDialog, A.IdentityWizard, A.TwoFactorDialog):
 page.add.click()
 page.table.selectRow(rows().index("Admin")); page.reset.click()
 page.add_ident.click()
-page.idents.selectRow(0)
-menu = page._ident_menu(None)
+menu = page._ident_menu(row_at(0))
 menu.actions()[2].trigger(); menu.actions()[1].trigger()
 check("Add account, Reset password, Add, Edit and Set up 2FA delete their window after it closes",
       gone == ["AccountDialog", "AccountDialog", "IdentityWizard", "IdentityWizard", "TwoFactorDialog"], gone)

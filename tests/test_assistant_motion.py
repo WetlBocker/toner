@@ -69,6 +69,17 @@ w.show_assistant(True); spin(40); w.show_assistant(False); spin(40); w.show_assi
 check("open, close, open: open", w.assistant.isVisible() and not overlays() and w.ai_button.isChecked())
 w.show_assistant(False); spin(600)
 
+print("== a remembered width wider than the window")
+kept = db.get_setting("splitters")
+db.set_setting("splitters", {**(kept or {}), "assistant_panel": [100, 5000]})
+total = sum(w.body.sizes())
+w.show_assistant(True); spin(60)
+check("the picture leaves the page at least 300 px", len(overlays()) == 1 and overlays()[0].width() <= total - 300, ([c.width() for c in overlays()], total))
+spin(500)
+check("...and so does the panel when the slide ends", w.assistant.isVisible() and w.body.sizes()[0] >= 300, w.body.sizes())
+w.show_assistant(False); spin(600)
+db.set_setting("splitters", kept)
+
 print("== motion off")
 motion.force("Off")
 t = run(True, 0)
