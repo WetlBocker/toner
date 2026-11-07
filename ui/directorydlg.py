@@ -7,8 +7,6 @@ from core import directory
 
 FAILED = "Toner couldn't connect: {reason}"
 NO_STORE = "This computer has no protected store, so Duo can't be turned on here."
-NO_GROUP = "Toner couldn't find a group named {name}."
-TWO_GROUPS = "More than one group is named {name}. Type its full DN instead."
 TAKEN = "Another directory already uses {value}."
 CA_UNREADABLE = "Toner can't read that CA file."
 CA_CHANGED = "The directory's CA file changed. An admin needs to save the directory again."
@@ -30,10 +28,6 @@ def words(e):
         return str(e)
     if isinstance(e, directory.CaChanged):
         return CA_CHANGED
-    if isinstance(e, directory.NotFound):
-        return NO_GROUP.format(name=e.args[0])
-    if isinstance(e, directory.Ambiguous):
-        return TWO_GROUPS.format(name=e.args[0])
     known = (directory.InsecureConfig, directory.Unreachable, directory.BadCredentials)
     return FAILED.format(reason=str(e) if isinstance(e, known) else type(e).__name__)
 

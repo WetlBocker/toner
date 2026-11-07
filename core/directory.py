@@ -21,7 +21,6 @@ class Unreachable(Exception): pass
 class BadCredentials(Exception): pass
 class InsecureConfig(ValueError): pass
 class CaChanged(InsecureConfig): pass     # the CA file isn't the one signed into the list: an admin saves the directory again
-class Ambiguous(Exception): pass      # more than one group has that name
 class NotFound(Exception): pass       # no group has that name
 
 
@@ -319,29 +318,6 @@ def _under(me, ou):
         return False
     head = me[:-len(ou) - 1]
     return bool(head) and (len(head) - len(head.rstrip("\\"))) % 2 == 0
-
-
-def resolve_groups(cfg, names, service_password):
-    """{name: group DN}. A name is a CN or a DN. A CN is searched under base_dn; a DN is read back. Either way the DN is the server's."""
-    conn = connect(cfg, cfg["service_dn"], service_password)
-    gf = AD_GROUP if cfg["kind"] == "ad" else LDAP_GROUP
-    out = {}
-    try:
-        for name in names:
-            if _is_dn(name):      # a typed DN is read back, and the server's own form is what is stored
-                found = _search(conn, name, gf, ["cn"], ldap3.BASE)
-                if not found: raise NotFound(name)
-                out[name] = found[0]["dn"]
-            else:
-                found = _search(conn, cfg["base_dn"], f"(&{gf}(cn={ldap3.utils.conv.escape_filter_chars(name)}))", ["cn"])
-                if not found: raise NotFound(name)
-                if len(found) > 1: raise Ambiguous(name)
-                out[name] = found[0]["dn"]
-    except lx.LDAPException:
-        raise Unreachable("read failed") from None
-    finally:
-        conn.unbind()
-    return out
 
 
 def _config_nc(conn):

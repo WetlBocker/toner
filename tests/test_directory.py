@@ -116,21 +116,10 @@ check("the bound person is read, not a look-alike with the same name part", z.gu
 check("the other one signs in as themselves", D.sign_in(AD, "zed@corp.example", "pw-zed").guid == str(G_ZED))
 check("a name with nothing for the user is BadCredentials", all(raises(D.BadCredentials, D.sign_in, AD, x, "pw") is not None for x in ("", "@x", "CORP\\", "  ")))
 
-print("== resolving group names")
-check("a CN resolves to its DN", D.resolve_groups(AD, ["Network-Admins"], "svc-pw") == {"Network-Admins": G("Network-Admins")})
-typed = "cn=eng-team,ou=groups," + BASE.lower()
-# the mock echoes the requested DN back, a real server answers with the entry's own; so stand in a connection that does
-class Echo:
-    result = {"result": 0}
-    def search(self, base, *a, **k): self.response = [{"type": "searchResEntry", "dn": G("Eng-Team"), "attributes": {}}]
-    def unbind(self): pass
-_connect = D.connect; D.connect = lambda *a: Echo()
-r = D.resolve_groups(AD, [typed], "svc-pw"); D.connect = _connect
-check("a typed DN is read back and the server's form is stored, not the typed text", r == {typed: G("Eng-Team")}, r)
-check("a CN with an equals sign that is not a DN is searched as a CN", raises(D.NotFound, D.resolve_groups, AD, ["a=b"], "svc-pw") is not None)
-check("a CN used twice is Ambiguous", raises(D.Ambiguous, D.resolve_groups, AD, ["Tech-Desk"], "svc-pw") is not None)
-check("an unknown CN is NotFound", raises(D.NotFound, D.resolve_groups, AD, ["Nope"], "svc-pw") is not None)
-check("a DN that does not exist is NotFound", raises(D.NotFound, D.resolve_groups, AD, ["CN=Nope,OU=Groups," + BASE], "svc-pw") is not None)
+print("== group names are no longer typed (step 4 lists what the server has)")
+from ui import directorydlg
+check("the name lookup and its messages are gone", not any(hasattr(D, n) for n in ("resolve_groups", "Ambiguous"))
+      and not any(hasattr(directorydlg, n) for n in ("NO_GROUP", "TWO_GROUPS")) and hasattr(D, "NotFound"))
 
 print("== Who Am I answers")
 for me, want in (("u:CORP\\alice", ("sam", "alice")), ("u:corp\\alice", ("sam", "alice")), ("dn:CN=A,DC=x", ("dn", "CN=A,DC=x"))):
