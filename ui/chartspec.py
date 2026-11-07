@@ -112,6 +112,19 @@ def donut(p, counts, title="", center_text=None, order=STATUSES):
     return opt
 
 
+def pie(p, slices, title=""):
+    """Slices as a doughnut: slices is [(name, value, colour)]. Every name stays in the legend, even at zero."""
+    if not any(v for _n, v, _c in slices):
+        return empty("")
+    opt = _base(p, title, legend=True)
+    opt["tooltip"] = _tooltip(p, formatter="{b}: {c} ({d}%)")
+    opt["series"] = [{"type": "pie", "radius": ["40%", "68%"], "center": ["50%", "58%"], "avoidLabelOverlap": True,
+                      "itemStyle": {"borderColor": p["surface"], "borderWidth": 2, "borderRadius": 4},
+                      "label": {"show": False}, "emphasis": {"scale": True, "scaleSize": 4, "label": {"show": False}},
+                      "data": [{"name": n, "value": v, "itemStyle": {"color": c}} for n, v, c in slices]}]
+    return opt
+
+
 def bars(p, categories, values, title="", unit="", horizontal=False, colors=None, limit=None, warn=None, fail=None, extra=None):
     """One value per category. `colors`: one per bar (else the accent); `warn`/`fail`: a bar at or past them takes the status
     colour, `limit`: a dashed line at that value. `extra`: one object per bar sent back on click (a device key, say)."""

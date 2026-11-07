@@ -195,6 +195,13 @@ tab = S.ScanningTab(); tab.resize(1000, 600); tab.show(); app.processEvents()
 check("laid out like Results, with its own words", tab.header.title.text() == "Scanning" and tab.run_btn.text() == "Scan" and tab.export_btn.text() == "Export..."
       and [a.text() for a in tab.export_btn.menu().actions()] == ["CSV", "HTML report", "PDF report"] and not tab.schedule_note.isVisible())
 check("it opens on the latest stored scan", tab.stored and tab.summary.text().startswith("Latest scan of 6 devices") and tab.summary.text().endswith("Scan again for fresh ones."), tab.summary.text())
+tab.charts_btn.setChecked(True); tab.resize(1280, 700); app.processEvents(); tab.draw_charts()
+import ui.chartspec as cs_mod
+pal = cs_mod.palette(); opt = tab.cvss_chart._builder(pal); ser = opt["series"][0]
+check("CVSS scores is a doughnut with the four labels and the bars' colours", ser["type"] == "pie" and [d["name"] for d in ser["data"]] == ["0–4", "4–7", "7–9", "9–10"]
+      and [d["itemStyle"]["color"] for d in ser["data"]] == [cs_mod.status_color(pal, s) for s in ("OK", "OK", "WARN", "FAIL")], opt)
+a, b = tab.vendor_chart.geometry(), tab.cvss_chart.geometry()
+check("at 1280 px the two cards are the same height and do not overlap", a.height() == b.height() and a.right() < b.left() and a.top() == b.top(), (a, b))
 tab.run_devices(["c9300", "edge-fw"])
 t0 = time.time()
 while tab.running() and time.time() - t0 < 30: app.processEvents(); time.sleep(0.02)

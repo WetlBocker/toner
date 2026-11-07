@@ -57,6 +57,13 @@ print("== histogram")
 hist = js(cs.histogram(p, [1, 3.9, 4, 7.5, 9, 10, 10], [0, 4, 7, 9, 10]))
 check("values fall in their bins, the last bin keeps its top edge", [x["value"] for x in hist["series"][0]["data"]] == [2, 1, 1, 3] and hist["xAxis"]["data"][-1] == "9–10")
 
+print("== pie")
+pi = js(cs.pie(p, [("0–4", 2, "#111111"), ("4–7", 0, "#222222"), ("7–9", 1, "#333333"), ("9–10", 3, "#444444")], title="CVSS scores"))
+check("a doughnut series, one slice per label, each in its colour, with a legend", pi["series"][0]["type"] == "pie" and isinstance(pi["series"][0]["radius"], list)
+      and [(d["name"], d["value"], d["itemStyle"]["color"]) for d in pi["series"][0]["data"]] == [("0–4", 2, "#111111"), ("4–7", 0, "#222222"), ("7–9", 1, "#333333"), ("9–10", 3, "#444444")]
+      and pi["legend"]["show"] and pi["title"]["text"] == "CVSS scores")
+check("no slices with anything in them is the empty note", cs.pie(p, [("a", 0, "#000")], "x") == cs.empty(""))
+
 print("== gauge")
 ga = js(cs.gauge(p, 78, warn=70, fail=90, title="CPU"))
 stops = ga["series"][0]["axisLine"]["lineStyle"]["color"]

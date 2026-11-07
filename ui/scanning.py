@@ -125,8 +125,8 @@ class ScanningTab(ResultsTab):
         series = [(st, [by_vendor[v][st] for v in vendors_]) for st in ("FAIL", "WARN", "OK")]
         self.vendor_chart.draw(lambda p: chartspec.grouped_bars(p, vendors_, series, title="Advisories by vendor", stacked=True))
         scores = [sc for _r, sc in rows]
-        self.cvss_chart.draw(lambda p: chartspec.histogram(p, scores, [0, 4, 7, 9, 10], title="CVSS scores",
-                                                           color_by=lambda lo, hi: chartspec.status_color(p, "FAIL") if lo >= 9 else chartspec.status_color(p, "WARN") if lo >= 7 else chartspec.status_color(p, "OK")))
+        bands = (("0–4", 0, 4, "OK"), ("4–7", 4, 7, "OK"), ("7–9", 7, 9, "WARN"), ("9–10", 9, 10.01, "FAIL"))
+        self.cvss_chart.draw(lambda p: chartspec.pie(p, [(n, sum(lo <= v < hi for v in scores), chartspec.status_color(p, st)) for n, lo, hi, st in bands], title="CVSS scores"))
 
     def _vendor_clicked(self, hit):
         """A vendor's bar: the search box narrows the list to that vendor (its name is in every device's search text)."""
