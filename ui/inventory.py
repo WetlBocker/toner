@@ -6,10 +6,10 @@ from PySide6.QtCore import QPointF, QTimer, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QIcon, QKeySequence, QPainter, QPen, QPixmap, QPolygonF, QShortcut
 from PySide6.QtWidgets import (QFrame, QSplitter, QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog,
                                QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout, QInputDialog, QLabel,
-                               QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSizePolicy, QSpinBox, QStyle, QTabWidget,
+                               QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSizePolicy, QSpinBox, QStyle, QTabWidget,
                                QStackedWidget, QToolButton, QTreeWidget,
                                QTreeWidgetItem, QVBoxLayout, QWidget, QWidgetAction)
-from core import agents, audit, bulk, db, display, importer, nettools, orgs, perms, profiles, proxy, scope, sessionimport, sessions, vendors, winmon
+from core import agents, audit, bulk, db, display, importer, nettools, orgs, perms, profiles, proxy, scope, sessionimport, sessions, unifikids, vendors, winmon
 from ui import icons, theme
 from ui.agentfleet import AgentFleet
 from ui.columns import ColumnChooser
@@ -71,6 +71,10 @@ class DeviceDialog(QDialog):
         self.port.setRange(0, 65535)
         self.port.setSpecialValueText("default")
         self.site = QLineEdit("default")
+        self.sites = QListWidget()                               # Site Manager, when the account is added: tick the sites to add (_fetch_sites)
+        self.sites.setMaximumHeight(140)
+        self._sites_job, self._sites_for = None, None
+        self.secret.editingFinished.connect(self._fetch_sites)
         self.location = QComboBox()
         self.location.setEditable(True)
         self.location.addItems(sorted({d["location"] for d in db.list_devices() if d.get("location")}))
@@ -192,7 +196,7 @@ class DeviceDialog(QDialog):
                                              ("Details", self.details), ("", self.enabled)))
         self.form.setRowVisible(self.org_pick, bool(orgs.list_orgs()))      # nothing to choose before there are organizations
         self.page_access, self.access = page((("Credential profile", self.profile), ("Username", self.username), ("SSH password", self.ssh_pw),
-                                              ("Password", self.secret), ("Enable password", self.enable_pw), ("", self.link_row), ("", self.get_key), ("Site", self.site),
+                                              ("Password", self.secret), ("Enable password", self.enable_pw), ("", self.link_row), ("", self.get_key), ("Site", self.site), ("Sites", self.sites),
                                               ("Jump host", self.jump), ("Proxy", self.proxy_mode), ("Proxy Type", self.proxy_kind),
                                               ("Proxy Address", self.proxy_host), ("Proxy Port", self.proxy_port),
                                               ("Proxy User", self.proxy_user), ("Proxy Password", self.proxy_pw),
@@ -379,6 +383,7 @@ class DeviceDialog(QDialog):
         if not self.ssh_pw.placeholderText().startswith("saved"):
             self.ssh_pw.setPlaceholderText("blank = the password above" if shared else "leave blank to keep the stored value")
         self.access.setRowVisible(self.site, bool(info["site"]))
+        self.access.setRowVisible(self.sites, vendor == "unifi_cloud" and not self.dev)
         from ui.keydialog import KEYS
         self.access.setRowVisible(self.get_key, vendor in KEYS)
         if vendor in KEYS:
@@ -616,6 +621,48 @@ class DeviceDialog(QDialog):
         finally:
             QApplication.restoreOverrideCursor()
 
+    def _fetch_sites(self):
+        """Site Manager, when the account is added: its sites, read on a worker thread with the key typed, to tick the ones to add."""
+        key = self.secret.text().strip()
+        if self._vendor() != "unifi_cloud" or self.dev or not key or key == self._sites_for or (self._sites_job and self._sites_job.isRunning()):
+            return
+        from drivers.unifi_cloud import UnifiCloudDriver
+        from ui.device_view import _Job
+        self._sites_for = key
+        dev = {**self.values(), "password": key}
+        dev["proxy"] = json.dumps(dev["proxy"]) if dev["proxy"] else ""
+        if self.proxy_pw.text():
+            dev["_proxy_secret"] = self.proxy_pw.text()
+        drv = UnifiCloudDriver(dev, {}, db.runtime_options())
+        job = self._sites_job = _Job(lambda: [((x.get("meta") or {}).get("name") or x.get("siteId"), x.get("siteId")) for x in drv.token_pages("/sites")])
+        _JOBS.add(job)                                           # kept until it ends, even if the window is closed first
+        job.finished.connect(lambda: _JOBS.discard(job))
+        job.done.connect(self._sites_done)
+        job.start()
+
+    def _sites_done(self, res):
+        self.sites.clear()
+        if isinstance(res, Exception):
+            self._sites_for = None                               # the same key can be tried again
+            from drivers.base import Driver
+            note = QListWidgetItem(Driver.explain(res))
+            note.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.sites.addItem(note)
+            return
+        for name, sid in res:
+            it = QListWidgetItem(str(name))
+            it.setData(ROLE, sid)
+            it.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+            it.setCheckState(Qt.CheckState.Unchecked)
+            self.sites.addItem(it)
+
+    def ticked_sites(self):
+        """[(name, site id)] ticked in the Sites list (Site Manager, when the account is added)."""
+        if not self.access.isRowVisible(self.sites):
+            return []
+        return [(self.sites.item(i).text(), self.sites.item(i).data(ROLE)) for i in range(self.sites.count())
+                if self.sites.item(i).checkState() == Qt.CheckState.Checked]
+
     def _win_values(self):
         if self.vendor.currentData() != "windows":
             return ""
@@ -781,6 +828,7 @@ class BulkEditDialog(QDialog):
 
 
 ROLE = Qt.ItemDataRole.UserRole
+_JOBS = set()                                   # worker threads still running for a closed window
 
 
 EMPTY_STRIP = 18            # the empty space the device list keeps under its last row (drop a device there to move it to the top level)
@@ -1038,7 +1086,7 @@ class InventoryTab(QWidget):
         self.table.setItemDelegateForColumn(self.STATUS, StatusDelegate(self.table))      # the same pill as Results and the Overview
         self.columns = ColumnChooser(self.table, self.table.header(), "inventory_columns", self.COLS, locked=(0,), auto=self._empty_columns,
                                      org_col=self.ORG)
-        self.table.itemExpanded.connect(lambda it: (self.remember(it, True), self._autosize()))
+        self.table.itemExpanded.connect(lambda it: (self._fill_kids(it), self.remember(it, True), self._autosize()))
         self.table.itemCollapsed.connect(lambda it: (self.remember(it, False), self._autosize()))
         self.table.moved.connect(self.handle_moves)
         here = Qt.ShortcutContext.WidgetWithChildrenShortcut    # only while the list has the focus, not in the search box
@@ -1320,6 +1368,8 @@ class InventoryTab(QWidget):
             return kind, int(ident.rpartition(":")[2])
         if kind == "org":
             return "org", int(ident)
+        if kind == "kid":                                # a UniFi console's device (a view, see _fill_kids)
+            return "kid", ident
         return "group", ident
 
     def org_of(self, item):
@@ -1381,6 +1431,7 @@ class InventoryTab(QWidget):
         except Exception:
             self.health = {}
         fresh = {self._key("device", d.get("org", db.target()), d["id"]): d for d in self._listed()}
+        stale = []
         found = QTreeWidgetItemIterator(self.table)
         while found.value():
             item = found.value()
@@ -1391,7 +1442,14 @@ class InventoryTab(QWidget):
                     item.setText(col, new.text(col))
                     item.setToolTip(col, new.toolTip(col))
                 item.setIcon(0, new.icon(0))
+                item.setChildIndicatorPolicy(new.childIndicatorPolicy())
+                if item.childCount():                       # a console's devices: built again when it is next opened
+                    stale.append(item)
             found += 1
+        for item in stale:
+            item.takeChildren()
+            if item.isExpanded():
+                self._fill_kids(item)
         self.columns.apply()                                # a Version column hidden while blank everywhere shows once one is read
         if self.pane.dev is not None:                       # the details pane shows the new status, version and checks too
             key = self._key("device", self.pane.dev.get("org", db.target()), self.pane.dev["id"])
@@ -1424,10 +1482,52 @@ class InventoryTab(QWidget):
                 it.setForeground(col, muted)
         if state and d["enabled"]:
             it.setToolTip(self.CHECKED, state["at"])
+        if unifikids.has_children(d):                        # its devices are listed when it is opened (_fill_kids)
+            it.setChildIndicatorPolicy(QTreeWidgetItem.ChildIndicatorPolicy.ShowIndicator)
         sw = display.software_line(db.software_of(d))        # "17.09.04a, INSTALL mode, image cat9k_iosxe.17.09.04a.SPA.bin. Read 26 Oct 2026 at 14:02."
         if sw:
             it.setToolTip(self.VERSION, sw)
         return it
+
+    def _fill_kids(self, item):
+        """A UniFi console's devices under its row, built the first time it is opened. They are views of its results: they open a page
+        of their own and can be removed once the console no longer reports them, nothing else."""
+        d = self.payload.get(item.data(0, ROLE))
+        if self.kind_of(item)[0] != "device" or not d or item.childCount() or d.get("vendor") not in unifikids.KINDS:
+            return
+        vendor, muted = display.vendor_name(d["vendor"]), QColor((theme.current() or {}).get("muted", "#888888"))
+        items = []
+        for k in unifikids.children(d):
+            it = QTreeWidgetItem([unifikids.shown_name(k), vendor, k["model"]] + [""] * (len(self.COLS) - 3))
+            it.setText(self.STATUS, "" if k["gone"] else k["status"])
+            it.setText(self.CHECKED, display.ago(k["last_seen"]))
+            it.setToolTip(self.CHECKED, k["last_seen"])
+            key = f"kid:{item.data(0, ROLE)}/{k['key']}"
+            it.setData(0, ROLE, key)
+            self.payload[key] = {"kid": k, "parent": d}
+            it.setIcon(0, self._icon("device") if k["gone"] else self._device_icon(k["status"]))
+            it.setFlags(Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled)
+            if k["gone"]:
+                for col in range(len(self.COLS)):
+                    it.setForeground(col, muted)
+            items.append(it)
+        item.addChildren(items)
+
+    def _kid_dev(self, item):
+        """What a console's device's page is opened with: the console's record (its limits, organization, vendor) named after the device,
+        so its history is found, with the device in 'kid'."""
+        p = self.payload[item.data(0, ROLE)]
+        parent, kid = p["parent"], p["kid"]
+        base = parent.get("key") or parent["name"]
+        return {**parent, "id": None, "name": f"{parent['name']} / {kid['name']}", "key": f"{base} / {kid['name']}",
+                "kid": {**kid, "parent": {"name": parent["name"], "org": parent.get("org"), "vendor": parent["vendor"]}}}
+
+    def remove_kid(self, item):
+        """Remove: forget a device the console no longer reports. Its history stays."""
+        p = self.payload.get(item.data(0, ROLE))
+        if p:
+            unifikids.forget(p["parent"], p["kid"]["key"])
+            (item.parent() or self.table.invisibleRootItem()).removeChild(item)
 
     def _enter(self):
         if self.selected() is not None:
@@ -1709,7 +1809,9 @@ class InventoryTab(QWidget):
             self.buttons[b].setToolTip(tip)
 
     def double_clicked(self, item, _col):
-        if self.kind_of(item)[0] == "device":
+        if self.kind_of(item)[0] == "kid":
+            self.open_details.emit(self._kid_dev(item))
+        elif self.kind_of(item)[0] == "device":
             self.edit() if self.editable(self.org_of(item)) else self.show_details()
 
     # ---------- devices ----------
@@ -1754,8 +1856,25 @@ class InventoryTab(QWidget):
             if dlg.vendor.findData(prefill.get("vendor") or "") >= 0:
                 dlg.vendor.setCurrentIndex(dlg.vendor.findData(prefill["vendor"]))
         if dlg.exec():
+            if dlg.ticked_sites():
+                self._add_sites(dlg)
+                return
             self._save(dlg.values(), dlg.secret.text(), extra_secrets={**dlg.snmp_secrets(), **dlg.proxy_secrets(), **dlg.ssh_secrets()},
                        link=dlg.link_row)
+
+    def _add_sites(self, dlg):
+        """Site Manager: an entry for each ticked site, scoped to it (its id in Site), named '<name> - <site>'. They share the account's
+        one API key: it is kept once, in a credential profile named after the account, which every entry uses."""
+        v, key = dlg.values(), dlg.secret.text()
+        pid = v["profile_id"]
+        if key:
+            try:
+                pid = profiles.save({"name": v["name"], "org": v["org"]}, {"main": key})
+            except ValueError as e:
+                QMessageBox.warning(self, "Duplicate", str(e))
+                return
+        for name, sid in dlg.ticked_sites():
+            self._save({**v, "name": f"{v['name']} - {name}", "site": sid, "profile_id": pid}, "", extra_secrets=dlg.proxy_secrets())
 
     def edit(self):
         d = self.selected()
@@ -1933,6 +2052,14 @@ class InventoryTab(QWidget):
         if item is not None and not item.isSelected():
             self.table.clearSelection()
             item.setSelected(True)
+        if item is not None and self.kind_of(item)[0] == "kid":         # a console's device: its page, and Remove once it is gone
+            menu = QMenu(self)
+            menu.addAction("Details...", lambda: self.open_details.emit(self._kid_dev(item)))
+            p = self.payload[item.data(0, ROLE)]
+            if p["kid"]["gone"] and self.editable(p["parent"].get("org", db.target())):
+                menu.addAction("Remove", lambda: self.remove_kid(item))
+            menu.exec(self.table.viewport().mapToGlobal(pos))
+            return
         devs, folders = self.selected_devices(), self.selected_folders()
         org = self.selected_org()
         can = org is not None and self.editable(org)

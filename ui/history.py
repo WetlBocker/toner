@@ -409,6 +409,39 @@ class ChartStack(QScrollArea):
 
 
 
+def draw_over_time(d, picked, th, chart, status_chart, table, stack):
+    """One device's ticked checks over time, drawn as their kind of data (chart_kind): numbers as lines on `chart` (a ChartStack); with
+    only status or text checks ticked, the first one's statuses per day on `status_chart`, or the times its value changed in `table`
+    (Device, Value, Checked). `stack` shows the one used. The History page and a device's page share it. Returns the line series."""
+    rows = {c: db.check_rows(d, c) for c in picked} if d else {}
+    kinds = {c: chart_kind(r) for c, r in rows.items()}
+    lines = any(k in ("line", "bar") for k in kinds.values())              # a number among the ticked checks: lines for those
+    first = picked[0] if picked else None
+    kind = "line" if lines or not first else kinds.get(first, "line")      # only text and status ticked: the first one's chart
+    stack.setCurrentWidget({"status": status_chart, "table": table}.get(kind, chart))
+    if kind == "status":
+        rs = rows[first]
+        days = sorted({r["t"][:10] for r in rs})
+        bars = [(s, [sum(1 for r in rs if r["t"][:10] == day and r["status"] == s) for day in days]) for s in chartspec.STATUSES
+                  if any(r["status"] == s for r in rs)]
+        title = display.check_name(first)
+        status_chart.draw(lambda p: chartspec.grouped_bars(p, days, bars, title=title, stacked=True))
+    elif kind == "table":
+        changes = []
+        for r in rows[first]:
+            if not changes or changes[-1]["value"] != r["value"]:
+                changes.append(r)
+        changes.reverse()                                              # newest first
+        with filling(table):
+            table.setRowCount(len(changes))
+            for i, r in enumerate(changes):
+                for j, v in enumerate([db.label_org(d), display.value(r["value"]), r["t"]]):
+                    table.setItem(i, j, QTableWidgetItem(v))
+    series = [(c, db.series(d, c)) for c in picked] if kind in ("line", "bar") else []     # one run so far is still a line
+    chart.set_series(series, th.get(picked[0].split(" (")[0]) if picked else None)
+    return series
+
+
 def _table(cols):
     t = QTableWidget(0, len(cols))
     t.setHorizontalHeaderLabels(cols)
@@ -787,34 +820,9 @@ class HistoryTab(QWidget):
     def draw(self, *_):
         d = self.dev.currentData()
         picked = [self.check_keys[k] for k in self.chk.selected() if k in self.check_keys]
-        rows = {c: db.check_rows(d, c) for c in picked} if d else {}
-        kinds = {c: chart_kind(r) for c, r in rows.items()}
-        lines = any(k in ("line", "bar") for k in kinds.values())              # a number among the ticked checks: lines for those
-        first = picked[0] if picked else None
-        kind = "line" if lines or not first else kinds[first]                  # only text and status ticked: the first one's chart
-        self.over_stack.setCurrentWidget({"status": self.over_chart, "table": self.over_table}.get(kind, self.chart))
-        if kind == "status":
-            rs = rows[first]
-            days = sorted({r["t"][:10] for r in rs})
-            bars = [(s, [sum(1 for r in rs if r["t"][:10] == day and r["status"] == s) for day in days]) for s in chartspec.STATUSES
-                      if any(r["status"] == s for r in rs)]
-            title = display.check_name(first)
-            self.over_chart.draw(lambda p: chartspec.grouped_bars(p, days, bars, title=title, stacked=True))
-        elif kind == "table":
-            changes = []
-            for r in rows[first]:
-                if not changes or changes[-1]["value"] != r["value"]:
-                    changes.append(r)
-            changes.reverse()                                              # newest first
-            with filling(self.over_table):
-                self.over_table.setRowCount(len(changes))
-                for i, r in enumerate(changes):
-                    for j, v in enumerate([db.label_org(d), display.value(r["value"]), r["t"]]):
-                        self.over_table.setItem(i, j, QTableWidgetItem(v))
-        series = [(c, db.series(d, c)) for c in picked] if kind in ("line", "bar") else []     # one run so far is still a line
         with db.within(db.split_key(d or "")[1]):                         # that organization's limits
             th = db.get_thresholds()
-        self.chart.set_series(series, th.get(picked[0].split(" (")[0]) if picked else None)
+        draw_over_time(d, picked, th, self.chart, self.over_chart, self.over_table, self.over_stack)
 
     def screen_context(self):
         """What the Assistant is told about this page: the chosen run and its rows, and the device and checks on the chart."""

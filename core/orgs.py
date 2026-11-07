@@ -16,7 +16,7 @@ SETTING = "org_current"
 COLOURS = ["#2f6fed", "#1e9e6a", "#c2410c", "#7c3aed", "#0e7490", "#be185d", "#a16207", "#4d7c0f"]
 
 # Tables whose rows belong to one device (by its name; UniFi sub-devices are 'controller / ap'), moved with it.
-DEVICE_TABLES = ("counter_baseline", "alert_state", "diagnostics", "agent_reports", "agent_metrics", "agent_seen", "ssh_sessions")
+DEVICE_TABLES = ("counter_baseline", "alert_state", "diagnostics", "agent_reports", "agent_metrics", "agent_seen", "ssh_sessions", "unifi_seen")
 
 
 def list_orgs(archived=True):
@@ -273,9 +273,9 @@ def _move_data(src, dst, dev_name):
                 for r in rows:
                     if t in ("agent_reports", "agent_seen"):
                         c.execute(f"DELETE FROM {t} WHERE device=?", (r["device"],))
-                    if t in ("counter_baseline", "alert_state"):
-                        c.execute(f"DELETE FROM {t} WHERE device=? AND " + ("key=?" if t == "counter_baseline" else "check_name=?"),
-                                  (r["device"], r["key"] if t == "counter_baseline" else r["check_name"]))
+                    if t in ("counter_baseline", "alert_state", "unifi_seen"):
+                        c.execute(f"DELETE FROM {t} WHERE device=? AND " + ("check_name=?" if t == "alert_state" else "key=?"),
+                                  (r["device"], r["check_name"] if t == "alert_state" else r["key"]))
                     _insert(c, t, r)
             ids = {r["id"]: _insert(c, "config_backups", r) for r in backups}
             for r in blog:

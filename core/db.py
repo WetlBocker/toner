@@ -728,9 +728,19 @@ def _m13_backup_secrets(c):
     c.execute("CREATE INDEX IF NOT EXISTS idx_backups_unchecked ON config_backups(id) WHERE secret IS NULL")
 
 
+def _m14_unifi_seen(c):
+    """The devices a UniFi console reports (core/unifikids.py): when each was first and last seen, by its id, so one the console no
+    longer reports stays listed until it is removed. Name and model are the latest the console gave."""
+    c.executescript("""
+    CREATE TABLE IF NOT EXISTS unifi_seen (
+        device TEXT NOT NULL, key TEXT NOT NULL, label TEXT NOT NULL, model TEXT DEFAULT '', first_seen TEXT NOT NULL, last_seen TEXT NOT NULL,
+        PRIMARY KEY (device, key)) WITHOUT ROWID;
+    """)
+
+
 MIGRATIONS = [(1, _m1_legacy_columns), (2, _m2_agent_history), (3, _m3_agent_tokens), (4, _m4_device_checks), (5, _m5_ansible_runs),
               (6, _m6_shared), (7, _m7_org_uids), (8, _m8_faster_history), (9, _m9_api_tester), (10, _m10_assistant), (11, _m11_device_software),
-              (12, _m12_assistant_searches), (13, _m13_backup_secrets)]
+              (12, _m12_assistant_searches), (13, _m13_backup_secrets), (14, _m14_unifi_seen)]
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 
 
@@ -1447,6 +1457,8 @@ def _save_run_here(results):
             "INSERT INTO results(run_id, device, check_name, status, value, message, numeric) "
             "VALUES(?,?,?,?,?,?,?)",
             [(rid, r.device, r.check, r.status, r.value, r.message, r.numeric) for r in results])
+        from core import unifikids
+        unifikids.note(c, results, now)
         cutoff = (datetime.now() - timedelta(days=int(get_setting("retention_days")))
                   ).strftime("%Y-%m-%d %H:%M:%S")
         c.execute("DELETE FROM runs WHERE started_at < ?", (cutoff,))

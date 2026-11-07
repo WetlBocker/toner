@@ -4,11 +4,11 @@ import json
 from PySide6.QtCore import QThread, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QFontDatabase
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QFormLayout, QHBoxLayout, QLabel, QMessageBox, QPlainTextEdit,
-                               QPushButton, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
-from core import backup, db, display, perms, profiles, sessions, snmp, vendors
+                               QPushButton, QStackedWidget, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
+from core import backup, db, display, perms, profiles, sessions, snmp, unifikids, vendors
 from core.runner import run_one
 from ui.configs import DiffHighlighter
-from ui.history import ChartStack
+from ui.history import ChartStack, _table as history_table, draw_over_time
 from ui.widgets import GroupPicker, StatusDelegate
 from ui import chartspec, status as st
 from ui.webchart import ChartView
@@ -68,6 +68,9 @@ class DeviceSummary(QWidget):
         while self.info.rowCount():
             self.info.removeRow(0)
         d = self.dev
+        if d.get("kid"):                                    # a console's device: a view, with no record of its own to describe
+            self.info.addRow(QLabel("<span style='color:gray'>Status</span>"), QLabel(f"{d['kid']['status']}  ({d['kid']['last_seen']})"))
+            return
         prof = (profiles.get(d.get("profile_id")) or {}).get("name", "")
         try:
             jump = json.loads(d.get("jump") or "{}").get("device", "")
@@ -117,11 +120,16 @@ class DeviceSummary(QWidget):
         return "; ".join(parts)
 
     def _latest_rows(self):
+        """The device's own latest rows: a UniFi console's devices have pages of their own, so their rows are theirs, not the console's."""
+        kid = self.dev.get("kid")
+        if kid:
+            return unifikids.rows_for(kid["parent"], kid["key"])
         name = self.dev["name"]
+        theirs = unifikids.labels(self.dev)
         runs = [r for r in db.list_runs(60)]
         for r in runs:
             rows = [x for x in db.run_results(r["id"]) if (x["device"] or "").split(" / ")[0] == name
-                    and x["check_name"] != "config backup"]
+                    and x["check_name"] != "config backup" and (x["device"] or "").partition(" / ")[2] not in theirs]
             if rows:
                 return rows
         return []
@@ -199,6 +207,13 @@ class DeviceView(QDialog):
 
         self.pick = GroupPicker(all_text="Choose checks", noun="checks", clear_text="Clear selection")
         self.chart = ChartStack()
+        self.over_chart = ChartView(min_height=240)            # a status check: how often each status happened, by day (as on History)
+        self.over_chart.setAccessibleName("Values over time")
+        self.over_table = history_table(["Device", "Value", "Checked"])     # a text check: each time its value changed
+        self.over_table.setAccessibleName("Values over time")
+        self.over_stack = QStackedWidget()
+        for w_ in (self.chart, self.over_chart, self.over_table):
+            self.over_stack.addWidget(w_)
         hist = QWidget()
         hl = QVBoxLayout(hist)
         bar = QHBoxLayout()
@@ -206,7 +221,7 @@ class DeviceView(QDialog):
         bar.addWidget(self.pick)
         bar.addStretch()
         hl.addLayout(bar)
-        hl.addWidget(self.chart, 1)
+        hl.addWidget(self.over_stack, 1)
         self.pick.changed.connect(self.draw)
         self.trend = ChartView(min_height=260)         # the same checks as areas over time, with the limits as dashed lines
         self.trend.setAccessibleName("Trend of the chosen checks")
@@ -282,10 +297,18 @@ class DeviceView(QDialog):
         self.buttons["backup"].setEnabled(backup.supported(d))
         self.buttons["snmp"].setEnabled(profiles.snmp_configured(d) or vendors.is_snmp(d["vendor"]))
         self.buttons["web"].setEnabled(True)
+        if d.get("kid"):                                     # a console's device: dials, history and trends only
+            self.title.setText(unifikids.shown_name(d["kid"]))
+            self.setWindowTitle(self.title.text())
+            self.sub.setText("  -  ".join(x for x in (d["kid"]["model"], d["kid"]["parent"]["name"]) if x))
+            for b in self.buttons.values():
+                b.setVisible(False)
+            self.tabs.setTabVisible(3, False)
         self._fill_info()
         self._fill_checks()
         self._fill_history()
-        self._fill_versions()
+        if not d.get("kid"):
+            self._fill_versions()
 
     def _fill_info(self):
         self.summary.dev = self.dev
@@ -339,12 +362,12 @@ class DeviceView(QDialog):
         self.gauges.setVisible(shown > 0)
 
     def restyle(self):
-        for g in self._gauges + [self.trend]:
+        for g in self._gauges + [self.trend, self.over_chart]:
             g.restyle()
 
     def _fill_history(self):
         keep = self.pick.selected()
-        checks = db.device_checks().get(self.dev["name"], [])
+        checks = (db.device_all_checks() if self.dev.get("kid") else db.device_checks()).get(self.dev["name"], [])
         self.keys = {display.check_name(c): c for c in checks}
         self.pick.set_labels(list(self.keys))
         keep = [k for k in keep if k in self.keys] or list(self.keys)[:1]
@@ -353,10 +376,9 @@ class DeviceView(QDialog):
 
     def draw(self, *_):
         picked = [self.keys[k] for k in self.pick.selected() if k in self.keys]
-        series = [(c, db.series(self.dev["name"], c)) for c in picked]
-        limits = db.thresholds_for(self.dev).get(picked[0].split(" (")[0]) if picked else None
-        self.chart.set_series(series, limits)
-        self._draw_trend(series, limits)
+        th = db.thresholds_for(self.dev)
+        series = draw_over_time(self.dev["name"], picked, th, self.chart, self.over_chart, self.over_table, self.over_stack)
+        self._draw_trend(series, th.get(picked[0].split(" (")[0]) if picked else None)
 
     def _draw_trend(self, series, limits):
         """The Trends tab: every picked check as an area over time; the first check's limits as dashed lines when all share a scale."""

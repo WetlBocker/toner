@@ -1,6 +1,7 @@
 """UniFi Site Manager (api.ui.com): every console and site on the account at once, through one API key. It reports device status and
 firmware per console, the health figures UniFi keeps for each site, the ISP's latency and packet loss, and SD-WAN topologies.
-The Site field is an optional filter on console and site names ('default', blank, * and all mean everything)."""
+The Site field is an optional filter on console and site names ('default', blank, * and all mean everything). A site's id there (the
+Add dialog's Sites list makes one entry per ticked site) scopes the entry to that site: its console, its health, and each of its devices."""
 from datetime import datetime, timezone
 
 from .base import OK, WARN, FAIL, grade, grade_low
@@ -20,7 +21,11 @@ class UnifiCloudDriver(UnifiApi):
             out.append(self.result("reachability", OK, f"{len(hosts)} console{'s' if len(hosts) != 1 else ''}", "UniFi Site Manager API"))
         if self.enabled("consoles"):
             self.safe(out, "consoles", lambda: self.consoles(out, hosts))
-        sites = self.token_pages("/sites") if any(self.enabled(k) for k in ("sites", "isp latency", "isp loss")) else []
+        want = (self.dev.get("site") or "").strip()
+        scoped = want.lower() not in ("", "*", "all", "default")
+        sites = self.token_pages("/sites") if scoped or any(self.enabled(k) for k in ("sites", "isp latency", "isp loss")) else []
+        # shortcut: a console's devices are listed per console (hostId), so a console with several sites shows them all; per site needs an API that says
+        self.scope = next(({s.get("siteId"), s.get("hostId")} for s in sites if s.get("siteId") == want), None) if scoped else None
         names = {(s.get("hostId"), s.get("siteId")): ((s.get("meta") or {}).get("name") or s.get("siteId")) for s in sites}
         if self.enabled("devices") or self.enabled("firmware"):
             self.safe(out, "devices", lambda: self.devices(out))
@@ -33,6 +38,12 @@ class UnifiCloudDriver(UnifiApi):
         if self.enabled("sd-wan"):
             self.safe(out, "sd-wan", lambda: self.sdwan(out))
         return out
+
+    def wanted(self, *names):
+        """Scoped to a site: only what belongs to that site or its console."""
+        if getattr(self, "scope", None):
+            return bool(self.scope & {n for n in names if n})
+        return super().wanted(*names)
 
     # ---------------------------------------------------------------- the consoles themselves
     def consoles(self, out, hosts):
@@ -81,11 +92,27 @@ class UnifiCloudDriver(UnifiApi):
                     out.append(self.row(label, "devices", FAIL if console_down or any(s[0] == FAIL for _d, s in down) else WARN,
                                         f"{len(devs) - len(down)}/{len(devs)} online", names + (f" and {len(down) - 6} more" if len(down) > 6 else ""),
                                         numeric=float(len(down))))
+            if self.scope:
+                self.each_device(out, devs, sev)
             if self.enabled("firmware") and sev != "Ignore":
                 old = [d for d in devs if d.get("updateAvailable")]
                 if old:
                     out.append(self.row(label, "firmware", FAIL if sev == "FAIL" else WARN, f"{len(old)} to update",
                                         ", ".join(f"{d.get('name') or d.get('mac')} -> {d.get('updateAvailable')}" for d in old[:6]), numeric=float(len(old))))
+
+    def each_device(self, out, devs, sev):
+        """A site entry: each device's own state and firmware, so it is listed under the entry with a page of its own."""
+        for d in devs:
+            label = d.get("name") or d.get("mac") or d.get("id")
+            rows = []
+            if self.enabled("devices"):
+                status, word = state_status(d.get("status"))
+                rows.append(self.row(label, "state", status, word, d.get("model", "") if status != OK else ""))
+            if self.enabled("firmware") and sev != "Ignore" and d.get("updateAvailable"):
+                rows.append(self.row(label, "firmware", FAIL if sev == "FAIL" else WARN, str(d.get("version") or ""), "an update is available"))
+            for r in rows:
+                r.kid = (d.get("id") or d.get("mac") or label, d.get("model") or "")
+            out.extend(rows)
 
     # ---------------------------------------------------------------- sites
     def site(self, out, s):

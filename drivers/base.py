@@ -29,6 +29,7 @@ class Result:
     message: str = ""
     numeric: Optional[float] = None     # stored for trend charts
     org: Optional[int] = field(default=None, compare=False, repr=False)    # the organization whose file the device lives in (None: the current one)
+    kid: Optional[tuple] = field(default=None, compare=False, repr=False)  # a UniFi console's device: (its id or MAC, its model); see core/unifikids.py
 
 def grade(value, warn, fail):
     """Higher value = worse."""

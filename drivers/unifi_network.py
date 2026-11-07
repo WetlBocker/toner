@@ -50,7 +50,8 @@ class UnifiNetworkDriver(UnifiApi):
         sid = site.get("id")
         devices = self.offset_pages(f"/sites/{sid}/devices")
         for dev in devices:
-            self.safe_rows(out, f"{tag}{dev.get('name') or dev.get('macAddress')}", lambda r, dev=dev: self.one_device(r, sid, dev))
+            self.safe_rows(out, f"{tag}{dev.get('name') or dev.get('macAddress')}", lambda r, dev=dev: self.one_device(r, sid, dev),
+                           (dev.get("id") or dev.get("macAddress"), dev.get("model") or ""))
         if self.enabled("clients"):
             try:
                 data = self.get(f"/sites/{sid}/clients", {"offset": 0, "limit": 1})
@@ -60,8 +61,9 @@ class UnifiNetworkDriver(UnifiApi):
             except Exception as e:                                 # a count is nice to have; do not lose the devices over it
                 out.append(self.result("clients", WARN, "unavailable", f"{type(e).__name__}: {e}"))
 
-    def safe_rows(self, out, label, fn):
-        """Rows for one device; a failure on it is reported against it and does not stop the others."""
+    def safe_rows(self, out, label, fn, kid=None):
+        """Rows for one device; a failure on it is reported against it and does not stop the others. `kid`: (id, model), which
+        lists the device under the console in the Inventory (core/unifikids.py)."""
         rows = []
         try:
             fn(rows.append)
@@ -69,6 +71,7 @@ class UnifiNetworkDriver(UnifiApi):
             rows.append(self.row(label, "statistics", "ERROR", "", f"{type(e).__name__}: {e}"))
         for r in rows:
             r.device = f"{self.name} / {label}"
+            r.kid = kid if kid and kid[0] else (label, kid[1] if kid else "")
         out.extend(rows)
 
     def one_device(self, add, sid, dev):
