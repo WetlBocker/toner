@@ -107,8 +107,8 @@ def signature(page):
         if _not_setting(w, page):
             continue                                  # acts by its own buttons (Settings > Security's vault section)
         if isinstance(w, QLineEdit):
-            if isinstance(w.parentWidget(), (QAbstractSpinBox, QComboBox)) and w.parentWidget().property("notSetting"):
-                continue
+            if w.isReadOnly() or (isinstance(w.parentWidget(), (QAbstractSpinBox, QComboBox)) and w.parentWidget().property("notSetting")):
+                continue                              # a read-only box shows something that follows (Agents' firewall command, Demarc's status), not a setting
             out.append(w.text())
         elif isinstance(w, QAbstractButton):
             if w.isCheckable() and not w.property("notSetting"):
