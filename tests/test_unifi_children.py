@@ -133,6 +133,12 @@ check("the device's page shows only its own CPU and memory dials", dials(child) 
 check("its latest checks are its own", child.checks.rowCount() >= 3 and all(":" not in child.checks.item(i, 0).text() for i in range(child.checks.rowCount())))
 check("no Edit, Run checks or Back up on a device's page (it is a view)", all(child.buttons[k].isHidden() for k in ("edit", "checks", "backup")) and not child.tabs.isTabVisible(3))
 check("its title is the device's name", child.title.text() == "AP Lobby")
+def info_rows(view):
+    f = view.summary.info
+    return {f.itemAt(i, f.ItemRole.LabelRole).widget().text(): f.itemAt(i, f.ItemRole.FieldRole).widget().text() for i in range(f.rowCount())}
+lobby = next(k for k in unifikids.children(gw) if k["key"] == "d1")
+status_row = next((v for k, v in info_rows(child).items() if "Status" in k), "")
+check("its Status row says when it was last seen, as Toner shows times", status_row == f"OK  ({display.read_on(lobby['last_seen'])})", status_row)
 switch = DeviceView(tab._kid_dev(next(item.child(i) for i in range(item.childCount()) if item.child(i).text(0) == "Edge Switch")))
 check("another device's page shows its own dials, not the first 3 devices'", dials(switch) == [("CPU dial", 15.0), ("Memory dial", 25.0)], dials(switch))
 parent = DeviceView(gw)
@@ -193,12 +199,20 @@ check("a device still reported cannot be removed (it would come back)", "Remove"
 history_before = len(db.series("gw / AP Hall", "cpu"))
 if "Remove" in acts:
     acts["Remove"].trigger()
+from core import audit
+check("Remove is written to the audit log", any(e.get("action") == "UniFi device removed" and e.get("detail") == "gw / AP Hall" for e in audit.recent(10)), audit.recent(3))
 item = find_item(tab, "gw"); item.setExpanded(True); app.processEvents()
 check("Remove forgets it", "d2" not in {k["key"] for k in unifikids.children(gw)} and not any(item.child(i).text(0).startswith("AP Hall") for i in range(item.childCount())))
 check("but keeps its history rows", history_before and len(db.series("gw / AP Hall", "cpu")) == history_before)
 time.sleep(1.1)
 net_routes([GATEWAY] + NET); run_and_save(gw)
 check("if it comes back it is listed again", "d2" in {k["key"] for k in unifikids.children(gw) if not k["gone"]})
+time.sleep(1.1)
+OPTS["disabled"] = {"unifi_network:devices"}
+rows = run_and_save(gw)
+OPTS["disabled"] = set()
+check("with the devices check off, an offline device makes no row...", not any(r.device == "gw / AP Yard" for r in rows), [r.device for r in rows])
+check("...but the API listed it, so it is not shown as gone", not any(k["gone"] for k in unifikids.children(gw)), [(k["name"], k["gone"]) for k in unifikids.children(gw)])
 
 print("== search finds a console's devices")
 tab.search.setText("lobby"); tab.refresh()
@@ -226,16 +240,49 @@ except Exception as e:                                     # what the runner sto
     db.save_run([Result("multi", "connection", "ERROR", "", str(e))])
 check("a site whose devices could not be read leaves them listed, not gone", unifikids.children(multi) and not any(k["gone"] for k in unifikids.children(multi)))
 before = len(unifikids.children(multi))
+with db.connect() as c:                                     # rows left under the new name (a console that once had it)
+    c.execute("INSERT INTO unifi_seen(device, key, label, model, first_seen, last_seen) VALUES('multi2', 'd1', 'Old AP', '', '2026-01-01 00:00:00', '2026-01-01 00:00:00')")
 tab.refresh()
-tab._save({**db.get_device(multi["id"]), "name": "multi2"}, "", old_name="multi")
+try:
+    saved = tab._save({**db.get_device(multi["id"]), "name": "multi2"}, "NEWKEY", old_name="multi")
+except Exception as e:
+    saved = e
 multi2 = db.get_device(multi["id"])
-check("renaming a console keeps its devices' bookkeeping", multi2["name"] == "multi2" and len(unifikids.children(multi2)) == before and unifikids.children(multi) == [])
+check("renaming onto a name with leftover rows succeeds", saved is True, repr(saved))
+check("...and its password and audit entry are written", keyring.get_password(db.SERVICE, db.secret_name("multi2")) == "NEWKEY"
+      and any(e.get("action") == "device edited" and e.get("detail") == "multi2" for e in audit.recent(10)), audit.recent(3))
+check("renaming a console keeps its devices' bookkeeping", multi2["name"] == "multi2" and len(unifikids.children(multi2)) == before and unifikids.children(multi) == []
+      and "Old AP" not in {k["name"] for k in unifikids.children(multi2)}, unifikids.children(multi2))
 QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes)
 tab.table.clearSelection(); find_item(tab, "multi2").setSelected(True)
 tab.delete()
 with db.connect() as c:
     left = c.execute("SELECT COUNT(*) FROM unifi_seen WHERE device IN ('multi', 'multi2')").fetchone()[0]
 check("deleting a console forgets its devices' bookkeeping", left == 0 and db.get_device(multi["id"]) is None, left)
+
+print("== a console moved to an organization without its data")
+from core import orgs
+net_routes([GATEWAY] + NET)
+mover = add_dev(name="mover", host="10.0.0.1", password="NETKEY")
+run_and_save(mover)
+moveco = orgs.create("Moveco", "MOVE")
+orgs.move_devices([{**db.get_device(mover["id"]), "org": db.GLOBAL}], moveco, with_data=False)
+with db.connect() as c:
+    left = c.execute("SELECT COUNT(*) FROM unifi_seen WHERE device='mover'").fetchone()[0]
+check("its device list does not stay behind in the old organization", left == 0, left)
+with db.within(moveco):
+    moved = next(x for x in db.list_devices() if x["name"] == "mover")
+    run_and_save(moved)
+tab.refresh()
+find_item(tab, "mover").setExpanded(True); app.processEvents()
+moved_item = find_item(tab, "mover"); moved_item.setExpanded(True); app.processEvents()
+moved_kid = moved_item.child(0)
+check("in Global, a device's row belongs to its console's organization", tab.org_of(moved_kid) == moveco, tab.org_of(moved_kid))
+tab.table.clearSelection(); find_item(tab, "gw").setSelected(True); moved_kid.setSelected(True); app.processEvents(); tab.update_buttons()
+check("a Global device with another organization's device row: no Edit or Delete", not tab.buttons["Edit"].isEnabled() and not tab.buttons["Delete"].isEnabled())
+tab.table.clearSelection(); moved_item.setSelected(True); moved_kid.setSelected(True); app.processEvents(); tab.update_buttons()
+check("a console with its own device row: Delete still works", tab.buttons["Delete"].isEnabled())
+tab.table.clearSelection()
 
 print("== Site Manager: the Add dialog lists the account's sites")
 STALE = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 310 * 86400))
@@ -292,6 +339,18 @@ check("the shared profile is made once an entry is saved, and audited as Setting
       and any(e.get("action") == "profile created" and "acct" in str(e.get("detail")) for e in audit.recent(50)), audit.recent(5))
 check("both use one API key in the vault: one secret, not two copies", len(pids) == 1 and None not in pids and list(STORE.values()).count("CLOUDKEY") == 1
       and not any(u.endswith("acct - HQ") or u.endswith("acct - Branch") for _s, u in STORE), (pids, [u for _s, u in STORE]))
+warned = []
+QMessageBox.warning = staticmethod(lambda *a, **k: warned.append(a[2]))
+d.name.setText("acme:eu")
+I.DeviceDialog = lambda *a, **k: d
+try:
+    tab.add(); colon = None
+except Exception as e:
+    colon = e
+I.DeviceDialog = real_dialog
+QMessageBox.warning = staticmethod(lambda *a, **k: None)
+check("an account name with ':' is refused before anything is saved, with the profile's own message", colon is None and warned == ["A profile name cannot contain ':'."]
+      and not any(x["name"].startswith("acme:eu") for x in db.list_devices()), (repr(colon), warned, [x["name"] for x in db.list_devices()]))
 CALLS.clear()
 plain = add_dev(name="acct-all", vendor="unifi_cloud", host="api.ui.com", site="default", password="CLOUDKEY")
 run_and_save(plain)
@@ -317,10 +376,34 @@ check("the console and site rows are the entry's own, not a device's", all(r.dev
 console_rows = unifikids.rows_for(made["acct - HQ"], "1")
 check("a console device named like its console: its page shows only its own rows", {r["check_name"] for r in console_rows} == {"state"}
       and all(r["device"] == "acct - HQ / HQ UDM" for r in console_rows), [(r["device"], r["check_name"], r["value"]) for r in console_rows])
-check("and the totals (devices online, firmware to update) stay on the entry's page", {("devices", "2/3 online"), ("firmware", "1 to update")} <=
-      {(r.check, r.value) for r in hq_rows if r.device == "acct - HQ"})
+check("a site entry has no totals beside its devices' own rows (no duplicates)", not any(r.check in ("devices", "firmware") and r.device == "acct - HQ" for r in hq_rows),
+      [(r.check, r.value) for r in hq_rows if r.device == "acct - HQ"])
 check("and only its own site's health", not any("Branch" in r.device for r in hq_rows) and not any(r.device.endswith("/ HQ") for r in br_rows))
 check("the whole-account entry is as before (no devices under it)", unifikids.children(plain) == [])
+
+print("== a site entry: one offline AP is one FAIL row")
+TODAY = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+ROUTES.update({"/hosts": {"data": [{"id": "h1", "type": "console", "latestBackupTime": TODAY}]},
+               "/devices": {"data": [{"hostId": "h1", "hostName": "HQ UDM", "devices": [{"id": "1", "name": "HQ UDM", "model": "UDM Pro", "status": "online", "isConsole": True},
+                                                                                       {"id": "3", "name": "HQ AP", "model": "U6", "status": "offline", "updateAvailable": "7.1"}]}]},
+               "/sites": {"data": [{"siteId": "st1", "hostId": "h1", "meta": {"name": "HQ"}, "statistics": {"counts": {"offlineDevice": 1, "totalDevice": 2}, "percentages": {"wanUptime": 100}}}]},
+               "/isp-metrics/5m": {"data": []}, "/sd-wan-configs": {"data": []}})
+one = run_and_save(made["acct - HQ"])
+check("exactly one FAIL row: the AP's own", [(r.device, r.check) for r in one if r.status == "FAIL"] == [("acct - HQ / HQ AP", "state")],
+      [(r.device, r.check, r.value) for r in one if r.status == "FAIL"])
+time.sleep(1.1)
+OPTS["disabled"] = {"unifi_cloud:devices"}
+run_and_save(made["acct - HQ"])
+OPTS["disabled"] = set()
+check("with only firmware on, a device with nothing to update is still seen (not gone)", [k["gone"] for k in unifikids.children(made["acct - HQ"]) if k["name"] in ("HQ UDM", "HQ AP")] == [False, False],
+      [(k["name"], k["gone"]) for k in unifikids.children(made["acct - HQ"])])
+
+print("== the gateway listed after 259 other devices")
+crowd = [{"id": f"y{i}", "name": f"Node {i:03d}", "model": "U6", "macAddress": f"cc:{i}", "ipAddress": f"10.3.{i // 200}.{i % 200 + 1}", "state": "ONLINE"} for i in range(259)]
+net_routes(crowd + [{**GATEWAY, "ipAddress": "10.0.0.9"}])
+late = add_dev(name="late", host="10.0.0.9", password="NETKEY")
+rows = run_and_save(late)
+check("its own statistics are read even past the cap", any(r.device == "late" and r.check == "cpu" for r in rows), [r.check for r in rows if r.device == "late"])
 
 print("== 300 devices")
 many = [{"id": f"x{i}", "name": f"AP {i:03d}", "model": "U6", "macAddress": f"bb:{i}", "ipAddress": "10.1.0.1", "state": "OFFLINE", "firmwareUpdatable": False}

@@ -1383,6 +1383,8 @@ class InventoryTab(QWidget):
         """The organization whose file a tree item belongs to."""
         key = item.data(0, ROLE) or ""
         kind, _, ident = key.partition(":")
+        if kind == "kid":                                    # a console's device: its console's ('kid:<console key>/<id>')
+            kind, _, ident = ident.partition("/")[0].partition(":")
         if kind == "org":
             return int(ident)
         if kind in ("folder", "device") and ":" in ident:
@@ -1536,6 +1538,8 @@ class InventoryTab(QWidget):
         p = self.payload.get(item.data(0, ROLE))
         if p:
             unifikids.forget(p["parent"], p["kid"]["key"])
+            with db.within(p["parent"].get("org")):
+                audit.log("UniFi device removed", f"{p['parent']['name']} / {p['kid']['name']}")
             (item.parent() or self.table.invisibleRootItem()).removeChild(item)
 
     def _enter(self):
@@ -1884,6 +1888,11 @@ class InventoryTab(QWidget):
         v, key = dlg.values(), dlg.secret.text()
         pid = v["profile_id"]
         if key:
+            try:
+                profiles.clean_name(v["name"])                  # before anything is saved: the profile is named after the account
+            except ValueError as e:
+                QMessageBox.warning(self, "Profile", str(e))
+                return
             with db.within(v["org"]):
                 taken = profiles.by_name(v["name"])
             if taken:
@@ -1894,7 +1903,11 @@ class InventoryTab(QWidget):
             if not self._save(dev, "", extra_secrets=dlg.proxy_secrets()) or not key or pid != v["profile_id"]:
                 continue
             with db.within(v["org"]):                    # the first entry is saved: now the account's key, once, for every entry
-                pid = profiles.save({"name": v["name"]}, {"main": key})
+                try:
+                    pid = profiles.save({"name": v["name"]}, {"main": key})
+                except ValueError as e:
+                    QMessageBox.warning(self, "Profile", str(e))
+                    break
                 audit.log("profile created", v["name"])
                 first = next(x for x in db.list_devices() if x["name"] == dev["name"])
                 db.save_device({**first, "profile_id": pid})

@@ -22,10 +22,11 @@ class UnifiNetworkDriver(UnifiApi):
         many = len(sites) > 1
         found = [(site, self.offset_pages(f"/sites/{site.get('id')}/devices")) for site in sites]
         gw = self.gateway([d for _s, devs in found for d in devs])
-        for site, devices in found:
+        for site, devices in sorted(found, key=lambda f: not any(d is gw for d in f[1])):     # the gateway's site first
             self.site_checks(out, site, f"{site.get('name')} - " if many else "", devices, gw)
         if self.enabled("pending"):
             self.safe(out, "pending", self.pending)
+        self.carry_sightings(out)
         return out
 
     def pick_sites(self, sites):
@@ -59,7 +60,7 @@ class UnifiNetworkDriver(UnifiApi):
     # ---------------------------------------------------------------- one site
     def site_checks(self, out, site, tag, devices, gw=None):
         sid = site.get("id")
-        for dev in devices:
+        for dev in sorted(devices, key=lambda d: d is not gw):        # the gateway's statistics first, never past MAX_STATS
             self.safe_rows(out, None if dev is gw else f"{tag}{dev.get('name') or dev.get('macAddress')}", lambda r, dev=dev: self.one_device(r, sid, dev),
                            (dev.get("id") or dev.get("macAddress"), dev.get("model") or ""))
         if self.enabled("clients"):
@@ -79,12 +80,15 @@ class UnifiNetworkDriver(UnifiApi):
             fn(rows.append)
         except Exception as e:
             rows.append(self.row(label, "statistics", "ERROR", "", f"{type(e).__name__}: {e}"))
+        kid = kid if kid and kid[0] else (label, kid[1] if kid else "")
         for r in rows:
             if label is None:                                 # the gateway that is the entry itself
                 r.device = self.name
                 continue
             r.device = f"{self.name} / {label}"
-            r.kid = kid if kid and kid[0] else (label, kid[1] if kid else "")
+            r.kid = kid
+        if not rows and label is not None:
+            self.sighted(label, kid)
         out.extend(rows)
 
     def one_device(self, add, sid, dev):

@@ -101,6 +101,16 @@ class UnifiApi(Driver):
             r.device = f"{self.name} / {label}"
         return r
 
+    def sighted(self, label, kid):
+        """A device the API listed whose checks made no row (its check is off, or it has nothing to report): still a sighting."""
+        self.__dict__.setdefault("_sighted", []).append((label, kid))
+
+    def carry_sightings(self, out):
+        """The sightings ride on the run's first row, so core/unifikids.note sees every listed device and none shows as gone.
+        shortcut: a run with no row at all records none; it would need a row to carry them."""
+        if out and getattr(self, "_sighted", None):
+            out[0].seen = self._sighted
+
     def wanted(self, *names):
         """The Site field as a filter on names and ids: blank, '*' and 'all' mean everything, and so does 'default' in the cloud
         driver (the device dialog fills that in); the Network driver treats 'default' as the console's default site."""

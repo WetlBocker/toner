@@ -214,6 +214,7 @@ def _move_from(src, dst, devs, with_data):
             with db.within(src), db.connect() as c:
                 token = _rows(c, "agent_reports", "device=?", (row["name"],))
                 c.execute("DELETE FROM agent_reports WHERE device=?", (row["name"],))
+                c.execute("DELETE FROM unifi_seen WHERE device=?", (row["name"],))     # its console's device list is not history
             with db.within(dst), db.connect() as c:
                 for r in token:
                     c.execute("DELETE FROM agent_reports WHERE device=?", (r["device"],))

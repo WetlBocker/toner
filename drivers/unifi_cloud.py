@@ -38,6 +38,7 @@ class UnifiCloudDriver(UnifiApi):
             self.safe(out, "isp", lambda: self.isp(out, names))
         if self.enabled("sd-wan"):
             self.safe(out, "sd-wan", lambda: self.sdwan(out))
+        self.carry_sightings(out)
         return out
 
     def wanted(self, *names, site=None):
@@ -87,6 +88,9 @@ class UnifiCloudDriver(UnifiApi):
             devs = [d for d in host.get("devices") or [] if isinstance(d, dict)]
             if not devs:
                 continue
+            if self.scope:                           # a site entry: each device's own rows, no totals that repeat them
+                self.each_device(out, devs, sev)
+                continue
             if self.enabled("devices"):
                 bad = [(d, state_status(d.get("status"))) for d in devs]
                 down = [(d, s) for d, s in bad if s[0] != OK]
@@ -98,8 +102,6 @@ class UnifiCloudDriver(UnifiApi):
                     out.append(self.agg(label, "devices", FAIL if console_down or any(s[0] == FAIL for _d, s in down) else WARN,
                                         f"{len(devs) - len(down)}/{len(devs)} online", names + (f" and {len(down) - 6} more" if len(down) > 6 else ""),
                                         numeric=float(len(down))))
-            if self.scope:
-                self.each_device(out, devs, sev)
             if self.enabled("firmware") and sev != "Ignore":
                 old = [d for d in devs if d.get("updateAvailable")]
                 if old:
@@ -116,8 +118,11 @@ class UnifiCloudDriver(UnifiApi):
                 rows.append(self.row(label, "state", status, word, d.get("model", "") if status != OK else ""))
             if self.enabled("firmware") and sev != "Ignore" and d.get("updateAvailable"):
                 rows.append(self.row(label, "firmware", FAIL if sev == "FAIL" else WARN, str(d.get("version") or ""), "an update is available"))
+            kid = (d.get("id") or d.get("mac") or label, d.get("model") or "")
             for r in rows:
-                r.kid = (d.get("id") or d.get("mac") or label, d.get("model") or "")
+                r.kid = kid
+            if not rows:
+                self.sighted(label, kid)
             out.extend(rows)
 
     # ---------------------------------------------------------------- sites

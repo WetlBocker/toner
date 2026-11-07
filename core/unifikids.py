@@ -11,13 +11,14 @@ WORST = {"ERROR": 0, "FAIL": 1, "WARN": 2}
 
 
 def note(c, results, now):
-    """db.save_run, in its transaction: each row a driver marked with its device's key (Result.kid) is a sighting of that device."""
+    """db.save_run, in its transaction: each row a driver marked with its device's key (Result.kid) is a sighting of that device, and so
+    is each device a row carries in Result.seen (listed by the console, with no row of its own)."""
     seen = {}
     for r in results:
+        parent, _, label = (r.device or "").partition(" / ")
         kid = getattr(r, "kid", None)
-        if kid and " / " in (r.device or ""):
-            parent, _, label = r.device.partition(" / ")
-            seen[(parent, str(kid[0]))] = (label, kid[1] or "")
+        for name, k in ([(label, kid)] if kid and label else []) + list(getattr(r, "seen", None) or []):
+            seen[(parent, str(k[0]))] = (name, k[1] or "")
     if seen:
         c.executemany("INSERT INTO unifi_seen(device, key, label, model, first_seen, last_seen) VALUES(?,?,?,?,?,?) "
                       "ON CONFLICT(device, key) DO UPDATE SET label=excluded.label, model=excluded.model, last_seen=excluded.last_seen",
@@ -89,6 +90,7 @@ def forget(dev, key=None):
 def rename(old, new):
     """A console renamed in the Inventory keeps its devices' first and last seen (in the file being written to)."""
     with db.connect() as c:
+        c.execute("DELETE FROM unifi_seen WHERE device=?", (new,))          # rows left by a console that once had the new name
         c.execute("UPDATE unifi_seen SET device=? WHERE device=?", (new, old))
 
 

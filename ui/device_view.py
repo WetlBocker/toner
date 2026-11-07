@@ -69,7 +69,7 @@ class DeviceSummary(QWidget):
             self.info.removeRow(0)
         d = self.dev
         if d.get("kid"):                                    # a console's device: a view, with no record of its own to describe
-            self.info.addRow(QLabel("<span style='color:gray'>Status</span>"), QLabel(f"{d['kid']['status']}  ({d['kid']['last_seen']})"))
+            self.info.addRow(QLabel("<span style='color:gray'>Status</span>"), QLabel(f"{d['kid']['status']}  ({display.read_on(d['kid']['last_seen'])})"))
             return
         prof = (profiles.get(d.get("profile_id")) or {}).get("name", "")
         try:
