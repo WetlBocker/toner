@@ -19,19 +19,20 @@ class UnifiCloudDriver(UnifiApi):
         hosts = self.token_pages("/hosts")
         if self.enabled("reachability"):
             out.append(self.result("reachability", OK, f"{len(hosts)} console{'s' if len(hosts) != 1 else ''}", "UniFi Site Manager API"))
-        if self.enabled("consoles"):
-            self.safe(out, "consoles", lambda: self.consoles(out, hosts))
         want = (self.dev.get("site") or "").strip()
         scoped = want.lower() not in ("", "*", "all", "default")
         sites = self.token_pages("/sites") if scoped or any(self.enabled(k) for k in ("sites", "isp latency", "isp loss")) else []
-        # shortcut: a console's devices are listed per console (hostId), so a console with several sites shows them all; per site needs an API that says
-        self.scope = next(({s.get("siteId"), s.get("hostId")} for s in sites if s.get("siteId") == want), None) if scoped else None
+        # (host id, site id) when the entry is scoped to a site. shortcut: a console's devices are listed per console (hostId), so a console
+        # with several sites shows them all under each; per site needs an API that says which site a device is in
+        self.scope = next(((s.get("hostId"), s.get("siteId")) for s in sites if s.get("siteId") == want), None) if scoped else None
+        if self.enabled("consoles"):
+            self.safe(out, "consoles", lambda: self.consoles(out, hosts))
         names = {(s.get("hostId"), s.get("siteId")): ((s.get("meta") or {}).get("name") or s.get("siteId")) for s in sites}
         if self.enabled("devices") or self.enabled("firmware"):
             self.safe(out, "devices", lambda: self.devices(out))
         if self.enabled("sites"):
             for s in sites:
-                if self.wanted((s.get("meta") or {}).get("name"), s.get("siteId"), s.get("hostId")):
+                if self.wanted((s.get("meta") or {}).get("name"), s.get("siteId"), s.get("hostId"), site=s.get("siteId")):
                     self.site(out, s)
         if self.enabled("isp latency") or self.enabled("isp loss"):
             self.safe(out, "isp", lambda: self.isp(out, names))
@@ -39,11 +40,16 @@ class UnifiCloudDriver(UnifiApi):
             self.safe(out, "sd-wan", lambda: self.sdwan(out))
         return out
 
-    def wanted(self, *names):
-        """Scoped to a site: only what belongs to that site or its console."""
+    def wanted(self, *names, site=None):
+        """Scoped to a site: what belongs to its console (by host id), or with `site`, to that site itself (its site id)."""
         if getattr(self, "scope", None):
-            return bool(self.scope & {n for n in names if n})
+            return site == self.scope[1] if site is not None else self.scope[0] in names
         return super().wanted(*names)
+
+    def agg(self, label, *a, **k):
+        """A row about a console or site as a whole: under its name, or, on an entry scoped to a site, the entry's own row (the devices
+        listed under the entry are each device's own rows)."""
+        return self.row(None if self.scope else label, *a, **k)
 
     # ---------------------------------------------------------------- the consoles themselves
     def consoles(self, out, hosts):
@@ -57,7 +63,7 @@ class UnifiCloudDriver(UnifiApi):
             if not self.wanted(label, h.get("id")):
                 continue
             if h.get("isBlocked"):
-                out.append(self.row(label, "console", FAIL, "blocked", "this console is blocked from the account"))
+                out.append(self.agg(label, "console", FAIL, "blocked", "this console is blocked from the account"))
                 continue
             when = h.get("latestBackupTime")
             days = None
@@ -68,7 +74,7 @@ class UnifiCloudDriver(UnifiApi):
             if days is None:
                 continue
             days = max(0.0, days)
-            out.append(self.row(label, "console", grade(days, t["warn"], t["fail"]), f"backup {days:.0f} days ago" if days >= 1 else "backed up today",
+            out.append(self.agg(label, "console", grade(days, t["warn"], t["fail"]), f"backup {days:.0f} days ago" if days >= 1 else "backed up today",
                                 "backups may have stopped" if days >= t["warn"] else "", numeric=days))
 
     # ---------------------------------------------------------------- devices, per console
@@ -85,11 +91,11 @@ class UnifiCloudDriver(UnifiApi):
                 bad = [(d, state_status(d.get("status"))) for d in devs]
                 down = [(d, s) for d, s in bad if s[0] != OK]
                 if not down:
-                    out.append(self.row(label, "devices", OK, f"{len(devs)} online", numeric=0.0))
+                    out.append(self.agg(label, "devices", OK, f"{len(devs)} online", numeric=0.0))
                 else:
                     console_down = any(d.get("isConsole") and s[0] == FAIL for d, s in down)
                     names = ", ".join(f"{d.get('name') or d.get('mac')} ({s[1]})" for d, s in down[:6])
-                    out.append(self.row(label, "devices", FAIL if console_down or any(s[0] == FAIL for _d, s in down) else WARN,
+                    out.append(self.agg(label, "devices", FAIL if console_down or any(s[0] == FAIL for _d, s in down) else WARN,
                                         f"{len(devs) - len(down)}/{len(devs)} online", names + (f" and {len(down) - 6} more" if len(down) > 6 else ""),
                                         numeric=float(len(down))))
             if self.scope:
@@ -97,7 +103,7 @@ class UnifiCloudDriver(UnifiApi):
             if self.enabled("firmware") and sev != "Ignore":
                 old = [d for d in devs if d.get("updateAvailable")]
                 if old:
-                    out.append(self.row(label, "firmware", FAIL if sev == "FAIL" else WARN, f"{len(old)} to update",
+                    out.append(self.agg(label, "firmware", FAIL if sev == "FAIL" else WARN, f"{len(old)} to update",
                                         ", ".join(f"{d.get('name') or d.get('mac')} -> {d.get('updateAvailable')}" for d in old[:6]), numeric=float(len(old))))
 
     def each_device(self, out, devs, sev):
@@ -130,19 +136,19 @@ class UnifiCloudDriver(UnifiApi):
             problems.append(f"{critical} critical notification{'s' if critical != 1 else ''}")
         status = FAIL if (offline and counts.get("offlineGatewayDevice")) else WARN if problems else OK
         total = counts.get("totalDevice")
-        out.append(self.row(label, "site health", status, "; ".join(problems[:1]) or (f"{total} devices" if total is not None else "ok"),
+        out.append(self.agg(label, "site health", status, "; ".join(problems[:1]) or (f"{total} devices" if total is not None else "ok"),
                             "; ".join(problems) if len(problems) > 1 else "", numeric=float(offline)))
         wan = (stats.get("percentages") or {}).get("wanUptime")
         if wan is not None:
             t = self.th["wan_uptime"]
-            out.append(self.row(label, "wan uptime", grade_low(float(wan), t["warn"], t["fail"]), f"{float(wan):.2f}%", numeric=float(wan)))
+            out.append(self.agg(label, "wan uptime", grade_low(float(wan), t["warn"], t["fail"]), f"{float(wan):.2f}%", numeric=float(wan)))
 
     # ---------------------------------------------------------------- the ISP
     def isp(self, out, names):
         data = self.get("/isp-metrics/5m", {"duration": "24h"})
         for entry in (data.get("data") if isinstance(data, dict) else data) or []:
             site = names.get((entry.get("hostId"), entry.get("siteId")), entry.get("siteId"))
-            if not self.wanted(site, entry.get("siteId"), entry.get("hostId")):
+            if not self.wanted(site, entry.get("siteId"), entry.get("hostId"), site=entry.get("siteId")):
                 continue
             periods = [p for p in entry.get("periods") or [] if isinstance(p, dict)]
             if not periods:
@@ -152,18 +158,21 @@ class UnifiCloudDriver(UnifiApi):
             isp = wan.get("ispName") or ""
             if self.enabled("isp latency") and wan.get("avgLatency") is not None:
                 v, t = float(wan["avgLatency"]), self.th["isp_latency"]
-                out.append(self.row(site, "isp latency", grade(v, t["warn"], t["fail"]), f"{v:.0f} ms", isp, numeric=v))
+                out.append(self.agg(site, "isp latency", grade(v, t["warn"], t["fail"]), f"{v:.0f} ms", isp, numeric=v))
             if self.enabled("isp loss") and wan.get("packetLoss") is not None:
                 v, t = float(wan["packetLoss"]), self.th["isp_loss"]
-                out.append(self.row(site, "isp loss", grade(v, t["warn"], t["fail"]), f"{v:g}%", isp, numeric=v))
+                out.append(self.agg(site, "isp loss", grade(v, t["warn"], t["fail"]), f"{v:g}%", isp, numeric=v))
 
     # ---------------------------------------------------------------- SD-WAN
     def sdwan(self, out):
         for cfg in self.token_pages("/sd-wan-configs", optional=True):
-            if not self.wanted(cfg.get("name"), cfg.get("id")):
+            if not self.scope and not self.wanted(cfg.get("name"), cfg.get("id")):
                 continue
             data = self.get(f"/sd-wan-configs/{cfg.get('id')}/status", optional=True)
             st = (data.get("data") if isinstance(data, dict) and "data" in data else data) or {}
+            if self.scope and not set(self.scope) & {m.get(k) for m in (st.get("hubs") or []) + (st.get("spokes") or []) if isinstance(m, dict)
+                                                     for k in ("hostId", "siteId")}:
+                continue                             # an entry scoped to a site: only a configuration its site or console is in
             label = f"SD-WAN {cfg.get('name') or cfg.get('id')}"
             generate = str(st.get("generateStatus") or "")
             members = [m for m in (st.get("hubs") or []) + (st.get("spokes") or []) if isinstance(m, dict)]

@@ -97,9 +97,10 @@ check("it calls the console's Network integration path with the key in X-API-KEY
 check("a console with a self-signed certificate is accepted unless 'verify' is ticked", all(c["verify"] is False for c in CALLS))
 check("reachability shows the application version", R[("udm", "reachability")].value == "Network 10.1.68")
 check("only the chosen site is read (default)", not any("/sites/s2/" in c["url"] for c in CALLS))
-check("a device that is online is OK, one that is offline FAILs, one updating WARNs", R[("udm / AP Lobby", "state")].status == "OK" and R[("udm / Old Gateway", "state")].status == "FAIL"
-      and R[("udm / AP Annex", "state")].status == "WARN" and R[("udm / Old Gateway", "state")].value == "offline")
-check("a device that is not online says what and where", "10.0.0.1" in R[("udm / Old Gateway", "state")].message)
+check("a device that is online is OK, one that is offline FAILs, one updating WARNs", R[("udm / AP Lobby", "state")].status == "OK" and R[("udm", "state")].status == "FAIL"
+      and R[("udm / AP Annex", "state")].status == "WARN" and R[("udm", "state")].value == "offline")
+check("the gateway at the console's address is the console itself: its rows are the console's own", ("udm / Old Gateway", "state") not in R)
+check("a device that is not online says what and where", "10.0.0.1" in R[("udm", "state")].message)
 check("uptime reads as days:hours:minutes:seconds and a recent reboot is flagged", R[("udm / AP Lobby", "uptime")].value == "90:00:00:00" and R[("udm / AP Lobby", "uptime")].status == "OK"
       and R[("udm / Core Switch", "uptime")].value == "0:00:10:00" and R[("udm / Core Switch", "uptime")].status == "WARN")
 check("CPU and memory use the global limits", R[("udm / AP Lobby", "cpu")].status == "OK" and R[("udm / AP Lobby", "memory")].status == "WARN" and R[("udm / AP Lobby", "memory")].value == "85%")

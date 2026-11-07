@@ -20,9 +20,10 @@ class UnifiNetworkDriver(UnifiApi):
             out.append(self.result("reachability", OK, f"Network {version}" if version else "answering", "UniFi Network API"))
         sites = self.pick_sites(self.offset_pages("/sites"))
         many = len(sites) > 1
-        for site in sites:
-            tag = f"{site.get('name')} - " if many else ""
-            self.site_checks(out, site, tag)
+        found = [(site, self.offset_pages(f"/sites/{site.get('id')}/devices")) for site in sites]
+        gw = self.gateway([d for _s, devs in found for d in devs])
+        for site, devices in found:
+            self.site_checks(out, site, f"{site.get('name')} - " if many else "", devices, gw)
         if self.enabled("pending"):
             self.safe(out, "pending", self.pending)
         return out
@@ -38,6 +39,16 @@ class UnifiNetworkDriver(UnifiApi):
             raise ValueError(f"site '{want}' not found; this key can see: {avail}")
         return match
 
+    def gateway(self, devices):
+        """The device that is this entry itself: the one at the entry's address, else the only gateway (UDM, UGW, UXG). Its rows are the
+        entry's own; every other device is listed under the entry."""
+        host = (self.dev.get("host") or "").strip().lower()
+        here = [d for d in devices if host and str(d.get("ipAddress") or "").lower() == host]
+        if here:
+            return here[0]
+        gws = [d for d in devices if "gateway" in (d.get("features") or []) or str(d.get("model") or "").upper().startswith(("UDM", "UGW", "UXG"))]
+        return gws[0] if len(gws) == 1 else None
+
     def pending(self):
         waiting = self.offset_pages("/pending-devices", optional=True)
         if not waiting:
@@ -46,11 +57,10 @@ class UnifiNetworkDriver(UnifiApi):
         return self.result("pending", WARN, f"{len(waiting)} waiting", "waiting to be adopted: " + names, numeric=float(len(waiting)))
 
     # ---------------------------------------------------------------- one site
-    def site_checks(self, out, site, tag):
+    def site_checks(self, out, site, tag, devices, gw=None):
         sid = site.get("id")
-        devices = self.offset_pages(f"/sites/{sid}/devices")
         for dev in devices:
-            self.safe_rows(out, f"{tag}{dev.get('name') or dev.get('macAddress')}", lambda r, dev=dev: self.one_device(r, sid, dev),
+            self.safe_rows(out, None if dev is gw else f"{tag}{dev.get('name') or dev.get('macAddress')}", lambda r, dev=dev: self.one_device(r, sid, dev),
                            (dev.get("id") or dev.get("macAddress"), dev.get("model") or ""))
         if self.enabled("clients"):
             try:
@@ -70,6 +80,9 @@ class UnifiNetworkDriver(UnifiApi):
         except Exception as e:
             rows.append(self.row(label, "statistics", "ERROR", "", f"{type(e).__name__}: {e}"))
         for r in rows:
+            if label is None:                                 # the gateway that is the entry itself
+                r.device = self.name
+                continue
             r.device = f"{self.name} / {label}"
             r.kid = kid if kid and kid[0] else (label, kid[1] if kid else "")
         out.extend(rows)

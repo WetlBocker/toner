@@ -78,10 +78,18 @@ def rows_for(dev, key):
             "SELECT device, check_name, status, value, message, numeric FROM results WHERE run_id=? AND device=? ORDER BY rowid", (rid, name))]
 
 
-def forget(dev, key):
-    """Remove: the device is no longer listed (until the console reports it again). Its history rows stay."""
+def forget(dev, key=None):
+    """Remove: the device is no longer listed (until the console reports it again). Its history rows stay. No key: every device of
+    a console that is deleted."""
     with db.within(dev.get("org")), db.connect() as c:
-        c.execute("DELETE FROM unifi_seen WHERE device=? AND key=?", (dev["name"], key))
+        c.execute("DELETE FROM unifi_seen WHERE device=?" + (" AND key=?" if key is not None else ""),
+                  (dev["name"], key) if key is not None else (dev["name"],))
+
+
+def rename(old, new):
+    """A console renamed in the Inventory keeps its devices' first and last seen (in the file being written to)."""
+    with db.connect() as c:
+        c.execute("UPDATE unifi_seen SET device=? WHERE device=?", (new, old))
 
 
 def shown_name(kid):

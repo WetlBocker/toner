@@ -1357,7 +1357,14 @@ class InventoryTab(QWidget):
         return [d for d in devs if (not og or d.get("org", db.GLOBAL) in og)
                 and (not v or vendors.family(d["vendor"]) in v) and (not loc or (d.get("location") or "") in loc)
                 and (not tg or tg & {x.lower() for x in db.split_tags(d.get("tags"))})
-                and (not words or all(w in self._haystack(d) for w in words))]
+                and (not words or all(w in self._haystack(d) for w in words) or self._kid_hits(d))]
+
+    def _kid_hits(self, d):
+        """The search words all match one of the console's devices (and not the console itself): it is listed, opened on that device."""
+        words = self._words()
+        if not words or d.get("vendor") not in unifikids.KINDS or all(w in self._haystack(d) for w in words):
+            return False
+        return any(all(w in label.lower() for w in words) for label in unifikids.labels(d))
 
     def kind_of(self, item):
         """('device', id), ('folder', id), ('org', organization) or ('group', text). Keys of items from another organization's file
@@ -1496,8 +1503,10 @@ class InventoryTab(QWidget):
         if self.kind_of(item)[0] != "device" or not d or item.childCount() or d.get("vendor") not in unifikids.KINDS:
             return
         vendor, muted = display.vendor_name(d["vendor"]), QColor((theme.current() or {}).get("muted", "#888888"))
-        items = []
+        items, words = [], self._words() if self._kid_hits(d) else []
         for k in unifikids.children(d):
+            if not all(w in k["name"].lower() for w in words):
+                continue                                  # found by a search on its devices: only those that match
             it = QTreeWidgetItem([unifikids.shown_name(k), vendor, k["model"]] + [""] * (len(self.COLS) - 3))
             it.setText(self.STATUS, "" if k["gone"] else k["status"])
             it.setText(self.CHECKED, display.ago(k["last_seen"]))
@@ -1530,7 +1539,7 @@ class InventoryTab(QWidget):
             (item.parent() or self.table.invisibleRootItem()).removeChild(item)
 
     def _enter(self):
-        if self.selected() is not None:
+        if self.selected() is not None or self._kid_selected() is not None:
             self.show_details()
 
     def folders_mode(self):
@@ -1579,6 +1588,12 @@ class InventoryTab(QWidget):
         bold = QFont()
         bold.setBold(True)
         self._build_folders(devs, bold)
+        if self._words():                                    # a console found by one of its devices: opened on it
+            for it in self._all_items():
+                d = self.payload.get(it.data(0, ROLE))
+                if self.kind_of(it)[0] == "device" and d and self._kid_hits(d):
+                    self._fill_kids(it)
+                    it.setExpanded(True)
         for i in range(len(self.COLS)):
             self.table.resizeColumnToContents(i)
         self.columns.apply()
@@ -1800,7 +1815,7 @@ class InventoryTab(QWidget):
         org = self.selected_org()
         can = org is not None and self.editable(org)
         self.buttons["Edit"].setEnabled(self.selected() is not None and can)
-        self.buttons["Details"].setEnabled(self.selected() is not None)
+        self.buttons["Details"].setEnabled(self.selected() is not None or self._kid_selected() is not None)
         self.buttons["Delete"].setEnabled(can and (bool(self.selected_devices()) or len(self.selected_folders()) == 1))
         self.buttons["New folder"].setEnabled(can)
         tip = "" if can or org is None else ("Archived organizations can only be viewed." if org in db.archived_ids()
@@ -1829,6 +1844,7 @@ class InventoryTab(QWidget):
             if old_name and old_name != dev["name"]:
                 db.move_device_secrets(old_name, dev["name"])          # password, token and SNMP secrets follow the name
                 agents.rename(old_name, dev["name"])
+                unifikids.rename(old_name, dev["name"])
             if secret:
                 db.set_secret(db.secret_name(dev["name"]), secret)
             for kind, value in (extra_secrets or {}).items():
@@ -1868,13 +1884,22 @@ class InventoryTab(QWidget):
         v, key = dlg.values(), dlg.secret.text()
         pid = v["profile_id"]
         if key:
-            try:
-                pid = profiles.save({"name": v["name"], "org": v["org"]}, {"main": key})
-            except ValueError as e:
-                QMessageBox.warning(self, "Duplicate", str(e))
+            with db.within(v["org"]):
+                taken = profiles.by_name(v["name"])
+            if taken:
+                QMessageBox.warning(self, "Duplicate", f"A profile named '{taken['name']}' already exists.")
                 return
         for name, sid in dlg.ticked_sites():
-            self._save({**v, "name": f"{v['name']} - {name}", "site": sid, "profile_id": pid}, "", extra_secrets=dlg.proxy_secrets())
+            dev = {**v, "name": f"{v['name']} - {name}", "site": sid, "profile_id": pid}
+            if not self._save(dev, "", extra_secrets=dlg.proxy_secrets()) or not key or pid != v["profile_id"]:
+                continue
+            with db.within(v["org"]):                    # the first entry is saved: now the account's key, once, for every entry
+                pid = profiles.save({"name": v["name"]}, {"main": key})
+                audit.log("profile created", v["name"])
+                first = next(x for x in db.list_devices() if x["name"] == dev["name"])
+                db.save_device({**first, "profile_id": pid})
+        if pid != v["profile_id"]:
+            self.refresh()
 
     def edit(self):
         d = self.selected()
@@ -1901,10 +1926,17 @@ class InventoryTab(QWidget):
             self._save(vals, dlg.secret.text(), old_name=d["name"], extra_secrets={**dlg.snmp_secrets(), **dlg.proxy_secrets(), **dlg.ssh_secrets()},
                        link=dlg.link_row)
 
+    def _kid_selected(self):
+        """The one selected row, when it is a console's device."""
+        items = self.table.selectedItems()
+        return items[0] if len(items) == 1 and self.kind_of(items[0])[0] == "kid" else None
+
     def show_details(self):
-        d = self.selected()
+        d, kid = self.selected(), self._kid_selected()
         if d:
             self.open_details.emit(d)
+        elif kid is not None:
+            self.open_details.emit(self._kid_dev(kid))
 
     def act_on(self, action, key):
         """A device action asked for elsewhere (the topology map's tile menu), run as the right-click here runs it: the device is
@@ -1930,6 +1962,7 @@ class InventoryTab(QWidget):
                     db.delete_device(d["id"])
                     db.delete_device_secrets(d["name"])
                     agents.forget(d["name"])
+                    unifikids.forget(d)
                     audit.log("device deleted", d["name"])
             self.refresh()
             self.changed.emit()
