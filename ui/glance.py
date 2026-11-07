@@ -1,6 +1,6 @@
 """Network at a glance: the devices as a small map on the Overview. A dot per device in its status colour, the links Tools > Topology
 found between them (dashed in the status colour when an end fails), a mark per status (round OK, triangle WARN, square FAIL, a hollow
-ring for ERROR), a still ring on a failing device, a slow pulsing one on a device Toner could not reach and a quick one on a device
+ring for ERROR), a pulsing ring on a device that fails or Toner could not reach, in its status colour, and one in the accent on a device
 being checked. Clicking a dot opens the device. Before a topology scan there are no links: the dots sit in a grid with a hint."""
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPen
@@ -97,7 +97,7 @@ class GlanceMap(QWidget):
         self.update()
 
     def _pulsing(self):
-        want = motion.enabled() and self.isVisible() and bool(self.checking or self.down)
+        want = motion.enabled() and self.isVisible() and bool(self.checking or any(s in DOWN for s in self.status.values()))
         if want and self._anim is None:
             self._anim = motion.animate(self, 1800, self._on_pulse, loop=True, curve=motion.QEasingCurve.Type.Linear)
         elif not want and self._anim is not None:
@@ -159,12 +159,11 @@ class GlanceMap(QWidget):
             c = self._pt(n)
             status = self.status.get(n)
             ink = st.qink(status) if status else QColor(st.GREY)
-            moving = n in self.checking or n in self.down               # only a device being checked or one Toner could not reach pulses
             ring = accent if n in self.checking else ink if status in DOWN else None
             if ring is not None:
-                r = 8 + 9 * self.pulse if moving else 11
+                r = 8 + 9 * self.pulse
                 col = QColor(ring)
-                col.setAlphaF(max(0.0, 0.9 * (1 - self.pulse)) if moving else 0.55)
+                col.setAlphaF(max(0.0, 0.9 * (1 - self.pulse)))
                 pen = QPen(col)
                 pen.setWidthF(2)
                 p.setPen(pen)

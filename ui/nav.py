@@ -214,7 +214,6 @@ class NavStack(QWidget):
         col.addWidget(self.org_label)
         col.addWidget(self.org)
         col.addWidget(self.quick)
-        col.addWidget(self.user)
         col.addSpacing(2)
         col.addWidget(self.list, 1)
         self.stack = QStackedWidget()
@@ -245,6 +244,10 @@ class NavStack(QWidget):
         self.user.setAccessibleName(name)
         self.user.setText("" if self._icons_only() else name)
         self.user.show()
+        for r in range(self.list.count()):
+            if self.list.itemWidget(self.list.item(r)) is self.user:
+                self.list.setRowHidden(r, False)
+        self._place_spacer()
 
     # ---------- what the sidebar shows
     def collapsed(self):
@@ -429,7 +432,13 @@ class NavStack(QWidget):
             self.list.addItem(item)
             self._spacer = self.list.count() - 1
             self._headings.append(self._spacer)
-            return self._spacer
+            row = QListWidgetItem("")                                   # the signed-in user, in the row above Settings
+            row.setFlags(Qt.ItemFlag.NoItemFlags)
+            row.setSizeHint(QSize(0, NAV_ITEM))
+            self.list.addItem(row)
+            self.list.setItemWidget(row, self.user)
+            self.list.setRowHidden(self.list.count() - 1, True)
+            return self.list.count() - 1
         item = QListWidgetItem(group)
         item.setData(Qt.ItemDataRole.UserRole, group)
         item.setFlags(Qt.ItemFlag.NoItemFlags)

@@ -199,6 +199,7 @@ QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox, QDoubleSpinBox, QComboBox, QAbst
     background: %(input_a)s; color: %(text)s; border: 1px solid %(edge)s; border-radius: %(r_input)spx;
     padding: %(pad_input)s; min-height: %(min_input)spx; selection-background-color: %(accent)s; selection-color: %(accent_text)s;
 }
+QLineEdit QToolButton { background: transparent; border: 0; padding: 0; margin: 0; min-height: 0; }     /* the clear "X": sized to its icon, so it centres */
 QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {
     border: 1px solid %(ring)s;
 }

@@ -67,7 +67,8 @@ def update_from_ieee(timeout=30):
     """Download the IEEE OUI list (about 6 MB) into the cache. Returns the number of entries."""
     import requests
     from core import proxy
-    r = requests.get("https://standards-oui.ieee.org/oui/oui.txt", timeout=timeout,
+    ua = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"}   # IEEE answers 418 to python-requests
+    r = requests.get("https://standards-oui.ieee.org/oui/oui.txt", timeout=timeout, headers=ua,
                      **proxy.requests_kwargs(None, "standards-oui.ieee.org"))
     r.raise_for_status()
     cache_path().write_text(r.text, encoding="utf-8")

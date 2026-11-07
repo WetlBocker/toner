@@ -115,14 +115,12 @@ check("the 'what is wrong' column is the one that stretches", hh.sectionResizeMo
 total = sum(hh.sectionSize(i) for i in range(5))
 check("so the table fills its panel (no empty strip on the right)", abs(total - dash.attention.viewport().width()) <= 2, (total, dash.attention.viewport().width()))
 check("cells show the full text on hover", dash.attention.item(0, 2).toolTip() == dash.attention.item(0, 2).text() and dash.attention.item(0, 2).text())
-check("with only runs to show there is no second 'Recent runs' heading under 'Recent activity'", "Recent runs" not in dash.recent.text() and "OK" in dash.recent.text(), dash.recent.text())
 db.save_device(dict(name="sw-a2", vendor="cisco", host="10.0.0.9", port=0, platform="cisco_ios", username="", site="d", verify_ssl=0, ha_expected=0, enabled=1))
 from core import backup
 with db.connect() as c:
     c.execute("INSERT INTO config_backups(device, taken_at, sha, size, lines, body, added, removed) VALUES('sw-a2','2020-01-01 00:00:00','a',1,1,x'00',0,0)")
     c.execute("INSERT INTO config_backups(device, taken_at, sha, size, lines, body, added, removed) VALUES('sw-a2',?,'b',1,1,x'00',2,1)", (time.strftime("%Y-%m-%d %H:%M:%S"),))
 dash.refresh()
-check("with changes as well, the two parts are labelled apart", "Configuration changes (24 h)" in dash.recent.text() and "<b>Runs</b>" in dash.recent.text(), dash.recent.text())
 check("one Windows computer reads '1 computer', not '1 computer(s)' (and says how it is monitored)", "<b>1</b> computer " in dash.fleet_label.text() + " " and "computer(s)" not in dash.fleet_label.text() and "by WinRM" in dash.fleet_label.text(), dash.fleet_label.text())
 db.save_device(dict(name="win-2", vendor="windows", host="10.0.0.4", port=0, platform="agent", username="", site="d", verify_ssl=0, ha_expected=0, enabled=1)); dash.refresh()
 check("several are plural, by kind", "<b>2</b> computers" in dash.fleet_label.text() and "1 by agent" in dash.fleet_label.text() and "1 by WinRM" in dash.fleet_label.text(), dash.fleet_label.text())

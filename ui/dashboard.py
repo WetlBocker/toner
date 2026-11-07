@@ -369,14 +369,9 @@ class DashboardTab(QWidget):
         self.period.setCurrentIndex(1)
         self.period.currentIndexChanged.connect(self.refresh)
         self.bars = BarList()
-        self.recent = QLabel("")
-        self.recent.setTextFormat(Qt.TextFormat.RichText)
-        self.recent.setWordWrap(True)
-        self.recent.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
 
         self.health_chart = ChartView(min_height=210)                   # devices by status as a ring; a slice opens those results
         self.health_chart.clicked.connect(self._health_clicked)
-        self.runs_chart = ChartView(min_height=200)                     # the last runs as stacked OK / WARN / FAIL / ERROR bars
         self.map = GlanceMap()                                          # the devices as a small map, links from Tools > Topology
         self.map.setMinimumWidth(330)                                   # the right column keeps room for the map's dots and their names
         self.map.open_device.connect(self.open_device)
@@ -418,9 +413,7 @@ class DashboardTab(QWidget):
         self.org_panel.hide()
         right.addWidget(panel("Health", self.health_chart))
         right.addWidget(panel("Availability", self.bars, self.period))
-        right.addWidget(panel("Last runs", self.runs_chart))
         right.addWidget(self.fleet_panel)
-        right.addWidget(panel("Recent activity", self.recent), 1)
         cols = self.cols = QHBoxLayout()
         cols.setSpacing(12)
         left_col = QVBoxLayout()                                       # each panel ends under its last row, not level with the right column
@@ -458,7 +451,6 @@ class DashboardTab(QWidget):
         self._paint_viewport()
         self.map.update()
         self.health_chart.restyle()
-        self.runs_chart.restyle()
 
     def _health_clicked(self, hit):
         """A slice of the Health ring: the Results page listing that status."""
@@ -466,15 +458,11 @@ class DashboardTab(QWidget):
         if what:
             self.show_results.emit(what)
 
-    def _charts(self, health, runs):
+    def _charts(self, health):
         counts = {"OK": 0, "WARN": 0, "FAIL": 0, "ERROR": 0}
         for v in health.values():
             counts[v["status"] if v["status"] in counts else "ERROR"] += 1
         self.health_chart.draw(lambda p: chartspec.donut(p, counts, order=("OK", "WARN", "FAIL", "ERROR")) if any(counts.values()) else chartspec.empty("No results yet"))
-        recent = list(reversed(runs[:12]))                              # oldest on the left
-        labels = [str(r["started_at"])[5:16].replace("-", "/") for r in recent]
-        series = [(st, [int(r.get(k) or 0) for r in recent]) for st, k in (("OK", "ok"), ("WARN", "warn"), ("FAIL", "fail"), ("ERROR", "error"))]
-        self.runs_chart.draw(lambda p: chartspec.grouped_bars(p, labels, series, stacked=True) if recent else chartspec.empty("No checks run yet"))
 
     # ---------- a run going now
     def run_started(self, names):
@@ -1058,16 +1046,4 @@ class DashboardTab(QWidget):
         rows.sort(key=lambda r: (r[1], r[0].lower()))
         self.bars.set_rows(rows[:10])
 
-        parts = []
-        if changes:
-            parts.append("<b>Configuration changes (24 h)</b><br>" + "<br>".join(
-                f"{html.escape(db.label_org(c['device']))} &nbsp; <span style='color:gray'>{c['taken_at']}  +{c['added']} / -{c['removed']}</span>"
-                for c in changes[:6]))
-        runs = db.list_runs(12)
-        self._charts(health, runs)
-        runs = runs[:5]
-        if runs:
-            parts.append(("<b>Runs</b><br>" if changes else "") + "<br>".join(
-                f"<span style='color:gray'>{r['started_at']}</span> &nbsp; OK {r['ok']} &nbsp; WARN {r['warn']} &nbsp; "
-                f"FAIL {r['fail']} &nbsp; ERROR {r['error']}" for r in runs))
-        self.recent.setText("<br><br>".join(parts) or "Nothing has happened yet.")
+        self._charts(health)
