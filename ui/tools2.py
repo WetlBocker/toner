@@ -1177,6 +1177,7 @@ class MacLookupTab(QWidget):
         self.lookup_out.setTextFormat(Qt.TextFormat.RichText)
         self.lookup_out.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.update_btn = QPushButton("Update OUI database...")
+        self.worker = None
         self.oui_info = _muted("")
         self.reset = reset_button()
         look = QFormLayout()
@@ -1225,18 +1226,20 @@ class MacLookupTab(QWidget):
         if QMessageBox.question(self, "Update OUI database", "This downloads the manufacturer list (about 6 MB) from "
                                 "standards-oui.ieee.org.\n\nDownload now?") != QMessageBox.StandardButton.Yes:
             return
-        QApplication.setOverrideCursor(self.cursor())
-        try:
-            n = oui.update_from_ieee()
-            self.oui_info.setText(f"Updated: {n:,} manufacturers.")
-        except Exception as e:
-            self.oui_info.setText(f"Update failed: {e}")
-        finally:
-            QApplication.restoreOverrideCursor()
+        from ui.tools import Call
+        self.update_btn.setEnabled(False)                     # the download runs off the window thread (about 6 MB)
+        self.worker = Call(oui.update_from_ieee)
+        self.worker.done.connect(self._updated)
+        self.worker.start()
+
+    def _updated(self, res):
+        self.update_btn.setEnabled(True)
+        self.oui_info.setText(f"Update failed: {res}" if isinstance(res, Exception) else f"Updated: {res:,} manufacturers.")
         self.show_lookup(self.mac.text())
 
     def shutdown(self):
-        pass
+        if self.worker:
+            self.worker.wait(3000)
 
 
 class WolTab(QWidget):

@@ -144,8 +144,17 @@ try:
 except iplookup.LookupError_:
     pass
 iplookup.lookup("8.8.8.8", SECRETKEY, opener=serving(RECORD))
+iplookup.lookup("8.8.8.8", SECRETKEY, opener=serving(RECORD), template="https://geo.example.com/v1/{ip}?token=PaStEd99&lang=en")
 lg.removeHandler(h)
-check("each request is logged with {key} masked", h.lines and all("sEcR3t" not in l and "%2F" not in l for l in h.lines) and any("https://geo.example.com/v1/8.8.8.8?token={key}" in l for l in h.lines), h.lines)
+check("each request is logged as its scheme, host and path only", h.lines and all("sEcR3t" not in l and "%2F" not in l for l in h.lines)
+      and any(l.endswith("GET https://geo.example.com/v1/8.8.8.8") for l in h.lines) and not any("?" in l for l in h.lines), h.lines)
+check("a key pasted straight into the URL is not logged", h.lines and not any("PaStEd99" in l or "token" in l for l in h.lines), h.lines)
+held = []
+def holding(req, timeout=0):
+    held.append(Reply(json.dumps(RECORD).encode()))
+    return held[-1]
+iplookup.lookup("8.8.8.8", SECRETKEY, opener=holding)
+check("the answer's connection is closed once read", held and held[-1].closed)
 
 print("== key safety")
 for t in ("https://x.test/a b/{ip}?k={key}", "https://x.test/{ip}\x01?k={key}", "https:///{ip}?k={key}"):
@@ -207,7 +216,14 @@ check("the page has API URL and API key, and the approved hint", "API URL" in [c
       and "API key" in [cp.form.itemAt(i, cp.form.ItemRole.LabelRole).widget().text() for i in range(cp.form.rowCount()) if cp.form.itemAt(i, cp.form.ItemRole.LabelRole) and cp.form.itemAt(i, cp.form.ItemRole.LabelRole).widget()]
       and any(HINT in w.text() for w in cp.findChildren(__import__("PySide6.QtWidgets", fromlist=["QLabel"]).QLabel)))
 check("it shows the saved URL", cp.api_url.text() == "https://geo.example.com/v1/{ip}?token={key}")
+from PySide6.QtWidgets import QLabel
+HTTP_NOTE = "This URL uses http, so the address and key travel unencrypted."
+notes = [w for w in cp.findChildren(QLabel) if w.text() == HTTP_NOTE]
+check("an https URL shows no http note", notes and all(n.isHidden() for n in notes), len(notes))
+cp.api_url.setText("http://x.test/json/{ip}?key={key}")
+check("an http URL shows the note under the API URL", notes and not notes[0].isHidden())
 cp.api_url.setText("https://x.test/json?key={key}")
+check("back to https, the note goes", notes and notes[0].isHidden())
 check("a URL without {ip} is refused by the page before saving", cp.validate() and HINT in cp.validate()[0], cp.validate())
 cp.api_url.setText("https://x.test/json/{ip}?key={key}")
 check("a good one passes and Save stores it", not cp.validate() and (cp.save() or iplookup.get_url() == "https://x.test/json/{ip}?key={key}"))

@@ -61,6 +61,22 @@ finally:
 ua = (seen.get("headers") or {}).get("User-Agent", "")
 check("a User-Agent is sent, and it is not python-requests'", ua and "python-requests" not in ua.lower() and ua.startswith("Mozilla/"), seen.get("headers"))
 check("the timeout is kept", seen.get("timeout") == 30)
+import threading
+from PySide6.QtWidgets import QMessageBox
+from ui.tools2 import MacLookupTab
+mac_tab = MacLookupTab()
+QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes)
+where = []
+real_update = oui.update_from_ieee
+oui.update_from_ieee = lambda *a, **k: (where.append(threading.current_thread()), time.sleep(0.2), 5)[2]
+mac_tab.update_db()
+end = time.time() + 5
+while time.time() < end and not mac_tab.oui_info.text().startswith("Updated"):
+    app.processEvents(); time.sleep(0.02)
+oui.update_from_ieee = real_update
+check("the download runs off the window thread", where and where[0] is not threading.main_thread(), where)
+check("and its result is shown when it ends", mac_tab.oui_info.text() == "Updated: 5 manufacturers.", mac_tab.oui_info.text())
+mac_tab.shutdown()
 
 print("== 7. Gauge needles turn about the arc's centre")
 from ui import chartspec as cs

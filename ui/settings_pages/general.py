@@ -97,11 +97,14 @@ class ConnectionsPage(Page):
         self.ipstack_result = note("")
         self.api_url = QLineEdit()
         self.api_url.setMinimumWidth(300)
+        self.http_note = note("This URL uses http, so the address and key travel unencrypted.")
         for label, w in (("SSH timeout (switches, routers)", self.ssh), ("Web API timeout (firewalls, controllers)", self.http),
                          ("Retries after a timeout", self.retries), ("Wait between retries", self.delay),
-                         ("API URL", self.api_url), ("", note(IPLOOKUP_HINT)),
+                         ("API URL", self.api_url), ("", self.http_note), ("", note(IPLOOKUP_HINT)),
                          ("API key", row_of(self.ipstack, self.test_ipstack, self.forget_ipstack)), ("", self.ipstack_result)):
             self.form.addRow(label, w)
+        self.api_url.textChanged.connect(lambda t: self.form.setRowVisible(self.http_note, t.strip().lower().startswith("http://")))
+        self.form.setRowVisible(self.http_note, False)
         self.lay.insertWidget(1, note(
             "Raise the timeouts for slow or remote links. Only timeouts and dropped connections are retried. "
             "A rejected login is never retried, because repeating a wrong password can lock the account."))

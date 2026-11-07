@@ -108,20 +108,23 @@ def _call(ip, key, template, timeout, opener=None, gateway=None):
     headers = {"User-Agent": "Toner", "Accept": "application/json"}
     if gateway:                                                          # the APILayer marketplace: (address pattern, where the key goes)
         pattern, where = gateway
-        address = shown = pattern.format(ip=urllib.parse.quote(str(ip)))
+        address = pattern.format(ip=urllib.parse.quote(str(ip)))
         who = pattern.split("/")[2]
         if where == "header":
             headers["apikey"] = key
         else:
             address += "?" + urllib.parse.urlencode({"access_key": key})
-            shown += "?access_key={key}"
     else:
-        address, shown, who = build(template, ip, key), template.replace("{ip}", urllib.parse.quote(str(ip), safe="")), host(template)
-    log.info("IP look-up: GET %s", shown)                               # {key} stays as written: the key is never logged
+        address, who = build(template, ip, key), host(template)
+    part = urllib.parse.urlsplit(address)                                # never the query (a key may have been pasted there), nor the key
+    log.info("IP look-up: GET %s://%s%s", part.scheme, part.hostname or "", _hide(part.path, key))
     req = urllib.request.Request(address, headers=headers)
     try:
         f = (opener or _OPENER.open)(req, timeout=timeout)
-        raw = f.read(MAX_BODY + 1)
+        try:
+            raw = f.read(MAX_BODY + 1)
+        finally:
+            f.close()
         body = raw[:MAX_BODY].decode("utf-8", "replace")
     except urllib.error.HTTPError as e:                                 # the provider answered with an HTTP error: its words, not just the number
         try:
