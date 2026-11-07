@@ -38,6 +38,15 @@ def _is_input(w):
     return isinstance(w, (QComboBox, QAbstractSpinBox, QPlainTextEdit, QTextEdit)) and not (hasattr(w, "isReadOnly") and w.isReadOnly())
 
 
+def chosen(combo):
+    """What a drop-down has picked, not where it sits in its list (a list refilled after load moves the choice to another row). Text
+    typed into an editable one that matches no row counts as it is."""
+    i = combo.currentIndex()
+    if i >= 0 and combo.itemData(i) is not None and combo.currentText() == combo.itemText(i):
+        return combo.itemData(i)
+    return combo.currentText()
+
+
 def _value(w):
     """The text a person would read for this control."""
     if isinstance(w, QLineEdit):
@@ -47,7 +56,8 @@ def _value(w):
     if isinstance(w, QAbstractButton):
         return "on" if w.isChecked() else "off"
     if isinstance(w, QComboBox):
-        return w.currentText() or "(none)"
+        c = chosen(w)
+        return (c if isinstance(c, str) else w.currentText()) or "(none)"
     if isinstance(w, QAbstractSpinBox):
         return w.text()
     text = w.toPlainText().strip()

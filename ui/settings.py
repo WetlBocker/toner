@@ -114,7 +114,7 @@ def signature(page):
             if w.isCheckable() and not w.property("notSetting"):
                 out.append(w.isChecked())
         elif isinstance(w, QComboBox) and not w.property("notSetting"):
-            out.append((w.currentIndex(), w.currentText()))
+            out.append(SD.chosen(w))
         elif isinstance(w, QAbstractSpinBox):
             out.append(w.text())
         elif isinstance(w, (QPlainTextEdit, QTextEdit)) and not w.isReadOnly():
