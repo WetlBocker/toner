@@ -373,6 +373,10 @@ def write_plain(name):
         os.replace(tmp, p)
     except OSError:
         quiet.ignored()                                  # the sign-in windows then use the default theme
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
 
 
 def plain_look():
@@ -380,10 +384,12 @@ def plain_look():
     taken from the file. Your colour needs its accent, which is in the database, so it (like any unknown name) gives System."""
     look = dict(themes.DEFAULT_LOOK)
     try:
-        name = json.loads(plain_path().read_text(encoding="utf-8")).get("theme")
+        with open(plain_path(), "rb") as f:
+            raw = f.read(1025)                           # a theme's name is a few bytes: anything bigger is not ours
+        name = json.loads(raw.decode("utf-8")).get("theme") if len(raw) <= 1024 else None
         name = themes.legacy_name(name) if isinstance(name, str) else themes.SYSTEM
         look["theme"] = themes.SYSTEM if name == "Your colour" else name
-    except (OSError, ValueError, AttributeError):
+    except (OSError, ValueError, AttributeError, RecursionError):
         pass
     return look
 

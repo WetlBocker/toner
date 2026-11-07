@@ -1192,7 +1192,7 @@ def main():
     except OSError:
         pass
     apply_look(app)
-    theme.write_plain(db.get_setting("theme"))    # (every start: existing users get the plain copy without visiting Settings)
+    theme.write_plain(theme.saved_look()["theme"])    # (every start: existing users get the plain copy without visiting Settings)
     otpprompt.install()
     win = Main()
     if "--minimized" in sys.argv and win.background_mode():

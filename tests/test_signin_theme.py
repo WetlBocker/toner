@@ -51,6 +51,14 @@ for label, text in (("damaged", "{not json"), ("not an object", "[1]"), ("unknow
                     ("Your colour (needs the database)", '{"theme": "Your colour"}')):
     P.write_text(text, encoding="utf-8"); check(label, bg_now() == default_bg)
 
+print("== a crafted file")
+P.write_text("[" * 200000 + "]" * 200000, encoding="utf-8"); check("200,000 deep", bg_now() == default_bg)
+P.write_text('{"theme": "Linen", "pad": "' + "x" * 2_000_000 + '"}', encoding="utf-8"); check("2 MB", bg_now() == default_bg)
+_r = os.replace
+os.replace = lambda a, b: (_ for _ in ()).throw(OSError("no"))
+P.unlink(); theme.write_plain("Nebula"); os.replace = _r
+check("failed write leaves no temp", not P.with_name(P.name + ".tmp").exists() and not P.exists())
+
 print("== only the name is taken from it")
 P.write_text(json.dumps({"theme": "Linen", "look": "Terminal", "panel_opacity": 50, "custom_accent": "#ff0000"}), encoding="utf-8")
 l = theme.plain_look()
