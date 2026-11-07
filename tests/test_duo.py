@@ -112,6 +112,12 @@ msgs.append(raises(duo.Unavailable, lambda: duo.preauth(cfg, "bob"))); check("no
 check("secret/ikey/code not in messages", not any(x and (SKEY in x or "IK" in x or "999999" in x) for x in msgs))
 
 osstore.get = REAL_GET
+if sys.platform != "win32":
+    import keyring.backends.null
+    was = passvault._old_backend
+    passvault._old_backend = keyring.backends.null.Keyring()
+    check("a keyring that keeps nothing is not a protected store", not osstore.available())
+    passvault._old_backend = was
 if osstore.available():
     osstore.put("duo:test", b"s3cret"); check("osstore round trip", osstore.get("duo:test") == b"s3cret")
     osstore.delete("duo:test"); check("osstore delete", osstore.get("duo:test") is None)

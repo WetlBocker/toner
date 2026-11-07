@@ -22,7 +22,8 @@ def _backend():
         b = passvault.without_vault(keyring.get_keyring())
         if b is None:
             return None
-    return None if "fail" in b.__class__.__module__ else b     # keyring.backends.fail: no Secret Service
+    # keyring.backends.fail (no Secret Service) or .null (keeps nothing): a secret put there would be lost without a word
+    return None if b.__class__.__module__ in ("keyring.backends.fail", "keyring.backends.null") else b
 
 
 def available():
