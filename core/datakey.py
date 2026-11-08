@@ -346,6 +346,17 @@ def open_with_recovery(recovery):
     return fails
 
 
+def open_with_keys(data_key):
+    """For an approval by the helper service only (core/dirsignin.py): the data key it released, open with no account's box key
+    or name. The approval closes it again."""
+    global _key, _box, _name
+    if not isinstance(data_key, bytes) or len(data_key) != 32:
+        raise ValueError("not a data key")
+    with _lock:
+        sqldb.set_key(data_key)
+        _key, _box, _name = data_key, None, None
+
+
 def check_password(name, password):
     """True when the password is right (for unlocking). Raises Throttled the same way opening does."""
     try:
@@ -482,8 +493,9 @@ def directory_account(name):
     return rec
 
 
-def start_directory_account(user, directory_id, slot):
+def start_directory_account(user, directory_id, slot, role=None):
     """Write an unapproved record for `user` (a directory.User) with a new box key, whose private half is held until approval.
+    `role`: its groups' role when the sign-in already has it (the helper's answer carries no groups); else read from user.groups.
     Refused (ValueError) when the name belongs to a local account, another directory or another person, or is approved."""
     from core import directory
     private, public = envelope.new_box_key()
@@ -503,7 +515,7 @@ def start_directory_account(user, directory_id, slot):
             "kind": "directory", "directory": directory_id, "guid": user.guid, "display": user.display,
             "slot_kind": slot.rec["kind"], "slot": slot.rec, "slot_id": slot.slot_id, "sealed": None, "box_pub": _b64(public),
             "approved_role": None, "online_at": time.time(), "full_at": time.time(),     # (only after password and Duo)
-            "groups_role": directory.role_for(cfg, user.groups, user.dn),
+            "groups_role": role if role is not None else directory.role_for(cfg, user.groups, user.dn),
             "created": datetime.now(timezone.utc).isoformat(timespec="seconds")}
         return old
     replaced = _change(start, signed_in=False)

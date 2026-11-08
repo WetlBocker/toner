@@ -135,6 +135,25 @@ helperclient.forget()
 check("forget clears the helper's spare copy", HSTORE.load() is None and helperclient.state(KEYS) == "off")
 check("forget with nothing enrolled is nothing to do", raises(helperclient.forget, Exception) is None)
 
+print("== call: cancel, and the timeout")
+class Silent(FakeConn):
+    """A helper that never answers (a Duo push still waiting at the phone)."""
+    closed = False
+    def send_bytes(self, b): pass
+    def poll(self, timeout): time.sleep(timeout); return False
+    def close(self): Silent.closed = True
+helperclient._connect = lambda: Silent()
+cancel = threading.Event()
+threading.Timer(0.3, cancel.set).start()
+t0 = time.monotonic()
+e = raises(lambda: helperclient.call({"op": "duo_push", "pending": "p"}, timeout=60, cancel=cancel), helperclient.NotRunning)
+check("cancel set while waiting: NotRunning within half a second, the connection closed (the helper stops the push)",
+      e is not None and time.monotonic() - t0 < 1.3 and Silent.closed, time.monotonic() - t0)
+t0 = time.monotonic()
+e = raises(lambda: helperclient.call({"op": "status", "keys_path": ""}, timeout=1), helperclient.NotRunning)
+check("no answer within the timeout: NotRunning", e is not None and 0.9 <= time.monotonic() - t0 < 2, time.monotonic() - t0)
+helperclient._connect = fake_connect
+
 print("== a keys file signed before the count: signed once, then enrolled")
 d = doc(); d.pop("rules_version")
 payload = roles._signed(d); d["rules_sig"] = envelope.sign(roles._held["rules"], payload)

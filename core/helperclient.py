@@ -139,14 +139,17 @@ def _connect():
     return conn
 
 
-def call(req, timeout=10):
+def call(req, timeout=10, cancel=None):
     """The helper's answer to `req` (an op and its fields; the protocol version is added). NotRunning when there is no helper
-    to ask, or no answer within `timeout` seconds."""
+    to ask, no answer within `timeout` seconds, or `cancel` (an Event) is set first: the connection then closes, which stops a
+    Duo push at the helper."""
     conn = _connect()
     try:
         conn.send_bytes(protocol.encode({**req, "v": protocol.PROTOCOL}))
-        if not conn.poll(timeout):
-            raise NotRunning()
+        end = time.monotonic() + timeout
+        while not conn.poll(max(0.0, min(0.5, end - time.monotonic()))):
+            if time.monotonic() >= end or (cancel is not None and cancel.is_set()):
+                raise NotRunning()
         return protocol.decode(conn.recv_bytes(protocol.MAX))
     except (OSError, EOFError, ValueError):             # gone mid-request, or an answer that isn't one
         raise NotRunning() from None

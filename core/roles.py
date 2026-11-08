@@ -333,6 +333,19 @@ def holds(kind):
     return kind in _held
 
 
+def hold(kind, private):
+    """An approval by the helper service: hold the role key it released (ValueError unless it is the one the rules are about).
+    The approval's close() lets go of it."""
+    with _lock:
+        try:
+            mine = _take(datakey.read(), kind, private)
+        except (TypeError, ValueError):                 # not a key of that kind at all
+            mine = False
+        if not mine:
+            raise ValueError("not this copy's role key")
+        _held[kind] = private
+
+
 def backups_public():
     """The backups key to encrypt to, or None while the rules don't check out."""
     return _load().get("backups_pub")

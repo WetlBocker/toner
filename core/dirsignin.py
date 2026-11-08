@@ -9,14 +9,19 @@
 
 An SSO connection (kind "oidc") has sso_start and sso_wait (the browser) in place of begin and the Duo steps.
 
+With "Let group members sign in without approval" on (helper_ready), the helper service checks the sign-in itself (the password
+and Duo, or the SSO answer with a nonce it issued) and gives a ticket; where an approval would come next, approve_by_helper has
+it release the data key and the rules key for that one approval, credited to HELPER_APPROVER. Any helper failure is today's flow.
+
 Wrong directory passwords count on netcheck.keys' shared counter, as local passwords do. No password, PIN or Duo code is kept on
 an Attempt, logged or put in a message; an SSO attempt's tokens stay on it, and only the refresh token is kept (in the vault)."""
+import base64
 import getpass
 import threading
 import time
 import webbrowser
 
-from core import audit, datakey, db, directory, dirpin, duo, oidc, passvault, perms, pinslot, quiet, roles, session
+from core import audit, datakey, db, directory, dirpin, duo, helperclient, oidc, passvault, perms, pinslot, quiet, roles, session
 
 OFFLINE_SECONDS = 3600
 UNREACHABLE = "Toner can't reach the directory. Connect to the network, then try again."
@@ -38,6 +43,7 @@ SSO_NOT_FRESH = "{provider} didn't confirm a fresh sign-in. Try again."
 SSO_BAD_ANSWER = "{provider}'s answer couldn't be checked, so the sign-in was refused."
 SSO_UNREACHABLE = "{provider} can't be reached, and this account hasn't been checked online in the last hour."
 SSO_REFUSED = "{provider} no longer allows this account. Sign in again."                  # the re-check's lock screen
+HELPER_APPROVER = "group membership"                                                        # {admin} in "sign-in approved"
 
 
 def refused_text():
@@ -94,6 +100,9 @@ class Attempt:
         self.kind = None            # the PIN slot kind once the chip refused a new key (pin_kind)
         self.browser = None         # SSO: the oidc.BrowserSignIn
         self.tokens = None          # SSO: the oidc.Tokens once the browser sign-in is checked
+        self.helper = False         # helper_ready() when the attempt began
+        self.pending = None         # the helper's pending Duo check (its id)
+        self.ticket = None          # the helper's ticket for this sign-in, used up by approve_by_helper
 
 
 def _keys_doc():
@@ -183,6 +192,9 @@ def begin(login, password):
         raise ValueError("not a directory account")
     a = Attempt(kind[1], kind[2])
     _tries()
+    a.helper = helper_ready()
+    if a.helper and _check_directory(a, password):
+        return a
     try:
         user = directory.sign_in(a.cfg, a.login, password)
     except directory.Unreachable:
@@ -200,6 +212,63 @@ def begin(login, password):
         raise NotInGroup(NOT_IN_GROUP)
     a.user, a.name, a.role = user, user.name, role
     return a
+
+
+def helper_ready():
+    """Sign-in without approval is on for this copy: the helper service answers, enrolled by it."""
+    try:
+        return helperclient.state(datakey.path()) == "on"
+    except Exception:                                   # never in the way of a sign-in
+        quiet.ignored()
+        return False
+
+
+def _ask(req, timeout=10, cancel=None):
+    """The helper's answer to req for this copy; {} when it can't be asked (NotRunning)."""
+    try:
+        return helperclient.call({**req, "keys_path": str(datakey.path())}, timeout=timeout, cancel=cancel)
+    except helperclient.NotRunning:
+        return {}
+
+
+def _check_directory(a, password):
+    """begin's check by the helper: True once it has decided (a.user, a.name, a.role and the ticket, or Duo pending at the
+    helper). False when it can't decide: Toner then binds itself with the same password, in this same call, asking nothing new.
+    A refused password or no group is the helper's answer, counted as begin counts it (a second bind would count twice at the
+    directory). Its answer names no password."""
+    ans = _ask({"op": "check_directory", "connection": a.cfg["id"], "login": a.login, "password": password}, timeout=60)
+    err = None if ans.get("ok") else ans.get("error")
+    if err in ("refused", "not_in_group"):
+        _tries(failed=True)
+        if err == "refused":
+            raise datakey.WrongPassword(datakey.WRONG)
+        raise NotInGroup(NOT_IN_GROUP)
+    if err is not None or not all(isinstance(ans.get(k), str) for k in ("name", "guid", "display")) \
+            or ans.get("role") not in datakey.ROLES or not isinstance(ans.get("ticket") or ans.get("pending"), str):
+        return False                                    # not running, no answer, or one it can't stand behind
+    a.user = directory.User(guid=ans["guid"], name=ans["name"], display=ans["display"], groups=(), enabled=True)
+    a.name, a.role, a.ticket, a.pending = ans["name"], ans["role"], ans.get("ticket"), ans.get("pending")
+    return True
+
+
+def _helper_duo(a, req, cancel, refused):
+    """The helper's Duo step for its pending check: its ticket, then onward. False when it can't be asked or answers neither
+    yes nor no: the caller takes Duo itself, with no ticket."""
+    ans = _ask(req, timeout=duo.PUSH_SECONDS + 3 * duo.REQUEST_TIMEOUT, cancel=cancel)
+    if cancel is not None and cancel.is_set():          # the person chose a code instead: the pending check stays for it
+        raise duo.Denied(DUO_DENIED)
+    err = None if ans.get("ok") else ans.get("error")
+    if err == "refused":
+        _denied(a)
+        raise duo.Denied(refused)
+    if err == "unreachable":
+        raise duo.Unavailable(DUO_DOWN)
+    a.pending = None
+    if err is not None or not isinstance(ans.get("ticket"), str):
+        return False
+    a.ticket = ans["ticket"]
+    _onward(a, "duo")
+    return True
 
 
 def _onward(a, stage):
@@ -231,7 +300,10 @@ def _denied(a):
 
 def after_password(a):
     _expect(a, "password")
-    if not (a.cfg.get("duo") or {}).get("on"):
+    if a.pending:                                       # the helper's Duo check
+        a.stage = "duo"
+        return
+    if a.ticket or not (a.cfg.get("duo") or {}).get("on"):     # a ticket: the helper checked Duo (or it was bypassed)
         return _onward(a, "password")
     try:
         r = duo.preauth(a.cfg, a.user.name)
@@ -247,6 +319,8 @@ def after_password(a):
 
 def duo_push(a, cancel):
     _expect(a, "duo")
+    if a.pending and _helper_duo(a, {"op": "duo_push", "pending": a.pending}, cancel, DUO_DENIED):
+        return
     try:
         duo.push(a.cfg, a.user.name, cancel)
     except duo.Unavailable:
@@ -260,6 +334,8 @@ def duo_push(a, cancel):
 
 def duo_code(a, code):
     _expect(a, "duo")
+    if a.pending and _helper_duo(a, {"op": "duo_code", "pending": a.pending, "code": code}, None, WRONG_CODE):
+        return
     try:
         duo.passcode(a.cfg, a.user.name, code)
     except duo.Unavailable:
@@ -293,6 +369,11 @@ def sso_start(cfg, login, open_url=webbrowser.open, nonce=None):
     reached takes the offline hour, as begin does."""
     a = Attempt(cfg, login)
     _tries()
+    a.helper = nonce is None and helper_ready()
+    if a.helper:                                        # the helper checks only a sign-in with a nonce it issued
+        ans = _ask({"op": "nonce", "connection": cfg["id"]})
+        nonce = ans.get("nonce") if ans.get("ok") and isinstance(ans.get("nonce"), str) else None
+        a.helper = nonce is not None
     try:
         _discover_now(cfg)
         a.browser = oidc.BrowserSignIn(cfg, nonce=nonce, open_url=open_url, login_hint=login)
@@ -326,7 +407,19 @@ def sso_wait(a, cancel):
         _tries(failed=True)
         raise NotInGroup(NOT_IN_GROUP)
     a.user, a.name, a.role, a.tokens = user, user.name, role, tokens
+    if a.helper:
+        _check_sso(a)
     _onward(a, "browser")
+
+
+def _check_sso(a):
+    """The helper checks the same sign-in: a ticket only when its answer is the same person (by guid, never by the editable
+    name alone) with the same role as Toner's own check. Anything else: no ticket, and an admin approves as today."""
+    ans = _ask({"op": "check_sso", "connection": a.cfg["id"], "id_token": a.tokens.id_token,
+                "access_token": a.tokens.access_token or ""}, timeout=30)
+    if ans.get("ok") and isinstance(ans.get("ticket"), str) and \
+            (ans.get("name"), ans.get("guid"), ans.get("role")) == (a.name, a.user.guid, a.role):
+        a.ticket = ans["ticket"]
 
 
 class TestLogin:
@@ -481,11 +574,13 @@ def choose_pin(a, pin):
     rec = _mine(a)
     if not (rec and rec.get("sealed")):
         try:
-            datakey.start_directory_account(a.user, a.cfg["id"], slot)
+            datakey.start_directory_account(a.user, a.cfg["id"], slot, a.role)
         except BaseException:
             _drop(slot)
             raise
     a.slot, a.stage = slot, "approve"
+    if a.ticket:
+        approve_by_helper(a)
 
 
 def _drop(slot):
@@ -523,14 +618,35 @@ def approve_with_account(a, approver, pin):
     _approve(a, opener)
 
 
-def _approve(a, opener):
+def approve_by_helper(a):
+    """At the approval (stage "approve"): the helper releases the data key and the rules key for the attempt's ticket (used up
+    either way), and Toner approves as HELPER_APPROVER. The keys live only inside this approval; _put_back lets go of them. Any
+    helper error, or a ticket for another role than this sign-in's: no keys, and the approval page stays, as today."""
+    ticket, a.ticket = a.ticket, None
+    ans = _ask({"op": "release", "ticket": ticket, "name": a.name})
+    if not ans.get("ok") or ans.get("role") != a.role:
+        return
+
+    def opener():
+        datakey.open_with_keys(base64.b64decode(str(ans.get("data_key")), validate=True))
+        roles.close()                                   # nothing of a session open before: only the helper's rules key
+        roles.hold("rules", base64.b64decode(str(ans.get("rules_private")), validate=True))
+        return 0
+    try:
+        _approve(a, opener, by=HELPER_APPROVER)
+    except Exception:                                   # (its message names no key) an admin approves instead
+        quiet.ignored()
+
+
+def _approve(a, opener, by=None):
     """Open the key as the approver with no session change, approve, then put back whatever was open before (a signed-in
-    session keeps its keys) or close it all. A cleanup failure never hides the approval's own error."""
+    session keeps its keys) or close it all. A cleanup failure never hides the approval's own error. `by`: the approver's
+    name when no account opens the key (the helper's opener holds its own role key)."""
     _expect(a, "approve")
     with session._lock:
         held = (datakey._key + datakey._box, datakey._name) if datakey.is_open() else None
         try:
-            _approve_as(a, opener)
+            _approve_as(a, opener, by)
         except BaseException:
             try:
                 _put_back(held)
@@ -540,10 +656,11 @@ def _approve(a, opener):
         _put_back(held)
 
 
-def _approve_as(a, opener):
+def _approve_as(a, opener, by=None):
     fails = opener()
-    by = datakey.signed_in_name() or RECOVERY_APPROVER
-    roles.unlock()
+    if by is None:
+        by = datakey.signed_in_name() or RECOVERY_APPROVER
+        roles.unlock()
     if fails:                                               # counted in netcheck.keys; audited while the key is open
         audit.log(f"{fails} failed sign-in attempts since the last sign-in", who=by)
     try:
@@ -580,7 +697,10 @@ def finish(a, pin):
             if not datakey.check_pin(a.name, pin):          # the PIN first (counted), so a wrong one never reaches approval
                 raise pinslot.WrongPin()
             a.stage, a.message = "approve", CHANGED
-            return
+            if a.ticket:
+                approve_by_helper(a)                        # approved: on with the PIN just checked
+            if a.stage != "pin":
+                return
         session.sign_in_pin(a.name, pin)                    # offline, "changed" signs in with the keys it already has
     except pinslot.SlotMissing:
         if not a.fresh:                                     # a new PIN needs the password checked online
