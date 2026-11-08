@@ -85,5 +85,23 @@ w.chk.set_selected(["CPU"]); w.chk._toggled()
 check("Over time: a number -> the line chart as before", w.over_stack.currentWidget() is w.chart and len(w.chart.series) == 1)
 check("the check picker's tooltip", w.compare_check.toolTip() == "The check to chart", w.compare_check.toolTip())
 
+print("== Failures: a cell or a bar lists the rows it counts")
+from datetime import datetime as _dt
+w.draw_failures()
+now = _dt.now()
+w.fail_when.clicked.emit({"kind": "series", "value": [now.hour, now.weekday(), 1]})
+dlg = getattr(w, "_fail_list", None)
+cells = lambda t: [[t.item(i, j).text() for j in range(t.columnCount())] for i in range(t.rowCount())] if t else []
+day = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][now.weekday()]
+check("a heatmap cell opens its FAIL and ERROR rows, titled by the day and hour", dlg is not None and dlg.windowTitle() == f"Failures: {day} {now.hour:02d}:00"
+      and [dlg.table.horizontalHeaderItem(j).text() for j in range(5)] == ["Time", "Device", "Check", "Status", "Message"]
+      and any(r[1] == "sw2" and r[3] == "FAIL" for r in cells(dlg.table)) and all(r[3] in ("FAIL", "ERROR") for r in cells(dlg.table)),
+      dlg and (dlg.windowTitle(), cells(dlg.table)))
+w.fail_where.clicked.emit({"kind": "series", "dataIndex": 0})
+dlg = getattr(w, "_fail_list", None)
+check("a device's bar opens that device's rows, titled by its name", dlg is not None and dlg.windowTitle() == "Failures: sw2"
+      and cells(dlg.table) and all(r[1] == "sw2" for r in cells(dlg.table)), dlg and (dlg.windowTitle(), cells(dlg.table)))
+w.fail_when.clicked.emit({"kind": "series", "value": [(now.hour + 12) % 24, now.weekday(), 0]})
+check("...an empty cell opens nothing new", dlg is not None and getattr(w, "_fail_list", None) is dlg)
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

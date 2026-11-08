@@ -1608,7 +1608,7 @@ AGENT_COLUMNS = {"cpu": "cpu", "memory": "memory", "disks": "disk", "uptime": "u
 
 
 def problems(days=7):
-    """Every FAIL and ERROR row of the last `days` days, for the History page's charts: [{'t', 'device', 'check', 'status'}],
+    """Every FAIL and ERROR row of the last `days` days, for the History page's charts: [{'t', 'device', 'check', 'status', 'message'}],
     oldest first, devices keyed with dkey. Counted in SQLite, read from every file of the view (Shared devices only, from Global
     seen in an organization), as availability is."""
     cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:00")
@@ -1616,7 +1616,7 @@ def problems(days=7):
     def here():
         with connect() as c:
             return [dict(r) for r in c.execute(
-                "SELECT runs.started_at AS t, results.device AS device, results.check_name AS 'check', results.status AS status "
+                "SELECT runs.started_at AS t, results.device AS device, results.check_name AS 'check', results.status AS status, results.message AS message "
                 "FROM results JOIN runs ON runs.id = results.run_id "
                 "WHERE runs.started_at >= ? AND results.status IN ('FAIL', 'ERROR') ORDER BY runs.started_at", (cutoff,))]
     out = []

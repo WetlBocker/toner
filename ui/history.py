@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 import pyqtgraph as pg
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPixmap
-from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy,
+from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy,
                                QSplitter, QStackedWidget, QTabWidget, QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout, QWidget)
 from core import db, display, reports, scope, trends
 from core.reports import COLORS, fg_for
@@ -543,6 +543,9 @@ class HistoryTab(QWidget):
         self.fail_when.setAccessibleName("Failures by weekday and hour")
         self.fail_where = ChartView(min_height=200)
         self.fail_where.setAccessibleName("Failures by device")
+        self.fail_when.clicked.connect(self._fail_cell)                    # a cell or a bar: the rows it counts
+        self.fail_where.clicked.connect(self._fail_bar)
+        self._fail_rows, self._fail_worst = [], []
         fails = QWidget()
         fl = QVBoxLayout(fails)
         fl.setContentsMargins(0, 8, 0, 0)
@@ -709,6 +712,7 @@ class HistoryTab(QWidget):
         names = self._group_names()
         if names is not None:
             rows = [r for r in rows if self._base(r["device"]) in names]
+        self._fail_rows, self._fail_worst = [], []
         if not rows:
             self.fail_when.draw(lambda p: chartspec.empty(f"No failures or errors in the last {days} days"))
             self.fail_where.draw(lambda p: chartspec.empty(""))
@@ -721,14 +725,54 @@ class HistoryTab(QWidget):
             except ValueError:
                 continue
             cells[(t.hour, t.weekday())] = cells.get((t.hour, t.weekday()), 0) + 1
+            self._fail_rows.append((t, r))
             per_device[r["device"]] = per_device.get(r["device"], 0) + 1
         hours = [f"{h:02d}" for h in range(24)]
         weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
         grid = [(h, d, n) for (h, d), n in cells.items()]
         self.fail_when.draw(lambda p: chartspec.heatmap(p, hours, weekdays, grid, title=f"When: FAIL and ERROR rows, last {days} days"))
         worst = sorted(per_device.items(), key=lambda kv: (-kv[1], kv[0].lower()))[:12]
+        self._fail_worst = [d for d, _n in worst]
         self.fail_where.draw(lambda p: chartspec.bars(p, [db.label_org(d) for d, _n in worst], [n for _d, n in worst], title="Where: devices with most",
                                                       horizontal=True, colors=[chartspec.status_color(p, "FAIL")] * len(worst)))
+
+    def _fail_cell(self, hit):
+        """A heatmap cell (an hour of a weekday) was clicked: the FAIL and ERROR rows it counts."""
+        v = hit.get("value") if hit.get("kind") == "series" else None
+        if not (isinstance(v, list) and len(v) >= 2):
+            return
+        hour, day = int(v[0]), int(v[1])
+        rows = [(t, r) for t, r in self._fail_rows if t.hour == hour and t.weekday() == day]
+        self._show_failures(f"Failures: {('Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun')[day]} {hour:02d}:00", rows)
+
+    def _fail_bar(self, hit):
+        """A device's bar was clicked: its FAIL and ERROR rows."""
+        i = hit.get("dataIndex")
+        if hit.get("kind") != "series" or not isinstance(i, int) or not 0 <= i < len(self._fail_worst):
+            return
+        device = self._fail_worst[i]
+        self._show_failures(f"Failures: {db.label_org(device)}", [(t, r) for t, r in self._fail_rows if r["device"] == device])
+
+    def _show_failures(self, title, rows):
+        """The rows behind a cell or a bar, newest first, in a window of their own (none for an empty cell)."""
+        if not rows:
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle(title)
+        dlg.resize(820, 460)
+        lay = QVBoxLayout(dlg)
+        dlg.table = _table(["Time", "Device", "Check", "Status", "Message"])
+        dlg.table.setItemDelegateForColumn(3, StatusDelegate(dlg.table))
+        for t, r in sorted(rows, key=lambda tr: tr[0], reverse=True):
+            i = dlg.table.rowCount()
+            dlg.table.insertRow(i)
+            for j, v in enumerate([t.strftime("%Y-%m-%d %H:%M"), db.label_org(r["device"]), display.check_name(r["check"]), r["status"],
+                                   r.get("message") or ""]):
+                dlg.table.setItem(i, j, QTableWidgetItem(str(v)))
+        dlg.table.resizeColumnsToContents()
+        lay.addWidget(dlg.table)
+        self._fail_list = dlg
+        dlg.show()
 
     def _pick_from_row(self):
         """A check's row was chosen in the run's list: that device and that check go on the chart (a check with no numbers
