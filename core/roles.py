@@ -129,18 +129,26 @@ def _signed(doc):
     return envelope.canonical(body)
 
 
-def _sign(doc):
+def _sign(doc, signer=None):
+    """Sign with the rules key held, or with `signer(payload) -> sig` (the helper service, which keeps the rules key) when given:
+    its signature must verify under the file's rules_pub, else nothing is written."""
     global _pending
     att = _attested(doc)
     doc["attested"] = {n: att.get(n) for n in doc["accounts"]}
     doc["roles"] = _clean_roles(doc.get("roles"))
     payload, sig = _signed(doc), doc.get("rules_sig")
+    pub = _public("rules", _held["rules"]) if signer is None else _unb64(doc["rules_pub"])
     # changed, a new key, or a file from before the count (its first signing since starts it, so an older file can't come back)
-    if "rules_version" not in doc or not (isinstance(sig, str) and envelope.verify(_public("rules", _held["rules"]), payload, sig)):
+    if "rules_version" not in doc or not (isinstance(sig, str) and envelope.verify(pub, payload, sig)):
         v = doc.get("rules_version")
         doc["rules_version"] = (v if isinstance(v, int) and not isinstance(v, bool) and v > 0 else 0) + 1
         payload = _signed(doc)
-    doc["rules_sig"] = envelope.sign(_held["rules"], payload)
+    if signer is None:
+        doc["rules_sig"] = envelope.sign(_held["rules"], payload)
+    else:
+        doc["rules_sig"] = signer(payload)
+        if not (isinstance(doc["rules_sig"], str) and envelope.verify(pub, payload, doc["rules_sig"])):
+            raise ValueError("the rules weren't signed")
     _pending = payload.decode("utf-8")              # kept as rules_signed once the file has landed (_landed)
 
 
@@ -369,7 +377,7 @@ def groups_changed():
 
 
 # ---------------------------------------------------------------- grants
-def _sync(doc):
+def _sync(doc, signer=None):
     """Wrap each role key held to every vouched-for box key that should have it (the recovery key's too), drop grants that no
     longer apply, and sign. A box key nobody has vouched for yet (a Part 1 account that added its own since) is vouched for now;
     one that differs from what was vouched for gets nothing until an Admin resets that password. The caller holds the rules key
@@ -406,7 +414,7 @@ def _sync(doc):
             if kind not in rg and kind in _held:
                 rg[kind] = envelope.wrap(_unb64(live), _held[kind], _aad(kind, None))
     doc["recovery_grants"] = rg
-    _sign(doc)
+    _sign(doc, signer)
 
 
 def sync_grants():
@@ -700,7 +708,7 @@ def needs_approval(name):
     return "changed" if (now == "Admin" and was != "Admin") or (unmasked(now) and not unmasked(was)) else None
 
 
-def approve(name, slot=None, approved_by=None):
+def approve(name, slot=None, approved_by=None, signer=None):
     """An Admin (who holds the rules key) or the recovery key approves a directory account: its approved role becomes its groups'
     role, and the role keys follow.
       first approval    `slot` is the one start_directory_account wrote: seals the data key and the box private held since then
@@ -708,14 +716,17 @@ def approve(name, slot=None, approved_by=None):
       new slot          (an approved account's new PIN, or another computer) `slot` is a new one: a new box key, vouched for and
                         sealed with the data key under it; the old slot is removed from this computer.
       no slot           (an approved account whose groups changed) keeps the seal.
-    approved_by names the approver in the audit (default: whoever is signed in)."""
+    approved_by names the approver in the audit (default: whoever is signed in). `signer(payload) -> sig`: the rules are signed
+    by it instead of a held rules key (the helper service's approval of a non-Admin), and only on rules that check out."""
     from core import perms
     with _lock:
-        if not _root and "rules" not in _held:
+        if signer is None and not _root and "rules" not in _held:
             raise perms.Denied()
 
         def go(doc):
-            repair = _may_write(doc)
+            if signer is not None and _state_of(doc) != "ok":
+                raise datakey.Locked("Sign in first.")
+            repair = _may_write(doc) if signer is None else False
             stored = datakey._stored(doc, name)
             rec = doc["accounts"][stored]
             if not _directory(rec) or rec.get("groups_role") not in ROLES:
@@ -743,7 +754,7 @@ def approve(name, slot=None, approved_by=None):
             pub = _rekey(doc) if repair else None
             if slot is not None:
                 _attested(doc)[stored] = rec["box_pub"]   # the approver saw this box key made (at start, or just now)
-            _sync(doc)
+            _sync(doc, signer)
             return stored, rec["slot_id"], old, pub
         stored, slot_id, old, pub = datakey.edit(go)
         _written(pub)

@@ -3,7 +3,8 @@ sign-in itself (an SSO answer with a nonce it issued, or a directory password pl
 from the admin-signed rules in the enrolled copy's netcheck.keys, verified with the rules key pinned at enrollment.
 
 `peer` is the caller's SID or uid, given by the transport. Nonces, tickets, pending Duo checks and the failure counts live in
-memory only. No answer carries a password, token, code or key, except release's keys. No Qt, and no database is opened.
+memory only. No answer carries a password, token, code or key, except release's keys: the rules key only for an Admin's
+ticket; anyone else's one approval is signed here (sign_approval). No Qt, and no database is opened.
 serve_channel is the connection loop that core/helper/windows.py and linux.py run on their own channel."""
 import base64
 import json
@@ -31,7 +32,8 @@ _COUNTED = {"not_owner", "other_user", "refused", "not_fresh", "bad_answer", "no
 _FIELDS = {"status": ("keys_path",), "enroll": ("keys_path", "data_key", "rules_private"), "forget": ("keys_path",),
            "nonce": ("keys_path", "connection"), "check_sso": ("keys_path", "connection", "id_token", "access_token"),
            "check_directory": ("keys_path", "connection", "login", "password"), "duo_push": ("pending",),
-           "duo_code": ("pending", "code"), "release": ("keys_path", "ticket", "name")}
+           "duo_code": ("pending", "code"), "release": ("keys_path", "ticket", "name"),
+           "sign_approval": ("keys_path", "ticket", "name", "signed")}
 _BAD = {"ok": False, "error": "bad_request"}
 log = logging.getLogger(__name__)
 _CODES = {oidc.Unreachable: "unreachable", oidc.Refused: "refused", oidc.NotFresh: "not_fresh", oidc.BadAnswer: "bad_answer",
@@ -197,10 +199,10 @@ class Helper:
             v = kept.get(key) if keep else kept.pop(key, None)
         return v[1:] if v and self.now() <= v[0] else None
 
-    def _ticket(self, rec, name, role):
+    def _ticket(self, rec, name, role, connection, guid):
         with self._lock:
             self._fails.pop(rec["owner"], None)        # a checked sign-in clears the count, as a password does in Toner
-        return self._put(self._tickets, TTL, name, role)
+        return self._put(self._tickets, TTL, name, role, connection, guid)
 
     # ------------------------------------------------------------ the signed rules
     def _rules(self, rec, read):
@@ -306,7 +308,7 @@ class Helper:
         role = directory.role_for(cfg, user.groups)
         if role is None:
             raise _No("not_in_group")
-        return {**_who(user, role), "ticket": self._ticket(rec, user.name, role)}
+        return {**_who(user, role), "ticket": self._ticket(rec, user.name, role, cfg["id"], user.guid)}
 
     def _check_directory(self, req, rec, cancel, read):
         cfg = self._cfg(rec, req["connection"], False, read)
@@ -318,13 +320,14 @@ class Helper:
             raise _No("not_in_group")
         who = _who(user, role)
         if not (cfg.get("duo") or {}).get("on"):
-            return {**who, "ticket": self._ticket(rec, user.name, role)}
+            return {**who, "ticket": self._ticket(rec, user.name, role, cfg["id"], user.guid)}
         r = duo.preauth(cfg, user.name, skey=self._skey(rec, cfg["id"]))
         if r == "allow":                                # Duo's bypass, set by its admin
-            return {**who, "ticket": self._ticket(rec, user.name, role)}
+            return {**who, "ticket": self._ticket(rec, user.name, role, cfg["id"], user.guid)}
         if r != "auth":                                 # deny or enroll: the password was right, Duo says no (as Toner: not counted)
             raise _No("duo_denied", name=user.name)     # (named only after the right password, as Toner's own audit row)
-        return {**who, "duo": "auth", "pending": self._put(self._pending, TTL, cfg["id"], user.name, role, {"pushed": False})}
+        return {**who, "duo": "auth", "pending": self._put(self._pending, TTL, cfg["id"], user.name, role, user.guid,
+                                                                 {"pushed": False})}
 
     def _duo(self, req, rec, check, read, push=False):
         """A pending Duo check: `check(cfg, name, skey)` passes or raises; then the pending check is used up for a ticket. It
@@ -332,7 +335,7 @@ class Helper:
         pending = self._take(self._pending, req["pending"], keep=True)
         if pending is None:
             raise _No("refused")
-        connection, name, role, state = pending
+        connection, name, role, guid, state = pending
         if push:
             with self._lock:
                 if state["pushed"]:
@@ -342,7 +345,7 @@ class Helper:
         check(cfg, name, self._skey(rec, connection))
         if self._take(self._pending, req["pending"]) is None:      # another request used it meanwhile
             raise _No("refused")
-        return {"ticket": self._ticket(rec, name, role)}
+        return {"ticket": self._ticket(rec, name, role, connection, guid)}
 
     def _duo_push(self, req, rec, cancel, read):
         def push(cfg, name, skey):
@@ -358,12 +361,56 @@ class Helper:
         return self._duo(req, rec, lambda cfg, name, skey: duo.passcode(cfg, name, req["code"], skey=skey), read)
 
     def _release(self, req, rec, cancel, read):
+        """The data key for a ticket, and for an Admin's the rules key too (the ticket used up). Anyone else's ticket stays for
+        sign_approval: the rules key never leaves for them."""
         self._rules(rec, read)
-        ticket = self._take(self._tickets, req["ticket"])
+        ticket = self._take(self._tickets, req["ticket"], keep=True)
         if ticket is None or ticket[0] != req["name"]:
             raise _No("refused")
         spare = rec["spare"]                            # the data key, then the 32-byte Ed25519 rules private key
+        if ticket[1] != "Admin":
+            return {"data_key": _b64(spare[:-32]), "role": ticket[1]}
+        if self._take(self._tickets, req["ticket"]) is None:       # another request used it meanwhile
+            raise _No("refused")
         return {"data_key": _b64(spare[:-32]), "rules_private": _b64(spare[-32:]), "role": ticket[1]}
+
+    def _sign_approval(self, req, rec, cancel, read):
+        """A non-Admin ticket's one approval, signed here (the ticket used up). `signed` is the signed part Toner proposes; it is
+        signed only when it differs from the verified rules by this account alone, approved at the ticket's role for the
+        ticket's connection and guid with a box key, and by rules_version one higher. (Grants and the seal aren't signed: Toner
+        holds neither role key here, so it can wrap neither.)"""
+        cur = json.loads(roles._signed(self._rules(rec, read)))
+        ticket = self._take(self._tickets, req["ticket"])
+        if ticket is None or ticket[0] != req["name"] or ticket[1] == "Admin":
+            raise _No("refused")
+        name, role, connection, guid = ticket
+        try:
+            new = json.loads(req["signed"])
+            canonical = isinstance(new, dict) and envelope.canonical(new) == req["signed"].encode("utf-8")
+        except (ValueError, RecursionError):
+            canonical = False
+        if not canonical:
+            raise _No("bad_request")
+        if not _only_approval(cur, new, name, {"approved_role": role, "directory": connection, "guid": guid}):
+            raise _No("refused")
+        return {"rules_sig": envelope.sign(rec["spare"][-32:], req["signed"].encode("utf-8"))}
+
+
+def _only_approval(cur, new, name, want):
+    """True when the signed part `new` is `cur` with only account `name` approved as `want` (plus its box key) and the
+    rules_version one higher: no other account, role permission, directory, key or the recovery key changed."""
+    acct = new["accounts"].get(name) if isinstance(new.get("accounts"), dict) else None
+    if not isinstance(acct, dict) or set(acct) != {*want, "box_pub"} or any(acct[k] != v for k, v in want.items()):
+        return False
+    try:
+        if len(_unb64(acct["box_pub"])) != 32:
+            return False
+    except (ValueError, TypeError, AttributeError):
+        return False
+    v = new.get("rules_version")
+    rest = lambda body: {k: x for k, x in body.items() if k not in ("accounts", "rules_version")}
+    others = lambda body: {k: x for k, x in body["accounts"].items() if k != name}
+    return type(v) is int and v == cur["rules_version"] + 1 and rest(new) == rest(cur) and others(new) == others(cur)
 
 
 # ------------------------------------------------------------ the channel

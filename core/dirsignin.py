@@ -11,7 +11,8 @@ An SSO connection (kind "oidc") has sso_start and sso_wait (the browser) in plac
 
 With "Let group members sign in without approval" on (helper_ready), the helper service checks the sign-in itself (the password
 and Duo, or the SSO answer with a nonce it issued) and gives a ticket; where an approval would come next, approve_by_helper has
-it release the data key and the rules key for that one approval, credited to HELPER_APPROVER. Any helper failure is today's flow.
+it release the data key for that one approval, credited to HELPER_APPROVER, and the helper signs it (an Admin's ticket releases the
+rules key instead). Any helper failure is today's flow.
 
 Wrong directory passwords count on netcheck.keys' shared counter, as local passwords do. No password, PIN or Duo code is kept on
 an Attempt, logged or put in a message; an SSO attempt's tokens stay on it, and only the refresh token is kept (in the vault)."""
@@ -623,26 +624,37 @@ def approve_with_account(a, approver, pin):
 
 
 def approve_by_helper(a):
-    """At the approval (stage "approve"): the helper releases the data key and the rules key for the attempt's ticket (used up
-    either way), and Toner approves as HELPER_APPROVER. The keys live only inside this approval; _put_back lets go of them. Any
-    helper error, or a ticket for another role than this sign-in's: no keys, and the approval page stays, as today."""
+    """At the approval (stage "approve"): the helper releases the data key for the attempt's ticket, and Toner approves as
+    HELPER_APPROVER. For an Admin's ticket it releases the rules key too; for anyone else's it signs that one approval itself
+    (sign_approval), so the rules key never reaches this process. The keys live only inside this approval; _put_back lets go of
+    them. Any helper error, or a ticket for another role than this sign-in's: no keys, and the approval page stays, as today."""
     ticket, a.ticket = a.ticket, None
     ans = _ask({"op": "release", "ticket": ticket, "name": a.name})
     if not ans.get("ok") or ans.get("role") != a.role:
         return
+    admin = a.role == "Admin"
 
     def opener():
         datakey.open_with_keys(base64.b64decode(str(ans.get("data_key")), validate=True))
-        roles.close()                                   # nothing of a session open before: only the helper's rules key
-        roles.hold("rules", base64.b64decode(str(ans.get("rules_private")), validate=True))
+        db._forget_settings()
+        db.get_setting("rules_key")                     # one read: a data key that isn't this copy's fails here, before any write
+        roles.close()                                   # nothing of a session open before: only the helper's rules key, if any
+        if admin:
+            roles.hold("rules", base64.b64decode(str(ans.get("rules_private")), validate=True))
         return 0
+
+    def signer(payload):
+        got = _ask({"op": "sign_approval", "ticket": ticket, "name": a.name, "signed": payload.decode("utf-8")})
+        if not got.get("ok"):
+            raise ValueError("the helper didn't sign the approval")
+        return got.get("rules_sig")
     try:
-        _approve(a, opener, by=HELPER_APPROVER)
+        _approve(a, opener, by=HELPER_APPROVER, signer=None if admin else signer)
     except Exception:                                   # (its message names no key) an admin approves instead
         quiet.ignored()
 
 
-def _approve(a, opener, by=None):
+def _approve(a, opener, by=None, signer=None):
     """Open the key as the approver with no session change, approve, then put back whatever was open before (a signed-in
     session keeps its keys) or close it all. A cleanup failure never hides the approval's own error. `by`: the approver's
     name when no account opens the key (the helper's opener holds its own role key)."""
@@ -650,7 +662,7 @@ def _approve(a, opener, by=None):
     with session._lock:
         held = (datakey._key + datakey._box, datakey._name) if datakey.is_open() else None
         try:
-            _approve_as(a, opener, by)
+            _approve_as(a, opener, by, signer)
         except BaseException:
             try:
                 _put_back(held)
@@ -660,7 +672,7 @@ def _approve(a, opener, by=None):
         _put_back(held)
 
 
-def _approve_as(a, opener, by=None):
+def _approve_as(a, opener, by=None, signer=None):
     fails = opener()
     if by is None:
         by = datakey.signed_in_name() or RECOVERY_APPROVER
@@ -668,7 +680,7 @@ def _approve_as(a, opener, by=None):
     if fails:                                               # counted in netcheck.keys; audited while the key is open
         audit.log(f"{fails} failed sign-in attempts since the last sign-in", who=by)
     try:
-        roles.approve(a.name, a.slot, approved_by=by)
+        roles.approve(a.name, a.slot, approved_by=by, signer=signer)
     except perms.Denied:
         raise CannotApprove(CANNOT_APPROVE) from None
     except roles.NotHeld:                                   # Toner restarted since the PIN was chosen: choose it again

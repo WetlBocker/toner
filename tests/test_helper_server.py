@@ -326,9 +326,52 @@ check("check_directory: an SSO connection is not a directory: bad_request",
 
 # ---------------------------------------------------------------- release
 a = ask("release", ticket=PUSH_TICKET, name="bob@acme.com")
-check("release with a valid ticket: the enrolled data key and rules key", a.get("ok") and base64.b64decode(a["data_key"]) == DATA_KEY
-      and base64.b64decode(a["rules_private"]) == RULES and a["role"] == "Tech", a)
-check("release: the same ticket twice gives refused", err(ask("release", ticket=PUSH_TICKET, name="bob@acme.com")) == "refused")
+check("release with a Tech's ticket: the enrolled data key, never the rules key", a.get("ok") and base64.b64decode(a["data_key"])
+      == DATA_KEY and "rules_private" not in a and a["role"] == "Tech", a)
+BOB_GUID = ask("check_directory", connection="d1", login="bob@acme.com", password="pw-bob")["guid"]
+CUR = json.loads(roles._signed(json.loads(pathlib.Path(KEYS).read_bytes())))
+BOX = b64(os.urandom(32))
+
+def proposal(change=None, **acct):
+    """The signed part Toner would propose for Bob's approval as a Tech, `change(body)` applied to it."""
+    new = json.loads(json.dumps(CUR))
+    new["accounts"]["bob@acme.com"] = {"approved_role": "Tech", "box_pub": BOX, "directory": "d1", "guid": BOB_GUID, **acct}
+    new["rules_version"] += 1
+    if change:
+        change(new)
+    return envelope.canonical(new).decode("utf-8")
+
+def sign(signed, ticket=None):
+    return ask("sign_approval", ticket=ticket or to_ticket(), name="bob@acme.com", signed=signed)
+
+b = sign(proposal(), PUSH_TICKET)
+check("sign_approval: the Tech's one approval is signed with the rules key", b.get("ok") and set(b) == {"ok", "rules_sig"}
+      and envelope.verify(roles._public("rules", RULES), proposal().encode(), b["rules_sig"]), b)
+check("...the ticket used up by it", err(ask("release", ticket=PUSH_TICKET, name="bob@acme.com")) == "refused"
+      and err(sign(proposal(), PUSH_TICKET)) == "refused")
+check("sign_approval refuses another account changed", err(sign(proposal(lambda n: n["accounts"]["Admin1"].update(role="Tech"))))
+      == "refused")
+check("...another account added", err(sign(proposal(lambda n: n["accounts"].__setitem__("eve@acme.com", n["accounts"]["bob@acme.com"]))))
+      == "refused")
+check("...a role permission changed", err(sign(proposal(lambda n: n["roles"]["Tech"].__setitem__("unmasked", True)))) == "refused")
+check("...a directory changed", err(sign(proposal(lambda n: n["directories"][0].__setitem__("servers", ["evil.example"])))) == "refused")
+check("...the backups key or the recovery key changed", err(sign(proposal(lambda n: n.__setitem__("backups_pub", BOX)))) == "refused"
+      and err(sign(proposal(lambda n: n.__setitem__("recovery_box_pub", BOX)))) == "refused")
+check("...a grant (or anything else) added to what is signed", err(sign(proposal(lambda n: n.__setitem__("grants", {"bob@acme.com":
+      {"rules": "x"}})))) == "refused")
+check("...the version skipped or kept", err(sign(proposal(lambda n: n.__setitem__("rules_version", n["rules_version"] + 1))))
+      == "refused" and err(sign(proposal(lambda n: n.__setitem__("rules_version", n["rules_version"] - 1)))) == "refused")
+check("...another role than the ticket's", err(sign(proposal(approved_role="Admin"))) == "refused")
+check("...another guid or connection than the ticket's", err(sign(proposal(guid="someone-else"))) == "refused"
+      and err(sign(proposal(directory="s1"))) == "refused")
+check("...a box key that isn't one, or an extra field", err(sign(proposal(box_pub="AAAA"))) == "refused"
+      and err(sign(proposal(sealed="x"))) == "refused")
+to_ticket()
+check("...another name than the ticket's", err(ask("sign_approval", ticket=to_ticket(), name="eve@acme.com", signed=proposal()))
+      == "refused")
+check("...a proposal that isn't canonical JSON: bad_request", err(sign(proposal() + " ")) == "bad_request"
+      and err(sign("[1]")) == "bad_request" and err(sign("not json")) == "bad_request")
+to_ticket()
 check("release: a ticket for another name gives refused", err(ask("release", ticket=to_ticket(), name="eve@acme.com")) == "refused")
 t = to_ticket(); T[0] += 601
 check("release: an expired ticket gives refused", err(ask("release", ticket=t, name="bob@acme.com")) == "refused")

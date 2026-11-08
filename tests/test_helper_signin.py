@@ -98,7 +98,7 @@ ADMINS, ENGINEERS, TECHS = "CN=Toner Admins," + BASE, "CN=Toner Engineers," + BA
 directory._STRATEGY = ldap3.MOCK_SYNC
 ldap = ldap3.Server("mock", get_info=ldap3.NONE)
 c = ldap3.Connection(ldap, client_strategy=ldap3.MOCK_SYNC)
-PEOPLE = {"bob": TECHS, "carol": TECHS, "dan": TECHS, "frank": TECHS, "gus": TECHS, "hal": TECHS, "ivy": TECHS, "erin": ENGINEERS, "alice": ADMINS}
+PEOPLE = {"bob": TECHS, "carol": TECHS, "dan": TECHS, "frank": TECHS, "gus": TECHS, "hal": TECHS, "ivy": TECHS, "jay": TECHS, "erin": ENGINEERS, "alice": ADMINS}
 for who, group in PEOPLE.items():
     dn = f"CN={who},OU=Users,{BASE}"
     c.strategy.add_entry(dn, {"objectClass": "user", "userPrincipalName": f"{who}@acme.com", "sAMAccountName": who, "cn": who,
@@ -221,6 +221,12 @@ check("(sign-in without approval is on)", helperclient.state(datakey.path()) == 
 check("HELPER_APPROVER is the approved wording", S.HELPER_APPROVER == "group membership")
 
 print("== an AD Tech's first sign-in: password and Duo push by the helper, then straight to the PIN")
+class Watch(dict):
+    """roles._held, noting every role key it is ever given."""
+    seen = set()
+    def __setitem__(self, k, v): Watch.seen.add(k); super().__setitem__(k, v)
+    def update(self, *a, **k): Watch.seen.update(dict(*a, **k)); super().update(*a, **k)
+roles._held = Watch(roles._held)
 BINDS.clear(); SENT.clear()
 a = to_duo("bob")
 check("begin: the helper checked the password, Duo is pending at the helper", a.stage == "duo" and a.helper and a.ticket is None
@@ -230,10 +236,17 @@ S.duo_push(a, threading.Event())
 check("the push through the helper: Choose a PIN, with the helper's ticket", a.stage == "choose-pin" and a.ticket and a.fresh)
 S.choose_pin(a, PIN)
 check("choose_pin: approved at once, no approval page: the PIN comes next", a.stage == "pin" and a.ticket is None and a.slot is None)
-check("...the ops asked of the helper", SENT == ["status", "check_directory", "duo_push", "release"], SENT)
+check("...the ops asked of the helper: the helper signed the approval", SENT == ["status", "check_directory", "duo_push", "release",
+      "sign_approval"], SENT)
+check("...the rules key was never held in this process", "rules" not in Watch.seen, Watch.seen)
 check("...no key kept in this process after the approval", no_keys(), (datakey._key is None, list(roles._held)))
 rec = datakey.directory_account("bob@acme.com")
 check("...sealed and approved as a Tech", rec["sealed"] and rec["approved_role"] == "Tech" and rec["groups_role"] == "Tech", rec)
+check("...no role key granted to it", "bob@acme.com" not in (doc().get("grants") or {}))
+session.sign_in("Admin1", PW)
+check("...and the rules the helper signed verify", roles.state() == "ok" and roles.verified()["accounts"]["bob@acme.com"]["approved_role"]
+      == "Tech")
+session.sign_out()
 S.finish(a, PIN)
 check("the PIN signs Bob in", a.stage == "done" and session.user() == "bob@acme.com")
 session.sign_out()
@@ -353,11 +366,41 @@ a = first("hal")
 check("release for another role than the attempt's: the approval page, no keys", a.stage == "approve" and no_keys())
 other_rules = base64.b64encode(os.urandom(32)).decode()
 ANSWER[0] = lambda req: {**HELPER.handle(req, "me"), "rules_private": other_rules} if req["op"] == "release" else None
+ldap.dit["hal@acme.com"]["memberOf"] = [ADMINS.encode()]       # an Admin's ticket: the one kind that releases the rules key
 a = to_duo("hal")
 S.duo_push(a, threading.Event())
 S.choose_pin(a, PIN)
 check("a released rules key that isn't this copy's: the approval page, no keys, the rules untouched", a.stage == "approve"
       and a.message == S.FIRST and no_keys() and not datakey.directory_account("hal@acme.com")["sealed"])
+ldap.dit["hal@acme.com"]["memberOf"] = [TECHS.encode()]
+ANSWER[0] = lambda req: {"ok": False, "error": "refused"} if req["op"] == "sign_approval" else None
+before = doc()
+a = first("jay")
+check("the helper won't sign the approval: the approval page, no keys, the file untouched", a.stage == "approve"
+      and a.message == S.FIRST and no_keys() and not datakey.directory_account("jay@acme.com")["sealed"]
+      and doc()["rules_sig"] == before["rules_sig"])
+ANSWER[0] = lambda req: {"ok": True, "rules_sig": base64.b64encode(os.urandom(64)).decode()} if req["op"] == "sign_approval" else None
+a = to_duo("jay")
+S.duo_push(a, threading.Event())
+S.choose_pin(a, PIN)
+check("a signature that doesn't verify: the approval page, nothing written", a.stage == "approve" and no_keys()
+      and not datakey.directory_account("jay@acme.com")["sealed"] and doc()["rules_sig"] == before["rules_sig"])
+ANSWER[0] = lambda req: {**HELPER.handle(req, "me"), "data_key": base64.b64encode(os.urandom(32)).decode()} if req["op"] == "release" else None
+real_get = db.get_setting
+READS = []
+db.get_setting = lambda key: (READS.append(key), real_get(key))[1]
+a = to_duo("jay")
+S.duo_push(a, threading.Event())
+saved, nul = os.dup(2), os.open(os.devnull, os.O_WRONLY)
+os.dup2(nul, 2)                         # (SQLCipher writes its own wrong-key lines to stderr)
+try:
+    S.choose_pin(a, PIN)
+finally:
+    os.dup2(saved, 2); os.close(saved); os.close(nul)
+db.get_setting = real_get
+check("a released data key that isn't this copy's: refused at the opener's database read, the approval page, nothing written",
+      a.stage == "approve" and no_keys() and READS[:1] == ["rules_key"] and not datakey.directory_account("jay@acme.com")["sealed"]
+      and doc()["rules_sig"] == before["rules_sig"], READS)
 ANSWER[0] = None
 
 print("== SSO: the helper names another guid than Toner's own check: refused, the approval page")
