@@ -53,7 +53,8 @@ def fit_rows(view, strip=EMPTY_STRIP, max_rows=MAX_ROWS):
     from PySide6.QtWidgets import QTableView, QTreeView, QTreeWidget, QTreeWidgetItemIterator
     bottoms = []
     if isinstance(view, QTreeWidget):
-        view.doItemsLayout()                                           # a branch opened a moment ago has its rows placed now, not later
+        view.executeDelayedItemsLayout()                               # a branch opened a moment ago has its rows placed now, not later;
+                                                                       # never a full re-layout: inside expandAll() that wrote over Qt's rows
         it = QTreeWidgetItemIterator(view, QTreeWidgetItemIterator.IteratorFlag.NotHidden)
         while it.value():
             r = view.visualItemRect(it.value())                        # empty for a row inside a closed branch

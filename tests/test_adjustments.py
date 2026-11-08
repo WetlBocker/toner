@@ -112,6 +112,18 @@ tr = QTreeWidget(); tr.setColumnCount(1); tr.resize(300, 800); tr.show(); app.pr
 top = QTreeWidgetItem(tr, ["parent"]); [QTreeWidgetItem(top, [f"child {i}"]) for i in range(6)]; app.processEvents()
 closed = fit_rows(tr); top.setExpanded(True); opened = fit_rows(tr)
 check("a tree grows the moment a branch is opened (no waiting for the next paint)", closed and opened and opened >= closed + 6 * tr.visualItemRect(top).height() - 2, (closed, opened))
+class Counted(QTreeWidget):                         # counts the full re-layouts made while Qt is inside expandAll()
+    inside, during = False, 0
+    def doItemsLayout(self):
+        Counted.during += Counted.inside
+        super().doItemsLayout()
+ct = Counted(); ct.resize(300, 800); ct.show()
+for i in range(5):
+    p_ = QTreeWidgetItem(ct, [f"d{i}"]); [QTreeWidgetItem(p_, [f"c{j}"]) for j in range(3)]
+ct.itemExpanded.connect(lambda _i: fit_rows(ct)); app.processEvents()
+Counted.inside = True; ct.expandAll(); Counted.inside = False
+check("fitted while Expand all opens every row, the tree is never laid out again from inside it (that wrote over Qt's rows: a crash)",
+      Counted.during == 0, Counted.during)
 w.go("Results"); app.processEvents()
 check("Results ends under its rows", w.results.table.maximumHeight() < w.results.height(), w.results.table.maximumHeight())
 check("Configs too", w.configs.devs.maximumHeight() < 16777215)
