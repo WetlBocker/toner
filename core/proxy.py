@@ -216,7 +216,7 @@ def _http_connect(cfg, host, port, timeout):
         while b"\r\n\r\n" not in data:
             if time.time() > deadline:
                 raise ProxyError(f"{cfg.label()} did not answer")
-            chunk = s.recv(4096)
+            chunk = s.recv(1)                          # a byte at a time: what the target sends after the reply is the caller's
             if not chunk:
                 raise ProxyError(f"{cfg.label()} closed the connection")
             data += chunk

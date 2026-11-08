@@ -196,6 +196,20 @@ m = fails(proxy.Config("http", "127.0.0.1", hp2.port, "svc", "wrong")); check("a
 hp3 = HttpProxy(refuse=403); m = fails(proxy.Config("http", "127.0.0.1", hp3.port)); check("a refusal is explained", m and "would not connect" in m and "403" in m, m)
 dead = socket.socket(); dead.bind(("127.0.0.1", 0)); dport = dead.getsockname()[1]; dead.close()
 m = fails(proxy.Config("http", "127.0.0.1", dport)); check("a proxy that is not there is explained", m and "could not reach the proxy" in m and str(dport) in m, m)
+class Eager(Server):                                    # the target speaks first (SMTP, SSH): its greeting arrives with the 200
+    def handle(self, c):
+        data = b""
+        while b"\r\n\r\n" not in data:
+            chunk = c.recv(4096)
+            if not chunk: return
+            data += chunk
+        c.sendall(b"HTTP/1.1 200 Connection established\r\n\r\n220 fake ESMTP ready\r\n"); c.recv(1)
+eager = Eager()
+s = proxy.connect(proxy.Config("http", "127.0.0.1", eager.port), "127.0.0.1", 25, 5); s.settimeout(3)
+try: got = s.recv(100)
+except OSError: got = b""
+s.close()
+check("a greeting sent with the proxy's 200 reaches the caller, none of it lost", got == b"220 fake ESMTP ready\r\n", got)
 check("a proxy error is not retried like a dropped connection", issubclass(proxy.ProxyError, OSError) and not issubclass(proxy.ProxyError, ConnectionError))
 
 print("== SOCKS5 proxy")
