@@ -219,11 +219,18 @@ oidc.GRAPH = ISS + "/graph"
 check("groups from the claim", oidc.groups(CFG, {"groups": ["a", "b"]}, "at-1") == ("a", "b"))
 check("no claim name: no groups", oidc.groups({**CFG, "groups_claim": ""}, {"groups": ["a"]}, "at-1") == ())
 ptr = {"_claim_names": {"groups": "src1"}, "oid": "oid-1"}
-check("a _claim_names pointer is fetched from Graph", oidc.groups(CFG, ptr, "at-1") == ("g-1", "g-2")
+ENTRA = {**CFG, "provider": "entra"}
+check("Entra: a _claim_names pointer is fetched from Graph", oidc.groups(ENTRA, ptr, "at-1") == ("g-1", "g-2")
       and P.graph_seen[-1][0] == "/graph/me/getMemberObjects")
 P.graph_me_id = "someone-else"
-check("Graph /me for another person is BadAnswer", raises(B, oidc.groups, CFG, ptr, "at-1"))
+check("Graph /me for another person is BadAnswer", raises(B, oidc.groups, ENTRA, ptr, "at-1"))
+P.graph_me_id = None
+check("...and so is no oid and no /me id (not the same person by default)", raises(B, oidc.groups, ENTRA, {"_claim_names": {"groups": "s"}},
+      "at-1") and raises(B, oidc.groups, ENTRA, ptr, "at-1"))
 P.graph_me_id = "oid-1"
+seen = len(P.graph_seen)
+check("another provider's _claim_names: no Graph call (its token never goes to Microsoft), no groups",
+      oidc.groups({**CFG, "provider": "okta"}, ptr, "at-1") == () and len(P.graph_seen) == seen)
 u = oidc.user_from({**CFG, "id_claim": "oid", "suffixes": ["example.com"]}, {"sub": "s", "oid": "o1", "preferred_username": "Ann@Example.com", "name": "Ann A"}, ["g"])
 check("user_from with id_claim=oid", u.guid == "o1" and u.name == "ann@example.com" and u.display == "Ann A" and u.groups == ("g",) and u.enabled)
 u = oidc.user_from({**CFG, "suffixes": ["x.org"]}, {"sub": "s", "email": "B@x.org"}, ())

@@ -161,6 +161,14 @@ check("the next sign-in goes straight to the PIN", a.stage == "pin" and a.fresh
 S.finish(a, PIN)
 check("...and opens", a.stage == "done" and session.user() == ANN)
 session.sign_out()
+real_put = passvault.put
+def no_vault(*a, **k): raise passvault.Locked("the vault can't be written")
+passvault.put = no_vault
+a = sso()
+S.finish(a, PIN)
+passvault.put = real_put
+check("the refresh token can't be kept: signed in all the same (the re-check skips)", a.stage == "done" and session.user() == ANN)
+session.sign_out()
 
 # ---------------------------------------------------------------- not in a mapped group
 P.id_claims = {"groups": ["other"]}

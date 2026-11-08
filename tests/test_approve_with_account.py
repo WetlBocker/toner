@@ -108,7 +108,7 @@ ADMINS, ENGINEERS, TECHS = "CN=Toner Admins," + BASE, "CN=Toner Engineers," + BA
 directory._STRATEGY = ldap3.MOCK_SYNC
 ldap = ldap3.Server("mock", get_info=ldap3.NONE)
 c = ldap3.Connection(ldap, client_strategy=ldap3.MOCK_SYNC)
-PEOPLE = {"alice": ADMINS, "bob": TECHS, "carol": ENGINEERS, "dave": ADMINS, "erin": TECHS, "frank": TECHS}
+PEOPLE = {"alice": ADMINS, "bob": TECHS, "carol": ENGINEERS, "dave": ADMINS, "erin": TECHS, "frank": TECHS, "gwen": TECHS}
 for who, group in PEOPLE.items():
     dn = "CN=%s,OU=Users,%s" % (who.title(), BASE)
     c.strategy.add_entry(dn, {"objectClass": "user", "userPrincipalName": who + "@acme.com", "sAMAccountName": who, "cn": who.title(),
@@ -353,6 +353,24 @@ check("...no session was opened", closed())
 w.pin.setText(PIN_F); w.pin_ok.click(); settle(w)
 check("frank's PIN signs frank in", w.result() == Accepted and session.user() == "frank@acme.com")
 check("...audited: approved by alice", rows("sign-in approved")[0]["detail"] == "frank@acme.com, approved by alice@acme.com")
+session.sign_out()
+
+print("== the window: the nested window closed while its approval runs")
+w = SignInWindow(); w.show()
+w.name.setText("gwen@acme.com"); w.next.click()
+w.pw.setText("pw-gwen"); w.sign_in.click()
+pump(lambda: w.pages.currentWidget() is w.choose_page)
+w.pin1.setText(PIN_F); w.pin2.setText(PIN_F); w.choose_ok.click(); settle(w)
+w.approve_with_account.click()
+n = w.approver
+n.name.setText("alice@acme.com"); n.next.click()
+n.pw.setText("pw-alice"); n.sign_in.click()
+pump(lambda: n.pages.currentWidget() is n.pin_page)
+n.pin.setText(PIN_A); n.pin_ok.click()
+n.reject()                                              # closed at once: the approval's Job ends first
+check("the outer window still routes on: gwen at her PIN", n.result() != Accepted and sealed("gwen@acme.com")
+      and w.attempt.stage == "pin" and w.pages.currentWidget() is w.pin_page, (w.attempt.stage, w.pages.currentWidget()))
+w.reject()
 session.sign_out()
 
 # ---------------------------------------------------------------- nothing secret anywhere

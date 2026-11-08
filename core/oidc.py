@@ -337,8 +337,9 @@ def groups(cfg, claims, access_token):
     if not name:
         return ()
     pointer = claims.get("_claim_names")
-    if isinstance(pointer, dict) and name in pointer:
-        if _graph("GET", "/me", access_token).get("id") != claims.get("oid"):
+    if isinstance(pointer, dict) and name in pointer and cfg.get("provider") == "entra":    # (only Entra's token goes to Graph)
+        oid, me = claims.get("oid"), _graph("GET", "/me", access_token).get("id")
+        if not (isinstance(oid, str) and oid and me == oid):
             raise BadAnswer(f"{host_of(GRAPH)} answered for someone else")
         found = _graph("POST", "/me/getMemberObjects", access_token, json={"securityEnabledOnly": False}).get("value")
     else:

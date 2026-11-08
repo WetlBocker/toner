@@ -510,6 +510,9 @@ class SignInWindow(QDialog):
             return
         if a.stage == "approve":
             self.approve_text.setText(a.message)
+        if a.name:                                       # the account's name as the directory or provider gives it, not as typed
+            for lab in (self.code_who, self.pin_who):
+                lab.setText(a.name)
         page, focus = {"duo": (self.duo_page, self.duo_cancel), "pin": (self.pin_page, self.pin),
                        "choose-pin": (self.choose_page, self.pin1), "approve": (self.approve_page, self.admin)}[a.stage]
         self._go(page, focus)
@@ -649,10 +652,11 @@ class SignInWindow(QDialog):
         self._step(lambda: dirsignin.approve(a, admin, pw), self.approve_error, self.approve_wait, self.admin_pw)
 
     def _approve_with_account(self):
-        """The nested window: once it approves, this window routes the attempt on (to its PIN)."""
+        """The nested window: once it closes, whatever its result (its Jobs have ended), this window routes the attempt on (to its
+        PIN once approved)."""
         a = self.attempt
         self.approver = SignInWindow(self, approver_for=a)
-        self.approver.finished.connect(lambda r: self._route() if r == QDialog.DialogCode.Accepted and self.attempt is a else None)
+        self.approver.finished.connect(lambda r: self._route() if self.attempt is a else None)
         self.approver.open()
 
     def _approve_key(self):

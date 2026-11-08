@@ -259,12 +259,17 @@ T[0] += 301
 check("check_sso: a nonce used after 300 s gives bad_answer", err(check_sso(tok)) == "bad_answer")
 T[0] = time.time()
 P.graph_member_ids = ["g1"]
+real_cfg = HELPER._cfg
+HELPER._cfg = lambda rec, conn, sso, read: {**real_cfg(rec, conn, sso, read), "provider": "entra"}     # (Graph is Entra's only)
 a = check_sso(sso_token(groups=None, _claim_names={"groups": "src1"})[1])
 check("check_sso: over 200 Entra groups, the list from Graph for the same person", a.get("role") == "Tech", a)
 P.graph_me_id = "someone-else"
 check("check_sso: Graph's /me is someone else: bad_answer", err(check_sso(sso_token(groups=None, _claim_names={"groups": "src1"})[1]))
       == "bad_answer")
 P.graph_me_id = "oid-1"
+HELPER._cfg = real_cfg
+check("check_sso: another provider's _claim_names: no Graph call, no groups", err(check_sso(sso_token(groups=None,
+      _claim_names={"groups": "src1"})[1])) == "not_in_group")
 check("check_sso: a directory connection is not an SSO one: bad_request",
       err(ask("check_sso", connection="d1", id_token=sso_token()[1], access_token="at-1")) == "bad_request")
 

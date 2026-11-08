@@ -182,9 +182,12 @@ def _mine(a):
 
 
 def _offline(a):
-    """The directory can't be reached: the PIN alone, within the hour of the last good check of a sealed account."""
+    """The directory can't be reached: the PIN alone, within the hour of the last good check of a sealed account (looked up by
+    the attempt's account name when it has one, else by the name the directory would give the typed login)."""
     who, short = directory._split_login(a.cfg, a.login)
-    if a.cfg["kind"] in ("ad", "oidc") and "@" in who:
+    if a.name:
+        name = a.name
+    elif a.cfg["kind"] in ("ad", "oidc") and "@" in who:
         name = who.lower()                                  # the UPN the directory would have named the account by
     else:                                                   # (DOMAIN\user: its UPN prefix taken to be the user name)
         first = (a.cfg.get("suffixes") or [""])[0]
@@ -752,7 +755,10 @@ def finish(a, pin):
         a.stage, a.message = "choose-pin", CHANGED
         return
     if a.tokens and a.tokens.refresh_token:                 # SSO: the background re-check's refresh token, once the vault is open
-        passvault.put(f"sso-refresh:{a.name}", a.tokens.refresh_token)
+        try:
+            passvault.put(f"sso-refresh:{a.name}", a.tokens.refresh_token)
+        except Exception:                                   # signed in already: the re-check then skips until the next sign-in
+            quiet.ignored()
     a.stage = "done"
 
 
