@@ -745,8 +745,16 @@ db.set_setting("rules_signed", payload.decode("utf-8"))
 roles._invalidate()
 check("rules_version: a file signed without it signs as before and still verifies", b"rules_version" not in payload
       and roles.state() == "ok" and roles.verified() is not None, roles.state())
+as_("Admin1", PW)
+check("...the first Admin sign-in since starts the count at 1, still verifying", doc()["rules_version"] == 1
+      and roles.state() == "ok" and signed_ok(), (doc().get("rules_version"), roles.state()))
+before, signed = datakey.path().read_bytes(), db.get_setting("rules_signed")
+as_("Admin1", PW)
+roles.sync_grants()
+check("...the next sign-in that changes nothing writes nothing", datakey.path().read_bytes() == before
+      and db.get_setting("rules_signed") == signed and doc()["rules_version"] == 1)
 roles.set_permissions("Tech", {"push": False})
-check("...its next change starts the count at 1", doc()["rules_version"] == 1 and roles.state() == "ok" and signed_ok())
+check("...and the next change makes it 2", doc()["rules_version"] == 2 and roles.state() == "ok" and signed_ok())
 d = doc(); d["rules_version"] = 7; put(d); roles._invalidate()
 check("rules_version: changed by hand, the rules don't verify", roles.state() == "tampered")
 session.sign_out()

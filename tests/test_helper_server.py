@@ -109,9 +109,16 @@ roles.set_directories([ACME, SSO])
 DATA_KEY = datakey._key
 RULES = roles._held["rules"]
 RULES = RULES if isinstance(RULES, bytes) else RULES.private_bytes_raw()
-session.sign_out()
 KEYS = str(datakey.path())
-ORIGINAL = pathlib.Path(KEYS).read_bytes()
+d = json.loads(pathlib.Path(KEYS).read_bytes()); d.pop("rules_version")      # as a Part 2/3 copy signed it, before the count
+payload = roles._signed(d)
+d["rules_sig"] = envelope.sign(RULES, payload)
+pathlib.Path(KEYS).write_text(json.dumps(d), encoding="utf-8")
+db.set_setting("rules_signed", payload.decode("utf-8"))
+roles._invalidate()
+session.sign_out()
+UNVERSIONED = pathlib.Path(KEYS).read_bytes()
+ORIGINAL = UNVERSIONED                                  # (set to the versioned file once an Admin has signed in)
 
 b64 = lambda b: base64.b64encode(b).decode()
 xor = lambda b: bytes(x ^ 0x5A for x in b)     # reversible, so the stored file can be checked for the raw keys
@@ -193,6 +200,11 @@ if os.name != "nt":
     th = threading.Thread(target=lambda: box.append(enroll(keys_path=str(FIFO))), daemon=True)
     th.start(); th.join(5)
     check("enroll from a FIFO: bad_request, without hanging", bool(box) and err(box[0]) == "bad_request", box)
+check("enroll on a keys file signed before rules_version: rules_changed", err(enroll()) == "rules_changed" and ST.load() is None)
+session.sign_in("Admin1", PW)                           # the first Admin signing since the upgrade starts the count
+session.sign_out()
+ORIGINAL = pathlib.Path(KEYS).read_bytes()
+check("...an Admin's sign-in signs it as version 1", json.loads(ORIGINAL).get("rules_version") == 1)
 check("enroll with the copy's rules key: ok", enroll() == {"ok": True})
 rec = ST.load()
 check("...the record: owner, path, rules_pub pinned, spare and Duo key", rec["owner"] == OWNER
@@ -354,6 +366,9 @@ check("...check_directory gives rules_changed",
       err(ask("check_directory", connection="d1", login="bob@acme.com", password="pw-bob")) == "rules_changed")
 check("...a new helper on the same store refuses it too",
       server.Helper(ST, now=now).handle({"op": "status", "keys_path": KEYS}, OWNER)["rules_changed"])
+pathlib.Path(KEYS).write_bytes(UNVERSIONED)         # the copy's file from before the count, signed by the same key
+check("the unversioned original put back: rules_changed, release gives nothing", ask("status")["rules_changed"]
+      and ask("release", ticket=t, name="bob@acme.com") == {"ok": False, "error": "rules_changed"})
 pathlib.Path(KEYS).write_bytes(NEWER)
 check("the newer file back: release works", ask("release", ticket=t, name="bob@acme.com").get("ok"))
 

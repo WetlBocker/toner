@@ -257,8 +257,10 @@ class Helper:
         if rec is not None and rec["owner"] != peer:
             raise _No("other_user")
         doc = _verified(path, rules_pub)                # read before the lock: a slow file holds up no one else
-        if doc is None or _version(doc) is None:        # not this copy's rules key, or rules it didn't sign
+        if doc is None:                                 # not this copy's rules key, or rules it didn't sign
             raise _No("refused")
+        if (_version(doc) or 0) < 1:                    # signed before the count: an Admin signs once more first, so no
+            raise _No("rules_changed")                  # older unversioned file can pass the minimum kept below
         with self._lock:                                # two peers enrolling at once: one wins, the other is other_user
             rec = self._load()
             if rec is not None and rec["owner"] != peer:

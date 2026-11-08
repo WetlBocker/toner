@@ -135,7 +135,8 @@ def _sign(doc):
     doc["attested"] = {n: att.get(n) for n in doc["accounts"]}
     doc["roles"] = _clean_roles(doc.get("roles"))
     payload, sig = _signed(doc), doc.get("rules_sig")
-    if not (isinstance(sig, str) and envelope.verify(_public("rules", _held["rules"]), payload, sig)):    # changed, or a new key
+    # changed, a new key, or a file from before the count (its first signing since starts it, so an older file can't come back)
+    if "rules_version" not in doc or not (isinstance(sig, str) and envelope.verify(_public("rules", _held["rules"]), payload, sig)):
         v = doc.get("rules_version")
         doc["rules_version"] = (v if isinstance(v, int) and not isinstance(v, bool) and v > 0 else 0) + 1
         payload = _signed(doc)
