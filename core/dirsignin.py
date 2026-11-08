@@ -36,6 +36,15 @@ SSO_CANCELLED = "The sign-in didn't finish in the browser."                     
 SSO_NOT_FRESH = "{provider} didn't confirm a fresh sign-in. Try again."
 SSO_BAD_ANSWER = "{provider}'s answer couldn't be checked, so the sign-in was refused."
 SSO_UNREACHABLE = "{provider} can't be reached, and this account hasn't been checked online in the last hour."
+SSO_REFUSED = "{provider} no longer allows this account. Sign in again."                  # the re-check's lock screen
+
+
+def refused_text():
+    """The lock screen's sentence for a refused account: SSO_REFUSED for an SSO connection's account, else session.REFUSED."""
+    last, name = roles.last_signed() or {}, session.user()
+    acct = (last.get("accounts") or {}).get(name) or {}
+    cfg = next((d for d in last.get("directories") or [] if isinstance(d, dict) and d.get("id") == acct.get("directory")), None)
+    return SSO_REFUSED.format(provider=cfg["name"]) if cfg and cfg.get("kind") == "oidc" else session.REFUSED
 
 
 def _windows_user():

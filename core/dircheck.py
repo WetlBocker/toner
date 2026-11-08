@@ -6,7 +6,7 @@ import logging
 import threading
 import time
 
-from core import audit, datakey, directory, passvault, quiet, roles, session
+from core import audit, datakey, directory, oidc, passvault, quiet, roles, session
 
 INTERVAL = 15 * 60
 FIRST = 5                      # seconds after start before the first check
@@ -23,6 +23,41 @@ def _refuse():
     audit.log("locked: the directory refused the account")
 
 
+def _sso_role(name, cfg, acct):
+    """(result, role) for an SSO account, through its refresh token: result is "skipped" or "offline" when nothing was learned,
+    else None and the role (None: refused). The vault holds the token; a new one the provider sends replaces it."""
+    try:
+        rt = passvault.get(f"sso-refresh:{name}")
+    except Exception:
+        rt = None
+    if not rt:
+        return "skipped", None
+    try:
+        tokens = oidc.refresh(cfg, rt)
+    except oidc.Refused:
+        return None, None
+    except Exception as e:     # unreachable, a bad answer, a config problem: never a reason to lock anyone out
+        log.info("SSO check failed: %s", type(e).__name__)
+        return "offline", None
+    c = tokens.claims
+    if c and (str(c.get(cfg.get("id_claim", "sub"))) != str(acct["guid"]) or c.get("iss") != cfg["issuer"]):
+        return None, None      # a provider answering for someone else must never keep this session open
+    if tokens.refresh_token:
+        try:
+            passvault.put(f"sso-refresh:{name}", tokens.refresh_token)
+        except Exception:
+            quiet.ignored()
+    if not c:
+        role = (datakey.directory_account(name) or {}).get("groups_role")      # no ID token, so no new groups: keep the last role
+        return (None, role) if role else ("offline", None)
+    try:
+        groups = oidc.groups(cfg, c, tokens.access_token)
+    except Exception as e:
+        log.info("SSO check failed: %s", type(e).__name__)
+        return "offline", None
+    return None, directory.role_for(cfg, groups)
+
+
 def run_once():
     """"ok", "refused", "offline" (nothing changed) or "skipped"."""
     name = session.user()
@@ -37,18 +72,23 @@ def run_once():
     if cfg is None or not acct.get("guid"):
         _refuse()
         return "refused"
-    try:
-        password = passvault.get(f"service:directory-{cfg['id']}")
-    except Exception:
-        password = None
-    if not password:
-        return "offline"
-    try:
-        user = directory.look_up(cfg, acct["guid"], password)
-    except Exception as e:     # unreachable, a refused service bind, a config problem: never a reason to lock anyone out
-        log.info("directory check failed: %s", type(e).__name__)
-        return "offline"
-    role = directory.role_for(cfg, user.groups, user.dn) if user is not None and user.enabled else None
+    if cfg.get("kind") == "oidc":
+        done, role = _sso_role(name, cfg, acct)
+        if done:
+            return done
+    else:
+        try:
+            password = passvault.get(f"service:directory-{cfg['id']}")
+        except Exception:
+            password = None
+        if not password:
+            return "offline"
+        try:
+            user = directory.look_up(cfg, acct["guid"], password)
+        except Exception as e:     # unreachable, a refused service bind, a config problem: never a reason to lock anyone out
+            log.info("directory check failed: %s", type(e).__name__)
+            return "offline"
+        role = directory.role_for(cfg, user.groups, user.dn) if user is not None and user.enabled else None
     if role is None:
         _refuse()
         return "refused"

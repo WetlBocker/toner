@@ -170,7 +170,7 @@ class LockScreen(QWidget):
             self.wait.timer.stop()                       # (a PIN countdown doesn't go on over these screens)
             say(self.error, "")
             self.pw.setText("")
-            self.reason.setText(session.REFUSED if mode == "refused" else "Please sign in again.")
+            self.reason.setText(dirsignin.refused_text() if mode == "refused" else "Please sign in again.")
 
     def _cover_all(self):
         """An opaque cover over every visible Toner window (dialogs included, which stay open underneath), then the lock on top
