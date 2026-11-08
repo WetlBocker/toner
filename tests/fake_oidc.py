@@ -117,6 +117,7 @@ class FakeProvider:
             def handle_any(self):
                 path = self.path.split("?")[0]
                 if prov.force:
+                    self.body()                 # read first: answering over an unread POST body resets the connection on Windows
                     self.send_json({}, prov.force)
                 elif path == "/.well-known/openid-configuration":
                     self.send_json(prov.meta())
