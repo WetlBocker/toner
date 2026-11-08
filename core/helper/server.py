@@ -3,9 +3,11 @@ sign-in itself (an SSO answer with a nonce it issued, or a directory password pl
 from the admin-signed rules in the enrolled copy's netcheck.keys, verified with the rules key pinned at enrollment.
 
 `peer` is the caller's SID or uid, given by the transport. Nonces, tickets, pending Duo checks and the failure counts live in
-memory only. No answer carries a password, token, code or key, except release's keys. No Qt, and no database is opened."""
+memory only. No answer carries a password, token, code or key, except release's keys. No Qt, and no database is opened.
+serve_channel is the connection loop that core/helper/windows.py and linux.py run on their own channel."""
 import base64
 import json
+import logging
 import math
 import os
 import re
@@ -17,7 +19,7 @@ import time
 import jwt
 
 from core import directory, duo, envelope, oidc, roles
-from core.helper.protocol import PROTOCOL
+from core.helper.protocol import MAX, PROTOCOL, decode, encode
 from core.version import VERSION
 
 TTL = 600                                               # seconds a ticket or a pending Duo check lives
@@ -30,6 +32,8 @@ _FIELDS = {"status": ("keys_path",), "enroll": ("keys_path", "data_key", "rules_
            "nonce": ("keys_path", "connection"), "check_sso": ("keys_path", "connection", "id_token", "access_token"),
            "check_directory": ("keys_path", "connection", "login", "password"), "duo_push": ("pending",),
            "duo_code": ("pending", "code"), "release": ("keys_path", "ticket", "name")}
+_BAD = {"ok": False, "error": "bad_request"}
+log = logging.getLogger(__name__)
 _CODES = {oidc.Unreachable: "unreachable", oidc.Refused: "refused", oidc.NotFresh: "not_fresh", oidc.BadAnswer: "bad_answer",
           directory.Unreachable: "unreachable", directory.BadCredentials: "refused", directory.InsecureConfig: "refused",
           duo.Unavailable: "unreachable", duo.Denied: "refused"}
@@ -89,13 +93,13 @@ def _version(doc):
     return v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else None
 
 
-def _verified(path, rules_pub):
-    """The keys doc at `path` when its rules_pub is `rules_pub` (b64) and the signed part verifies under it; else None.
-    bad_request (raised) for a path that is not a regular file of at most MAX_KEYS."""
+def _verified(path, rules_pub, read):
+    """The keys doc at `path`, read with `read`, when its rules_pub is `rules_pub` (b64) and the signed part verifies under it;
+    else None. bad_request (raised) for a path that is not a regular file of at most MAX_KEYS."""
     if path is None:
         return None
     try:
-        doc = json.loads(_read(path).decode("utf-8"))
+        doc = json.loads(read(path).decode("utf-8"))
         if doc["rules_pub"] == rules_pub and envelope.verify(_unb64(rules_pub), roles._signed(doc), doc["rules_sig"]):
             return doc
     except (OSError, ValueError, KeyError, TypeError, AttributeError, RecursionError):     # missing, unreadable or mangled
@@ -118,27 +122,29 @@ class Helper:
         self._nonces, self._tickets, self._pending = {}, {}, {}     # key -> (expires, ...)
 
     # ------------------------------------------------------------ the request
-    def handle(self, req, peer, cancel=None):
-        """The answer to one request from `peer`. `cancel` is set by the transport when the client goes (it stops a Duo push)."""
+    def handle(self, req, peer, cancel=None, read=None):
+        """The answer to one request from `peer`. `cancel` is set by the transport when the client goes (it stops a Duo push).
+        `read(path) -> bytes` reads the keys file with the caller's rights (the transport impersonates it); _read by default."""
+        read = read or _read
         op = req.get("op")
         need = _FIELDS.get(op)
         if need is None or not all(isinstance(req.get(k), str) for k in need) or (op != "status" and req.get("v") != PROTOCOL):
             return {"ok": False, "error": "bad_request"}
         if op == "status":
-            return self._status(req, peer)
+            return self._status(req, peer, read)
         wait = self._gate(peer)
         if wait:
             return {"ok": False, "error": "throttled", "wait": wait}
         try:
             try:
                 if op == "enroll":
-                    return {"ok": True, **self._enroll(req, peer)}
+                    return {"ok": True, **self._enroll(req, peer, read)}
                 rec = self._load()
                 if rec is None:
                     raise _No("not_enrolled")
                 if peer != rec["owner"] or (op not in ("duo_push", "duo_code") and _path(req["keys_path"]) != rec["keys_path"]):
                     raise _No("not_owner")
-                return {"ok": True, **getattr(self, "_" + op)(req, rec, cancel or threading.Event())}
+                return {"ok": True, **getattr(self, "_" + op)(req, rec, cancel or threading.Event(), read)}
             except tuple(_CODES) as e:
                 raise _No(next(c for t, c in _CODES.items() if isinstance(e, t))) from None
         except _No as e:
@@ -197,10 +203,10 @@ class Helper:
         return self._put(self._tickets, TTL, name, role)
 
     # ------------------------------------------------------------ the signed rules
-    def _rules(self, rec):
+    def _rules(self, rec, read):
         """The keys doc, its rules signed with the pinned key and no older than the newest seen (rules_changed otherwise: an
         edit, another rules key, or an older signed file put back). A newer rules_version is kept as the newest seen."""
-        doc = _verified(rec["keys_path"], rec["rules_pub"])
+        doc = _verified(rec["keys_path"], rec["rules_pub"], read)
         v = None if doc is None else _version(doc)
         if v is None or v < rec.get("rules_version", 0):
             raise _No("rules_changed")
@@ -212,9 +218,9 @@ class Helper:
             rec["rules_version"] = v
         return doc
 
-    def _cfg(self, rec, connection, sso):
+    def _cfg(self, rec, connection, sso, read):
         """The connection's settings from the verified rules."""
-        for d in self._rules(rec).get("directories") or []:
+        for d in self._rules(rec, read).get("directories") or []:
             if isinstance(d, dict) and d.get("id") == connection and (d.get("kind") == "oidc") == sso:
                 return d
         raise _No("bad_request")
@@ -226,19 +232,19 @@ class Helper:
         return skey
 
     # ------------------------------------------------------------ the ops
-    def _status(self, req, peer):
+    def _status(self, req, peer, read):
         rec = self._load()
         owner = rec is not None and peer == rec["owner"] and _path(req["keys_path"]) == rec["keys_path"]
         changed = False
         if owner:
             try:
-                self._rules(rec)
+                self._rules(rec, read)
             except _No:
                 changed = True
         return {"ok": True, "protocol": PROTOCOL, "version": VERSION, "enrolled": rec is not None, "owner": owner,
                 "rules_changed": changed}
 
-    def _enroll(self, req, peer):
+    def _enroll(self, req, peer, read):
         duo_keys = req.get("duo") or {}
         if not isinstance(duo_keys, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in duo_keys.items()):
             raise _No("bad_request")
@@ -256,7 +262,7 @@ class Helper:
         rec = self._load()
         if rec is not None and rec["owner"] != peer:
             raise _No("other_user")
-        doc = _verified(path, rules_pub)                # read before the lock: a slow file holds up no one else
+        doc = _verified(path, rules_pub, read)          # read before the lock: a slow file holds up no one else
         if doc is None:                                 # not this copy's rules key, or rules it didn't sign
             raise _No("refused")
         if (_version(doc) or 0) < 1:                    # signed before the count: an Admin signs once more first, so no
@@ -270,17 +276,17 @@ class Helper:
             self._reset()
         return {}
 
-    def _forget(self, req, rec, cancel):
+    def _forget(self, req, rec, cancel, read):
         with self._lock:
             self.store.clear()
             self._reset()
         return {}
 
-    def _nonce(self, req, rec, cancel):
+    def _nonce(self, req, rec, cancel, read):
         return {"nonce": self._put(self._nonces, NONCE_TTL, req["connection"], self.now())}
 
-    def _check_sso(self, req, rec, cancel):
-        cfg = self._cfg(rec, req["connection"], sso=True)
+    def _check_sso(self, req, rec, cancel, read):
+        cfg = self._cfg(rec, req["connection"], True, read)
         try:
             nonce = jwt.decode(req["id_token"], options={"verify_signature": False}).get("nonce")
         except jwt.PyJWTError:
@@ -302,8 +308,8 @@ class Helper:
             raise _No("not_in_group")
         return {**_who(user, role), "ticket": self._ticket(rec, user.name, role)}
 
-    def _check_directory(self, req, rec, cancel):
-        cfg = self._cfg(rec, req["connection"], sso=False)
+    def _check_directory(self, req, rec, cancel, read):
+        cfg = self._cfg(rec, req["connection"], False, read)
         user = directory.sign_in(cfg, req["login"], req["password"])
         if not user.enabled:
             raise _No("refused")
@@ -320,7 +326,7 @@ class Helper:
             raise _No("refused")
         return {**who, "duo": "auth", "pending": self._put(self._pending, TTL, cfg["id"], user.name, role, {"pushed": False})}
 
-    def _duo(self, req, rec, check, push=False):
+    def _duo(self, req, rec, check, read, push=False):
         """A pending Duo check: `check(cfg, name, skey)` passes or raises; then the pending check is used up for a ticket. It
         allows one push, so a password can't send push after push."""
         pending = self._take(self._pending, req["pending"], keep=True)
@@ -332,13 +338,13 @@ class Helper:
                 if state["pushed"]:
                     raise _No("refused")
                 state["pushed"] = True
-        cfg = self._cfg(rec, connection, sso=False)
+        cfg = self._cfg(rec, connection, False, read)
         check(cfg, name, self._skey(rec, connection))
         if self._take(self._pending, req["pending"]) is None:      # another request used it meanwhile
             raise _No("refused")
         return {"ticket": self._ticket(rec, name, role)}
 
-    def _duo_push(self, req, rec, cancel):
+    def _duo_push(self, req, rec, cancel, read):
         def push(cfg, name, skey):
             try:
                 duo.push(cfg, name, cancel, skey=skey)
@@ -346,15 +352,94 @@ class Helper:
                 raise _No("refused") from None
             except duo.Unavailable:
                 raise _No("unreachable", count=True) from None
-        return self._duo(req, rec, push, push=True)
+        return self._duo(req, rec, push, read, push=True)
 
-    def _duo_code(self, req, rec, cancel):
-        return self._duo(req, rec, lambda cfg, name, skey: duo.passcode(cfg, name, req["code"], skey=skey))
+    def _duo_code(self, req, rec, cancel, read):
+        return self._duo(req, rec, lambda cfg, name, skey: duo.passcode(cfg, name, req["code"], skey=skey), read)
 
-    def _release(self, req, rec, cancel):
-        self._rules(rec)
+    def _release(self, req, rec, cancel, read):
+        self._rules(rec, read)
         ticket = self._take(self._tickets, req["ticket"])
         if ticket is None or ticket[0] != req["name"]:
             raise _No("refused")
         spare = rec["spare"]                            # the data key, then the 32-byte Ed25519 rules private key
         return {"data_key": _b64(spare[:-32]), "rules_private": _b64(spare[-32:]), "role": ticket[1]}
+
+
+# ------------------------------------------------------------ the channel
+def serve_channel(listener, helper, stop, identify, wake):
+    """Accepts connections on `listener` until `stop` is set, a thread each. `identify(conn) -> (peer, read)` takes the
+    caller's identity, and a reader with its rights, from the OS, never from a message. `wake()` connects once, so an accept
+    waiting when `stop` is set returns."""
+    threading.Thread(target=lambda: (stop.wait(), wake()), daemon=True).start()
+    try:
+        while not stop.is_set():
+            try:
+                conn = listener.accept()
+            except Exception as e:                      # a client that came and went mid-accept
+                log.warning("helper: accept failed: %s", type(e).__name__)
+                stop.wait(0.1)
+                continue
+            if stop.is_set():
+                conn.close()
+                break
+            threading.Thread(target=_connection, args=(helper, conn, identify), daemon=True).start()
+    finally:
+        listener.close()
+
+
+def _connection(helper, conn, identify):
+    """One client, request after request until it goes. A message over MAX closes the connection (recv_bytes does); one that
+    isn't a JSON object is answered bad_request and closes it too. Nothing of a request or an answer is logged."""
+    with conn:
+        try:
+            peer, read = identify(conn)
+        except Exception as e:                          # the client process went before it could be named
+            log.warning("helper: no peer: %s", type(e).__name__)
+            return
+        while True:
+            try:
+                req = decode(conn.recv_bytes(MAX))
+            except ValueError:
+                req = None
+            except (EOFError, OSError):
+                return
+            ans = _BAD if req is None else _answer(helper, conn, req, peer, read)
+            if ans is None:
+                return
+            try:
+                conn.send_bytes(encode(ans))
+            except (OSError, ValueError):
+                return
+            if req is None:
+                return
+
+
+def _answer(helper, conn, req, peer, read):
+    """helper.handle, in a thread of its own while this one watches the client. When the client goes (or speaks out of turn)
+    `cancel` is set, which stops a Duo push, and there is no answer. An unexpected error (a disk error saving the store, say)
+    answers bad_request and logs the op and the error's type only: requests and answers carry passwords, tokens and keys."""
+    cancel, box = threading.Event(), []
+
+    def run():
+        try:
+            box.append(helper.handle(req, peer, cancel, read))
+        except Exception as e:
+            op = req.get("op")
+            log.warning("helper: %s failed: %s", op if isinstance(op, str) and op in _FIELDS else "?", type(e).__name__)
+            box.append(_BAD)
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    while True:
+        t.join(0.1)
+        if not t.is_alive():
+            return box[0]
+        try:
+            gone = conn.poll(0)
+        except (EOFError, OSError):
+            gone = True
+        if gone:
+            cancel.set()
+            t.join()
+            return None

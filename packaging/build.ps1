@@ -23,6 +23,13 @@ python -m PyInstaller @common --console --name TonerCli packaging\toner_cli.py
 if ($LASTEXITCODE) { throw "PyInstaller failed (TonerCli)" }
 Copy-Item build\dist\TonerCli\TonerCli.exe build\dist\Toner\ -Force
 Remove-Item -Recurse -Force build\dist\TonerCli
+# TonerHelper.exe: the helper service (packaging\toner_helper.py), without Qt, in a folder of its own beside Toner. Turning on
+# sign-in without approval copies that folder to %ProgramFiles%\Toner Helper\ (TonerHelper.exe --install, elevated).
+python -m PyInstaller --noconfirm --clean --onedir --console --name TonerHelper --exclude-module PySide6 --icon "$root\assets\toner.ico" `
+    --paths "$root" --distpath build\dist --workpath build\work --specpath build packaging\toner_helper.py
+if ($LASTEXITCODE) { throw "PyInstaller failed (TonerHelper)" }
+Copy-Item build\dist\TonerHelper build\dist\Toner\TonerHelper -Recurse -Force
+Remove-Item -Recurse -Force build\dist\TonerHelper
 
 # Qt pieces PyInstaller ships that Toner never uses: the virtual keyboard (and its input-context plugin), QtTest, the PDF
 # viewer (PDF reports are written with QPdfWriter, which is in QtGui) and Qt's own translation files (Toner is English only).

@@ -57,6 +57,11 @@ Filename: "{app}\Toner.exe"; Description: "Start Toner"; Flags: nowait postinsta
 ; An update that Toner started itself runs silently with /relaunch=1 and opens Toner again when it is done.
 Filename: "{app}\Toner.exe"; Flags: nowait; Check: Relaunch
 
+[UninstallRun]
+; The helper service (put in place, elevated, when sign-in without approval was turned on) goes with Toner, store and all.
+; Windows asks for administrator rights; only when the service is there.
+Filename: "{app}\TonerHelper\TonerHelper.exe"; Parameters: "--uninstall"; Flags: shellexec runhidden waituntilterminated; Verb: "runas"; Check: HelperInstalled; RunOnceId: "TonerHelper"
+
 ; Uninstalling an installed copy removes the program only. The database, history, logs and saved passwords stay (in
 ; %APPDATA%\NetCheck and Windows Credential Manager), so a reinstall or upgrade picks up where it left off.
 ; A portable copy has no uninstaller: delete its folder, and its data folder goes with it.
@@ -82,6 +87,14 @@ end;
 function Relaunch: Boolean;
 begin
   Result := ExpandConstant('{param:relaunch|0}') = '1';
+end;
+
+{ the helper service is installed: sc query answers 0 for a service that exists (1060 when it doesn't) }
+function HelperInstalled: Boolean;
+var
+  Code: Integer;
+begin
+  Result := Exec(ExpandConstant('{sys}\sc.exe'), 'query TonerHelper', '', SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0);
 end;
 
 function DefaultDir(Param: String): String;

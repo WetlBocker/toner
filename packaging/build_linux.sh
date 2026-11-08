@@ -15,6 +15,10 @@ python -m PyInstaller --noconfirm --clean --windowed --onedir --name Toner \
     --add-data "$root/assets/echarts.min.js:assets" --add-data "$root/assets/chart.html:assets" \
     --add-data "$root/core/data:core/data" \
     --distpath build/dist --workpath build/work --specpath build app.py
+# toner-helper: the helper service (packaging/toner_helper.py), without Qt. It goes into the AppDir under
+# usr/lib/toner-helper/; turning on sign-in without approval copies it to /opt/toner-helper/ (toner-helper --install, as root).
+python -m PyInstaller --noconfirm --clean --onedir --console --name toner-helper --exclude-module PySide6 --paths "$root" \
+    --distpath build/dist --workpath build/work --specpath build packaging/toner_helper.py
 
 # Qt pieces PyInstaller ships that Toner never uses (see build.ps1 for the list and why). QtQuick and QtQml stay for the
 # charts' QtWebEngine.
@@ -37,6 +41,7 @@ appdir="build/AppDir"
 rm -rf "$appdir"
 mkdir -p "$appdir/usr/lib" "$appdir/usr/share/icons/hicolor/256x256/apps" "$appdir/usr/share/applications"
 cp -a build/dist/Toner "$appdir/usr/lib/toner"
+cp -a build/dist/toner-helper "$appdir/usr/lib/toner-helper"
 cp assets/toner.png "$appdir/toner.png"
 cp assets/toner.png "$appdir/usr/share/icons/hicolor/256x256/apps/toner.png"
 cat > "$appdir/toner.desktop" <<'EOF'
