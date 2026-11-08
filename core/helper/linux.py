@@ -32,6 +32,11 @@ RuntimeDirectory=toner-helper
 RuntimeDirectoryMode=0755
 StateDirectory=toner-helper
 StateDirectoryMode=0700
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/toner-helper
+PrivateTmp=yes
+ProtectHome=read-only
 Restart=on-failure
 
 [Install]
@@ -96,6 +101,9 @@ def _reader(uid, gid):
 def _identify(conn):
     _, uid, gid = _creds(conn)
     return str(uid), _reader(uid, gid)
+
+
+client = connection.Client
 
 
 def _wake(address):

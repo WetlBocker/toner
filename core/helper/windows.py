@@ -27,8 +27,11 @@ from core.helper import server, store
 
 ADDRESS = r"\\.\pipe\TonerHelper"
 SERVICE = "TonerHelper"
-# Signed-in users may connect, network logons may not; only SYSTEM and Administrators may do more.
-_PIPE_SD = "D:P(D;;GA;;;NU)(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;AU)"
+# Signed-in users may connect, network logons may not; only SYSTEM and Administrators may do more. Users get read and write
+# (0x0012019b: GRGW less FILE_CREATE_PIPE_INSTANCE), so they can't add an instance of the pipe to catch the next client; its
+# owner (OW: SYSTEM, which made the first instance) makes the next ones.
+_PIPE_SD = "D:P(D;;GA;;;NU)(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;OW)(A;;0x0012019b;;;AU)"
+_CLIENT_ACCESS = 0x80000000 | 0x2 | 0x100               # GENERIC_READ, FILE_WRITE_DATA, FILE_WRITE_ATTRIBUTES (message mode)
 _DIR_SD = "O:BAD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)"      # owned by Administrators; SYSTEM and Administrators only
 _ADMINS = {"S-1-5-18", "S-1-5-32-544"}                 # SYSTEM, Administrators
 # what lets someone change a folder or what's in it: write/append data (add file/subfolder), write EA, delete child, write
@@ -221,9 +224,27 @@ def _identify(conn):
     return peer_of(conn), _reader(conn.fileno())
 
 
+def client(address):
+    """multiprocessing's pipe client, asking only for what _PIPE_SD gives users: its GENERIC_WRITE includes
+    FILE_CREATE_PIPE_INSTANCE, which they don't have. OSError when there is no pipe (or it stays busy)."""
+    for _ in range(10):
+        try:
+            _winapi.WaitNamedPipe(address, 1000)
+            h = _winapi.CreateFile(address, _CLIENT_ACCESS, 0, _winapi.NULL, _winapi.OPEN_EXISTING, _winapi.FILE_FLAG_OVERLAPPED,
+                                   _winapi.NULL)
+            break
+        except OSError as e:
+            if e.winerror not in (_winapi.ERROR_SEM_TIMEOUT, _winapi.ERROR_PIPE_BUSY):
+                raise
+    else:
+        raise OSError("the helper's pipe stays busy")
+    _winapi.SetNamedPipeHandleState(h, _winapi.PIPE_READMODE_MESSAGE, None, None)
+    return connection.PipeConnection(h)
+
+
 def _wake(address):
     try:
-        connection.Client(address).close()
+        client(address).close()
     except OSError:
         pass
 

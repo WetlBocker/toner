@@ -129,7 +129,7 @@ else:
 def _connect():
     """A connection to the helper, its identity checked before anything is sent; NotRunning otherwise."""
     try:
-        conn = connection.Client(ADDRESS)
+        conn = _plat.client(ADDRESS)
     except OSError:
         raise NotRunning() from None
     try:

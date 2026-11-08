@@ -111,10 +111,10 @@ def err(ans):
 def client():
     for _ in range(100):
         try:
-            return connection.Client(ADDR)
+            return plat.client(ADDR)
         except OSError:
             time.sleep(0.05)
-    return connection.Client(ADDR)
+    return plat.client(ADDR)
 
 def ask(c, op, **fields):
     req = {"op": op, "v": protocol.PROTOCOL, "keys_path": KEYS, **fields}
@@ -141,6 +141,9 @@ c = client()
 a = ask(c, "status")
 check("status over the channel: ok, not enrolled", a.get("ok") and a["enrolled"] is False and a["protocol"] == 1, a)
 if NT:
+    check("the pipe: signed-in users read and write it but can't add an instance (no FILE_CREATE_PIPE_INSTANCE), and the client"
+          " (just connected) asks for no more", "(A;;0x0012019b;;;AU)" in windows._PIPE_SD and "GRGW" not in windows._PIPE_SD
+          and not 0x0012019b & 0x4 and not windows._CLIENT_ACCESS & 0x4)
     check("a second helper can't take the pipe name while it is served", raises(
         lambda: windows.serve(server.Helper(ST), threading.Event(), address=ADDR), OSError))
 else:
@@ -217,14 +220,14 @@ HELPER.handle = real
 STOP.set()
 SERVE.join(5)
 check("stop: serve returns", not SERVE.is_alive())
-check("...and the channel is gone", raises(lambda: connection.Client(ADDR), OSError) if NT else not os.path.exists(ADDR))
+check("...and the channel is gone", raises(lambda: plat.client(ADDR), OSError) if NT else not os.path.exists(ADDR))
 
 
 # ---------------------------------------------------------------- the reader, on its own
 if NT:
     L = windows._Pipes(ADDR)
     def talk():
-        c = connection.Client(ADDR); c.send_bytes(b"hi"); c.recv_bytes(); c.close()
+        c = plat.client(ADDR); c.send_bytes(b"hi"); c.recv_bytes(); c.close()
     th = threading.Thread(target=talk, daemon=True); th.start()
     conn = L.accept()
     conn.recv_bytes()
@@ -422,6 +425,9 @@ check("the unit: root, its state folder 0700, the program in /opt/toner-helper",
       and "\nRuntimeDirectoryMode=0755\n" in linux.UNIT and "\nStateDirectory=toner-helper\n" in linux.UNIT
       and "\nExecStart=/opt/toner-helper/toner-helper --service\n" in linux.UNIT, linux.UNIT)
 check("...the service path starts with /opt/toner-helper/", linux.UNIT.split("ExecStart=")[1].startswith("/opt/toner-helper/"))
+check("...hardened: no new privileges, the system read-only but its state folder, a private /tmp, homes read-only (keys files are read)",
+      all(f"\n{line}\n" in linux.UNIT for line in ("NoNewPrivileges=yes", "ProtectSystem=strict", "ReadWritePaths=/var/lib/toner-helper",
+                                                    "PrivateTmp=yes", "ProtectHome=read-only")), linux.UNIT)
 if not NT:
     lplan = linux.install_plan(pathlib.Path("/x/toner-helper"))
     check("linux install_plan: stop, copy to /opt/toner-helper, the unit, reload, enable --now",
