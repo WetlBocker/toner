@@ -181,7 +181,9 @@ motion.force("Lively")
 from PySide6.QtWidgets import QLabel as _QL
 w.show_assistant(True); spin(60)
 cover = lambda: [c for c in w.findChildren(_QL) if c.objectName() == "assistantSlide"]
-check("while it opens, a picture of the panel slides over the page while the panel waits outside the splitter's view", len(cover()) == 1 and not cover()[0].pixmap().isNull() and not w.assistant.isVisible())
+from PySide6.QtWidgets import QWidget as _QW
+check("while it opens, a picture of the panel slides in, the page's pictures moving with it, over the real ones settled underneath",
+      len(cover()) == 1 and not cover()[0].pixmap().isNull() and [c for c in w.findChildren(_QW) if c.objectName() == "assistantPage"])
 spin(700)
 check("...and the panel itself is there once it has settled, open, the picture gone", w.body.widget(1) is w.assistant and w.assistant.isVisible() and not cover() and w.body.sizes()[1] > 100, w.body.sizes())
 w.show_assistant(False); spin(60)

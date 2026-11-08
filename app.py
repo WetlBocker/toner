@@ -8,7 +8,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence, QPainter, QPixmap, QShortcut
-from PySide6.QtWidgets import QApplication, QMainWindow, QMenu, QMessageBox, QSplitter, QSystemTrayIcon
+from PySide6.QtWidgets import QApplication, QMainWindow, QMenu, QMessageBox, QSplitter, QSystemTrayIcon, QWidget
 from core import agents, audit, checks, db, demarc, dircheck, display, legacyssh, notify, paths, perms, reports, roles, session, sessionlog, sessions, trends, trust, tunnel, updates
 from ui import theme
 from ui.about import AboutTab
@@ -113,6 +113,28 @@ def restart():
     from PySide6.QtCore import QProcess
     args = sys.argv[1:] if getattr(sys, "frozen", False) else sys.argv
     QProcess.startDetached(os.environ.get("APPIMAGE") or sys.executable, [a for a in args if a != "--minimized"])
+
+
+class _PageSlide(QWidget):
+    """While the Assistant panel slides: the page as it was, turning into the page as it will be (mix 0 to 1), shown up to the panel's
+    edge (shown, in px), and the page colour beyond it, behind the panel's picture."""
+
+    def __init__(self, parent, before):
+        super().__init__(parent)
+        self.setObjectName("assistantPage")
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.before, self.after, self.shown, self.mix = before, None, 0, 0.0
+
+    def paintEvent(self, _e):
+        from ui import theme
+        p = QPainter(self)
+        p.fillRect(self.rect(), QColor((theme.current() or {}).get("bg", "#000000")))
+        p.setClipRect(0, 0, self.shown, self.height())
+        p.drawPixmap(0, 0, self.before)
+        if self.after is not None and self.mix > 0:
+            p.setOpacity(self.mix)
+            p.drawPixmap(0, 0, self.after)
+        p.end()
 
 
 class Main(QMainWindow):
@@ -387,10 +409,10 @@ class Main(QMainWindow):
         self._place_ai_button()
 
     def _slide_panel(self, on, width):
-        """The panel's picture slides in from the right edge over the page, fading in (or out), ease-out, no bounce. The splitter is
-        set once: at the end when opening, at the start when closing, so the page is not laid out again on every frame. With motion off
-        it all happens at once."""
-        from PySide6.QtCore import QEasingCurve, QPoint
+        """The panel slides in from the right edge (or out), fading, ease-out, no bounce, and the page moves with it: its right edge
+        follows the panel while its picture before turns into its picture after. The splitter is set once, at the start, under a cover
+        (the page laid out once, not on every frame: that stuttered). With motion off it all happens at once."""
+        from PySide6.QtCore import QEasingCurve, QEvent, QPoint
         from PySide6.QtWidgets import QGraphicsOpacityEffect, QLabel
         from ui import motion
         total = sum(self.body.sizes())
@@ -405,6 +427,7 @@ class Main(QMainWindow):
             else:
                 width = self.assistant.width()
             shot = self.assistant.grab()
+            before = self.tabs.grab()
 
         def settle():
             self.assistant.setMinimumWidth(0)                           # (the splitter may take it to nothing)
@@ -421,6 +444,12 @@ class Main(QMainWindow):
         if not animated:
             settle()
             return
+        top = self.body.mapTo(self, QPoint(0, 0))
+        edge = top.x() + self.body.width()
+        page = _PageSlide(self, before)                                 # over the whole body: the page's pictures, the page colour beside them
+        page.setGeometry(top.x(), top.y(), self.body.width(), self.body.height())
+        page.shown = total - (width if not on else 0)
+        page.show()
         cover = QLabel(self)                                            # a child of the window, not of the splitter (which would adopt it)
         cover.setObjectName("assistantSlide")
         cover.setPixmap(shot)
@@ -428,27 +457,27 @@ class Main(QMainWindow):
         fade = QGraphicsOpacityEffect(cover)
         cover.setGraphicsEffect(fade)
         fade.setOpacity(0.0 if on else 1.0)
-        top = self.body.mapTo(self, QPoint(0, 0))
-        edge = top.x() + self.body.width()
         cover.setGeometry(edge - (width if not on else 0), top.y(), width, self.body.height())
         cover.show()
         self.ai_button.raise_()
-        if not on:
-            settle()                                                    # the page takes its width back; the picture leaves over it
+        settle()                                                        # under the covers: the real page and panel take their places now
+        QApplication.sendPostedEvents(None, QEvent.Type.LayoutRequest)
+        page.after = self.tabs.grab()
 
         def step(p):
-            q = p if on else 1 - p                                      # q: how far in
+            q = p if on else 1 - p                                      # q: how far in the panel is
             cover.move(round(edge - width * q), top.y())
             fade.setOpacity(q)
+            page.shown, page.mix = round(total - width * q), p
+            page.update()
 
         def done():
             if self._panel_finish is not done:
                 return
             self._panel_slide = self._panel_finish = None
-            cover.setParent(None)
-            cover.deleteLater()
-            if on:
-                settle()
+            for w in (cover, page):
+                w.setParent(None)
+                w.deleteLater()
         self._panel_finish = done
         self._panel_slide = motion.animate(self, self.PANEL_MS, step, curve=QEasingCurve.Type.OutCubic, on_done=done)
 

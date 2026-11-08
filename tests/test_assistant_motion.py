@@ -16,7 +16,7 @@ from core import db
 db.init()
 from core import assistant as AI
 from PySide6.QtCore import QCoreApplication, QEvent, QObject
-from PySide6.QtWidgets import QApplication, QLabel
+from PySide6.QtWidgets import QApplication, QLabel, QWidget
 app = QApplication([])
 import app as A
 A.apply_look(app)
@@ -53,10 +53,23 @@ def run(on, wait_ms):
 print("== motion on")
 motion.force("Lively")
 w.show_assistant(True); spin(500); w.show_assistant(False); spin(500)          # warm up (first show lays out lazily)
+def pages(): return [c for c in w.findChildren(QWidget) if c.objectName() == "assistantPage"]
 run(True, 60)
-check("opening: a picture of the panel slides over the page, the splitter untouched so far", len(overlays()) == 1 and not calls and not w.body.widget(1).isVisible(), (len(overlays()), calls))
+total = sum(w.body.sizes())
+pg = pages()
+check("opening: the panel's picture slides in, and the page moves with it: its right edge follows the panel, mid-way",
+      len(overlays()) == 1 and len(pg) == 1 and total - overlays()[0].width() < pg[0].shown < total
+      and abs(pg[0].x() + pg[0].shown - overlays()[0].x()) <= 1, (len(overlays()), len(pg), pg and pg[0].shown, overlays() and overlays()[0].x()))
+check("...the page's picture after the slide is ready, so it turns into it rather than jumping at the end", pg and pg[0].after is not None and 0 < pg[0].mix < 1,
+      pg and pg[0].mix)
 spin(500)
-check("opening: ends open, the picture gone, sizes set once", w.assistant.isVisible() and not overlays() and len(calls) <= 2 and w.body.sizes()[1] > 100, (calls, w.body.sizes()))
+check("opening: ends open, the pictures gone, sizes set once", w.assistant.isVisible() and not overlays() and not pages() and len(calls) <= 2
+      and w.body.sizes()[1] > 100, (calls, w.body.sizes()))
+w.show_assistant(False); spin(60)
+pg = pages()
+check("closing: the page follows the panel out too", len(pg) == 1 and len(overlays()) == 1 and abs(pg[0].x() + pg[0].shown - overlays()[0].x()) <= 1
+      and pg[0].shown < total, (len(pg), pg and pg[0].shown))
+spin(500); w.show_assistant(True); spin(500)
 w.show_assistant(False); spin(500)
 run(True, 600)
 check("opening: the page was laid out at most twice", counter.n <= 2, counter.n)
