@@ -1,10 +1,11 @@
-"""Settings page: Accounts. Account actions apply at once; the idle-lock minutes and the session length follow Save."""
+"""Settings page: Accounts. Account actions apply at once, and so does sign-in without approval (through its own confirmation);
+the idle-lock minutes and the session length follow Save."""
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QLabel, QMenu, QMessageBox, QPushButton, QTableWidget,
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QLabel, QMenu, QMessageBox, QPushButton, QTableWidget,
                                QTableWidgetItem)
 
-from core import audit, datakey, db, osstore, passvault, passwords, perms, quiet, roles, session
+from core import audit, datakey, db, helperclient, osstore, passvault, passwords, perms, quiet, roles, session
 from ui.directorydlg import service_key
 from ui.identitywizard import IdentityWizard
 from ui.settings_base import Page, compact_row, note, spin
@@ -21,6 +22,20 @@ NEW_KEY_ASK = "The old recovery key will stop working. Make a new one?"
 REMOVE_DIRECTORY = "Removing this directory signs out its accounts on this copy. Remove {name}?"
 KIND_NAMES = {"ad": "Active Directory", "ldap": "LDAP", "oidc": "SSO"}
 UNLOCKS = {"chip": "PIN (security chip)", "store": "PIN (protected store)", "pin": "PIN"}
+SWITCH = "Let group members sign in without approval"
+SWITCH_TIP = "Anyone in a mapped group can sign in on this computer for the first time without an admin."
+WARN_TITLE = "Let group members sign in without approval?"
+WARN_TEXT = ("Toner's helper service will keep a spare copy of Toner's key on this computer, so anyone in a mapped group can sign "
+             "in here for the first time without an admin. Programs running as you can't reach that copy, but an administrator of "
+             "this computer can. Installing the helper service needs administrator rights. Turning this off deletes the spare copy.")
+OFF_PORTABLE = "A portable copy can't use this: it has no helper service."
+OFF_OTHER_USER = "Toner's helper service on this computer serves another user."
+OFF_NOT_RUNNING = "Toner's helper service is installed but not running."
+OFF_OUTDATED = "Toner's helper service is out of date. Turn this on again to update it."
+OFF_RULES = "Sign-in without approval was turned off because Toner's rules key was replaced. Turn it on again to use it."
+INSTALL_FAILED = "Toner's helper service couldn't be installed: {reason}"
+HELPER_NOTES = {"portable": OFF_PORTABLE, "other_user": OFF_OTHER_USER, "not_running": OFF_NOT_RUNNING, "outdated": OFF_OUTDATED,
+                "rules_changed": OFF_RULES}
 
 
 def type_of(a):
@@ -173,6 +188,14 @@ class AccountsPage(Page):
         self.form.addRow("Lock after", self.idle)
         self.session = spin(1, 72, "")
         self.form.addRow("Session length (hours)", self.session)
+        self.helper = QCheckBox(SWITCH)
+        self.helper.setToolTip(SWITCH_TIP)
+        self.helper.setProperty("notSetting", True)                     # it acts at once, through its own confirmation
+        self.helper.toggled.connect(self._helper_toggled)
+        self.helper_note = note("")
+        self.form.addRow(self.helper)
+        self.form.addRow(self.helper_note)
+        self._helper_state = None
         for i, w in enumerate((self.banner, QLabel("<b>Accounts</b>"), note("Changes to accounts take effect right away."), self.table,
                                compact_row(self.add, self.change, self.reset, self.remove), compact_row(self.recovery),
                                QLabel("<b>External Identities</b>"), self.idents, compact_row(self.add_ident, self.edit_ident, self.remove_ident),
@@ -182,6 +205,7 @@ class AccountsPage(Page):
     def load(self):
         self.idle.setValue(int(db.get_setting("signin_idle_minutes") or 15))
         self.session.setValue(int(db.get_setting("signin_session_hours") or 12))
+        self._load_helper()
         self.refresh()
 
     def save(self):
@@ -293,6 +317,53 @@ class AccountsPage(Page):
             return
         audit.log("recovery key replaced")
         RecoveryDialog(key, self).exec()
+
+    # ---------------------------------------------------------------- sign-in without approval
+    def _load_helper(self):
+        """The switch as the helper service has it, for Admins only (enrolling needs the rules key an Admin holds)."""
+        admin = perms.is_admin() and roles.holds("rules")
+        self.helper.setVisible(admin)
+        self.helper_note.setVisible(False)
+        if not admin:
+            return
+        # shortcut: asks the helper on the window's thread (a local pipe, or `sc query` when absent); a Job if it ever shows
+        st = self._helper_state = helperclient.state(datakey.path())
+        text = HELPER_NOTES.get(st)
+        if db.get_setting("helper_off_notice"):         # turned off by a new rules key since: said once
+            db.set_setting("helper_off_notice", False)
+            text = OFF_RULES
+        self.helper.blockSignals(True)
+        self.helper.setChecked(st == "on")
+        self.helper.blockSignals(False)
+        self.helper.setEnabled(st not in ("portable", "other_user", "not_running"))
+        self.helper_note.setText(text or "")
+        self.helper_note.setVisible(bool(text))
+
+    def _helper_toggled(self, on):
+        """Ticked: the warning, then the helper installed when it isn't there or is out of date, then enrolled. Unticked: the
+        spare copy forgotten. Both at once, not at Save."""
+        try:
+            if on and self._helper_warned():
+                if self._helper_state in ("absent", "outdated"):
+                    # shortcut: the window waits while the administrator prompt is up (up to 2 minutes); a Job if it matters
+                    helperclient.install_elevated()
+                helperclient.enroll()
+                audit.log("sign-in without approval turned on", f"by {audit.actor()}")
+            elif not on:
+                helperclient.forget()
+                audit.log("sign-in without approval turned off", f"by {audit.actor()}")
+        except helperclient.InstallFailed as e:
+            QMessageBox.warning(self, self.title, INSTALL_FAILED.format(reason=e.reason))
+        except (helperclient.NotRunning, helperclient.HelperError):
+            quiet.ignored()                             # the switch shows what the helper has now, and its note why
+        self._load_helper()
+
+    def _helper_warned(self):
+        box = QMessageBox(QMessageBox.Icon.Warning, WARN_TITLE, WARN_TEXT, parent=self)
+        go = box.addButton("Turn on", QMessageBox.ButtonRole.AcceptRole)
+        box.setDefaultButton(box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole))
+        box.exec()
+        return box.clickedButton() is go
 
     # ---------------------------------------------------------------- directories
     def _dir(self):

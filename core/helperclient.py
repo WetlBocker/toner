@@ -1,0 +1,279 @@
+"""Toner's side of the helper service (core/helper): asking it over its pipe or socket, putting it in place as an administrator,
+and the "Let group members sign in without approval" switch's state. Nothing is sent before the other end is known to be the
+helper itself: on Windows the TonerHelper service's own process (anyone can make a pipe of the same name), on Linux root
+(SO_PEERCRED). enroll hands it the data key, the rules private key and the Duo secret keys over that channel only; they are never
+logged, audited or shown."""
+import base64
+import os
+import shutil
+import subprocess
+import tempfile
+import time
+from multiprocessing import connection
+from pathlib import Path
+
+from core import audit, db, quiet, updates
+from core.helper import protocol
+
+if os.name == "nt":
+    import ctypes
+    from ctypes import wintypes
+    from core.helper import windows as _plat
+    _TRUSTED = {"S-1-5-18"}                             # LocalSystem; tests add their own SID
+else:
+    from core.helper import linux as _plat
+    _TRUSTED = {0}                                      # root; tests add their own uid
+ADDRESS = _plat.ADDRESS
+# proposed wording (INSTALL_FAILED's {reason}), awaiting the owner's approval
+EXITED = "it stopped with code {code}."
+TOO_LONG = "the administrator prompt wasn't answered in time."
+NO_ANSWER = "it didn't start."
+
+
+class NotRunning(Exception):
+    """No helper answers, or what answers isn't the helper."""
+
+
+class InstallFailed(Exception):
+    def __init__(self, reason):
+        super().__init__(reason)
+        self.reason = reason
+
+
+class HelperError(Exception):
+    """The helper said no: its error code (protocol.ERRORS)."""
+
+
+def _b64(b):
+    return base64.b64encode(b).decode("ascii")
+
+
+# ------------------------------------------------------------ who is at the other end
+if os.name == "nt":
+    _k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _adv = ctypes.WinDLL("advapi32", use_last_error=True)
+    _shell = ctypes.WinDLL("shell32", use_last_error=True)
+    H, D = wintypes.HANDLE, wintypes.DWORD
+
+    class _SEI(ctypes.Structure):                       # SHELLEXECUTEINFOW
+        _fields_ = [("cbSize", D), ("fMask", wintypes.ULONG), ("hwnd", wintypes.HWND), ("lpVerb", wintypes.LPCWSTR),
+                    ("lpFile", wintypes.LPCWSTR), ("lpParameters", wintypes.LPCWSTR), ("lpDirectory", wintypes.LPCWSTR),
+                    ("nShow", ctypes.c_int), ("hInstApp", H), ("lpIDList", ctypes.c_void_p), ("lpClass", wintypes.LPCWSTR),
+                    ("hkeyClass", H), ("dwHotKey", D), ("hIcon", H), ("hProcess", H)]
+
+    for _dll, _name, _args, _res in [
+            (_k32, "GetNamedPipeServerProcessId", [H, ctypes.POINTER(wintypes.ULONG)], wintypes.BOOL),
+            (_k32, "OpenProcess", [D, wintypes.BOOL, D], H),
+            (_k32, "CloseHandle", [H], wintypes.BOOL),
+            (_k32, "WaitForSingleObject", [H, D], D),
+            (_k32, "GetExitCodeProcess", [H, ctypes.POINTER(D)], wintypes.BOOL),
+            (_adv, "OpenProcessToken", [H, D, ctypes.POINTER(H)], wintypes.BOOL),
+            (_adv, "OpenSCManagerW", [wintypes.LPCWSTR, wintypes.LPCWSTR, D], H),
+            (_adv, "OpenServiceW", [H, wintypes.LPCWSTR, D], H),
+            (_adv, "QueryServiceStatusEx", [H, ctypes.c_int, ctypes.c_void_p, D, ctypes.POINTER(D)], wintypes.BOOL),
+            (_adv, "CloseServiceHandle", [H], wintypes.BOOL),
+            (_shell, "ShellExecuteExW", [ctypes.POINTER(_SEI)], wintypes.BOOL)]:
+        getattr(_dll, _name).argtypes, getattr(_dll, _name).restype = _args, _res
+
+    def _sid_of(pid):
+        """The SID of the user running process `pid`; None when this user may not look (a SYSTEM process, to most users)."""
+        proc = _k32.OpenProcess(0x1000, False, pid)     # PROCESS_QUERY_LIMITED_INFORMATION
+        if not proc:
+            return None
+        try:
+            token = H()
+            if not _adv.OpenProcessToken(proc, 0x8, ctypes.byref(token)):     # TOKEN_QUERY
+                return None
+            try:
+                return _plat._token_sid(token)
+            finally:
+                _k32.CloseHandle(token)
+        finally:
+            _k32.CloseHandle(proc)
+
+    def _service_pid():
+        """The process id of the running TonerHelper service, from the service manager (0: not running)."""
+        scm = _adv.OpenSCManagerW(None, None, 0x1)      # SC_MANAGER_CONNECT
+        if not scm:
+            return 0
+        try:
+            svc = _adv.OpenServiceW(scm, _plat.SERVICE, 0x4)    # SERVICE_QUERY_STATUS
+            if not svc:
+                return 0
+            try:
+                st, n = (D * 9)(), D()                  # SERVICE_STATUS_PROCESS: the status, then dwProcessId, flags
+                if not _adv.QueryServiceStatusEx(svc, 0, st, ctypes.sizeof(st), ctypes.byref(n)):
+                    return 0
+                return st[7] if st[1] == 4 else 0       # SERVICE_RUNNING
+            finally:
+                _adv.CloseServiceHandle(svc)
+        finally:
+            _adv.CloseServiceHandle(scm)
+
+    def _server_ok(conn):
+        """The pipe's server is a LocalSystem process, or (when this user can't read that, as most can't) the TonerHelper
+        service's own process as the service manager names it. Only administrators can make or change that service."""
+        pid = wintypes.ULONG()
+        if not _k32.GetNamedPipeServerProcessId(conn.fileno(), ctypes.byref(pid)) or not pid.value:
+            return False
+        return _sid_of(pid.value) in _TRUSTED or pid.value == _service_pid()
+else:
+    def _server_ok(conn):
+        return _plat._creds(conn)[1] in _TRUSTED
+
+
+# ------------------------------------------------------------ asking it
+def _connect():
+    """A connection to the helper, its identity checked before anything is sent; NotRunning otherwise."""
+    try:
+        conn = connection.Client(ADDRESS)
+    except OSError:
+        raise NotRunning() from None
+    try:
+        ok = _server_ok(conn)
+    except OSError:
+        ok = False
+    if not ok:
+        conn.close()
+        raise NotRunning()
+    return conn
+
+
+def call(req, timeout=10):
+    """The helper's answer to `req` (an op and its fields; the protocol version is added). NotRunning when there is no helper
+    to ask, or no answer within `timeout` seconds."""
+    conn = _connect()
+    try:
+        conn.send_bytes(protocol.encode({**req, "v": protocol.PROTOCOL}))
+        if not conn.poll(timeout):
+            raise NotRunning()
+        return protocol.decode(conn.recv_bytes(protocol.MAX))
+    except (OSError, EOFError, ValueError):             # gone mid-request, or an answer that isn't one
+        raise NotRunning() from None
+    finally:
+        conn.close()
+
+
+def _ok(ans):
+    if not ans.get("ok"):
+        raise HelperError(str(ans.get("error")))
+    return ans
+
+
+def installed():
+    """The helper service is installed (running or not)."""
+    cmd = ["sc.exe", "query", _plat.SERVICE] if os.name == "nt" else ["systemctl", "is-enabled", "toner-helper"]
+    try:
+        return subprocess.run(cmd, capture_output=True, timeout=10,
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def state(keys_path):
+    """The switch's state for the copy whose keys file is `keys_path`: "portable", "absent", "not_running", "outdated",
+    "other_user", "rules_changed", "off" or "on". On "rules_changed" the helper's spare copy pins rules this copy no longer has,
+    so it is forgotten here (turned off, audited, and the Accounts page says so once)."""
+    if updates.installed_kind() == "portable":
+        return "portable"
+    try:
+        st = call({"op": "status", "keys_path": str(keys_path)})
+    except NotRunning:
+        return "not_running" if installed() else "absent"
+    if st.get("protocol") != protocol.PROTOCOL:
+        return "outdated"
+    if not st.get("owner"):
+        return "other_user" if st.get("enrolled") else "off"
+    if st.get("rules_changed"):
+        rules_replaced(keys_path)
+        return "rules_changed"
+    return "on"
+
+
+def rules_replaced(keys_path=None):
+    """Turns it off because the rules key was replaced (best effort), audits it and leaves the note for the Accounts page."""
+    try:
+        forget(keys_path)
+    except (NotRunning, HelperError):
+        quiet.ignored()
+    audit.log("sign-in without approval turned off", "the rules key was replaced")
+    try:
+        db.set_setting("helper_off_notice", True)
+    except Exception:
+        quiet.ignored()
+
+
+def enroll():
+    """In an Admin session: gives the helper this copy's keys file, the data key, the rules private key and the Duo secret key
+    of every directory with Duo on. HelperError when it refuses, NotRunning when it can't be asked."""
+    from core import datakey, osstore, roles
+    if not roles.holds("rules"):
+        raise HelperError("not_admin")
+    if ((roles.verified() or {}).get("rules_version") or 0) < 1:
+        roles.sync_grants()                             # signs once: the helper refuses rules signed before the count
+    duo = {}
+    for d in (roles.verified() or {}).get("directories") or []:
+        if isinstance(d, dict) and (d.get("duo") or {}).get("on"):
+            skey = osstore.get("duo:" + d["id"])
+            if skey:
+                duo[d["id"]] = _b64(skey)
+    _ok(call({"op": "enroll", "keys_path": str(datakey.path()), "data_key": _b64(datakey._key),
+              "rules_private": _b64(roles._held["rules"]), "duo": duo}))
+
+
+def forget(keys_path=None):
+    """Has the helper delete its spare copy for this copy. Nothing enrolled (or someone else's) is nothing to delete."""
+    from core import datakey
+    ans = call({"op": "forget", "keys_path": str(keys_path or datakey.path())})
+    if not ans.get("ok") and ans.get("error") not in ("not_enrolled", "not_owner"):
+        raise HelperError(str(ans.get("error")))
+
+
+# ------------------------------------------------------------ installing it
+def _elevate(timeout):
+    """Runs the helper's --install as an administrator/root and waits; its exit code."""
+    if os.name == "nt":
+        exe = Path(updates.app_dir()) / "TonerHelper" / "TonerHelper.exe"
+        sei = _SEI(cbSize=ctypes.sizeof(_SEI), fMask=0x40 | 0x100, lpVerb="runas", lpFile=str(exe),   # NOCLOSEPROCESS, NOASYNC
+                   lpParameters="--install", nShow=0)
+        if not _shell.ShellExecuteExW(ctypes.byref(sei)):
+            raise ctypes.WinError(ctypes.get_last_error())      # 1223: the administrator prompt was cancelled
+        try:
+            if _k32.WaitForSingleObject(sei.hProcess, int(timeout * 1000)) != 0:
+                raise subprocess.TimeoutExpired("TonerHelper.exe", timeout)
+            code = D()
+            if not _k32.GetExitCodeProcess(sei.hProcess, ctypes.byref(code)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            return code.value
+        finally:
+            _k32.CloseHandle(sei.hProcess)
+    # root usually can't read a FUSE-mounted AppImage: copy the helper out to a folder only this user can open, then delete it
+    src = Path(os.environ.get("APPDIR") or updates.app_dir()) / "usr" / "lib" / "toner-helper"
+    tmp = tempfile.mkdtemp(prefix="toner-helper-")      # 0700
+    try:
+        copy = Path(tmp) / "toner-helper"
+        shutil.copytree(src, copy)
+        return subprocess.run(["pkexec", str(copy / "toner-helper"), "--install"], capture_output=True, timeout=timeout).returncode
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def install_elevated(timeout=120):
+    """Installs (or updates) the helper service as an administrator, then waits up to 15 s for it to answer. InstallFailed."""
+    try:
+        code = _elevate(timeout)
+    except subprocess.TimeoutExpired:
+        raise InstallFailed(TOO_LONG) from None
+    except OSError as e:
+        raise InstallFailed(e.strerror or type(e).__name__) from None
+    if code:
+        raise InstallFailed(EXITED.format(code=code))
+    end = time.monotonic() + 15
+    while True:
+        try:
+            call({"op": "status", "keys_path": ""}, timeout=5)
+            return
+        except NotRunning:
+            if time.monotonic() > end:
+                raise InstallFailed(NO_ANSWER) from None
+            time.sleep(0.5)

@@ -98,6 +98,7 @@ DEFAULT_SETTINGS = {
     "hostkey_mode": "Trust on first use",
     "signin_session_hours": 12,                  # a full sign-in (directory and second step) lasts this long (core/session.py)
     "signin_idle_minutes": 15,                   # no mouse or key input this long locks Toner (ui/lockscreen.py); 0: never
+    "helper_off_notice": False,                  # sign-in without approval was turned off by a new rules key: say so once (Accounts)
     "credential_manager_carried": False,         # an older Toner's Credential Manager passwords are all in the vault (ui/setupdlg.py)
     "rules_key": "",                             # the fingerprint of the key that signs the roles in netcheck.keys (core/roles.py)
     "rules_signed": "",                          # what that key last signed, for the recovery key's repair (core/roles.py)
@@ -150,7 +151,7 @@ DEFAULT_SETTINGS = {
 NOT_PORTABLE = {"vault_provider", "vault_config", "vault_collections_migrated", "org_current", "window_geometry", "splitters", "inventory_details_hidden", "ansible_distro", "ansible_playbooks", "ansible_server", "ansible_server_device", "sidebar_collapsed", "sessions_list_hidden", "settings_list_hidden", "tools_list_hidden", "automation_list_hidden", "acks", "client_scope", "onboarding_done", "inventory_columns", "results_columns", "scanning_columns", "topology_last", "topology_prev", "topology_positions", "topology_top", "notify_channels", "notify_snooze_until", "inventory_expanded", "snippets", "fileserver", "iperf_path", "openssl_path",
                 "update_last_check", "update_skip", "update_pending", "sessions_expanded", "agent_enabled", "agent_enroll", "agent_bind",
                 "agent_address", "install_uid", "demarc", "assistant_button", "credential_manager_carried", "rules_key", "rules_signed",
-                "signin_session_hours", "signin_idle_minutes"}
+                "signin_session_hours", "signin_idle_minutes", "helper_off_notice"}
 
 DEVICE_FIELDS = ["name", "vendor", "host", "port", "platform", "username",
                  "site", "verify_ssl", "ha_expected", "enabled", "location", "details", "folder_id",
@@ -553,8 +554,8 @@ def init():
         """)
         _migrate(c)
         _migrate_settings(c)
-        if target() != GLOBAL:                            # these two are Global's alone now; an old Import settings may have left rows here
-            c.execute("DELETE FROM settings WHERE key IN ('signin_session_hours', 'signin_idle_minutes')")
+        if target() != GLOBAL:                            # these are Global's alone now; an old Import settings may have left rows here
+            c.execute("DELETE FROM settings WHERE key IN ('signin_session_hours', 'signin_idle_minutes', 'helper_off_notice')")
     _invalidate_folders()
     _forget_settings()
     if target() == GLOBAL:                                # bring every organization's file up to date too
@@ -1160,7 +1161,7 @@ GLOBAL_ONLY = {"credential_manager_carried", "rules_key", "rules_signed", "windo
                "agent_cert_warned", "agent_enabled", "agent_token_days", "agent_port", "agent_bind", "agent_address",
                "vault_provider", "vault_config", "vault_collections_migrated", "vault_direct", "update_direct", "vault_keep_copies", "install_uid", "demarc",
                "ai_provider", "ai_model", "ai_depth", "ai_spend_limit", "ai_run_commands", "ai_search", "assistant_button",
-               "signin_session_hours", "signin_idle_minutes"}
+               "signin_session_hours", "signin_idle_minutes", "helper_off_notice"}
 # (agent sign-up, its interval and whether installed agents are told it are each organization's own: Settings > Agents)
 # ...and these belong to one organization's own lists, so an organization never borrows Global's:
 ORG_LOCAL = {"acks", "inventory_expanded", "sessions_expanded", "client_scope", "trend_last", "notify_snooze_until", "firmware_source"}

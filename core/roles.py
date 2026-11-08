@@ -602,8 +602,26 @@ def _resign(doc, repair):
 
 def _written(pub):
     if pub is not None:
+        was = db.get_setting("rules_key")
         db.set_setting("rules_key", envelope.fingerprint(pub))
+        if was != envelope.fingerprint(pub):
+            _helper_follows(rekeyed=True)
     _invalidate()
+
+
+def _helper_follows(rekeyed=False):
+    """Best effort, after a change has landed: the helper service's spare copy pins the rules key, so a new one turns sign-in
+    without approval off (state() sees the new key as rules_changed and does it); otherwise, while it is on, it is enrolled again
+    so it has the Duo keys as they are now."""
+    from core import helperclient
+    try:
+        st = helperclient.state(datakey.path())
+        if st == "on" and rekeyed:                      # (the helper didn't see the new key: turn it off all the same)
+            helperclient.rules_replaced()
+        elif st == "on":
+            helperclient.enroll()
+    except Exception:                                   # no helper, or one that says no: nothing of the change is undone
+        quiet.ignored()
 
 
 def set_role(name, role):
@@ -775,6 +793,8 @@ def set_directories(directories, edited=None):
             return old, dropped, _resign(doc, repair), doc
         old, dropped, pub, wrote = datakey.edit(go)
         _written(pub)
+        if pub is None:
+            _helper_follows()                           # (Set up 2FA saves through here: a new Duo key reaches the helper)
         dirpin.remember(wrote)                          # signed and landed: this computer's remembered list follows
         for i, d in new.items():
             if i not in old:
