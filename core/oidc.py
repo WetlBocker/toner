@@ -51,6 +51,10 @@ class Cancelled(OidcError):
     pass
 
 
+class Forbidden(BadAnswer):
+    """Microsoft Graph said no (403): the app has no admin consent for what it asked."""
+
+
 _lock = threading.Lock()
 _meta_cache = {}        # issuer -> (fetched_at, document)
 _keys_cache = {}        # jwks_uri -> (fetched_at, {kid: PyJWK})
@@ -328,6 +332,8 @@ def refresh(cfg, refresh_token, scopes=SCOPES):
 
 def _graph(method, path, token, **kw):
     r = _send(method, GRAPH + path, 10, **{**kw, "headers": {"Authorization": f"Bearer {token}", **kw.get("headers", {})}})
+    if r.status_code == 403:
+        raise Forbidden(f"{host_of(GRAPH)} refused the request")
     return _json(r, GRAPH)
 
 

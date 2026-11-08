@@ -151,7 +151,13 @@ fill(w, "http://127.0.0.1:1/nothing-here")
 check("NOT_FOUND with the URL, still on Connection", nxt(w) == "Toner couldn't read sign-in settings from http://127.0.0.1:1/nothing-here."
       and w.step == 2 and w.title.text() == "Connection", w.message.text())
 fill(w, "not a url")
-check("...a URL that isn't one: NOT_FOUND too", nxt(w) == "Toner couldn't read sign-in settings from not a url." and w.step == 2)
+check("...an address that isn't https with a server: the approved sentence", nxt(w)
+      == "The address must start with https:// and name a server." and w.step == 2, w.message.text())
+fill(w, "ftp://idp.example")
+check("...ftp:// too", nxt(w) == "The address must start with https:// and name a server." and w.step == 2, w.message.text())
+fill(w, ISS, domains="")
+check("no email domain: the approved sentence, still on Connection", nxt(w) == "Type at least one email domain." and w.step == 2,
+      w.message.text())
 w.reject()
 
 print("== Entra: an admin's sign-in lists groups, the filter searches Graph")
@@ -163,7 +169,20 @@ check("FOUND, on Who can sign in", nxt(w) == "Toner found Entra's sign-in settin
 check("...the Entra sign-in button and its text, Groups only (no OUs)", w.list_btn.text() == "Sign in to list groups"
       and w.list_btn.isVisibleTo(w) and w.list_text.text() == IW.LIST_GROUPS_TEXT and w.list_text.isVisibleTo(w)
       and not w.lists["ous"].isVisibleTo(w) and not w.filters["ous"].isVisibleTo(w) and w.lists["groups"].isVisibleTo(w))
-check("Next with nothing ticked is refused", nxt(w) == "Choose at least one OU or group." and w.step == 3)
+check("Next with nothing ticked is refused, in SSO's words", nxt(w) == "Choose at least one group." and w.step == 3)
+real_groups = P.routes["/graph/groups"]
+P.routes["/graph/groups"] = lambda prov, h: h.send_json({"error": {"code": "Authorization_RequestDenied"}}, 403)
+w.list_btn.click()
+pump(lambda: not w._jobs and w.message.text())
+check("Graph refuses to list groups (no admin consent): the approved sentence", w.message.text() == "Entra didn't let Toner list "
+      "groups. Grant GroupMember.Read.All with admin consent for Toner's app, then try again.", w.message.text())
+P.routes["/graph/groups"] = real_groups
+P.mode = "denied"
+w.list_btn.click()
+pump(lambda: not w._jobs and w.message.text() != IW.GRAPH_DENIED)
+check("the Entra admin declines at the provider: the approved refused sentence", w.message.text() == "Entra refused the sign-in.",
+      w.message.text())
+P.mode = "ok"
 P.authorize_seen.clear(); OPENED.clear()
 w.list_btn.click()
 pump(lambda: group_rows(w) and not w._jobs)
@@ -211,12 +230,20 @@ check("...the typed groups box and its words, no Entra button, no role for every
       and w.typed_text.text() == "Type each group exactly as Okta sends it, one per line." and not w.everyone.isVisibleTo(w)
       and not w.list_btn.isVisibleTo(w))
 check("...the secret not stored before Save", not any(k[0].startswith("oidc:") for k in OS))
-check("Next with nothing typed is refused", nxt(w) == "Choose at least one OU or group." and w.step == 3)
+check("...the box's accessible name names the provider", w.typed.accessibleName() == "Type each group exactly as Okta sends it, one per line.",
+      w.typed.accessibleName())
+check("Next with nothing typed is refused, in SSO's words", nxt(w) == "Choose at least one group." and w.step == 3)
 w.typed.setPlainText("Toner Admins\n  Toner Techs \n\nToner Admins\n")
 nxt(w)
 check("Roles: each typed group once", list(w.role_boxes) == ["Toner Admins", "Toner Techs"])
 w.role_boxes["Toner Admins"].setCurrentText("Admin")
 w.name.setText("Okta")
+osstore.available, before = (lambda: False), dirs()
+w.save_btn.click(); settle(w)
+check("no protected store with a client secret typed: the approved sentence, nothing saved", w.message.text() == "This computer has no "
+      "protected store, so the client secret can't be kept. Use a public client, as the provider's note describes."
+      and dirs() == before and not w.result() and not any(k[0].startswith("oidc:") for k in OS), w.message.text())
+osstore.available = lambda: True
 w.save_btn.click(); settle(w)
 d = next((x for x in dirs() if x.get("provider") == "okta"), {})
 check("Saved: the typed groups by role, no group names, no everyone", d.get("groups") == {"Admin": ["Toner Admins"], "Engineer": [], "Tech": ["Toner Techs"]}

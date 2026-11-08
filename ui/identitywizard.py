@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (QComboBox, QDialog, QFileDialog, QFormLayout, QHB
                                QVBoxLayout, QWidget)
 
 from core import datakey, directory, oidc, osstore, passvault, perms, roles, ssopresets
-from core.dirsignin import SSO_BAD_ANSWER, SSO_CANCELLED, SSO_NOT_FRESH, UNREACHABLE
+from core.dirsignin import UNREACHABLE, sso_said
 from ui import status
 from ui.directorydlg import CA_UNREADABLE, KINDS, SECURITY, TAKEN, Said, _netbios, _split, _taken, service_key, with_ca, words
 from ui.settings_base import note
@@ -38,6 +38,13 @@ GRAPH_SCOPES = "openid profile GroupMember.Read.All"
 GROUP_ID = Qt.ItemDataRole.UserRole                 # an Entra group row's id (its text is the group's name)
 CONNECTED = "Connected. Choose who can sign in."
 NONE_TICKED = "Choose at least one OU or group."
+NONE_SSO = "Choose at least one group."
+NO_DOMAIN = "Type at least one email domain."
+BAD_ADDRESS = "The address must start with https:// and name a server."
+GRAPH_DENIED = ("Entra didn't let Toner list groups. Grant GroupMember.Read.All with admin consent for Toner's app, then try "
+                "again.")
+NO_STORE = ("This computer has no protected store, so the client secret can't be kept. Use a public client, as the provider's note "
+            "describes.")
 LISTS = (("ous", "OUs"), ("groups", "Groups"))
 ROLES = directory.ROLE_ORDER
 CAP = 5000                  # OUs and groups loaded at step 3; past it a filter box also searches the directory
@@ -280,6 +287,7 @@ class IdentityWizard(QDialog):
             self.read_form.setRowVisible(wgt, not sso)
         named = self.name.text().strip() or ssopresets.PRESETS[self._provider()]["label"]
         self.typed_text.setText(TYPE_GROUPS_TEXT.format(provider=named))
+        self.typed.setAccessibleName(TYPE_GROUPS_TEXT.format(provider=named))
         claim = bool(self.claim.text().strip())
         for wgt in (self.typed_text, self.typed):
             wgt.setVisible(claim)
@@ -293,7 +301,7 @@ class IdentityWizard(QDialog):
             return self._discover() if self._sso() else self._connect()
         if i == 3:
             if not self._choices() and not (self._sso() and not self.claim.text().strip()):
-                return self._say(NONE_TICKED)
+                return self._say(NONE_SSO if self._sso() else NONE_TICKED)
             self._fill_roles()
         self._go(i + 1)
 
@@ -383,10 +391,15 @@ class IdentityWizard(QDialog):
 
         def run():
             try:
+                directory.check_config(cfg)                 # (the two the admin can put right here first, in the approved words)
+            except directory.BadIssuer:
+                raise Said(BAD_ADDRESS) from None
+            except directory.NoDomain:
+                raise Said(NO_DOMAIN) from None
+            try:
                 oidc.discover(cfg["issuer"])
             except oidc.OidcError:
                 raise Said(NOT_FOUND.format(url=cfg["issuer"])) from None
-            directory.check_config(cfg)
         self._run(run, lambda _r, e: self._discovered(cfg, e))
 
     def _discovered(self, cfg, error):
@@ -503,10 +516,11 @@ class IdentityWizard(QDialog):
         """An SSO failure in the approved words: an oidc error's own text names the provider's host, so is never shown."""
         if isinstance(e, oidc.Unreachable):
             return UNREACHABLE
+        if isinstance(e, oidc.Forbidden):                   # Graph: no admin consent for GroupMember.Read.All
+            return GRAPH_DENIED
         if not isinstance(e, oidc.OidcError):
             return words(e)
-        text = SSO_CANCELLED if isinstance(e, oidc.Cancelled) else SSO_NOT_FRESH if isinstance(e, oidc.NotFresh) else SSO_BAD_ANSWER
-        return text.format(provider=self.name.text().strip())
+        return sso_said({"name": self.name.text().strip()}, e)
 
     # ---------------------------------------------------------------- step 5
     def _fill_roles(self):
@@ -571,6 +585,8 @@ class IdentityWizard(QDialog):
 
     def _save(self):
         if self._sso():                                      # nothing to read from a server: saved at once
+            if self.secret.text() and not osstore.available():     # (before anything is saved: the secret couldn't be kept)
+                return self._say(NO_STORE)
             cfg = self._cfg()
             taken = _taken(self.dirs, self.id, cfg)
             return self._say(TAKEN.format(value=taken)) if taken else self._saved(cfg, [], self.secret.text(), None)

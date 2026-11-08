@@ -22,6 +22,8 @@ class Unreachable(Exception): pass
 class BadCredentials(Exception): pass
 class InsecureConfig(ValueError): pass
 class CaChanged(InsecureConfig): pass     # the CA file isn't the one signed into the list: an admin saves the directory again
+class BadIssuer(InsecureConfig): pass     # an SSO connection's address isn't https with a server name
+class NoDomain(InsecureConfig): pass      # an SSO connection lists no email domain
 
 
 @dataclass(frozen=True)
@@ -44,14 +46,14 @@ def check_config(cfg):
         except ValueError:
             host = None
         if not host or not (parts.scheme == "https" or (oidc._TEST_ALLOW_HTTP and parts.scheme == "http")):
-            raise InsecureConfig("the issuer must be https")
+            raise BadIssuer("the issuer must be https")
         if cfg.get("provider") not in ssopresets.PRESETS:
             raise InsecureConfig("unknown provider")
         if not cfg.get("client_id"):
             raise InsecureConfig("no client ID")
         sx = cfg.get("suffixes")
         if not (isinstance(sx, list) and sx and all(isinstance(s, str) and s.strip() for s in sx)):
-            raise InsecureConfig("no email domain")
+            raise NoDomain("no email domain")
         names = cfg.get("group_names", {})
         if not (isinstance(names, dict) and all(isinstance(k, str) and isinstance(v, str) for k, v in names.items())):
             raise InsecureConfig("bad group names")
