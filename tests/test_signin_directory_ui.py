@@ -219,7 +219,8 @@ w.pin1.setText(PIN); w.pin2.setText(PIN); w.choose_ok.click(); settle(w)
 check("then the approval page, with the first-sign-in text", at(w) == "approve" and words_on(w.approve_page)[1:] == [
     "An admin needs to approve this",
     "This is your first sign-in to this copy of Toner. Ask an admin to sign in here to approve it.",
-    "Admin username", "Password", "Approve", "Not you?", "Use the recovery key"], words_on(w.approve_page))
+    "Admin username", "Password", "Approve", "Not you?", "Approve with a directory account", "Use the recovery key"],
+    words_on(w.approve_page))
 w.admin.setText("Eng1"); w.admin_pw.setText(PW2); w.approve_ok.click(); settle(w)
 check("an Engineer can't approve", at(w) == "approve" and w.approve_error.text() == "That account can't approve sign-ins."
       and w.admin_pw.text() == "", w.approve_error.text())

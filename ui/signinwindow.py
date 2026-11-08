@@ -31,6 +31,9 @@ PIN_MISMATCH = "The two PINs don't match."
 SSO_TITLE = "Continue in your browser"
 SSO_TEXT = "Sign in on the {provider} page that opened in your browser. Toner carries on when you're done."
 SSO_AGAIN = "Open the page again"
+APPROVE_WITH_ACCOUNT = "Approve with a directory account"
+APPROVER_TITLE = "Admin approval"
+APPROVER_TEXT = "An admin who has signed in on this computer before signs in with their own account, then types their Toner PIN."
 # directory steps' errors whose text is already the approved sentence
 SAID = (datakey.WrongPassword, datakey.NameTaken, dirsignin.NotInGroup, dirsignin.Paused, dirsignin.CannotApprove, dirsignin.CaChanged,
         duo.Unavailable, duo.Denied, pinslot.WrongPin)
@@ -170,15 +173,19 @@ class Job(QThread):
 
 # ---------------------------------------------------------------- the window
 class SignInWindow(QDialog):
-    """exec() returns Accepted once session.state() == "open"; Escape or closing it quits Toner."""
+    """exec() returns Accepted once session.state() == "open"; Escape or closing it quits Toner.
 
-    def __init__(self, parent=None):
+    approver_for (an Attempt at "approve"): the nested window an Admin approves it in, with their own directory or SSO sign-in
+    and PIN. It never opens a session; it accepts once the approval lands."""
+
+    def __init__(self, parent=None, approver_for=None):
         super().__init__(parent)
         self.setWindowTitle("Toner")
         self.setMinimumSize(460, 440)
         self.pages = QStackedWidget()
+        self.approver_for, self.approver = approver_for, None
 
-        self.name_page, lay = self._page("Sign in")
+        self.name_page, lay = self._page(APPROVER_TITLE, APPROVER_TEXT) if approver_for else self._page("Sign in")
         self.name = field(lay, "Username or email")
         self.name_error = error_label()
         self.next = primary("Next")
@@ -261,11 +268,12 @@ class SignInWindow(QDialog):
         self.approve_text = lay.itemAt(2).widget()
         self.admin, self.admin_pw = field(lay, "Admin username"), field(lay, "Password", secret=True)
         self.approve_error, self.approve_ok = error_label(), primary("Approve")
-        self.approve_recovery = link("Use the recovery key")
+        self.approve_recovery, self.approve_with_account = link("Use the recovery key"), link(APPROVE_WITH_ACCOUNT)
         self._finish(lay, self.admin_pw, self.approve_error, self.approve_ok, self._approve, self._not_you_link(),
-                     self.approve_recovery)
+                     self.approve_with_account, self.approve_recovery)
         self.admin.returnPressed.connect(self.admin_pw.setFocus)
         self.approve_recovery.clicked.connect(lambda: self._go(self.approve_key_page, self.approve_key))
+        self.approve_with_account.clicked.connect(self._approve_with_account)
 
         self.approve_key_page, lay = self._page(APPROVE_TITLE, RECOVERY_TEXT)
         self.approve_key = field(lay, "Recovery key")
@@ -279,6 +287,10 @@ class SignInWindow(QDialog):
         self._waits = (self.pin_wait, self.choose_wait, self.approve_wait, self.approve_key_wait)
         self._secrets = (self.pw, self.code, self.pin, self.pin1, self.pin2, self.admin, self.admin_pw, self.approve_key,
                          self.recovery, self.new_pw, self.confirm)
+        if approver_for:                                 # the approver's own sign-in: no recovery key, new PIN or session
+            self.use_recovery.hide()
+            self.forgot.hide()
+            self.pin_ok.setText("Approve")
         outer = QVBoxLayout(self)
         centred(self.pages, outer)
         self._go(self.name_page, self.name)
@@ -337,6 +349,9 @@ class SignInWindow(QDialog):
             return
         except DAMAGED_ERRORS:
             self.directory = False                       # the password step says what is wrong with the file, as before
+        if self.approver_for and not self.directory:     # a local Admin approves on the approval page itself
+            say(self.name_error, dirsignin.CANNOT_APPROVE)
+            return
         for lab in (self.who, self.code_who, self.pin_who):
             lab.setText(name)
         self.pw.setText("")
@@ -487,6 +502,11 @@ class SignInWindow(QDialog):
                     say(self.pin_error, self._unreachable())
                     return
                 dirsignin.restart_pin(a)
+        if self.approver_for and (a.offline or a.stage in ("choose-pin", "approve")):
+            self._drop()                                 # the approver would need a new PIN (or the directory): not here
+            self._go(self.name_page, self.name)
+            say(self.name_error, self._unreachable() if a.offline else dirsignin.NOT_HERE_BEFORE)
+            return
         if a.stage == "done":
             self.accept()
             return
@@ -552,6 +572,9 @@ class SignInWindow(QDialog):
     def _pin(self):
         a, pin = self.attempt, self.pin.text()
         self.pin.setText("")
+        if self.approver_for:
+            return self._run(lambda: dirsignin.approve_with_account(self.approver_for, a, pin),
+                             lambda _r, e: self.accept() if e is None else self._fail(e, self.pin_error, self.pin_wait, self.pin))
         self._step(lambda: dirsignin.finish(a, pin), self.pin_error, self.pin_wait, self.pin)
 
     def _forgot_pin(self):
@@ -626,6 +649,13 @@ class SignInWindow(QDialog):
         a, admin, pw = self.attempt, self.admin.text().strip(), self.admin_pw.text()
         self.admin_pw.setText("")
         self._step(lambda: dirsignin.approve(a, admin, pw), self.approve_error, self.approve_wait, self.admin_pw)
+
+    def _approve_with_account(self):
+        """The nested window: once it approves, this window routes the attempt on (to its PIN)."""
+        a = self.attempt
+        self.approver = SignInWindow(self, approver_for=a)
+        self.approver.finished.connect(lambda r: self._route() if r == QDialog.DialogCode.Accepted and self.attempt is a else None)
+        self.approver.open()
 
     def _approve_key(self):
         a, key = self.attempt, self.approve_key.text()

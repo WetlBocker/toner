@@ -4,7 +4,7 @@
     after_password  Duo's preauth, when the directory has Duo on
     duo_push/code   Duo's second step
     choose_pin      a new PIN slot: a first sign-in, "Forgot your PIN?" (restart_pin), or a computer without the slot's key
-    approve         an Admin, or the recovery key, approves at this computer
+    approve         an Admin, or the recovery key, approves at this computer (approve_with_account: a directory or SSO Admin)
     finish          the PIN signs in
 
 An SSO connection (kind "oidc") has sso_start and sso_wait (the browser) in place of begin and the Duo steps.
@@ -25,6 +25,7 @@ DUO_DENIED = "Duo didn't approve the sign-in."
 WRONG_CODE = "That code isn't right."
 NOT_IN_GROUP = "Your account isn't in a Toner group. Ask an admin."
 CANNOT_APPROVE = "That account can't approve sign-ins."
+NOT_HERE_BEFORE = "That account hasn't signed in on this computer before, so it can't approve here."
 FIRST = "This is your first sign-in to this copy of Toner. Ask an admin to sign in here to approve it."
 CHANGED = "Your access changed. Ask an admin to sign in here to approve it."
 PAUSED = "Directory sign-in is paused on this computer. An admin needs to sign in first."
@@ -501,6 +502,25 @@ def approve(a, admin_name, admin_password):
 
 def approve_recovery(a, recovery):
     _approve(a, lambda: datakey.open_with_recovery(recovery))
+
+
+def approve_with_account(a, approver, pin):
+    """A directory or SSO Admin approves with their own sign-in (an Attempt at its PIN, checked online just now) and their Toner
+    PIN on this computer. Their session is never opened; the audit credits them by name."""
+    if str(approver.name or "").casefold() == str(a.name or "").casefold():
+        raise CannotApprove(CANNOT_APPROVE)
+    rec = datakey.directory_account(approver.name) if approver.name else None
+    if not (rec and rec.get("sealed")):
+        raise CannotApprove(NOT_HERE_BEFORE)
+    if approver.stage != "pin" or not approver.fresh or approver.role != "Admin":     # the role from this sign-in's groups
+        raise CannotApprove(CANNOT_APPROVE)
+
+    def opener():
+        try:
+            return datakey.open_with_pin(approver.name, pin)
+        except pinslot.SlotMissing:                         # no PIN slot on this computer: they'd need a new PIN here first
+            raise CannotApprove(NOT_HERE_BEFORE) from None
+    _approve(a, opener)
 
 
 def _approve(a, opener):
