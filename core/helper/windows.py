@@ -25,6 +25,10 @@ SERVICE = "TonerHelper"
 # Signed-in users may connect, network logons may not; only SYSTEM and Administrators may do more.
 _PIPE_SD = "D:P(D;;GA;;;NU)(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;AU)"
 _DIR_SD = "O:BAD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)"      # owned by Administrators; SYSTEM and Administrators only
+_ADMINS = {"S-1-5-18", "S-1-5-32-544"}                 # SYSTEM, Administrators
+# what lets someone change a folder or what's in it: write/append data (add file/subfolder), write EA, delete child, write
+# attributes, DELETE, WRITE_DAC, WRITE_OWNER, GENERIC_ALL, GENERIC_WRITE
+_WRITE = 0x2 | 0x4 | 0x10 | 0x40 | 0x100 | 0x10000 | 0x40000 | 0x80000 | 0x10000000 | 0x40000000
 _ACL = ["/inheritance:r", "/grant:r", "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F"]    # SIDs: the names are translated
 log = logging.getLogger(__name__)
 _on_read = None                                         # test hook: called inside the read, while impersonating
@@ -45,6 +49,8 @@ for _dll, _name, _args, _res in [
         (_adv, "OpenProcessToken", [H, D, ctypes.POINTER(H)], wintypes.BOOL),
         (_adv, "GetTokenInformation", [H, ctypes.c_int, P, D, ctypes.POINTER(D)], wintypes.BOOL),
         (_adv, "ConvertSidToStringSidW", [P, ctypes.POINTER(P)], wintypes.BOOL),
+        (_adv, "GetNamedSecurityInfoW", [wintypes.LPCWSTR, ctypes.c_int, D] + [ctypes.POINTER(P)] * 5, D),
+        (_adv, "GetAce", [P, D, ctypes.POINTER(P)], wintypes.BOOL),
         (_adv, "ImpersonateNamedPipeClient", [H], wintypes.BOOL),
         (_adv, "RevertToSelf", [], wintypes.BOOL),
         (_adv, "RegisterServiceCtrlHandlerExW", [wintypes.LPCWSTR, P, P], H),
@@ -120,8 +126,12 @@ def _token_sid(token):
     buf = ctypes.create_string_buffer(256)              # TOKEN_USER: a pointer, attributes, then the SID (at most 68 bytes)
     n = D()
     _check(_adv.GetTokenInformation(token, 1, buf, len(buf), ctypes.byref(n)))      # TokenUser
+    return _sid_str(ctypes.cast(buf, ctypes.POINTER(P))[0])
+
+
+def _sid_str(psid):
     s = P()
-    _check(_adv.ConvertSidToStringSidW(ctypes.cast(buf, ctypes.POINTER(P))[0], ctypes.byref(s)))
+    _check(_adv.ConvertSidToStringSidW(psid, ctypes.byref(s)))
     try:
         return ctypes.wstring_at(s.value)
     finally:
@@ -288,10 +298,59 @@ def _step(step):
             raise OSError(f"{step[0]} {step[1]} failed ({r.returncode})")
 
 
+def _security(path):
+    """(owner SID, the SIDs the DACL lets change the object at `path`). Writers is None when anyone may (no DACL) or an allow
+    ACE is of a kind this doesn't read (object or callback ACEs): such a folder isn't trusted."""
+    owner, dacl, sd = P(), P(), P()
+    err = _adv.GetNamedSecurityInfoW(str(path), 1, 0x1 | 0x4, ctypes.byref(owner), None, ctypes.byref(dacl), None,
+                                     ctypes.byref(sd))          # SE_FILE_OBJECT; OWNER and DACL
+    if err:
+        raise ctypes.WinError(err)
+    try:
+        if not dacl.value:
+            return _sid_str(owner), None
+        writers = set()
+        for i in range(ctypes.cast(dacl, ctypes.POINTER(ctypes.c_ushort))[2]):     # ACL header: rev, sbz1, size, AceCount
+            ace = P()
+            _check(_adv.GetAce(dacl, i, ctypes.byref(ace)))
+            kind = ctypes.cast(ace, ctypes.POINTER(ctypes.c_ubyte))[0]
+            if kind == 1:                               # ACCESS_DENIED_ACE
+                continue
+            if kind != 0:                               # not a plain ACCESS_ALLOWED_ACE
+                return _sid_str(owner), None
+            if ctypes.cast(ace.value + 4, ctypes.POINTER(D))[0] & _WRITE:    # header (4 bytes), Mask, then the SID
+                writers.add(_sid_str(ace.value + 8))
+        return _sid_str(owner), writers
+    finally:
+        _k32.LocalFree(sd)
+
+
+def _trusted(path):
+    """The folder at `path` is owned by SYSTEM or Administrators and only they may change it, so nothing in it was put there by
+    anyone else. A link or junction, or a folder whose security can't be read, is not."""
+    if os.path.islink(path) or os.path.isjunction(path):
+        return False
+    try:
+        owner, writers = _security(path)
+    except OSError:
+        return False
+    return owner in _ADMINS and writers is not None and writers <= _ADMINS
+
+
 def _remove(path):
-    """Deletes the folder at `path`, or only the link when it is a link or junction (someone may have put one there). It is
-    renamed aside first, waiting up to 30 s for a stopping service to let go of its files, so the name is free at once."""
+    """Clears the name `path`. A folder only administrators could have written is deleted: renamed aside first, waiting up to
+    30 s for a stopping service to let go of its files, then removed. Anything else (a folder a user made or can write to, a
+    link, a junction) is only renamed aside to <name>.untrusted-<time> and left there untouched: deleting inside a tree its
+    owner can change would let them point the deletion, as an administrator, anywhere (a junction swapped in mid-walk).
+    OSError when it can't be moved aside, which stops the install."""
     if not os.path.lexists(path):
+        return
+    if not _trusted(path):
+        aside = path.with_name(f"{path.name}.untrusted-{time.strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(2)}")
+        try:
+            os.rename(path, aside)                      # MoveFileExW: the folder itself, nothing inside it is opened
+        except OSError as e:
+            raise OSError(f"{path} isn't admin-only and couldn't be moved aside") from e
         return
     old = path.with_name(f"{path.name}.old-{secrets.token_hex(4)}")
     for i in range(60):
@@ -302,14 +361,15 @@ def _remove(path):
             if i == 59:
                 raise
             time.sleep(0.5)
-    if os.path.islink(old) or os.path.isjunction(old):
-        os.unlink(old)
-    else:
-        shutil.rmtree(old)
+    shutil.rmtree(old)
 
 
 def _fresh(path):
     """An empty folder at `path`, made with the admin-only ACL in the same step: nothing anyone else put there survives, and
     there is no moment when a user could add a file to it (ProgramData lets users create files in new folders)."""
     _remove(path)
+    _mkdir_admin(path)
+
+
+def _mkdir_admin(path):
     _check(_k32.CreateDirectoryW(str(path), ctypes.byref(_sa(_DIR_SD))))

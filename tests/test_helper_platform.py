@@ -15,7 +15,7 @@ STORE = {}
 keyring.set_password = lambda s, u, p: STORE.__setitem__((s, u), p)
 keyring.get_password = lambda s, u: STORE.get((s, u))
 keyring.delete_password = lambda s, u: STORE.pop((s, u), None)
-import base64, ctypes, logging, pathlib, pickle, subprocess, threading, uuid
+import base64, ctypes, logging, pathlib, pickle, shutil, subprocess, threading, uuid
 from multiprocessing import connection
 from core import datakey, db, osstore, roles, session
 from core.helper import linux, protocol, server, store
@@ -265,6 +265,69 @@ else:
         linux._on_read = lambda: SEEN.append(fs_ids())
     else:
         print("  skip  reader as another uid (needs root)")
+
+
+# ---------------------------------------------------------------- install: a folder a user could write is moved aside, never walked
+if NT:
+    import _winapi
+    T = pathlib.Path(_tmp.mkdtemp(prefix="netcheck_plant_"))
+    SENTINEL = T / "sentinel"
+    SENTINEL.mkdir(); (SENTINEL / "keep.txt").write_text("keep")
+    PLANT = T / "Toner Helper"
+    PLANT.mkdir(); (PLANT / "x.txt").write_text("x")
+    _winapi.CreateJunction(str(SENTINEL), str(PLANT / "link"))      # what a planter swaps in to aim a delete
+    own, writers = windows._security(PLANT)
+    check("_security: a folder this user made is theirs, and someone besides SYSTEM/Administrators may write to it (OWNER RIGHTS here)",
+          own == ME and writers is not None and not writers <= {"S-1-5-18", "S-1-5-32-544"}, (own, writers))
+    check("...so it isn't trusted; nor is a junction", not windows._trusted(PLANT) and not windows._trusted(PLANT / "link"))
+    ADMIN_ONLY = T / "admin-only"
+    windows._check(windows._k32.CreateDirectoryW(str(ADMIN_ONLY), ctypes.byref(windows._sa("D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)"))))
+    own, writers = windows._security(ADMIN_ONLY)
+    check("_security reads an admin-only DACL: writers SYSTEM and Administrators (owner this user, so still untrusted)",
+          writers == {"S-1-5-18", "S-1-5-32-544"} and own == ME and not windows._trusted(ADMIN_ONLY), (own, writers))
+    subprocess.run(["icacls", str(ADMIN_ONLY), "/reset"], capture_output=True)     # the owner may: then it can be deleted
+    os.rmdir(ADMIN_ONLY)
+
+    MADE = []
+    real_mkdir = windows._mkdir_admin
+    windows._mkdir_admin = lambda p: (MADE.append(p), os.mkdir(p))  # as this user (an admin-owned folder needs elevation)
+    windows._step(["mkdir", str(PLANT)])
+    aside = [p for p in T.iterdir() if p.name.startswith("Toner Helper.untrusted-")]
+    check("install over a planted folder: renamed aside, not deleted, its contents and junction as they were",
+          len(aside) == 1 and (aside[0] / "x.txt").read_text() == "x" and os.path.isjunction(aside[0] / "link"), aside)
+    check("...the folder the junction points at is untouched", [p.name for p in SENTINEL.iterdir()] == ["keep.txt"]
+          and (SENTINEL / "keep.txt").read_text() == "keep")
+    check("...and a fresh folder is made at the name", MADE == [PLANT] and PLANT.is_dir() and list(PLANT.iterdir()) == [])
+    windows._step(["rmdir", str(PLANT)])
+    check("uninstall over a folder a user made: renamed aside too, not deleted",
+          not PLANT.exists() and len([p for p in T.iterdir() if p.name.startswith("Toner Helper.untrusted-")]) == 2)
+    PLANT.mkdir()
+    real_rename = os.rename
+    def no_rename(*a): raise PermissionError(5, "denied")
+    os.rename = no_rename
+    try:
+        check("a planted folder that can't be moved aside stops the install, untouched",
+              raises(lambda: windows._step(["mkdir", str(PLANT)]), OSError) and PLANT.is_dir() and len(MADE) == 1)
+    finally:
+        os.rename = real_rename
+
+    real_security = windows._security
+    TRUSTED = T / "trusted"
+    (TRUSTED / "sub").mkdir(parents=True); (TRUSTED / "sub" / "helper.json").write_text("{}")
+    windows._security = lambda p: ("S-1-5-32-544", {"S-1-5-18", "S-1-5-32-544"})        # mocked: setting an admin owner needs elevation
+    windows._step(["rmdir", str(TRUSTED)])
+    check("a folder owned by Administrators that only SYSTEM/Administrators may write (mocked lookup): deleted",
+          not TRUSTED.exists() and not [p for p in T.iterdir() if p.name.startswith(("trusted.old", "trusted.untrusted"))])
+    for name, sec in [("users may write", ("S-1-5-32-544", {"S-1-5-18", "S-1-5-32-544", "S-1-5-32-545"})),
+                      ("owned by a user", (ME, {"S-1-5-18", "S-1-5-32-544"})), ("no DACL", ("S-1-5-18", None))]:
+        TRUSTED.mkdir(); (TRUSTED / "f").write_text("f")
+        windows._security = lambda p, sec=sec: sec
+        windows._step(["rmdir", str(TRUSTED)])
+        kept = [p for p in T.iterdir() if p.name.startswith("trusted.untrusted-")]
+        check(f"...{name} (mocked lookup): moved aside with its file, not deleted", not TRUSTED.exists() and len(kept) == 1
+              and (kept[0] / "f").exists(), kept)
+        shutil.rmtree(kept[0])
+    windows._security, windows._mkdir_admin = real_security, real_mkdir
 
 
 # ---------------------------------------------------------------- install: the plan and the refusals (nothing is run)
