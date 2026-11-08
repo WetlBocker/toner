@@ -202,6 +202,39 @@ check("...and the helper refuses nothing it shouldn't: it is just off", helpercl
 session.sign_out()
 session.sign_in("Admin1", PW)
 
+print("== rules_changed found before anyone signs in: the audit row and the note wait for the key, said once")
+helperclient.enroll()
+check("(on)", helperclient.state(KEYS) == "on")
+roles.set_permissions("Tech", {"push": not roles.permissions("Tech")["push"]})
+new = KEYS.read_bytes()
+db.set_setting("helper_off_notice", False)
+OFF = ("sign-in without approval turned off", "the rules key was replaced")
+said = lambda: sum(a == OFF for a in acts())
+n = said()
+session.sign_out()
+KEYS.write_bytes(old)                                   # an older signed file put back while nobody is signed in
+check("signed out: rules_changed, the spare copy forgotten, nothing raised", helperclient.state(KEYS) == "rules_changed"
+      and HSTORE.load() is None and not datakey.is_open())
+check("...looked at again: off, nothing more to say", helperclient.state(KEYS) == "off")
+KEYS.write_bytes(new); roles._invalidate()
+session.sign_in("Admin1", PW)
+check("after sign-in: audited once, and the Accounts page's note is set", said() == n + 1 and db.get_setting("helper_off_notice") is True,
+      (said() - n, db.get_setting("helper_off_notice")))
+helperclient.enroll()
+db.set_setting("helper_off_notice", False)
+real_forget = helperclient.forget
+def cannot_forget(keys_path=None): raise helperclient.NotRunning()
+helperclient.forget = cannot_forget
+KEYS.write_bytes(old); roles._invalidate()
+for _ in range(3):                                      # the Accounts page loaded three times while it can't be turned off
+    helperclient.state(KEYS)
+check("the helper can't be made to let go: nothing said yet, however often it is looked at", said() == n + 1
+      and db.get_setting("helper_off_notice") is False)
+helperclient.forget = real_forget
+check("...once it lets go: said once", helperclient.state(KEYS) == "rules_changed" and said() == n + 2
+      and db.get_setting("helper_off_notice") is True and helperclient.state(KEYS) == "off" and said() == n + 2)
+KEYS.write_bytes(new); roles._invalidate()
+
 print("== a helper that can't be reached changes nothing of a change")
 UP[0] = False
 roles.set_directories(roles.verified()["directories"])

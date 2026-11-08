@@ -12,7 +12,7 @@ import time
 from multiprocessing import connection
 from pathlib import Path
 
-from core import audit, db, quiet, updates
+from core import datakey, db, quiet, session, updates
 from core.helper import protocol
 
 if os.name == "nt":
@@ -28,6 +28,9 @@ ADDRESS = _plat.ADDRESS
 EXITED = "it stopped with code {code}."
 TOO_LONG = "the administrator prompt wasn't answered in time."
 NO_ANSWER = "it didn't start."
+
+
+_notice_due = False     # rules_replaced before sign-in: the Accounts page's note, set once the key opens
 
 
 class NotRunning(Exception):
@@ -173,16 +176,17 @@ def installed():
         return False
 
 
-def state(keys_path):
+def state(keys_path, ask_service=True):
     """The switch's state for the copy whose keys file is `keys_path`: "portable", "absent", "not_running", "outdated",
     "other_user", "rules_changed", "off" or "on". On "rules_changed" the helper's spare copy pins rules this copy no longer has,
-    so it is forgotten here (turned off, audited, and the Accounts page says so once)."""
+    so it is forgotten here (turned off, audited, and the Accounts page says so once). `ask_service=False`: no helper answering
+    is "not_running" without asking the service manager whether it is installed."""
     if updates.installed_kind() == "portable":
         return "portable"
     try:
         st = call({"op": "status", "keys_path": str(keys_path)})
     except NotRunning:
-        return "not_running" if installed() else "absent"
+        return "not_running" if not ask_service or installed() else "absent"
     if st.get("protocol") != protocol.PROTOCOL:
         return "outdated"
     if not st.get("owner"):
@@ -194,16 +198,32 @@ def state(keys_path):
 
 
 def rules_replaced(keys_path=None):
-    """Turns it off because the rules key was replaced (best effort), audits it and leaves the note for the Accounts page."""
+    """Turns it off because the rules key was replaced. Once the helper has let go of its spare copy it is audited and the
+    Accounts page says so once; found before sign-in, both wait for the key to open. While the helper can't be made to let go,
+    nothing is said yet: a later look that turns it off says it, so it is never said twice."""
+    global _notice_due
     try:
         forget(keys_path)
     except (NotRunning, HelperError):
         quiet.ignored()
-    audit.log("sign-in without approval turned off", "the rules key was replaced")
-    try:
-        db.set_setting("helper_off_notice", True)
-    except Exception:
-        quiet.ignored()
+        return
+    session.audit_soon("sign-in without approval turned off", "the rules key was replaced")
+    _notice_due = True
+    _set_notice("open" if datakey.is_open() else None)
+
+
+def _set_notice(new):
+    """session's listener (and rules_replaced): the Accounts page's note written once the key is open."""
+    global _notice_due
+    if new == "open" and _notice_due and datakey.is_open():
+        try:
+            db.set_setting("helper_off_notice", True)
+            _notice_due = False
+        except Exception:
+            quiet.ignored()
+
+
+session.on_change(_set_notice)
 
 
 def enroll():

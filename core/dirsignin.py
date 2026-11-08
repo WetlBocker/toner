@@ -34,6 +34,7 @@ CANNOT_APPROVE = "That account can't approve sign-ins."
 NOT_HERE_BEFORE = "That account hasn't signed in on this computer before, so it can't approve here."
 FIRST = "This is your first sign-in to this copy of Toner. Ask an admin to sign in here to approve it."
 CHANGED = "Your access changed. Ask an admin to sign in here to approve it."
+HELPER_DOWN = "Toner's helper service isn't running, so an admin has to approve this one."     # after FIRST or CHANGED
 PAUSED = "Directory sign-in is paused on this computer. An admin needs to sign in first."
 CA_CHANGED = "The directory's CA file changed. An admin needs to save the directory again."
 NAME_TAKEN = "That name already belongs to another account on this copy. Ask an admin."     # Choose a PIN only
@@ -227,7 +228,7 @@ def begin(login, password):
 def helper_ready():
     """Sign-in without approval is on for this copy: the helper service answers, enrolled by it."""
     try:
-        return helperclient.state(datakey.path()) == "on"
+        return helperclient.state(datakey.path(), ask_service=False) == "on"
     except Exception:                                   # never in the way of a sign-in
         quiet.ignored()
         return False
@@ -597,6 +598,21 @@ def choose_pin(a, pin):
     a.slot, a.stage = slot, "approve"
     if a.ticket:
         approve_by_helper(a)
+    _why_admin(a)
+
+
+def _why_admin(a):
+    """On the approval page: HELPER_DOWN after its text when sign-in without approval would have done it but the helper
+    service doesn't answer (installed, not running)."""
+    if a.stage != "approve" or HELPER_DOWN in (a.message or ""):
+        return
+    try:
+        down = helperclient.state(datakey.path()) == "not_running"
+    except Exception:                                   # never in the way of a sign-in
+        quiet.ignored()
+        return
+    if down:
+        a.message = f"{a.message} {HELPER_DOWN}"
 
 
 def _drop(slot):
@@ -727,6 +743,7 @@ def finish(a, pin):
             if a.ticket:
                 approve_by_helper(a)                        # approved: on with the PIN just checked
             if a.stage != "pin":
+                _why_admin(a)
                 return
         session.sign_in_pin(a.name, pin)                    # offline, "changed" signs in with the keys it already has
     except pinslot.SlotMissing:

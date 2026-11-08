@@ -98,7 +98,7 @@ ADMINS, ENGINEERS, TECHS = "CN=Toner Admins," + BASE, "CN=Toner Engineers," + BA
 directory._STRATEGY = ldap3.MOCK_SYNC
 ldap = ldap3.Server("mock", get_info=ldap3.NONE)
 c = ldap3.Connection(ldap, client_strategy=ldap3.MOCK_SYNC)
-PEOPLE = {"bob": TECHS, "carol": TECHS, "dan": TECHS, "frank": TECHS, "gus": TECHS, "hal": TECHS, "ivy": TECHS, "jay": TECHS, "erin": ENGINEERS, "alice": ADMINS}
+PEOPLE = {"bob": TECHS, "carol": TECHS, "dan": TECHS, "frank": TECHS, "gus": TECHS, "hal": TECHS, "ivy": TECHS, "jay": TECHS, "kim": TECHS, "erin": ENGINEERS, "alice": ADMINS}
 for who, group in PEOPLE.items():
     dn = f"CN={who},OU=Users,{BASE}"
     c.strategy.add_entry(dn, {"objectClass": "user", "userPrincipalName": f"{who}@acme.com", "sAMAccountName": who, "cn": who,
@@ -333,10 +333,21 @@ check("...approved by the helper", a.stage == "pin" and no_keys())
 
 print("== the helper stopped (NotRunning): today's flow, the approval page with FIRST")
 UP[0] = False
+ASKED = []
+helperclient.installed = lambda: ASKED.append(1) or True
+check("helper_ready: False, without asking the service manager whether it is installed", S.helper_ready() is False and not ASKED)
+helperclient.installed = lambda: True
 BINDS.clear()
 a = first("carol")
 check("Toner checked the password itself", BINDS == ["toner"], BINDS)
-check("the approval page, FIRST, no ticket", a.stage == "approve" and a.message == S.FIRST and a.ticket is None and not a.helper)
+DOWN = "Toner's helper service isn't running, so an admin has to approve this one."
+check("the approval page: FIRST, then why the helper didn't approve it; no ticket", a.stage == "approve" and S.HELPER_DOWN == DOWN
+      and a.message == S.FIRST + " " + DOWN and a.ticket is None and not a.helper, a.message)
+helperclient.installed = lambda: False
+a = first("kim")
+check("...the helper not installed at all (the switch was never on): FIRST alone", a.stage == "approve" and a.message == S.FIRST,
+      a.message)
+helperclient.installed = lambda: True
 UP[0] = True
 
 print("== the helper stops after the password: Toner's own Duo, the approval page")
@@ -348,7 +359,7 @@ S.duo_push(a, threading.Event())
 check("Toner's own push went through: Choose a PIN, no ticket", a.stage == "choose-pin" and a.ticket is None
       and DUO["pushes"] == pushes + 1)
 S.choose_pin(a, PIN)
-check("...then the approval page with FIRST", a.stage == "approve" and a.message == S.FIRST)
+check("...then the approval page with FIRST, and why", a.stage == "approve" and a.message == S.FIRST + " " + DOWN, a.message)
 UP[0] = True
 
 print("== a helper rules_changed answer: the approval page, and no keys")
