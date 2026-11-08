@@ -35,7 +35,7 @@ _PART2 = ("roles", "rules_pub", "rules_sig", "backups_pub", "grants", "recovery_
           "directories")
 # a directory's settings as stored (core/directory.py's Config): never a secret, which lives in the OS store or the vault
 _DIRECTORY = {"id", "name", "kind", "servers", "port", "security", "ca_file", "base_dn", "netbios", "suffixes", "service_dn",
-              "groups", "ous", "duo", "ca_sha256",
+              "groups", "ous", "duo", "ca_sha256", "tls_pinned",
               "provider", "issuer", "client_id", "groups_claim", "id_claim", "group_names", "everyone"}
 _DUO = {"on", "host", "ikey"}
 _NOT_READY = ("no such table", "file is not a database")    # a first start signs in before the database is encrypted and set up

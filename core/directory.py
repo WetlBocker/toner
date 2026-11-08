@@ -19,6 +19,16 @@ LDAP_GROUP = "(|(objectClass=groupOfNames)(objectClass=groupOfUniqueNames)(objec
 
 
 class Unreachable(Exception): pass
+
+
+class Untrusted(Unreachable):
+    """A server's certificate wasn't trusted: its authority isn't one this computer trusts, or it isn't made out to the server's
+    name, or (pinned) it isn't the certificate an admin trusted. `host`: which server, so its certificate can be shown."""
+    def __init__(self, host):
+        super().__init__(f"cannot use {host}: its certificate isn't trusted")
+        self.host = host
+
+
 class BadCredentials(Exception): pass
 class InsecureConfig(ValueError): pass
 class CaChanged(InsecureConfig): pass     # the CA file isn't the one signed into the list: an admin saves the directory again
@@ -71,6 +81,8 @@ def check_config(cfg):
         raise InsecureConfig("TLS is required")
     if sec == "ldaps" and int(cfg.get("port") or 0) == 389:
         raise InsecureConfig("port 389 is not LDAPS")
+    if "tls_pinned" in cfg and (cfg["tls_pinned"] is not True or not cfg.get("ca_file")):
+        raise InsecureConfig("a pinned certificate needs its file")    # (the file is the server's own certificate, trusted by an admin)
 
 
 def _ca(cfg, data=None):
@@ -90,8 +102,14 @@ def _ca(cfg, data=None):
     return data.decode("ascii", "ignore") if b"-----BEGIN" in data else data     # ssl's cadata takes PEM as text, DER as bytes
 
 
+def _pinned_tls():
+    """TLS for a certificate an admin trusted (tls_pinned): the usual checks (authority, name, dates) are left to the comparison
+    _open makes, byte for byte with the pinned certificate, before anything is sent."""
+    return ldap3.Tls(validate=ssl.CERT_NONE)
+
+
 def _make_server(cfg, host, ca=None):
-    tls = ldap3.Tls(validate=ssl.CERT_REQUIRED, ca_certs_data=ca)
+    tls = _pinned_tls() if cfg.get("tls_pinned") else ldap3.Tls(validate=ssl.CERT_REQUIRED, ca_certs_data=ca)
     return ldap3.Server(host, port=int(cfg["port"]), use_ssl=cfg["security"] == "ldaps", tls=tls,
                         connect_timeout=CONNECT_TIMEOUT, get_info=ldap3.NONE)
 
@@ -103,13 +121,40 @@ def _open(cfg, host, ca, **credentials):
     try:
         conn = ldap3.Connection(_make_server(cfg, host, ca), client_strategy=_STRATEGY, receive_timeout=RECEIVE_TIMEOUT,
                                 raise_exceptions=True, auto_referrals=False, **credentials)
-        conn.open()
-        if cfg["security"] == "starttls" and not (conn.start_tls() and conn.tls_started):
-            raise Unreachable(f"StartTLS failed on {host}")
+        try:
+            conn.open()
+            if cfg["security"] == "starttls" and not (conn.start_tls() and conn.tls_started):
+                raise Unreachable(f"StartTLS failed on {host}")
+        except (lx.LDAPException, ssl.SSLError) as e:
+            if _cert_refused(e):
+                raise Untrusted(host) from None
+            raise
+        if cfg.get("tls_pinned") and not _is_pinned(conn, ca):
+            try:
+                conn.socket.close()                        # not the certificate the admin trusted: nothing is sent over it, not even goodbye
+            except (OSError, AttributeError):
+                pass
+            raise Untrusted(host)
         return conn
     except BaseException:
         _close(conn)
         raise
+
+
+def _cert_refused(e):
+    """The handshake failed on the certificate (its authority, dates or name), not on the network."""
+    return isinstance(e, (ssl.SSLCertVerificationError, lx.LDAPCertificateError)) or "CERTIFICATE_VERIFY_FAILED" in str(e)
+
+
+def _is_pinned(conn, ca):
+    """The server's certificate is exactly the pinned one (the CA file's certificate)."""
+    try:
+        sock = conn.socket
+        got = sock.getpeercert(binary_form=True) if sock is not None else None
+        want = ssl.PEM_cert_to_DER_cert(ca) if isinstance(ca, str) else ca
+    except (ValueError, OSError, AttributeError):
+        return False
+    return bool(got) and bool(want) and hashlib.sha256(got).digest() == hashlib.sha256(want).digest()
 
 
 def reachable(cfg):
@@ -143,9 +188,9 @@ def connect(cfg, who, password, ca_data=None):
         except (lx.LDAPInvalidCredentialsResult, lx.LDAPBindError, lx.LDAPUserNameIsMandatoryError, lx.LDAPPasswordIsMandatoryError):
             _close(conn)
             raise BadCredentials("bind refused") from None
-        except (lx.LDAPException, OSError, Unreachable):
+        except (lx.LDAPException, OSError, Unreachable) as e:
             _close(conn)
-            down = Unreachable(f"cannot use {host}")
+            down = e if isinstance(e, Untrusted) else Unreachable(f"cannot use {host}")
     raise down
 
 

@@ -17,9 +17,9 @@ from PySide6.QtWidgets import (QComboBox, QDialog, QFileDialog, QFormLayout, QHB
                                QListWidgetItem, QPlainTextEdit, QPushButton, QRadioButton, QScrollArea, QSpinBox, QStackedWidget,
                                QVBoxLayout, QWidget)
 
-from core import datakey, directory, oidc, osstore, passvault, perms, roles, ssopresets
+from core import certpeek, datakey, directory, oidc, osstore, passvault, perms, roles, ssopresets
 from core.dirsignin import UNREACHABLE, sso_said
-from ui import status
+from ui import certtrust, status
 from ui.directorydlg import CA_UNREADABLE, KINDS, SECURITY, TAKEN, Said, _netbios, _split, _taken, service_key, with_ca, words
 from ui.settings_base import note
 from ui.signinwindow import Job, heading, primary, say
@@ -84,6 +84,8 @@ class IdentityWizard(QDialog):
         saved = cfg or {}
         self.id = saved.get("id") or secrets.token_hex(8)
         self.ca_path, self.ca_picked = saved.get("ca_file") or "", False
+        self.pinned = bool(saved.get("tls_pinned"))                  # the CA file is a server certificate the admin trusted here
+        self._trusted = set()                                        # certificates trusted in this window
         self._jobs, self._closed = set(), False
         self._live, self.more, self._loaded = None, False, False     # step 3's (cfg, service password) for the searches
         self._target = None                                          # (servers, base DN) step 3 last connected to
@@ -328,14 +330,14 @@ class IdentityWizard(QDialog):
             if not self.ca_path:
                 self.cert.setCurrentIndex(0)
         else:
-            self.ca_path = ""
+            self.ca_path, self.pinned = "", False
             self.ca_label.setText("")
 
     def _pick(self):
         """The file picker, starting at the CA file there is. A file chosen here is trusted: step 3 hashes it anew. True if chosen."""
         path, _ = QFileDialog.getOpenFileName(self, "", self.ca_path)
         if path:
-            self.ca_picked, self.ca_path = True, path
+            self.ca_picked, self.ca_path, self.pinned = True, path, False
             self.ca_label.setText(path)
         return bool(path)
 
@@ -354,11 +356,29 @@ class IdentityWizard(QDialog):
             got.update(info=info, tree=directory.tree(c, pw, cap=CAP), cfg=c)
         self._run(run, lambda _r, e: self._connected(got, pw, refill, e))
 
+    def _offer_trust(self, error):
+        """Read the refused certificate (the handshake only) and ask; Trust pins it as the CA file and connects again."""
+        host, port, security = error.host, self.port.value(), SECURITY[self.security.currentIndex()][1]
+        got = []
+        self._run(lambda: got.append(certpeek.fetch(host, port, security)), lambda _r, e: self._trust_landed(error, host, got, e))
+
+    def _trust_landed(self, error, host, got, e):
+        if e is not None or not got or got[0] in self._trusted or not certtrust.ask(self, host, got[0]):
+            return self._say(words(error))                 # (one just trusted and still refused is not asked about again)
+        self._trusted.add(got[0])
+        path = certtrust.save(got[0])
+        self.ca_path, self.ca_picked, self.pinned = path, True, True
+        self.ca_label.setText(path)
+        self.cert.setCurrentIndex(1)
+        self._connect()
+
     @staticmethod
     def _servers(cfg):
         return tuple(directory._key(s) for s in cfg["servers"])
 
     def _connected(self, got, pw, refill, error):
+        if isinstance(error, directory.Untrusted):            # the server's certificate isn't trusted here: show it, the admin may trust it
+            return self._offer_trust(error)
         if error is not None:
             self._say(words(error))
             if isinstance(error, directory.CaChanged) and self._pick():     # the file chosen again is the one to trust
@@ -570,6 +590,8 @@ class IdentityWizard(QDialog):
                "base_dn": self.base_dn.text().strip(), "netbios": self.netbios.text().strip(), "suffixes": _split(self.suffixes.text()),
                "service_dn": self.service_dn.text().strip(),
                "duo": dict((self.orig or {}).get("duo") or {"on": False, "host": "", "ikey": ""})}     # Ruling R1
+        if self.pinned and self.ca_path:
+            cfg["tls_pinned"] = True
         for k, _ in LISTS:
             cfg[k] = {r: [dn for dn in self._ticked(k) if dn in self.role_boxes and self.role_boxes[dn].currentText() == r] for r in ROLES}
         return cfg

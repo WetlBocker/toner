@@ -706,4 +706,72 @@ check("Accounts is hidden from an Engineer", Settings._role_hidden(SimpleNamespa
 session.sign_out(); session.sign_in("Admin1", PW)
 check("...and shown to an Admin", Settings._role_hidden(SimpleNamespace(pages=[page]), 0) is False)
 
+print("== a server whose certificate this computer doesn't trust: shown, and trusted by the admin")
+import datetime as _dtm
+import pathlib
+from PySide6.QtWidgets import QLabel
+from cryptography import x509 as _x509
+from cryptography.hazmat.primitives import hashes as _h
+from cryptography.hazmat.primitives.asymmetric import ec as _ec
+from cryptography.x509.oid import NameOID as _N
+from core import certpeek, paths
+_key = _ec.generate_private_key(_ec.SECP256R1()); _nm = _x509.Name([_x509.NameAttribute(_N.COMMON_NAME, "dc1.acme.com")])
+_now = _dtm.datetime.now(_dtm.timezone.utc)
+from cryptography.hazmat.primitives import serialization as _ser
+SDER = (_x509.CertificateBuilder().subject_name(_nm).issuer_name(_nm).public_key(_key.public_key()).serial_number(1)
+        .not_valid_before(_now - _dtm.timedelta(days=400)).not_valid_after(_now - _dtm.timedelta(days=40))
+        .add_extension(_x509.SubjectAlternativeName([_x509.DNSName("dc1.acme.com")]), False).sign(_key, _h.SHA256())).public_bytes(_ser.Encoding.DER)
+try:
+    from ui import certtrust
+    d = certtrust.TrustDialog("10.0.0.10", SDER)
+    words_shown = d.findChildren(QLabel)
+    texts_ = [l.text() for l in words_shown]
+    info = certpeek.describe(SDER)
+    check("the prompt: its title, sentence, the certificate's rows, the expiry, and Trust / Cancel",
+          d.windowTitle() == "Trust this certificate?"
+          and "10.0.0.10 presented a certificate this computer doesn't trust. Trust it only if it's your directory server's." in texts_
+          and all(x in texts_ for x in ("Made out to", "Issued by", "Valid", "SHA-256", "dc1.acme.com", f"{info['valid_from']} to {info['valid_to']}",
+                                        info["sha256"], f"This certificate expired on {info['valid_to']}."))
+          and d.trust_btn.text() == "Trust" and d.cancel_btn.text() == "Cancel", texts_)
+except Exception as e:
+    check("the prompt: its title, sentence, the certificate's rows, the expiry, and Trust / Cancel", False, repr(e))
+    certtrust = None
+fetched, asked = [], []
+real_discover2, real_fetch = directory.discover, certpeek.fetch
+first = [True]
+def untrusted_once(*a):
+    if first[0]:
+        first[0] = False
+        raise directory.Untrusted("dc1.acme.com")
+    return real_discover2(*a)
+directory.discover = untrusted_once
+certpeek.fetch = lambda host, port, security, *a: fetched.append((host, port, security)) or SDER
+if certtrust:
+    certtrust.ask = lambda parent, host, der: asked.append((host, der)) or True
+real_pinned = directory._is_pinned; directory._is_pinned = lambda conn, ca: True     # (the byte comparison: test_directory, on real TLS)
+w = wizard([], None)
+got_msg = connect(w)
+directory.discover, certpeek.fetch, directory._is_pinned = real_discover2, real_fetch, real_pinned
+check("Next on step 3, the certificate refused: it is read (only the handshake) and shown to the admin",
+      fetched == [("dc1.acme.com", 636, "ldaps")] and asked == [("dc1.acme.com", SDER)], (fetched, asked))
+pem_path = w.ca_path
+check("...trusted: saved in Toner's data folder as the directory's CA file, pinned, and step 3 tried again (Connected)",
+      bool(pem_path) and pathlib.Path(pem_path).parent == paths.data_dir() / "certs" and pathlib.Path(pem_path).read_bytes() == certpeek.pem(SDER)
+      and w.ca_label.text() == pem_path and w.cert.currentIndex() == 1 and w._cfg().get("tls_pinned") is True
+      and got_msg == "Connected. Choose who can sign in." and step(w) == 3, (pem_path, got_msg, w._cfg().get("tls_pinned")))
+w.back_btn.click(); choose(w, "System trust store")
+check("...choosing the system trust store again un-pins it", "tls_pinned" not in w._cfg() and w.ca_path == "")
+w.reject()
+first[0] = True; asked.clear()
+directory.discover = untrusted_once
+certpeek.fetch = lambda *a: SDER
+if certtrust:
+    certtrust.ask = lambda parent, host, der: asked.append(host) or False
+w = wizard([], None)
+got_msg = connect(w)
+directory.discover, certpeek.fetch = real_discover2, real_fetch
+check("...Cancel: nothing is trusted, step 3 stays, saying it couldn't connect", asked == ["dc1.acme.com"] and w.ca_path == "" and step(w) == 2
+      and got_msg.startswith("Toner couldn't connect:"), (asked, got_msg))
+w.reject()
+
 print(f"\n{ok} passed, {bad} failed"); sys.exit(1 if bad else 0)

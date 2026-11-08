@@ -289,7 +289,8 @@ check("an empty server list is refused", not passes(dict(AD, servers=[])))
 check("StartTLS on 389 and LDAPS on 636 pass", passes(dict(AD, security="starttls", port=389)) and passes(AD))
 check("connect refuses an insecure config before any network", raises(D.InsecureConfig, D.connect, dict(AD, port=389), "x", "y") is not None)
 import inspect; src = inspect.getsource(D)
-check("certificates are required, never disabled", "CERT_REQUIRED" in src and "CERT_NONE" not in src)
+check("certificates are required: only a certificate the admin trusted (pinned, matched byte for byte) skips the usual checks",
+      "CERT_REQUIRED" in src and src.count("CERT_NONE") == 1 and "_pinned_tls" in src)
 tls = REAL_MAKE_SERVER(dict(AD, ca_file=""), "h").tls
 check("the real server object validates certificates", tls.validate == __import__("ssl").CERT_REQUIRED)
 
@@ -345,5 +346,71 @@ s = socket.socket(); s.bind(("127.0.0.1", 0)); port = s.getsockname()[1]; s.clos
 t0 = time.time()
 r = raises(D.Unreachable, D.connect, dict(AD, servers=["127.0.0.1"], port=port), "x@corp.example", "pw")
 check("a closed port raises Unreachable within the timeout", r is not None and time.time() - t0 < 8, (r, time.time() - t0))
+
+print("== a certificate this computer doesn't trust: Untrusted, then pinned by the admin")
+import datetime as _dtm, ssl as _ssl, threading as _th
+from cryptography import x509 as _x509
+from cryptography.hazmat.primitives import hashes as _h, serialization as _ser
+from cryptography.hazmat.primitives.asymmetric import ec as _ec
+from cryptography.x509.oid import NameOID as _N
+from core import certpeek
+def selfsigned(name, days_ago_end):
+    key = _ec.generate_private_key(_ec.SECP256R1())
+    nm = _x509.Name([_x509.NameAttribute(_N.COMMON_NAME, name)])
+    now = _dtm.datetime.now(_dtm.timezone.utc)
+    cert = (_x509.CertificateBuilder().subject_name(nm).issuer_name(nm).public_key(key.public_key()).serial_number(_x509.random_serial_number())
+            .not_valid_before(now - _dtm.timedelta(days=400)).not_valid_after(now - _dtm.timedelta(days=days_ago_end))
+            .add_extension(_x509.SubjectAlternativeName([_x509.DNSName(name)]), False).sign(key, _h.SHA256()))
+    kp, cp = os.path.join(SP, f"k-{name}.pem"), os.path.join(SP, f"c-{name}.pem")
+    with open(kp, "wb") as f: f.write(key.private_bytes(_ser.Encoding.PEM, _ser.PrivateFormat.PKCS8, _ser.NoEncryption()))
+    with open(cp, "wb") as f: f.write(cert.public_bytes(_ser.Encoding.PEM))
+    return cp, kp, cert.public_bytes(_ser.Encoding.DER)
+CP, KP, CDER = selfsigned("dc-pinned.corp.example", 30)            # expired a month ago, made out to a name, not the address
+OTHER, _ok, ODER = selfsigned("other.corp.example", -300)
+GOT = []                                                            # what the fake server received after the handshake
+def tls_server(starttls=False):
+    ls = socket.socket(); ls.bind(("127.0.0.1", 0)); ls.listen(8)
+    ctx = _ssl.SSLContext(_ssl.PROTOCOL_TLS_SERVER); ctx.load_cert_chain(CP, KP)
+    def serve():
+        while True:
+            try: c, _a = ls.accept()
+            except OSError: return
+            try:
+                c.settimeout(5)
+                if starttls:
+                    c.recv(4096); c.sendall(bytes.fromhex("300c02010178070a010004000400"))
+                t = ctx.wrap_socket(c, server_side=True)
+                data = t.recv(4096)
+                if data: GOT.append(data)
+                t.close()
+            except Exception: pass
+    _th.Thread(target=serve, daemon=True).start()
+    return ls.getsockname()[1]
+P1 = tls_server()
+base = dict(AD, servers=["127.0.0.1"], port=P1)
+u = None
+try: D.connect(base, "x@corp.example", "pw")
+except Exception as e: u = e
+check("a certificate from an authority this computer doesn't trust is Untrusted (an Unreachable), naming the server",
+      isinstance(u, getattr(D, "Untrusted", ())) and isinstance(u, D.Unreachable) and getattr(u, "host", None) == "127.0.0.1", repr(u))
+try: got = certpeek.fetch("127.0.0.1", P1, "ldaps"); info = certpeek.describe(CDER)
+except Exception as e: got, info = repr(e), {}
+check("...the server's certificate can be read for the admin to see (only the handshake, nothing sent)", got == CDER, got if got != CDER else "")
+check("...and it says who it is made out to, who issued it, when it is valid, and its SHA-256",
+      info.get("names") == ["dc-pinned.corp.example"] and info.get("issuer") == "dc-pinned.corp.example"
+      and info.get("expired") is True and len(info.get("sha256", "").split(":")) == 32, info)
+pinned = dict(base, ca_file=CP, ca_sha256=hashlib.sha256(open(CP, "rb").read()).hexdigest(), tls_pinned=True)
+check("pinned: that exact certificate is accepted, though it has expired and is made out to another name", D.reachable(pinned))
+wrong = dict(base, ca_file=OTHER, ca_sha256=hashlib.sha256(open(OTHER, "rb").read()).hexdigest(), tls_pinned=True)
+GOT.clear()
+r = raises(getattr(D, "Untrusted", KeyError), D.connect, wrong, "x@corp.example", "pw")
+time.sleep(0.3)
+check("...a different certificate is Untrusted, and no sign-in reached the server", r is not None and GOT == [], (r, GOT))
+check("tls_pinned needs a CA file, and is true or absent", not passes(dict(AD, tls_pinned=True)) and not passes(dict(AD, ca_file=CP, ca_sha256="x", tls_pinned="yes"))
+      and passes(dict(AD, ca_file=CP, ca_sha256="x", tls_pinned=True)))
+P2 = tls_server(starttls=True)
+try: got2 = certpeek.fetch("127.0.0.1", P2, "starttls")
+except Exception as e: got2 = repr(e)
+check("StartTLS: the certificate is read after the StartTLS request", got2 == CDER, got2 if got2 != CDER else "")
 
 print(f"\n{ok} passed, {bad} failed"); sys.exit(1 if bad else 0)
