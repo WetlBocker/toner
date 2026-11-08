@@ -185,6 +185,13 @@ reopen()
 oidc.refresh = lambda cfg, rt: oidc.Tokens("x", "at", "rt-x", {"sub": "sub-1", "iss": "https://evil.example"})
 check("another issuer: refused and locked", dircheck.run_once() == "refused" and session.refused())
 oidc.refresh = real_refresh
+reopen()
+P.id_claims = {"preferred_username": "ann@evil.example"}
+check("an account now outside the connection's email domains: refused and locked", dircheck.run_once() == "refused"
+      and session.refused())
+reopen()
+P.id_claims = {"preferred_username": "Ann@EXAMPLE.com"}
+check("...the domain compared in any case: ok", dircheck.run_once() == "ok" and not session.refused())
 
 # ---------------------------------------------------------------- a provider that is down
 reopen()

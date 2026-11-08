@@ -209,10 +209,25 @@ check("a _claim_names pointer is fetched from Graph", oidc.groups(CFG, ptr, "at-
 P.graph_me_id = "someone-else"
 check("Graph /me for another person is BadAnswer", raises(B, oidc.groups, CFG, ptr, "at-1"))
 P.graph_me_id = "oid-1"
-u = oidc.user_from({**CFG, "id_claim": "oid"}, {"sub": "s", "oid": "o1", "preferred_username": "Ann@Example.com", "name": "Ann A"}, ["g"])
+u = oidc.user_from({**CFG, "id_claim": "oid", "suffixes": ["example.com"]}, {"sub": "s", "oid": "o1", "preferred_username": "Ann@Example.com", "name": "Ann A"}, ["g"])
 check("user_from with id_claim=oid", u.guid == "o1" and u.name == "ann@example.com" and u.display == "Ann A" and u.groups == ("g",) and u.enabled)
-u = oidc.user_from(CFG, {"sub": "s", "email": "B@x.org"}, ())
+u = oidc.user_from({**CFG, "suffixes": ["x.org"]}, {"sub": "s", "email": "B@x.org"}, ())
 check("user_from defaults: sub, email, display is name", u.guid == "s" and u.name == "b@x.org" and u.display == "b@x.org")
+print("== domain_ok: the token's account is in one of the connection's email domains")
+D = {**CFG, "provider": "other", "suffixes": ["Example.com"]}
+G = {**D, "provider": "google"}
+check("a matching preferred_username passes, in any case", oidc.domain_ok(D, {"preferred_username": "ann@EXAMPLE.COM"}))
+check("another domain is refused", not oidc.domain_ok(D, {"preferred_username": "ann@evil.example"}))
+check("no name at all is refused", not oidc.domain_ok(D, {"sub": "s"}) and not oidc.domain_ok(D, {"preferred_username": "ann"}))
+check("the email comes first", oidc.domain_ok(D, {"email": "a@example.com", "preferred_username": "a@evil.example"})
+      and not oidc.domain_ok(D, {"email": "a@evil.example", "preferred_username": "a@example.com"}))
+check("an email marked unverified is refused", not oidc.domain_ok(D, {"email": "a@example.com", "email_verified": False})
+      and not oidc.domain_ok(D, {"email": "a@example.com", "email_verified": "false"})
+      and oidc.domain_ok(D, {"email": "a@example.com", "email_verified": True}))
+check("Google: the hd claim decides", oidc.domain_ok(G, {"hd": "example.COM", "email": "a@gmail.com"})
+      and not oidc.domain_ok(G, {"hd": "evil.example", "email": "a@example.com"}))
+check("Google: no hd is refused", not oidc.domain_ok(G, {"email": "a@example.com", "email_verified": True}))
+check("user_from refuses another domain as BadAnswer", raises(B, oidc.user_from, D, {"sub": "s", "preferred_username": "a@evil.example"}, ()))
 check("search_groups returns (id, name)", oidc.search_groups("at-1", "Al") == [("id-a", "Alpha"), ("id-b", "Beta")])
 path, q, hdr = P.graph_seen[-1]
 check("... with $search and ConsistencyLevel", q["$search"] == '"displayName:Al"' and hdr.get("ConsistencyLevel") == "eventual" and q["$select"] == "id,displayName")

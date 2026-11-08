@@ -337,8 +337,28 @@ def groups(cfg, claims, access_token):
     return tuple(g for g in found if isinstance(g, str)) if isinstance(found, list) else ()
 
 
+def domain_ok(cfg, claims):
+    """True when the account the token names is in one of the connection's email domains (any case). Google: its hd claim (no
+    hd: refused). Others: the email's domain (refused when email_verified is there and not true), else preferred_username's."""
+    if cfg.get("provider") == "google":
+        dom = claims.get("hd")
+    else:
+        email = claims.get("email")
+        if isinstance(email, str) and email:
+            if "email_verified" in claims and claims["email_verified"] is not True:
+                return False
+            who = email
+        else:
+            who = claims.get("preferred_username")
+        dom = who.rsplit("@", 1)[1] if isinstance(who, str) and "@" in who else None
+    return isinstance(dom, str) and bool(dom) and dom.casefold() in {str(s).casefold() for s in cfg.get("suffixes") or []}
+
+
 def user_from(cfg, claims, groups):
-    name = (claims.get("preferred_username") or claims.get("email") or claims["sub"]).lower()
+    """The person the token names, once their domain is one of the connection's (BadAnswer otherwise)."""
+    if not domain_ok(cfg, claims):
+        raise BadAnswer(f"{host_of(cfg['issuer'])}'s answer is for an account outside the connection's email domains")
+    name =(claims.get("preferred_username") or claims.get("email") or claims["sub"]).lower()
     return directory.User(guid=claims[cfg.get("id_claim", "sub")], name=name, display=claims.get("name") or name, groups=tuple(groups), enabled=True)
 
 

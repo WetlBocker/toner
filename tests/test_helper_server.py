@@ -244,6 +244,9 @@ check("check_sso: a nonce issued for another connection gives bad_answer",
 check("check_sso: auth_time 400 s old gives not_fresh", err(check_sso(sso_token(auth_time=int(time.time()) - 400)[1])) == "not_fresh")
 check("check_sso: a group not mapped gives not_in_group", err(check_sso(sso_token(groups=["g9"])[1])) == "not_in_group")
 check("check_sso: a good one clears the count", check_sso(sso_token()[1]).get("ok") and OWNER not in HELPER._fails)
+check("check_sso: an account outside the connection's email domains gives bad_answer",
+      err(check_sso(sso_token(preferred_username="ann@evil.example")[1])) == "bad_answer")
+check("check_sso: the domain is compared in any case", check_sso(sso_token(preferred_username="Ann@Example.COM")[1]).get("ok"))
 check("check_sso: a sign-in from before the nonce was issued (a browser session reused quietly) gives not_fresh",
       err(check_sso(sso_token(auth_time=int(time.time()) - 100)[1])) == "not_fresh")
 check("check_sso: a sign-in within the clock leeway before the nonce is fresh",

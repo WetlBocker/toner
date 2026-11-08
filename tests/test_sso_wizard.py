@@ -355,6 +355,15 @@ t = S.TestLogin(cfg)
 P.id_claims = {"preferred_username": "ann@acme.com", "groups": ["id-net"]}
 t.check_sso(browse, threading.Event())
 check("passes with the role and ends", t.stage == "done" and t.role == "Admin" and t.result == "Signed in as ann@acme.com. Role: Admin. Signed out.")
+P.id_claims = {"preferred_username": "ann@evil.example", "groups": ["id-net"]}
+t = S.TestLogin(cfg)
+try:
+    t.check_sso(browse, threading.Event()); got = None
+except Exception as e:
+    got = e
+check("an account outside the connection's email domains: SSO_BAD_ANSWER", isinstance(got, oidc.BadAnswer)
+      and str(got) == S.SSO_BAD_ANSWER.format(provider="Contoso") and t.result == str(got), repr(got))
+P.id_claims = {"preferred_username": "ann@acme.com", "groups": ["id-net"]}
 P.force = 503
 t = S.TestLogin(cfg)
 try:

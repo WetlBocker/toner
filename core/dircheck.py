@@ -40,8 +40,9 @@ def _sso_role(name, cfg, acct):
         log.info("SSO check failed: %s", type(e).__name__)
         return "offline", None
     c = tokens.claims
-    if c and (str(c.get(cfg.get("id_claim", "sub"))) != str(acct["guid"]) or c.get("iss") != cfg["issuer"]):
-        return None, None      # a provider answering for someone else must never keep this session open
+    if c and (str(c.get(cfg.get("id_claim", "sub"))) != str(acct["guid"]) or c.get("iss") != cfg["issuer"]
+              or not oidc.domain_ok(cfg, c)):
+        return None, None      # a provider answering for someone else (or outside the domains) must never keep this session open
     if tokens.refresh_token:
         try:
             passvault.put(f"sso-refresh:{name}", tokens.refresh_token)

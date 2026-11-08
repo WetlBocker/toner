@@ -168,6 +168,12 @@ before = fails()
 e = raises(sso, S.NotInGroup)
 check("not in a mapped group: NotInGroup, with the approved sentence, counted", e is not None and str(e) == S.NOT_IN_GROUP
       and fails() == before + 1)
+P.id_claims = {"preferred_username": "ann@evil.example"}
+before = fails()
+check("an account outside the connection's email domains: BadAnswer, counted", raises(sso, oidc.BadAnswer) is not None
+      and fails() == before + 1)
+P.id_claims = {"preferred_username": "ANN@EXAMPLE.COM"}
+check("...the domain is compared in any case", sso().stage == "pin")
 P.id_claims = {}
 
 # ---------------------------------------------------------------- refused answers count on the shared counter
