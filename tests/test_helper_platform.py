@@ -279,15 +279,17 @@ if NT:
     PLANT = T / "Toner Helper"
     PLANT.mkdir(); (PLANT / "x.txt").write_text("x")
     _winapi.CreateJunction(str(SENTINEL), str(PLANT / "link"))      # what a planter swaps in to aim a delete
+    ELEVATED = bool(ctypes.windll.shell32.IsUserAnAdmin())          # an elevated token (CI) makes new objects owned by Administrators
+    NEW_OWNER = "S-1-5-32-544" if ELEVATED else ME
     own, writers = windows._security(PLANT)
     check("_security: a folder this user made is theirs, and someone besides SYSTEM/Administrators may write to it (OWNER RIGHTS here)",
-          own == ME and writers is not None and not writers <= {"S-1-5-18", "S-1-5-32-544"}, (own, writers))
+          own == NEW_OWNER and writers is not None and not writers <= {"S-1-5-18", "S-1-5-32-544"}, (own, writers))
     check("...so it isn't trusted; nor is a junction", not windows._trusted(PLANT) and not windows._trusted(PLANT / "link"))
     ADMIN_ONLY = T / "admin-only"
     windows._check(windows._k32.CreateDirectoryW(str(ADMIN_ONLY), ctypes.byref(windows._sa("D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)"))))
     own, writers = windows._security(ADMIN_ONLY)
-    check("_security reads an admin-only DACL: writers SYSTEM and Administrators (owner this user, so still untrusted)",
-          writers == {"S-1-5-18", "S-1-5-32-544"} and own == ME and not windows._trusted(ADMIN_ONLY), (own, writers))
+    check("_security reads an admin-only DACL: writers SYSTEM and Administrators; trusted only when an admin owns it (elevated)",
+          writers == {"S-1-5-18", "S-1-5-32-544"} and own == NEW_OWNER and windows._trusted(ADMIN_ONLY) == ELEVATED, (own, writers))
     subprocess.run(["icacls", str(ADMIN_ONLY), "/reset"], capture_output=True)     # the owner may: then it can be deleted
     os.rmdir(ADMIN_ONLY)
 
