@@ -408,6 +408,18 @@ check("...another guid or connection than the ticket's", err(sign(proposal(guid=
       and err(sign(proposal(directory="s1"))) == "refused")
 check("...a box key that isn't one, or an extra field", err(sign(proposal(box_pub="AAAA"))) == "refused"
       and err(sign(proposal(sealed="x"))) == "refused")
+# the name's existing record: only the same directory account (same connection and guid) may be re-approved under it
+from core.helper.server import _only_approval
+WANT = {"approved_role": "Tech", "directory": "d1", "guid": BOB_GUID}
+def cur_with(rec):
+    c = json.loads(json.dumps(CUR)); c["accounts"]["bob@acme.com"] = rec; return c
+NEW = json.loads(proposal())
+check("...a name that is another account's (local, no directory): refused", not _only_approval(cur_with({"role": "Admin"}), NEW,
+      "bob@acme.com", WANT))
+check("...a name held by another connection or guid: refused", not _only_approval(cur_with({**WANT, "guid": "other"}), NEW,
+      "bob@acme.com", WANT) and not _only_approval(cur_with({**WANT, "directory": "s1"}), NEW, "bob@acme.com", WANT))
+check("...the same directory account approved again (a forgotten PIN): signed", _only_approval(cur_with({**WANT, "box_pub": b64(os.urandom(32))}),
+      NEW, "bob@acme.com", WANT) and _only_approval(CUR, NEW, "bob@acme.com", WANT))
 to_ticket()
 check("...another name than the ticket's", err(ask("sign_approval", ticket=to_ticket(), name="eve@acme.com", signed=proposal()))
       == "refused")

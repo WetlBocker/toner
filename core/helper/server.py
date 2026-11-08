@@ -421,6 +421,9 @@ def _only_approval(cur, new, name, want):
             return False
     except (ValueError, TypeError, AttributeError):
         return False
+    held = cur["accounts"].get(name)       # the name may be new, or this same directory account again (never someone else's)
+    if held is not None and not (isinstance(held, dict) and held.get("directory") == want["directory"] and held.get("guid") == want["guid"]):
+        return False
     v = new.get("rules_version")
     rest = lambda body: {k: x for k, x in body.items() if k not in ("accounts", "rules_version")}
     others = lambda body: {k: x for k, x in body["accounts"].items() if k != name}
