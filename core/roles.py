@@ -110,7 +110,8 @@ def _attested(doc):
 
 def _signed(doc):
     """What the rules key signs. A directory account is in it once approved; its groups_role and online_at are not. The
-    directories are in it once the file has them (so a file without any signs as Part 2 did)."""
+    directories are in it once the file has them (so a file without any signs as Part 2 did), and so is rules_version, the count
+    that rises with each signing (a file signed before it existed still verifies; the helper refuses an older file put back)."""
     att = doc.get("attested") or {}
     accounts = {}
     for n, a in doc["accounts"].items():
@@ -123,6 +124,8 @@ def _signed(doc):
             "backups_pub": doc.get("backups_pub")}
     if "directories" in doc:
         body["directories"] = doc["directories"]
+    if "rules_version" in doc:
+        body["rules_version"] = doc["rules_version"]
     return envelope.canonical(body)
 
 
@@ -131,7 +134,11 @@ def _sign(doc):
     att = _attested(doc)
     doc["attested"] = {n: att.get(n) for n in doc["accounts"]}
     doc["roles"] = _clean_roles(doc.get("roles"))
-    payload = _signed(doc)
+    payload, sig = _signed(doc), doc.get("rules_sig")
+    if not (isinstance(sig, str) and envelope.verify(_public("rules", _held["rules"]), payload, sig)):    # changed, or a new key
+        v = doc.get("rules_version")
+        doc["rules_version"] = (v if isinstance(v, int) and not isinstance(v, bool) and v > 0 else 0) + 1
+        payload = _signed(doc)
     doc["rules_sig"] = envelope.sign(_held["rules"], payload)
     _pending = payload.decode("utf-8")              # kept as rules_signed once the file has landed (_landed)
 

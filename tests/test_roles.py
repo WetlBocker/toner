@@ -729,4 +729,26 @@ as_(None)
 check("...the old key still opens, ok and root", roles.state() == "ok" and roles._root, roles.state())
 session.sign_out()
 
+# ---------------------------------------------------------------- rules_version: a count signed with the rules (the helper refuses an older file)
+fresh("rulesversion")
+v = doc().get("rules_version")
+roles.sync_grants()
+check("rules_version: a signing that changes nothing keeps it", doc().get("rules_version") == v)
+roles.set_permissions("Tech", {"push": True})
+check("rules_version: each change raises it by one, signed", isinstance(v, int) and v >= 1 and doc()["rules_version"] == v + 1
+      and signed_ok() and json.loads(db.get_setting("rules_signed"))["rules_version"] == v + 1, (v, doc().get("rules_version")))
+d = doc(); d.pop("rules_version")                       # a file signed before rules_version existed
+payload = roles._signed(d)
+d["rules_sig"] = envelope.sign(roles._held["rules"], payload)
+put(d)
+db.set_setting("rules_signed", payload.decode("utf-8"))
+roles._invalidate()
+check("rules_version: a file signed without it signs as before and still verifies", b"rules_version" not in payload
+      and roles.state() == "ok" and roles.verified() is not None, roles.state())
+roles.set_permissions("Tech", {"push": False})
+check("...its next change starts the count at 1", doc()["rules_version"] == 1 and roles.state() == "ok" and signed_ok())
+d = doc(); d["rules_version"] = 7; put(d); roles._invalidate()
+check("rules_version: changed by hand, the rules don't verify", roles.state() == "tampered")
+session.sign_out()
+
 print(f"\n{ok} passed, {bad} failed"); sys.exit(1 if bad else 0)

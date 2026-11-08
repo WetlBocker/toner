@@ -8,7 +8,9 @@ import base64
 import json
 import math
 import os
+import re
 import secrets
+import stat
 import threading
 import time
 
@@ -18,7 +20,9 @@ from core import directory, duo, envelope, oidc, roles
 from core.helper.protocol import PROTOCOL
 from core.version import VERSION
 
-TTL = 600                                               # seconds a nonce, a ticket or a pending Duo check lives
+TTL = 600                                               # seconds a ticket or a pending Duo check lives
+NONCE_TTL = 300                                         # a nonce: the sign-in it asks for must start after it was issued
+MAX_KEYS = 1 << 20                                      # the most of a keys file read
 FREE_TRIES, FIRST_WAIT, MAX_WAIT = 5, 30, 900           # as datakey's: 5 free failures, then 30 s doubling to 15 min
 _KEEP = 100                                             # most nonces (tickets, pending) outstanding at once; the oldest goes
 _COUNTED = {"not_owner", "other_user", "refused", "not_fresh", "bad_answer", "not_in_group"}
@@ -32,7 +36,8 @@ _CODES = {oidc.Unreachable: "unreachable", oidc.Refused: "refused", oidc.NotFres
 
 
 class _No(Exception):
-    """The answer {"ok": False, "error": code}; `count` says whether it counts as a failure against the peer."""
+    """The answer {"ok": False, "error": code}; `count` says whether it counts as a failure against the peer (by default: the
+    codes that say no to a sign-in)."""
 
     def __init__(self, code, count=None):
         super().__init__(code)
@@ -48,17 +53,49 @@ def _unb64(s):
 
 
 def _path(p):
-    try:
-        return os.path.normcase(os.path.abspath(p))
-    except ValueError:                                  # a NUL in it: matches no path
+    r"""The path normalised when it is an absolute local one (a drive letter on Windows); None for anything else: relative, UNC
+    or device forms (a UNC share, the \\.\ and \\?\ prefixes), or a NUL in it. A device reached any other way is refused by
+    _read, which takes regular files only."""
+    if not (re.match(r"[A-Za-z]:[\\/]", p) if os.name == "nt" else p.startswith("/")):
         return None
+    try:
+        p = os.path.normcase(os.path.abspath(p))
+    except ValueError:
+        return None
+    return p if (re.match(r"[a-z]:\\", p) if os.name == "nt" else not p.startswith("//")) else None
+
+
+def _read(path):
+    """The keys file's bytes. It must be a regular file (opened without blocking, so a FIFO can't hold SYSTEM up) of at most
+    MAX_KEYS bytes, else bad_request. OSError when it can't be read."""
+    if os.name == "nt" and not stat.S_ISREG(os.stat(path).st_mode):
+        raise _No("bad_request")
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0))
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise _No("bad_request")
+        with open(fd, "rb", closefd=False) as f:
+            data = f.read(MAX_KEYS + 1)
+    finally:
+        os.close(fd)
+    if len(data) > MAX_KEYS:
+        raise _No("bad_request")
+    return data
+
+
+def _version(doc):
+    """The signed rules_version (0 for a file signed before there was one); None when it isn't a count."""
+    v = doc.get("rules_version", 0)
+    return v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else None
 
 
 def _verified(path, rules_pub):
-    """The keys doc at `path` when its rules_pub is `rules_pub` (b64) and the signed part verifies under it; else None."""
+    """The keys doc at `path` when its rules_pub is `rules_pub` (b64) and the signed part verifies under it; else None.
+    bad_request (raised) for a path that is not a regular file of at most MAX_KEYS."""
+    if path is None:
+        return None
     try:
-        with open(path, encoding="utf-8") as f:
-            doc = json.load(f)
+        doc = json.loads(_read(path).decode("utf-8"))
         if doc["rules_pub"] == rules_pub and envelope.verify(_unb64(rules_pub), roles._signed(doc), doc["rules_sig"]):
             return doc
     except (OSError, ValueError, KeyError, TypeError, AttributeError, RecursionError):     # missing, unreadable or mangled
@@ -137,7 +174,7 @@ class Helper:
             c[1] = self.now() + wait
             return wait
 
-    def _put(self, kept, *value):
+    def _put(self, kept, ttl, *value):
         key = secrets.token_urlsafe(32)
         with self._lock:
             now = self.now()
@@ -145,7 +182,7 @@ class Helper:
                 del kept[k]
             while len(kept) >= _KEEP:
                 del kept[next(iter(kept))]
-            kept[key] = (now + TTL, *value)
+            kept[key] = (now + ttl, *value)
         return key
 
     def _take(self, kept, key, keep=False):
@@ -157,15 +194,27 @@ class Helper:
     def _ticket(self, rec, name, role):
         with self._lock:
             self._fails.pop(rec["owner"], None)        # a checked sign-in clears the count, as a password does in Toner
-        return self._put(self._tickets, name, role)
+        return self._put(self._tickets, TTL, name, role)
 
     # ------------------------------------------------------------ the signed rules
-    def _cfg(self, rec, connection, sso):
-        """The connection's settings from the rules signed with the pinned key (rules_changed when they don't verify)."""
+    def _rules(self, rec):
+        """The keys doc, its rules signed with the pinned key and no older than the newest seen (rules_changed otherwise: an
+        edit, another rules key, or an older signed file put back). A newer rules_version is kept as the newest seen."""
         doc = _verified(rec["keys_path"], rec["rules_pub"])
-        if doc is None:
+        v = None if doc is None else _version(doc)
+        if v is None or v < rec.get("rules_version", 0):
             raise _No("rules_changed")
-        for d in doc.get("directories") or []:
+        if v > rec.get("rules_version", 0):
+            with self._lock:
+                cur = self._load()
+                if cur is not None and cur["owner"] == rec["owner"] and cur.get("rules_version", 0) < v:
+                    self.store.save({**cur, "rules_version": v})
+            rec["rules_version"] = v
+        return doc
+
+    def _cfg(self, rec, connection, sso):
+        """The connection's settings from the verified rules."""
+        for d in self._rules(rec).get("directories") or []:
             if isinstance(d, dict) and d.get("id") == connection and (d.get("kind") == "oidc") == sso:
                 return d
         raise _No("bad_request")
@@ -180,7 +229,12 @@ class Helper:
     def _status(self, req, peer):
         rec = self._load()
         owner = rec is not None and peer == rec["owner"] and _path(req["keys_path"]) == rec["keys_path"]
-        changed = owner and _verified(rec["keys_path"], rec["rules_pub"]) is None
+        changed = False
+        if owner:
+            try:
+                self._rules(rec)
+            except _No:
+                changed = True
         return {"ok": True, "protocol": PROTOCOL, "version": VERSION, "enrolled": rec is not None, "owner": owner,
                 "rules_changed": changed}
 
@@ -197,14 +251,20 @@ class Helper:
         if len(data_key) != 32:
             raise _No("bad_request")
         path = _path(req["keys_path"])
+        if path is None:
+            raise _No("bad_request")
+        rec = self._load()
+        if rec is not None and rec["owner"] != peer:
+            raise _No("other_user")
+        doc = _verified(path, rules_pub)                # read before the lock: a slow file holds up no one else
+        if doc is None or _version(doc) is None:        # not this copy's rules key, or rules it didn't sign
+            raise _No("refused")
         with self._lock:                                # two peers enrolling at once: one wins, the other is other_user
             rec = self._load()
             if rec is not None and rec["owner"] != peer:
                 raise _No("other_user")
-            if _verified(path, rules_pub) is None:      # not this copy's rules key, or rules it didn't sign
-                raise _No("refused")
             self.store.save({"owner": peer, "keys_path": path, "rules_pub": rules_pub, "spare": data_key + rules_private,
-                             "duo": duo_keys, "enrolled_at": self.now()})
+                             "duo": duo_keys, "enrolled_at": self.now(), "rules_version": _version(doc)})
             self._reset()
         return {}
 
@@ -215,7 +275,7 @@ class Helper:
         return {}
 
     def _nonce(self, req, rec, cancel):
-        return {"nonce": self._put(self._nonces, req["connection"])}
+        return {"nonce": self._put(self._nonces, NONCE_TTL, req["connection"], self.now())}
 
     def _check_sso(self, req, rec, cancel):
         cfg = self._cfg(rec, req["connection"], sso=True)
@@ -224,9 +284,13 @@ class Helper:
         except jwt.PyJWTError:
             raise _No("bad_answer") from None
         # used up here, whatever follows: a nonce this helper issued for this connection, once
-        if not isinstance(nonce, str) or self._take(self._nonces, nonce) != (req["connection"],):
+        issued = self._take(self._nonces, nonce) if isinstance(nonce, str) else None
+        if issued is None or issued[0] != req["connection"]:
             raise _No("bad_answer")
         claims = oidc.verify_id_token(cfg, req["id_token"], nonce, max_age=300, now=self.now())
+        # a sign-in from before the nonce: a browser session reused quietly (prompt=none), not one typed for this sign-in
+        if claims["auth_time"] < issued[1] - oidc.LEEWAY:
+            raise _No("not_fresh")
         try:
             user = oidc.user_from(cfg, claims, oidc.groups(cfg, claims, req["access_token"]))
         except KeyError:                                # the ID token names no one
@@ -252,14 +316,20 @@ class Helper:
             return {**who, "ticket": self._ticket(rec, user.name, role)}
         if r != "auth":
             raise _No("refused")
-        return {**who, "duo": "auth", "pending": self._put(self._pending, cfg["id"], user.name, role)}
+        return {**who, "duo": "auth", "pending": self._put(self._pending, TTL, cfg["id"], user.name, role, {"pushed": False})}
 
-    def _duo(self, req, rec, check):
-        """A pending Duo check: `check(cfg, name, skey)` passes or raises; then the pending check is used up for a ticket."""
+    def _duo(self, req, rec, check, push=False):
+        """A pending Duo check: `check(cfg, name, skey)` passes or raises; then the pending check is used up for a ticket. It
+        allows one push, so a password can't send push after push."""
         pending = self._take(self._pending, req["pending"], keep=True)
         if pending is None:
             raise _No("refused")
-        connection, name, role = pending
+        connection, name, role, state = pending
+        if push:
+            with self._lock:
+                if state["pushed"]:
+                    raise _No("refused")
+                state["pushed"] = True
         cfg = self._cfg(rec, connection, sso=False)
         check(cfg, name, self._skey(rec, connection))
         if self._take(self._pending, req["pending"]) is None:      # another request used it meanwhile
@@ -270,16 +340,17 @@ class Helper:
         def push(cfg, name, skey):
             try:
                 duo.push(cfg, name, cancel, skey=skey)
-            except duo.Denied:
-                raise _No("refused", count=not cancel.is_set()) from None     # the client went: no failure of the person's
-        return self._duo(req, rec, push)
+            except duo.Denied:                          # denied, timed out or cancelled: every push not allowed counts
+                raise _No("refused") from None
+            except duo.Unavailable:
+                raise _No("unreachable", count=True) from None
+        return self._duo(req, rec, push, push=True)
 
     def _duo_code(self, req, rec, cancel):
         return self._duo(req, rec, lambda cfg, name, skey: duo.passcode(cfg, name, req["code"], skey=skey))
 
     def _release(self, req, rec, cancel):
-        if _verified(rec["keys_path"], rec["rules_pub"]) is None:
-            raise _No("rules_changed")
+        self._rules(rec)
         ticket = self._take(self._tickets, req["ticket"])
         if ticket is None or ticket[0] != req["name"]:
             raise _No("refused")

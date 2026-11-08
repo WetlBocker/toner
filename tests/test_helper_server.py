@@ -135,8 +135,8 @@ def ask(op, peer=OWNER, cancel=None, **fields):
 def err(ans):
     return ans.get("error") if not ans.get("ok") else None
 
-def enroll(peer=OWNER, rules=RULES):
-    return ask("enroll", peer, data_key=b64(DATA_KEY), rules_private=b64(rules), duo={"d1": b64(SKEY.encode())})
+def enroll(peer=OWNER, rules=RULES, **fields):
+    return ask("enroll", peer, data_key=b64(DATA_KEY), rules_private=b64(rules), duo={"d1": b64(SKEY.encode())}, **fields)
 
 def sso_token(**claims):
     n = ask("nonce", connection="s1")["nonce"]
@@ -179,11 +179,26 @@ check("an op before enrollment: not_enrolled", err(ask("nonce", connection="s1")
 check("enroll with another Ed25519 key: refused", err(enroll(rules=envelope.new_signing_key()[0])) == "refused" and ST.load() is None)
 check("enroll with a bad request: bad_request", err(ask("enroll", data_key="!!", rules_private=b64(RULES))) == "bad_request"
       and err(ask("enroll", data_key=b64(DATA_KEY))) == "bad_request")
+far = ([r"\\server\share\netcheck.keys", "//server/share/netcheck.keys", r"\\.\pipe\toner", r"\\?\C:\x\netcheck.keys",
+        "netcheck.keys", r"\x\netcheck.keys"] if os.name == "nt" else ["//server/share/netcheck.keys", "netcheck.keys"])
+check("enroll from a UNC, device or relative path: bad_request", [err(enroll(keys_path=f)) for f in far] == ["bad_request"] * len(far))
+BIG = HDIR / "big.keys"
+BIG.write_bytes(ORIGINAL + b" " * (1 << 20))
+check("enroll from a keys file over 1 MiB: bad_request", err(enroll(keys_path=str(BIG))) == "bad_request")
+check("enroll from a folder: bad_request", err(enroll(keys_path=str(HDIR))) == "bad_request")
+if os.name != "nt":
+    FIFO = HDIR / "fifo.keys"
+    os.mkfifo(FIFO)
+    box = []
+    th = threading.Thread(target=lambda: box.append(enroll(keys_path=str(FIFO))), daemon=True)
+    th.start(); th.join(5)
+    check("enroll from a FIFO: bad_request, without hanging", bool(box) and err(box[0]) == "bad_request", box)
 check("enroll with the copy's rules key: ok", enroll() == {"ok": True})
 rec = ST.load()
 check("...the record: owner, path, rules_pub pinned, spare and Duo key", rec["owner"] == OWNER
       and rec["keys_path"] == os.path.normcase(os.path.abspath(KEYS)) and rec["rules_pub"] == json.loads(ORIGINAL)["rules_pub"]
-      and rec["spare"] == DATA_KEY + RULES and rec["duo"] == {"d1": SKEY.encode()} and abs(rec["enrolled_at"] - T[0]) < 1)
+      and rec["spare"] == DATA_KEY + RULES and rec["duo"] == {"d1": SKEY.encode()} and abs(rec["enrolled_at"] - T[0]) < 1
+      and rec["rules_version"] == json.loads(ORIGINAL)["rules_version"] >= 1)
 raw = ST.path.read_text(encoding="utf-8")
 check("...the stored file holds the keys only protected", not any(s in raw for s in (b64(DATA_KEY), b64(RULES), b64(DATA_KEY + RULES),
                                                                                      SKEY, b64(SKEY.encode()))))
@@ -217,9 +232,16 @@ check("check_sso: a nonce issued for another connection gives bad_answer",
 check("check_sso: auth_time 400 s old gives not_fresh", err(check_sso(sso_token(auth_time=int(time.time()) - 400)[1])) == "not_fresh")
 check("check_sso: a group not mapped gives not_in_group", err(check_sso(sso_token(groups=["g9"])[1])) == "not_in_group")
 check("check_sso: a good one clears the count", check_sso(sso_token()[1]).get("ok") and OWNER not in HELPER._fails)
+check("check_sso: a sign-in from before the nonce was issued (a browser session reused quietly) gives not_fresh",
+      err(check_sso(sso_token(auth_time=int(time.time()) - 100)[1])) == "not_fresh")
+check("check_sso: a sign-in within the clock leeway before the nonce is fresh",
+      check_sso(sso_token(auth_time=int(time.time()) - 30)[1]).get("ok"))
 n, tok = sso_token()
-T[0] += 601
-check("check_sso: an expired nonce gives bad_answer", err(check_sso(tok)) == "bad_answer")
+T[0] += 299
+check("check_sso: a nonce used within 300 s works", check_sso(tok).get("ok"))
+n, tok = sso_token()
+T[0] += 301
+check("check_sso: a nonce used after 300 s gives bad_answer", err(check_sso(tok)) == "bad_answer")
 T[0] = time.time()
 P.graph_member_ids = ["g1"]
 a = check_sso(sso_token(groups=None, _claim_names={"groups": "src1"})[1])
@@ -270,6 +292,12 @@ DUO["push"] = "deny"
 a = ask("check_directory", connection="d1", login="bob@acme.com", password="pw-bob")
 check("duo_push denied: refused", err(ask("duo_push", pending=a["pending"])) == "refused")
 DUO["push"] = "allow"
+check("duo_push: one push per password check, a second gives refused", err(ask("duo_push", pending=a["pending"])) == "refused")
+check("...a code may still follow it", isinstance(ask("duo_code", pending=a["pending"], code="135790").get("ticket"), str))
+a = ask("check_directory", connection="d1", login="bob@acme.com", password="pw-bob")
+ev = threading.Event(); ev.set()
+check("duo_push cancelled (the client went): refused, and it counts", err(ask("duo_push", pending=a["pending"], cancel=ev))
+      == "refused" and HELPER._fails[OWNER][0] == 1, HELPER._fails.get(OWNER))
 check("duo_push from another peer: not_owner", err(ask("duo_push", "S-1-5-21-1-1003", pending=a["pending"])) == "not_owner")
 DUO["preauth"] = "deny"
 check("Duo preauth deny: refused", err(ask("check_directory", connection="d1", login="bob@acme.com", password="pw-bob")) == "refused")
@@ -309,6 +337,26 @@ T[0] += 61
 check("the wait over: the right password works again", isinstance(to_ticket(), str))
 T[0] = time.time()
 
+# ---------------------------------------------------------------- an older signed keys file put back
+session.sign_in("Admin1", PW)
+roles.set_directories([ACME, {**SSO, "groups": {"Tech": ["g1"], "Engineer": ["g2"]}}])
+session.sign_out()
+NEWER = pathlib.Path(KEYS).read_bytes()
+old_v, new_v = json.loads(ORIGINAL)["rules_version"], json.loads(NEWER)["rules_version"]
+check("a newer signed file: accepted, its rules_version kept as the newest seen", new_v > old_v
+      and not ask("status")["rules_changed"] and ST.load()["rules_version"] == new_v, (old_v, new_v, ST.load().get("rules_version")))
+t = to_ticket()
+pathlib.Path(KEYS).write_bytes(ORIGINAL)            # the older file, validly signed by the same key, put back
+check("an older signed file put back: status says rules_changed", ask("status")["rules_changed"])
+check("...release gives rules_changed and releases nothing", ask("release", ticket=t, name="bob@acme.com")
+      == {"ok": False, "error": "rules_changed"})
+check("...check_directory gives rules_changed",
+      err(ask("check_directory", connection="d1", login="bob@acme.com", password="pw-bob")) == "rules_changed")
+check("...a new helper on the same store refuses it too",
+      server.Helper(ST, now=now).handle({"op": "status", "keys_path": KEYS}, OWNER)["rules_changed"])
+pathlib.Path(KEYS).write_bytes(NEWER)
+check("the newer file back: release works", ask("release", ticket=t, name="bob@acme.com").get("ok"))
+
 # ---------------------------------------------------------------- forget
 check("forget from the owner: ok, the store cleared", ask("forget") == {"ok": True} and ST.load() is None
       and not ST.path.exists() and not ask("status")["enrolled"])
@@ -319,7 +367,7 @@ SECRETS = ["pw-bob", "wrong-pw", "135790", "000000", "at-1", SKEY, b64(SKEY.enco
 seen = json.dumps(ANSWERS) + "\n".join(LOG)
 check("no password, code, Duo key or spare key in an answer or the log", not [s for s in SECRETS if s in seen],
       [s for s in SECRETS if s in seen])
-check("released keys not in the log", not any(r["data_key"] in "\n".join(LOG) for r in RELEASED) and len(RELEASED) == 2)
+check("released keys not in the log", not any(r["data_key"] in "\n".join(LOG) for r in RELEASED) and len(RELEASED) == 3)
 check("no ID token in an answer or the log", len(TOKENS) > 10 and not any(t in seen for t in TOKENS))
 
 P.stop()
