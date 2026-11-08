@@ -3,14 +3,16 @@ recovery-key sign-in an account gets a new password at once, and Toner is signed
 password to lock with). The card helpers here are shared with the first start (ui/setupdlg.py) and the lock screen.
 
 A directory account (core/dirsignin.py) goes from the password to Duo, the PIN, and when needed a new PIN and an admin's
-approval. Each slow step runs on a Job thread; its result is used only while the window is still on that attempt."""
+approval. Each slow step runs on a Job thread; its result is used only while the window is still on that attempt. An SSO
+account goes to the browser instead of the password and Duo."""
 import threading
+import webbrowser
 
 from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal
 from PySide6.QtWidgets import (QComboBox, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QStackedWidget,
                                QVBoxLayout)
 
-from core import audit, datakey, directory, dirsignin, duo, passvault, passwords, perms, pinslot, session
+from core import audit, datakey, directory, dirsignin, duo, oidc, passvault, passwords, perms, pinslot, session
 from ui import theme
 
 DAMAGED = "This file is damaged or was changed outside Toner."
@@ -26,6 +28,9 @@ CHOOSE_TITLE = "Choose a PIN"
 CHOOSE_TEXT = "You'll use this PIN to unlock Toner on this computer."
 APPROVE_TITLE = "An admin needs to approve this"
 PIN_MISMATCH = "The two PINs don't match."
+SSO_TITLE = "Continue in your browser"
+SSO_TEXT = "Sign in on the {provider} page that opened in your browser. Toner carries on when you're done."
+SSO_AGAIN = "Open the page again"
 # directory steps' errors whose text is already the approved sentence
 SAID = (datakey.WrongPassword, datakey.NameTaken, dirsignin.NotInGroup, dirsignin.Paused, dirsignin.CannotApprove, dirsignin.CaChanged,
         duo.Unavailable, duo.Denied, pinslot.WrongPin)
@@ -221,6 +226,18 @@ class SignInWindow(QDialog):
         self.duo_cancel.clicked.connect(self._duo_cancel)
         self.use_code.clicked.connect(self._use_code)
 
+        self.sso, self._sso_attempt = None, []                  # the SSO connection typed for; the attempt once started
+        self.sso_page, lay = self._page(SSO_TITLE, SSO_TEXT)
+        self.sso_text = lay.itemAt(2).widget()
+        self.sso_cancel, self.sso_again = primary("Cancel"), link(SSO_AGAIN)
+        lay.addSpacing(10)
+        lay.addWidget(self.sso_cancel)
+        lay.addSpacing(6)
+        lay.addWidget(self.sso_again, 0, Qt.AlignmentFlag.AlignLeft)
+        self.sso_cancel.clicked.connect(lambda: self._cancel.set())    # the wait ends within a second and lands as Cancelled
+        self.sso_again.clicked.connect(self._sso_again)
+        self.name_wait = Wait(self.name_error, self.next)       # an SSO start while the shared counter's wait runs
+
         self.code_page, lay = self._page("")
         self.code_who = lay.itemAt(1).widget()
         self.code = field(lay, "Duo code")
@@ -309,8 +326,12 @@ class SignInWindow(QDialog):
         if not name:
             say(self.name_error, "Enter a username.")
             return
+        self.sso = None
         try:
-            self.directory = dirsignin.classify(name)[0] == "directory"
+            kind = dirsignin.classify(name)
+            self.directory = kind[0] == "directory"
+            if self.directory and kind[1].get("kind") == "oidc":
+                self.sso = kind[1]
         except dirsignin.Paused as e:
             say(self.name_error, str(e))
             return
@@ -319,6 +340,8 @@ class SignInWindow(QDialog):
         for lab in (self.who, self.code_who, self.pin_who):
             lab.setText(name)
         self.pw.setText("")
+        if self.sso:
+            return self._sso()
         self._go(self.password_page, self.pw)
 
     def _try(self, signing_in, error, wait, opener):
@@ -434,8 +457,12 @@ class SignInWindow(QDialog):
     def _fail(self, e, label, wait, box=None):
         if isinstance(e, (datakey.Throttled, pinslot.PinLocked)) and wait is not None:
             wait.start(e.seconds)
-        elif isinstance(e, directory.Unreachable):
-            say(label, dirsignin.UNREACHABLE)
+        elif isinstance(e, (directory.Unreachable, oidc.Unreachable)):
+            say(label, self._unreachable())
+        elif isinstance(e, oidc.OidcError):              # its own text names the provider's host: never shown
+            text = (dirsignin.SSO_CANCELLED if isinstance(e, oidc.Cancelled) else
+                    dirsignin.SSO_NOT_FRESH if isinstance(e, oidc.NotFresh) else dirsignin.SSO_BAD_ANSWER)
+            say(label, text.format(provider=self.sso["name"]))
         elif isinstance(e, SAID):
             say(label, str(e))
         elif isinstance(e, DAMAGED_ERRORS):
@@ -457,7 +484,7 @@ class SignInWindow(QDialog):
             if forgot and a.stage == "pin":
                 if a.offline:                            # the directory went away since Forgot your PIN? was pressed
                     self._go(self.pin_page, self.pin)
-                    say(self.pin_error, dirsignin.UNREACHABLE)
+                    say(self.pin_error, self._unreachable())
                     return
                 dirsignin.restart_pin(a)
         if a.stage == "done":
@@ -530,11 +557,43 @@ class SignInWindow(QDialog):
     def _forgot_pin(self):
         """A new PIN needs the password (and Duo) checked online again, in a new attempt."""
         if self.attempt.offline:
-            say(self.pin_error, dirsignin.UNREACHABLE)
+            say(self.pin_error, self._unreachable())
             return
         self._drop()
         self._forgot = True
+        if self.sso:
+            return self._sso()
         self._go(self.password_page, self.pw)
+
+    def _unreachable(self):
+        return dirsignin.SSO_UNREACHABLE.format(provider=self.sso["name"]) if self.sso else dirsignin.UNREACHABLE
+
+    def _sso(self):
+        """The browser instead of the password. One Job starts the sign-in and waits for it, so its loopback port never outlives
+        the Job: Cancel, Not you? or closing the window sets the Event, and the wait ends within a second."""
+        cfg, login, cancel, started = self.sso, self.name.text().strip(), threading.Event(), []
+        self._cancel, self._sso_attempt = cancel, started
+        self.sso_text.setText(SSO_TEXT.format(provider=cfg["name"]))
+        self._go(self.sso_page, self.sso_cancel)
+
+        def sign_in():
+            a = dirsignin.sso_start(cfg, login, open_url=webbrowser.open)
+            started.append(a)
+            if a.stage == "browser":                     # (offline: at the PIN already)
+                dirsignin.sso_wait(a, cancel)
+            return a
+
+        def landed(a, e):
+            if e is not None:
+                self._go(self.name_page, self.name)
+                return self._fail(e, self.name_error, self.name_wait, self.name)
+            self.attempt = a
+            self._route()
+        self._run(sign_in, landed, block=False)
+
+    def _sso_again(self):
+        if self._sso_attempt and self._sso_attempt[0].browser is not None:
+            self._sso_attempt[0].browser.open()
 
     def _choose(self):
         a, pin, again = self.attempt, self.pin1.text(), self.pin2.text()

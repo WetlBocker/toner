@@ -7,13 +7,16 @@
     approve         an Admin, or the recovery key, approves at this computer
     finish          the PIN signs in
 
+An SSO connection (kind "oidc") has sso_start and sso_wait (the browser) in place of begin and the Duo steps.
+
 Wrong directory passwords count on netcheck.keys' shared counter, as local passwords do. No password, PIN or Duo code is kept on
-an Attempt, logged or put in a message."""
+an Attempt, logged or put in a message; an SSO attempt's tokens stay on it, and only the refresh token is kept (in the vault)."""
 import getpass
 import threading
 import time
+import webbrowser
 
-from core import audit, datakey, db, directory, dirpin, duo, perms, pinslot, quiet, roles, session
+from core import audit, datakey, db, directory, dirpin, duo, oidc, passvault, perms, pinslot, quiet, roles, session
 
 OFFLINE_SECONDS = 3600
 UNREACHABLE = "Toner can't reach the directory. Connect to the network, then try again."
@@ -29,6 +32,10 @@ CA_CHANGED = "The directory's CA file changed. An admin needs to save the direct
 NAME_TAKEN = "That name already belongs to another account on this copy. Ask an admin."     # Choose a PIN only
 TEST_OK = "Signed in as {name}. Role: {role}. Signed out."                                  # Test login only
 TEST_NOT_MAPPED = "{name} isn't in an OU or group that Toner maps to a role."
+SSO_CANCELLED = "The sign-in didn't finish in the browser."                                 # {provider}: the connection's name
+SSO_NOT_FRESH = "{provider} didn't confirm a fresh sign-in. Try again."
+SSO_BAD_ANSWER = "{provider}'s answer couldn't be checked, so the sign-in was refused."
+SSO_UNREACHABLE = "{provider} can't be reached, and this account hasn't been checked online in the last hour."
 
 
 def _windows_user():
@@ -60,7 +67,8 @@ class CaChanged(Exception):
 
 
 class Attempt:
-    """One sign-in. stage: "password" (checked, call after_password), "duo", "choose-pin", "approve", "pin" or "done"."""
+    """One sign-in. stage: "password" (checked, call after_password), "browser" (SSO: call sso_wait), "duo", "choose-pin",
+    "approve", "pin" or "done"."""
 
     def __init__(self, cfg, login):
         self.cfg, self.login = cfg, login
@@ -74,6 +82,8 @@ class Attempt:
         self.slot = None            # a new PIN slot waiting for its approval
         self.reset = False          # "Forgot your PIN?"
         self.kind = None            # the PIN slot kind once the chip refused a new key (pin_kind)
+        self.browser = None         # SSO: the oidc.BrowserSignIn
+        self.tokens = None          # SSO: the oidc.Tokens once the browser sign-in is checked
 
 
 def _keys_doc():
@@ -144,7 +154,7 @@ def _mine(a):
 def _offline(a):
     """The directory can't be reached: the PIN alone, within the hour of the last good check of a sealed account."""
     who, short = directory._split_login(a.cfg, a.login)
-    if a.cfg["kind"] == "ad" and "@" in who:
+    if a.cfg["kind"] in ("ad", "oidc") and "@" in who:
         name = who.lower()                                  # the UPN the directory would have named the account by
     else:                                                   # (DOMAIN\user: its UPN prefix taken to be the user name)
         first = (a.cfg.get("suffixes") or [""])[0]
@@ -248,6 +258,65 @@ def duo_code(a, code):
         _denied(a)
         raise duo.Denied(WRONG_CODE) from None
     _onward(a, "duo")
+
+
+def _discover_now(cfg):
+    """The provider's discovery read now, not from the hour's cache, so a provider that went down is seen as down."""
+    with oidc._lock:
+        oidc._meta_cache.pop(cfg["issuer"], None)
+    return oidc.discover(cfg["issuer"])
+
+
+def reachable(cfg):
+    """True when the directory (or the SSO provider) answers now. Sends no credential."""
+    if cfg.get("kind") != "oidc":
+        return directory.reachable(cfg)
+    try:
+        _discover_now(cfg)
+    except oidc.OidcError:
+        return False
+    return True
+
+
+def sso_start(cfg, login, open_url=webbrowser.open, nonce=None):
+    """An SSO sign-in: the provider's page opens in the browser (stage "browser"; sso_wait next). A provider that can't be
+    reached takes the offline hour, as begin does."""
+    a = Attempt(cfg, login)
+    _tries()
+    try:
+        _discover_now(cfg)
+        a.browser = oidc.BrowserSignIn(cfg, nonce=nonce, open_url=open_url, login_hint=login)
+    except oidc.Unreachable:
+        return _offline(a)
+    try:
+        a.browser.open()
+    except BaseException:
+        a.browser.close()                                   # the loopback port goes with it
+        raise
+    a.stage = "browser"
+    return a
+
+
+def sso_wait(a, cancel):
+    """Waits for the browser (`cancel` set: Cancelled within a second), then checks the answer and the groups' role. The
+    oidc errors keep their internal text (the provider's host): callers show the SSO_* sentences instead."""
+    _expect(a, "browser")
+    try:
+        tokens = a.browser.run(cancel)
+        user = oidc.user_from(a.cfg, tokens.claims, oidc.groups(a.cfg, tokens.claims, tokens.access_token))
+    except oidc.Unreachable:
+        return _offline(a)
+    except (oidc.Refused, oidc.BadAnswer, oidc.NotFresh, oidc.Cancelled, KeyError) as e:
+        _tries(failed=True)
+        if isinstance(e, KeyError):                         # the ID token names no one (no sub, or no id_claim)
+            raise oidc.BadAnswer(f"{oidc.host_of(a.cfg['issuer'])}'s answer names no one") from None
+        raise
+    role = directory.role_for(a.cfg, user.groups)
+    if role is None:
+        _tries(failed=True)
+        raise NotInGroup(NOT_IN_GROUP)
+    a.user, a.name, a.role, a.tokens = user, user.name, role, tokens
+    _onward(a, "browser")
 
 
 class TestLogin:
@@ -453,6 +522,8 @@ def finish(a, pin):
             raise directory.Unreachable(UNREACHABLE) from None
         a.stage, a.message = "choose-pin", CHANGED
         return
+    if a.tokens and a.tokens.refresh_token:                 # SSO: the background re-check's refresh token, once the vault is open
+        passvault.put(f"sso-refresh:{a.name}", a.tokens.refresh_token)
     a.stage = "done"
 
 

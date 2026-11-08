@@ -11,7 +11,7 @@ import time
 from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QVBoxLayout, QWidget
 
-from core import datakey, db, directory, dirpin, pinslot, session
+from core import datakey, db, dirpin, dirsignin, pinslot, session
 from ui import theme
 from ui.signinwindow import DAMAGED, DAMAGED_ERRORS, Job, Wait, card, centred, error_label, heading, link, primary, say, words
 
@@ -246,7 +246,7 @@ class LockScreen(QWidget):
             rec = datakey.directory_account(name)
             dirs = datakey.read().get("directories") or []
             cfg = next((d for d in dirs if d.get("id") == (rec or {}).get("directory")), None)
-            return cfg is None or dirpin.changed(dirs) or directory.reachable(cfg)
+            return cfg is None or dirpin.changed(dirs) or dirsignin.reachable(cfg)     # (SSO: the provider)
 
         def landed(job, up, _error):                     # (an error: no config to probe, so not reachable)
             job.wait()
