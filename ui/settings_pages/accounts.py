@@ -1,5 +1,6 @@
 """Settings page: Accounts. Account actions apply at once, and so does sign-in without approval (through its own confirmation);
 the idle-lock minutes and the session length follow Save."""
+import sys
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QLabel, QMenu, QMessageBox, QPushButton, QTableWidget,
@@ -28,6 +29,7 @@ WARN_TITLE = "Let group members sign in without approval?"
 WARN_TEXT = ("Toner's helper service will keep a spare copy of Toner's key on this computer, so anyone in a mapped group can sign "
              "in here for the first time without an admin. Programs running as you can't reach that copy, but an administrator of "
              "this computer can. Installing the helper service needs administrator rights. Turning this off deletes the spare copy.")
+WARN_LINUX = "On Linux, the spare copy is protected only by this computer's disk encryption, so use full-disk encryption."
 OFF_PORTABLE = "A portable copy can't use this: it has no helper service."
 OFF_OTHER_USER = "Toner's helper service on this computer serves another user."
 OFF_NOT_RUNNING = "Toner's helper service is installed but not running."
@@ -359,7 +361,8 @@ class AccountsPage(Page):
         self._load_helper()
 
     def _helper_warned(self):
-        box = QMessageBox(QMessageBox.Icon.Warning, WARN_TITLE, WARN_TEXT, parent=self)
+        text = WARN_TEXT + (" " + WARN_LINUX if sys.platform.startswith("linux") else "")     # (Windows: sealed by the chip)
+        box = QMessageBox(QMessageBox.Icon.Warning, WARN_TITLE, text, parent=self)
         go = box.addButton("Turn on", QMessageBox.ButtonRole.AcceptRole)
         box.setDefaultButton(box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole))
         box.exec()

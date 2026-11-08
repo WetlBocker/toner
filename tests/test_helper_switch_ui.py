@@ -77,10 +77,21 @@ check("an Admin sees it: absent, enabled, off, no note", not sw.isHidden() and s
 print("== ticking it")
 CALLS.clear(); n = len(acts())
 sw.click(); app.processEvents()
-check("ticking shows the approved warning", BOXES and BOXES[-1] == ("Let group members sign in without approval?",
-      "Toner's helper service will keep a spare copy of Toner's key on this computer, so anyone in a mapped group can sign in here for "
-      "the first time without an admin. Programs running as you can't reach that copy, but an administrator of this computer can. "
-      "Installing the helper service needs administrator rights. Turning this off deletes the spare copy.", ["Turn on", "Cancel"]), BOXES[-1:])
+WARN = ("Toner's helper service will keep a spare copy of Toner's key on this computer, so anyone in a mapped group can sign in here for "
+        "the first time without an admin. Programs running as you can't reach that copy, but an administrator of this computer can. "
+        "Installing the helper service needs administrator rights. Turning this off deletes the spare copy.")
+LINUX = " On Linux, the spare copy is protected only by this computer's disk encryption, so use full-disk encryption."
+check("ticking shows the approved warning (on Linux, with the disk encryption sentence after it)", BOXES and BOXES[-1] == (
+      "Let group members sign in without approval?", WARN + (LINUX if sys.platform.startswith("linux") else ""), ["Turn on", "Cancel"]),
+      BOXES[-1:])
+real_platform = sys.platform
+for plat, want in (("linux", WARN + LINUX), ("win32", WARN)):
+    sys.platform = plat
+    try:
+        sw.click(); app.processEvents()
+    finally:
+        sys.platform = real_platform
+    check(f"...the warning on {plat}, exact", BOXES[-1][1] == want and not sw.isChecked(), BOXES[-1:])
 check("Cancel changes nothing", not sw.isChecked() and "install" not in CALLS and "enroll" not in CALLS and len(acts()) == n, CALLS)
 check("...and leaves no pending Save change", S.pending_changes() == [], S.pending_changes())
 

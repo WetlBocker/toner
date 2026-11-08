@@ -1,7 +1,8 @@
 r"""The helper on Windows: the TonerHelper service, running as LocalSystem, on the named pipe \\.\pipe\TonerHelper. The caller
 is the user of the pipe client's process, and the keys file is read impersonating the client. The program lives in
-%ProgramFiles%\Toner Helper\ and the store, DPAPI-protected as LocalSystem, in %ProgramData%\Toner Helper\: both writable by
-SYSTEM and Administrators only. ctypes only (no pywin32)."""
+%ProgramFiles%\Toner Helper\ and the store in %ProgramData%\Toner Helper\: both writable by SYSTEM and Administrators only. The
+store's secrets are sealed by the security chip (a machine key with no PIN), so a copy of the disk opens nothing elsewhere; DPAPI
+as LocalSystem only where there is no chip. ctypes only (no pywin32)."""
 import _winapi
 import ctypes
 import logging
@@ -17,7 +18,11 @@ from ctypes import wintypes
 from multiprocessing import connection
 from pathlib import Path
 
-from core import passvault
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+from core import passvault, tpm_windows
 from core.helper import server, store
 
 ADDRESS = r"\\.\pipe\TonerHelper"
@@ -86,7 +91,49 @@ DATA_DIR = _known("62AB5D82-FDC1-4DC3-A9DD-070D1D495D97") / "Toner Helper"      
 STORE_PATH = DATA_DIR / "helper.json"
 _SYSTEM = _known("1AC14E77-02E7-4E5D-B744-2EB1AE5198B7")                           # FOLDERID_System: sc.exe, icacls.exe
 _PROFILES = _known("0762D272-C50A-4BB0-A382-697DCD729B80")                         # FOLDERID_UserProfiles: C:\Users
-protect, unprotect = passvault.dpapi_protect, passvault.dpapi_unprotect     # as LocalSystem: only SYSTEM can unprotect
+SPARE_KEY = "Toner-Helper-Spare"                       # the security chip's machine key that seals the store's secrets
+_CHIP = b"tpm1:"                                        # a blob sealed by it starts so; any other is DPAPI's (as LocalSystem)
+_OAEP = padding.OAEP(padding.MGF1(hashes.SHA256()), hashes.SHA256(), None)
+_AAD = b"toner-helper-spare"
+
+
+def protect(b):
+    """`b` sealed as core/pinslot.py seals a chip slot: RSA-OAEP of a random key by the machine key (made on first use), then
+    AES-GCM. With no security chip: DPAPI as LocalSystem, which only SYSTEM can open."""
+    try:
+        try:
+            der = tpm_windows.public(SPARE_KEY, machine=True)
+        except FileNotFoundError:
+            der = tpm_windows.create(SPARE_KEY, None, machine=True)
+    except OSError:                                     # no chip here (as tpm_windows.available() decides)
+        return passvault.dpapi_protect(b)
+    kek, nonce = os.urandom(32), os.urandom(12)
+    wrapped = serialization.load_der_public_key(der).encrypt(kek, _OAEP)
+    return _CHIP + wrapped + nonce + AESGCM(kek).encrypt(nonce, b, _AAD)
+
+
+def unprotect(b):
+    if not b.startswith(_CHIP):
+        return passvault.dpapi_unprotect(b)
+    raw = b[len(_CHIP):]
+    kek = tpm_windows.decrypt(SPARE_KEY, None, raw[:256], machine=True)        # RSA-2048: 256 bytes
+    return AESGCM(kek).decrypt(raw[256:268], raw[268:], _AAD)
+
+
+def forget_key():
+    """The machine key goes (forget and uninstall): best effort, since without the store it opens nothing."""
+    try:
+        tpm_windows.delete(SPARE_KEY, machine=True)
+    except OSError as e:
+        log.warning("helper: the chip's key wasn't deleted: %s", type(e).__name__)
+
+
+class Store(store.Store):
+    """The helper's store; clearing it (forget) deletes the machine key too."""
+
+    def clear(self):
+        super().clear()
+        forget_key()
 
 
 class _SA(ctypes.Structure):
@@ -225,7 +272,7 @@ def run_service():
         handle.append(h)
         status(2)                                       # start pending
         try:
-            helper = server.Helper(store.Store(STORE_PATH, protect, unprotect))
+            helper = server.Helper(Store(STORE_PATH, protect, unprotect))
             status(4)                                   # running
             serve(helper, stop)
         except Exception as e:                          # the pipe name taken, say
@@ -280,7 +327,8 @@ def install(src_dir):
 def uninstall():
     """Stops and removes the service, its program folder and its store. Only elevated."""
     _guard()
-    for step in [["sc.exe", "stop", SERVICE], ["sc.exe", "delete", SERVICE], ["rmdir", str(DATA_DIR)], ["rmdir", str(PROGRAM_DIR)]]:
+    for step in [["sc.exe", "stop", SERVICE], ["sc.exe", "delete", SERVICE], ["rmdir", str(DATA_DIR)], ["rmdir", str(PROGRAM_DIR)],
+                 ["forget-key"]]:
         _step(step)
 
 
@@ -292,6 +340,8 @@ def _step(step):
         _fresh(Path(step[1]))
     elif step[0] == "rmdir":
         _remove(Path(step[1]))
+    elif step[0] == "forget-key":
+        forget_key()
     else:                                               # from System32, never the folder TonerHelper.exe runs from
         r = subprocess.run([str(_SYSTEM / step[0]), *step[1:]], capture_output=True)
         if r.returncode and step[1] not in ("stop", "delete"):       # no service to stop or delete: nothing to do

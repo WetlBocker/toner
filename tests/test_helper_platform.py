@@ -330,6 +330,73 @@ if NT:
     windows._security, windows._mkdir_admin = real_security, real_mkdir
 
 
+# ---------------------------------------------------------------- the spare copy sealed by the security chip (a fake one)
+if NT:
+    from cryptography.hazmat.primitives import hashes as _h, serialization as _ser
+    from cryptography.hazmat.primitives.asymmetric import padding as _pad, rsa as _rsa
+    from core import passvault
+
+    class FakeChip:
+        keys, calls, down = {}, [], False
+
+        @classmethod
+        def _gate(cls, what, name, machine):
+            cls.calls.append((what, name, machine))
+            if cls.down:
+                raise OSError("create key failed (0x80090030)")         # no chip here
+        @classmethod
+        def public(cls, name, machine=False):
+            cls._gate("public", name, machine)
+            if (name, machine) not in cls.keys:
+                raise FileNotFoundError(name)
+            return cls.keys[name, machine].public_key().public_bytes(_ser.Encoding.DER, _ser.PublicFormat.SubjectPublicKeyInfo)
+        @classmethod
+        def create(cls, name, pin, machine=False):
+            cls._gate("create", name, machine)
+            cls.keys[name, machine] = _rsa.generate_private_key(public_exponent=65537, key_size=2048)
+            return cls.public(name, machine)
+        @classmethod
+        def decrypt(cls, name, pin, data, machine=False):
+            cls._gate("decrypt", name, machine)
+            if (name, machine) not in cls.keys:
+                raise FileNotFoundError(name)
+            return cls.keys[name, machine].decrypt(data, _pad.OAEP(_pad.MGF1(_h.SHA256()), _h.SHA256(), None))
+        @classmethod
+        def delete(cls, name, machine=False):
+            cls.calls.append(("delete", name, machine))
+            cls.keys.pop((name, machine), None)
+
+    real_tpm = windows.tpm_windows
+    windows.tpm_windows = FakeChip
+    SECRET = os.urandom(64)
+    blob = windows.protect(SECRET)
+    check("protect: sealed by a machine key in the chip, made on first use, with no PIN", blob.startswith(b"tpm1:")
+          and SECRET not in blob and ("create", windows.SPARE_KEY, True) in FakeChip.calls and len(FakeChip.keys) == 1)
+    check("...unprotect opens it again", windows.unprotect(blob) == SECRET)
+    blob2 = windows.protect(SECRET)
+    check("...the same machine key seals the next one, with a new random key", sum(c[0] == "create" for c in FakeChip.calls) == 1
+          and blob2 != blob and windows.unprotect(blob2) == SECRET)
+    kept = FakeChip.keys.pop((windows.SPARE_KEY, True))
+    check("...another computer's chip (no such key) opens nothing", raises(lambda: windows.unprotect(blob), FileNotFoundError))
+    FakeChip.keys[windows.SPARE_KEY, True] = kept
+    FakeChip.down = True
+    blob3 = windows.protect(SECRET)
+    check("no chip: DPAPI, as before", not blob3.startswith(b"tpm1:") and blob3 != SECRET
+          and passvault.dpapi_unprotect(blob3) == SECRET)
+    FakeChip.down = False
+    check("...and unprotect opens a DPAPI blob without the chip", windows.unprotect(blob3) == SECRET
+          and FakeChip.calls[-1][0] != "decrypt")
+    WST = windows.Store(HDIR / "chip.json", windows.protect, windows.unprotect)
+    WST.save({"owner": "me", "spare": SECRET, "duo": {"d1": b"skey"}})
+    on_disk = (HDIR / "chip.json").read_bytes()
+    check("the store on disk: sealed by the chip, the spare and Duo key not in it", b"tpm1:" not in on_disk          # (b64 of it)
+          and base64.b64encode(SECRET) not in on_disk and WST.load()["spare"] == SECRET and WST.load()["duo"] == {"d1": b"skey"})
+    WST.clear()
+    check("forget (the store cleared): the machine key deleted too", not (HDIR / "chip.json").exists()
+          and (windows.SPARE_KEY, True) not in FakeChip.keys and FakeChip.calls[-1] == ("delete", windows.SPARE_KEY, True))
+    windows.tpm_windows = real_tpm
+
+
 # ---------------------------------------------------------------- install: the plan and the refusals (nothing is run)
 if NT:
     PF = os.path.join(os.environ["ProgramFiles"], "Toner Helper")
@@ -380,5 +447,11 @@ check("install (elevated, mocked): runs the plan in order", RAN == plat.install_
 RAN.clear()
 plat._elevated = lambda: False
 check("uninstall: refused when not elevated, nothing run", raises(plat.uninstall, PermissionError) and RAN == [])
+if NT:
+    plat._elevated = lambda: True
+    plat.uninstall()
+    check("uninstall (elevated, mocked): stops and deletes the service, both folders, then the chip's machine key",
+          RAN == [["sc.exe", "stop", "TonerHelper"], ["sc.exe", "delete", "TonerHelper"], ["rmdir", str(plat.DATA_DIR)],
+                  ["rmdir", str(plat.PROGRAM_DIR)], ["forget-key"]], RAN)
 
 print(f"\n{ok} passed, {bad} failed")

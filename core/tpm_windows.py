@@ -3,14 +3,15 @@ Toner passes in code (NCRYPT_PIN_PROPERTY, every call silent, so Windows never s
 Windows: after 4 in 8 hours (its defaults for a standard user, before the TPM's own 32), it refuses every try, even a right one
 and even making a new key, until the oldest is 8 hours old. That is LockedOut.
 
-Elsewhere, and on a computer without the key, decrypt and delete raise FileNotFoundError; a wrong PIN raises PermissionError."""
+Elsewhere, and on a computer without the key, decrypt and delete raise FileNotFoundError; a wrong PIN raises PermissionError.
+`machine=True`: a key of the computer's (NCRYPT_MACHINE_KEY_FLAG) rather than the user's, as the helper service's has (no PIN)."""
 import ctypes
 import functools
 import os
 import sys
 
 PROVIDER = "Microsoft Platform Crypto Provider"
-SILENT, OVERWRITE, OAEP, ALLOW_DECRYPT = 0x40, 0x80, 0x4, 0x1
+SILENT, OVERWRITE, OAEP, ALLOW_DECRYPT, MACHINE = 0x40, 0x80, 0x4, 0x1, 0x20
 BAD_KEYSET = 0x80090016                                          # NTE_BAD_KEYSET: no key by that name here
 WRONG_PIN = {0x80090010, 0x80290408}                             # NTE_PERM, TPM_E_PCP_AUTHENTICATION_FAILED
 LOCKED = {0x80090031, 0x80290409, 0x80280921}                    # NTE_AUTHENTICATION_IGNORED, its PCP twin, TPM_20_E_LOCKOUT
@@ -93,9 +94,9 @@ def _provider():
     return h
 
 
-def _open(prov, name):
+def _open(prov, name, machine=False):
     k = ctypes.c_size_t()
-    _check(_nc().NCryptOpenKey(prov, ctypes.byref(k), name, 0, SILENT), "open key")
+    _check(_nc().NCryptOpenKey(prov, ctypes.byref(k), name, 0, SILENT | (MACHINE if machine else 0)), "open key")
     return k
 
 
@@ -121,15 +122,42 @@ def available():
         return False
 
 
-def create(name, pin):
-    """A persisted RSA-2048 decryption key (replacing one of that name); returns its public key, DER SubjectPublicKeyInfo."""
+def _public_der(k):
+    """The key's public half, DER SubjectPublicKeyInfo."""
     from ctypes import wintypes as W
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import rsa
+    nc, n = _nc(), W.DWORD()
+    _check(nc.NCryptExportKey(k, 0, "RSAPUBLICBLOB", None, None, 0, ctypes.byref(n), 0), "export key")
+    blob = ctypes.create_string_buffer(n.value)
+    _check(nc.NCryptExportKey(k, 0, "RSAPUBLICBLOB", None, blob, n.value, ctypes.byref(n), 0), "export key")
+    raw = blob.raw[:n.value]               # BCRYPT_RSAKEY_BLOB: six ULONGs, then the exponent and the modulus, big-endian
+    cbe, cbm = int.from_bytes(raw[8:12], "little"), int.from_bytes(raw[12:16], "little")
+    pub = rsa.RSAPublicNumbers(int.from_bytes(raw[24:24 + cbe], "big"), int.from_bytes(raw[24 + cbe:24 + cbe + cbm], "big"))
+    return pub.public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+
+
+def public(name, machine=False):
+    """The public key of key `name` (FileNotFoundError when there is none), DER SubjectPublicKeyInfo."""
+    prov = _provider()
+    try:
+        k = _open(prov, name, machine)
+        try:
+            return _public_der(k)
+        finally:
+            _nc().NCryptFreeObject(k)
+    finally:
+        _nc().NCryptFreeObject(prov)
+
+
+def create(name, pin, machine=False):
+    """A persisted RSA-2048 decryption key (replacing one of that name); returns its public key, DER SubjectPublicKeyInfo."""
+    from ctypes import wintypes as W
     prov = _provider()                     # first: off Windows, FileNotFoundError (ctypes has no WinDLL there)
     nc, k = _nc(), ctypes.c_size_t()
     try:
-        _check(nc.NCryptCreatePersistedKey(prov, ctypes.byref(k), "RSA", name, 0, OVERWRITE), "create key")
+        _check(nc.NCryptCreatePersistedKey(prov, ctypes.byref(k), "RSA", name, 0, OVERWRITE | (MACHINE if machine else 0)),
+               "create key")
         finalized = False
         try:
             _check(nc.NCryptSetProperty(k, "Length", ctypes.byref(W.DWORD(2048)), 4, 0), "set length")
@@ -138,10 +166,7 @@ def create(name, pin):
                 _set_pin(k, pin)
             _check(nc.NCryptFinalizeKey(k, SILENT), "finalize key")
             finalized = True
-            n = W.DWORD()
-            _check(nc.NCryptExportKey(k, 0, "RSAPUBLICBLOB", None, None, 0, ctypes.byref(n), 0), "export key")
-            blob = ctypes.create_string_buffer(n.value)
-            _check(nc.NCryptExportKey(k, 0, "RSAPUBLICBLOB", None, blob, n.value, ctypes.byref(n), 0), "export key")
+            der = _public_der(k)
         except BaseException:
             if finalized and nc.NCryptDeleteKey(k, 0) == 0:     # the key is on the chip now: don't leave it there
                 k = None                                        # (a delete that works frees the handle)
@@ -151,14 +176,11 @@ def create(name, pin):
                 nc.NCryptFreeObject(k)
     finally:
         nc.NCryptFreeObject(prov)
-    raw = blob.raw[:n.value]               # BCRYPT_RSAKEY_BLOB: six ULONGs, then the exponent and the modulus, big-endian
-    cbe, cbm = int.from_bytes(raw[8:12], "little"), int.from_bytes(raw[12:16], "little")
-    pub = rsa.RSAPublicNumbers(int.from_bytes(raw[24:24 + cbe], "big"), int.from_bytes(raw[24 + cbe:24 + cbe + cbm], "big"))
-    return pub.public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+    return der
 
 
-def decrypt(name, pin, data):
-    """RSA-OAEP-SHA256 decryption with the key's PIN."""
+def decrypt(name, pin, data, machine=False):
+    """RSA-OAEP-SHA256 decryption with the key's PIN (None: a key made without one)."""
     from ctypes import wintypes as W
 
     class OaepInfo(ctypes.Structure):
@@ -166,9 +188,10 @@ def decrypt(name, pin, data):
     prov = _provider()                     # first: off Windows, FileNotFoundError (ctypes has no WinDLL there)
     nc = _nc()
     try:
-        k = _open(prov, name)
+        k = _open(prov, name, machine)
         try:
-            _set_pin(k, pin)
+            if pin is not None:
+                _set_pin(k, pin)
             out, n = ctypes.create_string_buffer(512), W.DWORD()
             _check(nc.NCryptDecrypt(k, data, len(data), ctypes.byref(OaepInfo("SHA256", None, 0)), out, 512, ctypes.byref(n),
                                     OAEP | SILENT), "decrypt")
@@ -182,7 +205,7 @@ def decrypt(name, pin, data):
         nc.NCryptFreeObject(prov)
 
 
-def delete(name):
+def delete(name, machine=False):
     """Deletes the key; nothing happens when it isn't here."""
     nc = _nc() if sys.platform == "win32" else None
     try:
@@ -191,7 +214,7 @@ def delete(name):
         return
     try:
         try:
-            k = _open(prov, name)
+            k = _open(prov, name, machine)
         except FileNotFoundError:
             return
         r = nc.NCryptDeleteKey(k, 0)              # (NCRYPT_SILENT_FLAG is refused here: NTE_BAD_FLAGS); success frees k
