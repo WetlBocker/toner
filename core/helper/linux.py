@@ -15,7 +15,7 @@ import threading
 from multiprocessing import connection
 from pathlib import Path
 
-from core.helper import server, store
+from core.helper import protocol, server, store
 
 ADDRESS = "/run/toner-helper/helper.sock"
 PROGRAM_DIR = Path("/opt/toner-helper")
@@ -192,7 +192,10 @@ def uninstall():
 
 def _step(step):
     if step[0] == "copy":
-        _copy(Path(step[1]), Path(step[2]))
+        try:
+            _copy(Path(step[1]), Path(step[2]))
+        except OSError as e:                            # (shutil.Error too)
+            raise protocol.CopyFailed(f"copying {step[1]} failed") from e
     elif step[0] == "write":
         fd = os.open(step[1], os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o644)
         with open(fd, "w", encoding="utf-8") as f:

@@ -15,7 +15,7 @@ STORE = {}
 keyring.set_password = lambda s, u, p: STORE.__setitem__((s, u), p)
 keyring.get_password = lambda s, u: STORE.get((s, u))
 keyring.delete_password = lambda s, u: STORE.pop((s, u), None)
-import base64, ctypes, logging, pathlib, pickle, shutil, subprocess, threading, uuid
+import base64, contextlib, ctypes, io, logging, pathlib, pickle, shutil, subprocess, sys, threading, uuid
 from multiprocessing import connection
 from core import datakey, db, osstore, roles, session
 from core.helper import linux, protocol, server, store
@@ -398,6 +398,32 @@ if NT:
     check("forget (the store cleared): the machine key deleted too", not (HDIR / "chip.json").exists()
           and (windows.SPARE_KEY, True) not in FakeChip.keys and FakeChip.calls[-1] == ("delete", windows.SPARE_KEY, True))
     windows.tpm_windows = real_tpm
+
+
+# ---------------------------------------------------------------- --install that can't copy its files says so in its exit code
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "packaging"))
+import toner_helper
+SRC_GONE, DST = HDIR / "no-such-build", HDIR / "copied"
+if NT:
+    real_mkdir, windows._mkdir_admin = windows._mkdir_admin, os.mkdir      # (an admin-only folder needs an administrator)
+check("the copy step failing: CopyFailed", raises(lambda: plat._step(["copy", str(SRC_GONE), str(DST)]), protocol.CopyFailed))
+if NT:
+    windows._mkdir_admin = real_mkdir
+real_install, had_frozen = plat.install, hasattr(sys, "frozen")
+def no_copy(src): raise protocol.CopyFailed("copying failed")
+plat.install, sys.frozen = no_copy, True
+err_out = io.StringIO()
+with contextlib.redirect_stderr(err_out):
+    rc = toner_helper.main(["--install"])
+def other(src): raise OSError("sc.exe create failed (5)")
+plat.install = other
+with contextlib.redirect_stderr(err_out):
+    rc2 = toner_helper.main(["--install"])
+plat.install = real_install
+if not had_frozen:
+    del sys.frozen
+check("...and --install exits with COPY_FAILED for it (Toner shows the approved reason), 1 for anything else",
+      rc == protocol.COPY_FAILED == 3 and rc2 == 1, (rc, rc2))
 
 
 # ---------------------------------------------------------------- install: the plan and the refusals (nothing is run)

@@ -14,7 +14,7 @@ STORE = {}
 keyring.set_password = lambda s, u, p: STORE.__setitem__((s, u), p)
 keyring.get_password = lambda s, u: STORE.get((s, u))
 keyring.delete_password = lambda s, u: STORE.pop((s, u), None)
-import base64, json, pathlib, subprocess, threading, uuid
+import base64, json, pathlib, shutil, subprocess, threading, uuid
 from core import audit, datakey, db, envelope, helperclient, osstore, roles, session, updates
 from core.helper import protocol, server, store
 
@@ -246,9 +246,18 @@ print("== install_elevated")
 real_elevate = helperclient._elevate
 helperclient._elevate = lambda t: 0
 check("installs, then waits for the helper to answer", raises(helperclient.install_elevated, Exception) is None)
-helperclient._elevate = lambda t: 3
+helperclient._elevate = lambda t: 1
 e = raises(helperclient.install_elevated, helperclient.InstallFailed)
-check("a failed install: InstallFailed with its exit code", e is not None and e.reason == helperclient.EXITED.format(code=3), e and e.reason)
+check("a failed install: InstallFailed with its exit code", e is not None and e.reason == "it stopped with code 1.", e and e.reason)
+helperclient._elevate = lambda t: protocol.COPY_FAILED
+e = raises(helperclient.install_elevated, helperclient.InstallFailed)
+check("...its files not copied (the installer's own code for it): the approved reason", e is not None
+      and e.reason == "it couldn't copy its files.", e and e.reason)
+def bare(t): raise shutil.Error([("a", "b", "x")])
+helperclient._elevate = bare
+e = raises(helperclient.install_elevated, helperclient.InstallFailed)
+check("...an error with no OS text: an approved reason, never a class name", e is not None and e.reason == "it didn't start.",
+      e and e.reason)
 def cancelled(t): raise OSError(1223, "The operation was canceled by the user.")
 helperclient._elevate = cancelled
 e = raises(helperclient.install_elevated, helperclient.InstallFailed)

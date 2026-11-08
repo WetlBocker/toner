@@ -12,6 +12,7 @@ if os.name == "nt":
     from core.helper import windows as platform
 else:
     from core.helper import linux as platform
+from core.helper.protocol import COPY_FAILED, CopyFailed
 from core.version import VERSION
 
 
@@ -28,7 +29,7 @@ def main(argv):
             platform.install(Path(sys.executable).resolve().parent) if argv == ["--install"] else platform.uninstall()
         except (OSError, ValueError) as e:
             print(f"toner-helper: {e}", file=sys.stderr)
-            return 1
+            return COPY_FAILED if isinstance(e, CopyFailed) else 1
     else:
         print(__doc__, file=sys.stderr)
         return 2

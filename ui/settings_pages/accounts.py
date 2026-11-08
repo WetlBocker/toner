@@ -36,6 +36,8 @@ OFF_NOT_RUNNING = "Toner's helper service is installed but not running."
 OFF_OUTDATED = "Toner's helper service is out of date. Turn this on again to update it."
 OFF_RULES = "Sign-in without approval was turned off because Toner's rules key was replaced. Turn it on again to use it."
 INSTALL_FAILED = "Toner's helper service couldn't be installed: {reason}"
+OFF_FAILED = ("Toner's helper service couldn't be reached, so its spare copy of Toner's key is still there. Try again when it's "
+              "running.")
 HELPER_NOTES = {"portable": OFF_PORTABLE, "other_user": OFF_OTHER_USER, "not_running": OFF_NOT_RUNNING, "outdated": OFF_OUTDATED,
                 "rules_changed": OFF_RULES}
 
@@ -352,13 +354,18 @@ class AccountsPage(Page):
                 helperclient.enroll()
                 audit.log("sign-in without approval turned on", f"by {audit.actor()}")
             elif not on:
-                helperclient.forget()
+                try:
+                    helperclient.forget()
+                except helperclient.NotRunning:
+                    QMessageBox.warning(self, self.title, OFF_FAILED)
+                    return
                 audit.log("sign-in without approval turned off", f"by {audit.actor()}")
         except helperclient.InstallFailed as e:
             QMessageBox.warning(self, self.title, INSTALL_FAILED.format(reason=e.reason))
         except (helperclient.NotRunning, helperclient.HelperError):
             quiet.ignored()                             # the switch shows what the helper has now, and its note why
-        self._load_helper()
+        finally:
+            self._load_helper()                         # (whatever happened: the switch shows the helper's state)
 
     def _helper_warned(self):
         text = WARN_TEXT + (" " + WARN_LINUX if sys.platform.startswith("linux") else "")     # (Windows: sealed by the chip)

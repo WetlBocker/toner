@@ -138,6 +138,29 @@ sw.click(); app.processEvents()
 check("Turn on while out of date: installs again, then enrolls", [c for c in CALLS if c != "state"] == ["install", "enroll"] and sw.isChecked(), CALLS)
 check("...and the note goes", note.isHidden())
 
+print("== unticking when the helper can't be reached")
+STATE[0] = "on"; page.load(); WARNED.clear()
+def unreachable(keys_path=None):
+    CALLS.append("forget")
+    raise helperclient.NotRunning()
+helperclient.forget = unreachable
+sw.click(); app.processEvents()
+check("the approved sentence; not audited; the switch still on, as the helper has it", WARNED == [
+      "Toner's helper service couldn't be reached, so its spare copy of Toner's key is still there. Try again when it's running."]
+      and sw.isChecked() and ("sign-in without approval turned off", "by Admin") not in acts()[:1], WARNED)
+def broken():
+    CALLS.append("enroll")
+    raise RuntimeError("unexpected")
+helperclient.forget, real_enroll, helperclient.enroll = forget, helperclient.enroll, broken
+STATE[0] = "off"; page.load()
+RAISED, real_hook = [], sys.excepthook
+sys.excepthook = lambda *e: RAISED.append(e[0])         # (Qt hands a slot's exception to the hook)
+sw.click(); app.processEvents()
+sys.excepthook = real_hook
+helperclient.enroll = real_enroll
+check("an unexpected error: the switch is still put back to the helper's state", not sw.isChecked() and RAISED == [RuntimeError],
+      RAISED)
+
 print("== turned off by a new rules key: said once")
 STATE[0] = "off"
 db.set_setting("helper_off_notice", True)

@@ -24,10 +24,11 @@ else:
     from core.helper import linux as _plat
     _TRUSTED = {0}                                      # root; tests add their own uid
 ADDRESS = _plat.ADDRESS
-# proposed wording (INSTALL_FAILED's {reason}), awaiting the owner's approval
+# INSTALL_FAILED's {reason} (approved wording); any other reason is the OS's own text, never an exception's class name
 EXITED = "it stopped with code {code}."
 TOO_LONG = "the administrator prompt wasn't answered in time."
 NO_ANSWER = "it didn't start."
+NO_COPY = "it couldn't copy its files."
 
 
 _notice_due = False     # rules_replaced before sign-in: the Accounts page's note, set once the key opens
@@ -275,7 +276,10 @@ def _elevate(timeout):
     tmp = tempfile.mkdtemp(prefix="toner-helper-")      # 0700
     try:
         copy = Path(tmp) / "toner-helper"
-        shutil.copytree(src, copy)
+        try:
+            shutil.copytree(src, copy)
+        except OSError:                                 # (shutil.Error too)
+            raise InstallFailed(NO_COPY) from None
         return subprocess.run(["pkexec", str(copy / "toner-helper"), "--install"], capture_output=True, timeout=timeout).returncode
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -288,9 +292,9 @@ def install_elevated(timeout=120):
     except subprocess.TimeoutExpired:
         raise InstallFailed(TOO_LONG) from None
     except OSError as e:
-        raise InstallFailed(e.strerror or type(e).__name__) from None
+        raise InstallFailed(e.strerror or NO_ANSWER) from None
     if code:
-        raise InstallFailed(EXITED.format(code=code))
+        raise InstallFailed(NO_COPY if code == protocol.COPY_FAILED else EXITED.format(code=code))
     end = time.monotonic() + 15
     while True:
         try:

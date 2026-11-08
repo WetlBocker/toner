@@ -23,7 +23,7 @@ from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from core import passvault, tpm_windows
-from core.helper import server, store
+from core.helper import protocol, server, store
 
 ADDRESS = r"\\.\pipe\TonerHelper"
 SERVICE = "TonerHelper"
@@ -356,7 +356,10 @@ def uninstall():
 def _step(step):
     if step[0] == "copy":
         _fresh(Path(step[2]))
-        shutil.copytree(step[1], step[2], dirs_exist_ok=True)      # links followed: the copy holds files only
+        try:
+            shutil.copytree(step[1], step[2], dirs_exist_ok=True)  # links followed: the copy holds files only
+        except OSError as e:                            # (shutil.Error too)
+            raise protocol.CopyFailed(f"copying {step[1]} failed") from e
     elif step[0] == "mkdir":
         _fresh(Path(step[1]))
     elif step[0] == "rmdir":

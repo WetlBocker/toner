@@ -4,8 +4,13 @@ import json
 
 PROTOCOL = 1
 MAX = 65536
+COPY_FAILED = 3                         # --install's exit code when it couldn't copy its files
 ERRORS = ("not_owner", "not_enrolled", "rules_changed", "refused", "not_fresh", "bad_answer", "unreachable", "not_in_group",
           "throttled", "bad_request", "other_user", "duo_denied")
+
+
+class CopyFailed(OSError):
+    """--install couldn't copy the helper's files into place."""
 
 
 def encode(obj):
