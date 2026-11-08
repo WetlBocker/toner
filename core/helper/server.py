@@ -43,9 +43,9 @@ class _No(Exception):
     """The answer {"ok": False, "error": code}; `count` says whether it counts as a failure against the peer (by default: the
     codes that say no to a sign-in)."""
 
-    def __init__(self, code, count=None):
+    def __init__(self, code, count=None, **extra):
         super().__init__(code)
-        self.code, self.count = code, code in _COUNTED if count is None else count
+        self.code, self.count, self.extra = code, code in _COUNTED if count is None else count, extra
 
 
 def _b64(b):
@@ -149,7 +149,7 @@ class Helper:
                 raise _No(next(c for t, c in _CODES.items() if isinstance(e, t))) from None
         except _No as e:
             wait = self._failed(peer) if e.count else 0
-            return {"ok": False, "error": "throttled", "wait": wait} if wait else {"ok": False, "error": e.code}
+            return {"ok": False, "error": "throttled", "wait": wait} if wait else {"ok": False, "error": e.code, **e.extra}
 
     def _load(self):
         try:
@@ -322,8 +322,8 @@ class Helper:
         r = duo.preauth(cfg, user.name, skey=self._skey(rec, cfg["id"]))
         if r == "allow":                                # Duo's bypass, set by its admin
             return {**who, "ticket": self._ticket(rec, user.name, role)}
-        if r != "auth":
-            raise _No("refused")
+        if r != "auth":                                 # deny or enroll: the password was right, Duo says no (as Toner: not counted)
+            raise _No("duo_denied", name=user.name)     # (named only after the right password, as Toner's own audit row)
         return {**who, "duo": "auth", "pending": self._put(self._pending, TTL, cfg["id"], user.name, role, {"pushed": False})}
 
     def _duo(self, req, rec, check, read, push=False):

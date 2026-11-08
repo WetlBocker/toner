@@ -235,9 +235,13 @@ def _check_directory(a, password):
     """begin's check by the helper: True once it has decided (a.user, a.name, a.role and the ticket, or Duo pending at the
     helper). False when it can't decide: Toner then binds itself with the same password, in this same call, asking nothing new.
     A refused password or no group is the helper's answer, counted as begin counts it (a second bind would count twice at the
-    directory). Its answer names no password."""
+    directory); a Duo deny at preauth is too, uncounted and audited as after_password does it. Its answer names no password."""
     ans = _ask({"op": "check_directory", "connection": a.cfg["id"], "login": a.login, "password": password}, timeout=60)
     err = None if ans.get("ok") else ans.get("error")
+    if err == "duo_denied":                             # the right password, Duo said no at preauth: as after_password does
+        name = str(ans.get("name") or a.login)
+        session.audit_soon("Duo denied a sign-in", name, who=name)
+        raise duo.Denied(DUO_DENIED)
     if err in ("refused", "not_in_group"):
         _tries(failed=True)
         if err == "refused":

@@ -284,6 +284,26 @@ check("a wrong password: WrongPassword, as today", isinstance(e, datakey.WrongPa
 check("...counted once on the shared counter, one bind (the helper's)", doc()["throttle"]["fails"] == before + 1
       and BINDS == ["helper"], (BINDS, doc()["throttle"]))
 
+print("== Duo says no at the helper's preauth: as today's Duo deny")
+for i, answer in enumerate(("deny", "enroll")):
+    DUO["preauth"] = answer
+    BINDS.clear()
+    before = doc()["throttle"]["fails"]
+    try:
+        S.begin("ivy@acme.com", "pw-ivy")
+        e = None
+    except Exception as x:
+        e = x
+    DUO["preauth"] = "auth"
+    check(f"preauth {answer}: Denied with DUO_DENIED", isinstance(e, duo.Denied) and str(e) == S.DUO_DENIED, repr(e))
+    check("...the right password is not counted as a failure", doc()["throttle"]["fails"] == before, doc()["throttle"])
+    check("...and Toner never bound itself", BINDS == ["helper"], BINDS)
+    session.sign_in("Admin1", PW)
+    denied = [r for r in audit.recent(5000) if r["action"] == "Duo denied a sign-in"]
+    session.sign_out()
+    check("...audited as today: Duo denied a sign-in, by its name", len(denied) == i + 1 and denied[0]["detail"] == "ivy@acme.com"
+          and denied[0]["actor"] == "ivy@acme.com", denied[:1])
+
 print("== a Duo code through the helper")
 a = to_duo("ivy")
 try:

@@ -312,9 +312,10 @@ check("duo_push cancelled (the client went): refused, and it counts", err(ask("d
       == "refused" and HELPER._fails[OWNER][0] == 1, HELPER._fails.get(OWNER))
 check("duo_push from another peer: not_owner", err(ask("duo_push", "S-1-5-21-1-1003", pending=a["pending"])) == "not_owner")
 DUO["preauth"] = "deny"
-check("Duo preauth deny: refused", err(ask("check_directory", connection="d1", login="bob@acme.com", password="pw-bob")) == "refused")
+check("Duo preauth deny: duo_denied", err(ask("check_directory", connection="d1", login="bob@acme.com", password="pw-bob")) == "duo_denied")
 DUO["preauth"] = "enroll"
-check("Duo preauth enroll: refused", err(ask("check_directory", connection="d1", login="bob@acme.com", password="pw-bob")) == "refused")
+check("Duo preauth enroll: duo_denied", err(ask("check_directory", connection="d1", login="bob@acme.com", password="pw-bob")) == "duo_denied")
+check("...and a wrong password is still refused", err(ask("check_directory", connection="d1", login="bob@acme.com", password="nope")) == "refused")
 DUO["preauth"] = "auth"
 check("Duo preauth allow: a ticket", isinstance(to_ticket(), str))
 check("check_directory: an SSO connection is not a directory: bad_request",

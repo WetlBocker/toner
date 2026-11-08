@@ -5,7 +5,7 @@ import json
 PROTOCOL = 1
 MAX = 65536
 ERRORS = ("not_owner", "not_enrolled", "rules_changed", "refused", "not_fresh", "bad_answer", "unreachable", "not_in_group",
-          "throttled", "bad_request", "other_user")
+          "throttled", "bad_request", "other_user", "duo_denied")
 
 
 def encode(obj):
