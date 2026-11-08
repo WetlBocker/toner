@@ -2,6 +2,7 @@
 No user-facing text lives here; exception messages are internal and never contain a password."""
 import hashlib, ssl, string, uuid
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 import ldap3
 from ldap3.core import exceptions as lx
@@ -35,15 +36,30 @@ class User:
 
 def check_config(cfg):
     if cfg.get("kind") == "oidc":                       # an SSO connection: no servers or LDAP TLS, but https and an email domain
-        from core import oidc
-        if not str(cfg.get("issuer") or "").startswith("https://") and not (
-                oidc._TEST_ALLOW_HTTP and str(cfg.get("issuer") or "").startswith("http://")):
+        from core import oidc, ssopresets
+        issuer = cfg.get("issuer")
+        try:
+            parts = urlsplit(issuer) if isinstance(issuer, str) else None
+            host = parts and parts.hostname
+        except ValueError:
+            host = None
+        if not host or not (parts.scheme == "https" or (oidc._TEST_ALLOW_HTTP and parts.scheme == "http")):
             raise InsecureConfig("the issuer must be https")
+        if cfg.get("provider") not in ssopresets.PRESETS:
+            raise InsecureConfig("unknown provider")
         if not cfg.get("client_id"):
             raise InsecureConfig("no client ID")
-        if not cfg.get("suffixes"):
+        sx = cfg.get("suffixes")
+        if not (isinstance(sx, list) and sx and all(isinstance(s, str) and s.strip() for s in sx)):
             raise InsecureConfig("no email domain")
+        names = cfg.get("group_names", {})
+        if not (isinstance(names, dict) and all(isinstance(k, str) and isinstance(v, str) for k, v in names.items())):
+            raise InsecureConfig("bad group names")
+        if cfg.get("everyone") is not None and cfg.get("everyone") not in ROLE_ORDER:
+            raise InsecureConfig("bad role for everyone")
         return
+    if "everyone" in cfg:                               # a role for everyone is for SSO only: a directory maps its OUs and groups
+        raise InsecureConfig("everyone is for SSO only")
     if not cfg.get("servers"):
         raise InsecureConfig("no servers")
     if cfg.get("kind") not in ("ad", "ldap"):
@@ -309,7 +325,7 @@ def role_for(cfg, groups, dn=""):
             return role
         if me and any(_under(me, _key(ou)) for ou in (cfg.get("ous") or {}).get(role, [])):
             return role
-    return cfg.get("everyone") if cfg.get("everyone") in ROLE_ORDER else None
+    return cfg.get("everyone") if cfg.get("kind") == "oidc" and cfg.get("everyone") in ROLE_ORDER else None
 
 
 def _under(me, ou):

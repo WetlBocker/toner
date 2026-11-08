@@ -351,7 +351,8 @@ class AccountsPage(Page):
             QMessageBox.warning(self, self.title, str(e))
             self.refresh()
             return
-        for forget in (lambda: passvault.remove(service_key(d["id"])), lambda: osstore.delete("duo:" + d["id"])):
+        for forget in (lambda: passvault.remove(service_key(d["id"])), lambda: osstore.delete("duo:" + d["id"]),
+                       lambda: osstore.delete("oidc:" + d["id"])):
             try:
                 forget()
             except Exception:                           # a locked vault or no protected store: nothing of it can be used now

@@ -1,14 +1,15 @@
 """Test login (Settings > Accounts > External Identities, right-click; Admins only): one directory user's password and, when the
-directory has Duo on, the real Duo step, through dirsignin.TestLogin. Nothing is kept: no session, key, PIN slot or account change
-in this process. The password and code boxes are emptied at the click and on close. Each step runs on a Job; a result that lands
+directory has Duo on, the real Duo step, through dirsignin.TestLogin (an SSO connection: one browser sign-in). Nothing is kept:
+no session, key, PIN slot or account change in this process. The password and code boxes are emptied at the click and on close. Each step runs on a Job; a result that lands
 after Cancel, a code instead, close or a newer Test is dropped, and an exception is dropped once its sentence is shown."""
 import threading
 import traceback
+import webbrowser
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QDialog, QStackedWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QDialog, QLabel, QStackedWidget, QVBoxLayout, QWidget
 
-from core import datakey, directory, dirsignin, perms
+from core import datakey, directory, dirsignin, oidc, perms
 from ui import status
 from ui.signinwindow import (DAMAGED, DAMAGED_ERRORS, DUO_TEXT, DUO_TITLE, SAID, Job, Wait, field, heading, link, primary, say,
                              words)
@@ -33,6 +34,9 @@ class TestLoginDialog(QDialog):
         self.pw.returnPressed.connect(self.test_btn.click)
         self.user.returnPressed.connect(self.pw.setFocus)
         self.wait = Wait(self.result, self.test_btn)
+        if cfg.get("kind") == "oidc":                   # SSO: the provider's page in the browser asks who, not these boxes
+            for w in [self.user, self.pw] + [x for x in self.form_page.findChildren(QLabel) if x.buddy() in (self.user, self.pw)]:
+                w.hide()
 
         self.push_page, lay = self._page()
         lay.addWidget(heading(DUO_TITLE))
@@ -72,6 +76,8 @@ class TestLoginDialog(QDialog):
 
     # ---------------------------------------------------------------- the steps
     def _test(self):
+        if self.cfg.get("kind") == "oidc":
+            return self._test_sso()
         login, box = self.user.text().strip(), [self.pw.text()]     # (popped on the Job: no frame keeps the password)
         self.pw.setText("")
         say(self.result, "")
@@ -84,6 +90,13 @@ class TestLoginDialog(QDialog):
                 return self._push()
             self._end(e)
         self._run(lambda: t.check_password(login, box.pop()), landed)
+
+    def _test_sso(self):
+        """One browser sign-in; closing the dialog stops the wait within a second."""
+        say(self.result, "")
+        self._turn += 1
+        t, cancel = self.test, self._cancel = dirsignin.TestLogin(self.cfg), threading.Event()
+        self._run(lambda: t.check_sso(webbrowser.open, cancel), lambda _r, e: self._end(e))
 
     def _push(self):
         t, cancel = self.test, threading.Event()
@@ -125,7 +138,7 @@ class TestLoginDialog(QDialog):
             self.wait.start(e.seconds)
         elif isinstance(e, directory.Unreachable):
             say(self.result, dirsignin.UNREACHABLE)
-        elif isinstance(e, (*SAID, perms.Denied)):
+        elif isinstance(e, (*SAID, perms.Denied, oidc.OidcError)):     # (check_sso's carry the SSO_* sentences)
             say(self.result, str(e))
         elif isinstance(e, DAMAGED_ERRORS):
             say(self.result, DAMAGED)

@@ -331,7 +331,8 @@ def sso_wait(a, cancel):
 class TestLogin:
     """Test login: an Admin checks one directory user's password and Duo. begin's and the Duo steps' checks, with nothing kept:
     no data key, PIN slot, account record or session, no write to the account, and a pass never clears the shared counter.
-    cfg comes from roles.verified(). stage: "password", "duo" or "done"; result is the sentence shown once done. Each finished
+    cfg comes from roles.verified(); an SSO connection's test is check_sso (the browser) in place of check_password and Duo.
+    stage: "password", "duo" or "done"; result is the sentence shown once done. Each finished
     test writes one "test login" audit row; a push cancelled for a code writes none."""
 
     def __init__(self, cfg):
@@ -372,6 +373,41 @@ class TestLogin:
         if r == "allow":                                    # Duo's bypass, set by its admin
             return self._passed("password")
         self.stage = "duo"
+
+    def check_sso(self, open_url, cancel):
+        """An SSO connection's test, in place of check_password: one browser sign-in, its groups and their role. The tokens go with
+        this call. `cancel` set (the dialog closed): no audit row and nothing counted. The oidc errors carry the SSO_* sentences."""
+        _expect(self, "password")
+        if not perms.is_admin():
+            raise perms.Denied()
+        _tries()
+        provider, user, browser = self.cfg["name"], None, None
+        try:
+            _discover_now(self.cfg)                         # a provider that went down is seen as down, not waited on
+            browser = oidc.BrowserSignIn(self.cfg, open_url=open_url, scopes="openid profile email")     # no refresh token asked for
+            browser.open()
+            tokens = browser.run(cancel)
+            user = oidc.user_from(self.cfg, tokens.claims, oidc.groups(self.cfg, tokens.claims, tokens.access_token))
+        except oidc.Unreachable:
+            failed = directory.Unreachable(UNREACHABLE)
+        except oidc.Cancelled:
+            if cancel.is_set():
+                raise
+            failed = oidc.Cancelled(SSO_CANCELLED)
+        except oidc.NotFresh:
+            failed = oidc.NotFresh(SSO_NOT_FRESH.format(provider=provider))
+        except (oidc.OidcError, KeyError):                  # KeyError: the ID token names no one
+            failed = oidc.BadAnswer(SSO_BAD_ANSWER.format(provider=provider))
+        finally:
+            if browser is not None:
+                browser.close()
+        if user is None:
+            self._fail("password", provider, failed, count=not isinstance(failed, directory.Unreachable))
+        role = directory.role_for(self.cfg, user.groups)
+        if role is None:
+            self._fail("password", user.name, NotInGroup(TEST_NOT_MAPPED.format(name=user.name)), count=True)
+        self.name, self.role = user.name, role
+        self._passed("password")
 
     def duo_push(self, cancel):
         _expect(self, "duo")

@@ -39,15 +39,36 @@ def refused(d):
         return True
     return False
 
+def raises(fn):
+    try:
+        fn()
+    except directory.InsecureConfig:
+        return True
+    return False
+
 roles.set_directories([sso()])
 check("an Entra cfg is stored", roles.verified()["directories"][0]["provider"] == "entra")
 check("http issuer refused", refused(sso(issuer="http://login.example.com")))
 check("empty client id refused", refused(sso(client_id="")))
 check("no email domain refused", refused(sso(suffixes=[])))
 check("unknown key refused", refused(sso(surprise=1)))
+check("an issuer with no host refused", refused(sso(issuer="https://")) and refused(sso(issuer="https:///v2.0"))
+      and refused(sso(issuer=None)) and refused(sso(issuer="https://[bad")))
+check("an unknown provider refused", refused(sso(provider="azure")) and refused(sso(provider=None)))
+check("suffixes must be a non-empty list of non-empty strings", refused(sso(suffixes="acme.com")) and refused(sso(suffixes=[""]))
+      and refused(sso(suffixes=["acme.com", 3])) and refused(sso(suffixes=["  "])))
+check("group_names must map str to str", refused(sso(group_names=["g"])) and refused(sso(group_names={"g": 1})))
+check("everyone must be a role or None", refused(sso(everyone="Owner")) and not refused(sso(everyone="Tech")))
 oidc._TEST_ALLOW_HTTP = True
 check("http issuer allowed by the test flag", not refused(sso(issuer="http://127.0.0.1:1")))
+check("...but still needs a host", refused(sso(issuer="http://")))
 oidc._TEST_ALLOW_HTTP = False
+AD = {"id": "d1", "name": "ACME", "kind": "ad", "servers": ["dc1.acme.com"], "port": 636, "security": "ldaps", "ca_file": "",
+      "base_dn": "DC=acme,DC=com", "netbios": "ACME", "suffixes": ["acme.com"], "service_dn": "CN=svc,DC=acme,DC=com",
+      "groups": {"Admin": ["CN=Admins,DC=acme,DC=com"]}, "ous": {}, "duo": {"on": False, "host": "", "ikey": ""}}
+check("everyone is refused on an AD or LDAP directory", raises(lambda: directory.check_config({**AD, "everyone": "Tech"}))
+      and raises(lambda: directory.check_config({**AD, "kind": "ldap", "everyone": None})) and not raises(lambda: directory.check_config(AD)))
+check("role_for ignores everyone on a directory that isn't SSO", directory.role_for({**AD, "everyone": "Tech"}, []) is None)
 roles.set_directories([sso()])
 
 datakey.add_local("sam@acme.com", PW, "Tech")
