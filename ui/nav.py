@@ -52,12 +52,13 @@ class NavDelegate(QStyledItemDelegate):
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QFont, QFontMetrics, QPainter, QPen
         row = index.row()
-        if self.nav.is_break(row):                                     # icons only: a short rule where a group name would be
+        if self.nav.is_break(row):                                     # a short rule between the groups: in place of the name when folded, above it when open
             t = theme.current() or {}
             r = opt.rect
+            y = r.top() + NAV_BREAK // 2                               # the same height from the row's top either way, so it never jumps
             p.save()
             p.setPen(QPen(QColor(t.get("border", "#444444")), 1))
-            p.drawLine(r.left() + 14, r.center().y(), r.right() - 14, r.center().y())
+            p.drawLine(r.left() + 14, y, r.right() - 14, y)
             p.restore()
             return
         n = self.nav.count_for_row(row)
@@ -183,7 +184,7 @@ class NavStack(QWidget):
         self.user = QPushButton()                  # who is signed in: Lock and Sign out (set_user)
         self.user.setProperty("ghost", True)
         self.user.setFocusPolicy(Qt.FocusPolicy.TabFocus)
-        self.user.setStyleSheet("text-align: left; padding: 6px 10px;")
+        self.user.setObjectName("navUser")                # the theme lays it out like Search, folded or open, with no menu arrow
         self.user.hide()
         self._user_name = ""
         self.list = QListWidget()                  # the sections, one under another, with their group names
@@ -201,7 +202,7 @@ class NavStack(QWidget):
         self.head = head = QHBoxLayout()           # the mark and the name; centred on the mark alone when folded
         head.setContentsMargins(0, 0, 0, 0)
         head.setSpacing(8)
-        head.addStretch(0)
+        head.addSpacing((SIDE_FOLDED - 20 - LOGO) // 2)   # the mark's place: centred in the folded column, and the same when open
         head.addWidget(self.mark)
         head.addWidget(self._brand, 1)
         head.addSpacing(FOLD + 4)                  # where the fold button sits while the names show
@@ -258,8 +259,9 @@ class NavStack(QWidget):
         return self._collapsed or self._auto
 
     def is_break(self, row):
-        """Folded to icons, a group name's row is drawn as a short rule between the groups (none above the first group)."""
-        return self._icons_only() and row in self._headings and row != self._spacer and row != 0
+        """A group name's row carries a short rule between the groups: in place of the name when folded, above it when open (none
+        above the first group)."""
+        return row in self._headings and row != self._spacer and row != 0
 
     def _place_fold(self):
         """The fold button: at the right of the top row while the names show; astride the sidebar's edge, just outside it, when
@@ -272,24 +274,31 @@ class NavStack(QWidget):
             self.fold.move(w - m.right() - FOLD, m.top() + (LOGO - FOLD) // 2)
         self.fold.raise_()
 
-    def _slide_to(self, width):
-        """The sidebar's width: it slides to the folded or open width with a small bounce at the end (at once with motion off, or
-        before the window is up)."""
+    def _slide_to(self, width, heights, then=None):
+        """One motion to the folded or open sidebar: its width and its rows' heights (the group headings, the sections) ease there
+        together, ease-out, never past the end (a bounce squeezed the icons). `then` runs at the end. At once with motion off, or before
+        the window is up."""
         from ui import motion
         motion.stop(self._slide)
+        self._slide = None
         start = self.side.width()
-        if start == width or not motion.enabled() or not self.isVisible():
-            self.side.setFixedWidth(width)
-            self._place_fold()
-            return
-        from PySide6.QtCore import QEasingCurve
-        curve = QEasingCurve(QEasingCurve.Type.OutBack)
-        curve.setOvershoot(0.9)                                        # a short way past, then back: the bounce
+        before = {row: self.list.item(row).sizeHint().height() for row in heights}
 
         def step(p):
-            self.side.setFixedWidth(max(8, round(start + (width - start) * p)))
+            self.side.setFixedWidth(round(start + (width - start) * p))
+            for row, h in heights.items():
+                self.list.item(row).setSizeHint(QSize(0, round(before[row] + (h - before[row]) * p)))
+            self._place_spacer()
             self._place_fold()
-        self._slide = motion.animate(self, 380, step, curve=curve)
+
+        def done():
+            self._slide = None
+            if then:
+                then()
+        if (start == width and before == heights) or not motion.enabled() or not self.isVisible():
+            step(1.0)
+            return done()
+        self._slide = motion.animate(self, 320, step, on_done=done)
 
     def set_orgs(self, orgs, current=0):
         """[(id, name, colour)]: the organizations besides Global (archived ones are not offered). Hidden while there are none."""
@@ -317,42 +326,60 @@ class NavStack(QWidget):
         if changed:
             self.collapsed_changed.emit(on)
 
+    def _heights(self, icons_only):
+        """{row: height} for the group headings and the sections, folded or open."""
+        h = {row: (NAV_BREAK if row else 6) if icons_only else (NAV_HEADING if row else NAV_HEADING - 12) for row in self._headings
+             if row != self._spacer}
+        h.update({row: NAV_ITEM_FOLDED if icons_only else NAV_ITEM for row in self._rows})
+        return h
+
     def _apply_mode(self):
-        """Show the names or just the icons: in the sections, the group names, Search, the switcher and the fold button."""
+        """Show the names or just the icons, as one motion: folding, the group names go at once (their rule stays put as the rows
+        shrink) and the other names when the sidebar is narrow; opening, the names come back at once and show as it widens. The mark
+        never moves sideways."""
         icons_only = self._icons_only()
-        self._slide_to(SIDE_FOLDED if icons_only else SIDE_WIDTH)
         self.fold.setToolTip("Show the sidebar in full (Ctrl+B)" if self._collapsed else "Fold the sidebar to icons (Ctrl+B)")
-        self._brand.setVisible(not icons_only)
-        self.head.setStretch(0, 1 if icons_only else 0)                 # the mark sits in the middle of the folded column
-        self.head.setStretch(self.head.count() - 1, 1 if icons_only else 0)
-        self.head.itemAt(3).changeSize(0 if icons_only else FOLD + 4, 0)
-        self.head.invalidate()
-        self.quick.setText("" if icons_only else "Search")
-        self.user.setText("" if icons_only else self._user_name)
-        self.quick.setProperty("folded", icons_only)                   # the icon alone, in the middle of the button
-        self.quick.style().unpolish(self.quick)
-        self.quick.style().polish(self.quick)
-        self.org_label.setVisible(not icons_only and not self.org.isHidden())
-        for row in self._headings:
-            item = self.list.item(row)
-            if row == self._spacer:
-                continue
-            item.setText("" if icons_only else item.data(Qt.ItemDataRole.UserRole))
-            item.setSizeHint(QSize(0, (NAV_BREAK if row else 6) if icons_only else (NAV_HEADING if row else NAV_HEADING - 12)))
-        for i in range(len(self._names)):
-            self._label(i)
-        self._place_spacer()
+        self._heading_names(not icons_only)
+        if icons_only:
+            self._slide_to(SIDE_FOLDED, self._heights(True), then=lambda: self._names_shown(not self._icons_only()))
+        else:
+            self._names_shown(True)
+            self._slide_to(SIDE_WIDTH, self._heights(False))
         self._place_fold()
         self.restyle()
 
-    def _label(self, i):
-        """What section i shows: its icon and name, and a dot after the name when something is new (on the icon when only icons show)."""
+    def _heading_names(self, on):
+        for row in self._headings:
+            if row != self._spacer:
+                item = self.list.item(row)
+                item.setText(item.data(Qt.ItemDataRole.UserRole) if on else "")
+
+    def _names_shown(self, on):
+        """The names beside the icons: the sections', the brand's, Search's and the account's (centred icons when off)."""
+        self._brand.setVisible(on)
+        self.head.itemAt(3).changeSize(FOLD + 4 if on else 0, 0)       # where the fold button sits while the names show
+        self.head.invalidate()
+        self.quick.setText("Search" if on else "")
+        self.user.setText(self._user_name if on else "")
+        for b in (self.quick, self.user):                              # the icon alone, in the middle of the button
+            b.setProperty("folded", not on)
+            b.style().unpolish(b)
+            b.style().polish(b)
+        self.org_label.setVisible(on and not self.org.isHidden())
+        for i in range(len(self._names)):
+            self._label(i, sized=False)
+        self._place_spacer()
+
+    def _label(self, i, sized=True):
+        """What section i shows: its icon and name, and a dot after the name when something is new (on the icon when only icons show).
+        sized: its row's height too (not while the sidebar is sliding, which sets the heights)."""
         item = self.list.item(self._rows[i])
         dot = i in self._badges
         icons_only = self._icons_only()
         item.setText("" if icons_only else self._names[i] + ("   ●" if dot else ""))
         item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | (Qt.AlignmentFlag.AlignHCenter if icons_only else Qt.AlignmentFlag.AlignLeft))
-        item.setSizeHint(QSize(0, NAV_ITEM_FOLDED if icons_only else NAV_ITEM))
+        if sized and self._slide is None:
+            item.setSizeHint(QSize(0, NAV_ITEM_FOLDED if icons_only else NAV_ITEM))
         tip = self._names[i] + ("   (new)" if dot and icons_only else "")
         item.setToolTip(tip + (f"   (Ctrl+{i + 1})" if i < 9 else "") + (f"\n{self._words[i]}" if self._words.get(i) else ""))
 

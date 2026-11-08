@@ -69,6 +69,23 @@ spin(700)
 check("...and settles at the folded width, the fold button on its edge", n.side.width() == nav.SIDE_FOLDED and n.fold.x() < nav.SIDE_FOLDED < n.fold.x() + n.fold.width(), (n.side.width(), n.fold.pos()))
 n.setCollapsed(False); spin(700)
 check("...and back", n.side.width() == nav.SIDE_WIDTH)
+check("open: the same short rule above each group name, none above the first", [n.is_break(r) for r in n._headings if r != n._spacer] == [False, True, True]
+      and all(n.list.item(r).text() for r in n._headings if r != n._spacer))
+row_of = lambda r: n.list.visualItemRect(n.list.item(r)).height()
+head, sec = n._headings[1], n._rows[0]
+mark0, widths, heights, labels = n.mark.x(), [], [], []
+n.setCollapsed(True)
+for _ in range(60):
+    app.processEvents(); time.sleep(0.01)
+    widths.append(n.side.width()); heights.append(row_of(head)); labels.append(n.list.item(sec).text())
+spin(500)
+check("folding is one motion: the group headings shrink with the width, not before it", any(nav.NAV_BREAK < h < nav.NAV_HEADING for h in heights), heights)
+check("...the names stay until the sidebar is narrow, then go", labels[0] != "" and n.list.item(sec).text() == "", labels[:3])
+check("...the sidebar never goes narrower than folded on its way (no squeeze)", min(widths) >= nav.SIDE_FOLDED, min(widths))
+check("...and the mark doesn't move sideways", n.mark.x() == mark0, (mark0, n.mark.x()))
+check("folded: the account button is centred like Search, with no menu arrow", n.user.objectName() == "navUser" and n.user.styleSheet() == ""
+      and n.user.property("folded") is True and "QPushButton#navUser::menu-indicator" in app.styleSheet())
+n.setCollapsed(False); spin(700)
 w.show_assistant(True); spin(w.PANEL_MS + 100)                   # the splitter takes the width when the slide ends
 check("the Assistant panel slides open too", 0 < w.body.sizes()[1] < w.assistant.minimumWidth() or w.body.sizes()[1] >= w.assistant.minimumWidth(), w.body.sizes())
 spin(700)

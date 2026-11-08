@@ -311,6 +311,9 @@ QLabel#brandMark { background: %(accent)s; color: %(accent_text)s; border-radius
 QPushButton#navSearch { text-align: left; padding: 6px 10px; background: %(input)s; border: 1px solid %(border)s; color: %(muted)s; }
 QPushButton#navSearch[folded="true"] { text-align: center; padding: 6px 4px; }
 QPushButton#navSearch:hover { color: %(text)s; background: %(hover)s; }
+QPushButton#navUser { text-align: left; padding: 6px 10px; }
+QPushButton#navUser[folded="true"] { text-align: center; padding: 6px 4px; }
+QPushButton#navUser::menu-indicator { image: none; width: 0px; }
 QPushButton#navFold { padding: 0; background: %(surface)s; border: 1px solid %(border)s; border-radius: %(r_btn)spx; }
 QPushButton#refresh { padding: 0; }
 QPushButton#navFold:hover { background: %(hover)s; }
