@@ -134,9 +134,9 @@ directory._who_am_i = lambda conn: "u:ACME\\" + conn.server.dit[conn.user]["sAMA
 directory._make_server = lambda cfg, host, *_: ldap
 BINDS = []
 real_connect = directory.connect
-def counting_connect(cfg, who, password):
+def counting_connect(cfg, who, password, **k):
     BINDS.append(who)
-    return real_connect(cfg, who, password)
+    return real_connect(cfg, who, password, **k)
 directory.connect = counting_connect
 
 DUO_ON = {"on": True, "host": f"127.0.0.1:{srv.server_port}", "ikey": "IK"}
@@ -269,7 +269,7 @@ check("unreachable: the approved sentence", e is not None and str(e) == S.UNREAC
 directory._make_server = lambda cfg, host, *_: ldap
 
 # ---------------------------------------------------------------- the CA file changed since the list was signed
-def ca_changed(cfg, who, password): raise directory.CaChanged("CA file changed")
+def ca_changed(cfg, who, password, **k): raise directory.CaChanged("CA file changed")
 directory.connect = ca_changed
 t = S.TestLogin(cfg())
 e = raises(lambda: t.check_password("bob@acme.com", "pw-bob"), S.CaChanged)

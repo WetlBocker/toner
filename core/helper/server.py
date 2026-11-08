@@ -109,6 +109,20 @@ def _verified(path, rules_pub, read):
     return None
 
 
+def _ca(cfg, read):
+    """The connection's CA file read with `read` (the caller's rights; a regular file of at most MAX_KEYS), or None when it has
+    none. A path that isn't an absolute local one, or a file that can't be read: bad_request, and Toner checks the sign-in."""
+    if not cfg.get("ca_file"):
+        return None
+    path = _path(cfg["ca_file"]) if isinstance(cfg["ca_file"], str) else None
+    if path is None:
+        raise _No("bad_request")
+    try:
+        return read(path)
+    except OSError:
+        raise _No("bad_request") from None
+
+
 def _who(user, role):
     return {"name": user.name, "role": role, "guid": user.guid, "display": user.display}
 
@@ -312,7 +326,7 @@ class Helper:
 
     def _check_directory(self, req, rec, cancel, read):
         cfg = self._cfg(rec, req["connection"], False, read)
-        user = directory.sign_in(cfg, req["login"], req["password"])
+        user = directory.sign_in(cfg, req["login"], req["password"], ca_data=_ca(cfg, read))
         if not user.enabled:
             raise _No("refused")
         role = directory.role_for(cfg, user.groups, user.dn)

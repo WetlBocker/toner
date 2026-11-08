@@ -71,16 +71,18 @@ def check_config(cfg):
         raise InsecureConfig("port 389 is not LDAPS")
 
 
-def _ca(cfg):
+def _ca(cfg, data=None):
     """The CA file's contents for ldap3, read once and checked against the SHA-256 signed into the list (roles.set_directories),
-    so a changed file is refused, not trusted. No CA file: None (the system store)."""
+    so a changed file is refused, not trusted. No CA file: None (the system store). `data`: the file's bytes, read already by
+    the caller (the helper service reads it with its client's rights, never its own)."""
     if not cfg.get("ca_file"):
         return None
-    try:
-        with open(cfg["ca_file"], "rb") as f:
-            data = f.read()
-    except OSError:
-        raise InsecureConfig("the CA file can't be read") from None
+    if data is None:
+        try:
+            with open(cfg["ca_file"], "rb") as f:
+                data = f.read()
+        except OSError:
+            raise InsecureConfig("the CA file can't be read") from None
     if hashlib.sha256(data).hexdigest() != cfg.get("ca_sha256"):
         raise CaChanged("the CA file isn't the one signed")
     return data.decode("ascii", "ignore") if b"-----BEGIN" in data else data     # ssl's cadata takes PEM as text, DER as bytes
@@ -124,11 +126,11 @@ def reachable(cfg):
     return False
 
 
-def connect(cfg, who, password):
+def connect(cfg, who, password, ca_data=None):
     check_config(cfg)
     if not who or not password:      # an empty password makes a SIMPLE bind anonymous, which "succeeds"
         raise BadCredentials("empty identity or password")
-    ca = _ca(cfg)
+    ca = _ca(cfg, ca_data)
     down = None
     for host in cfg["servers"]:
         conn = None
@@ -279,10 +281,11 @@ def _who_am_i(conn):
     return conn.extend.standard.who_am_i() or ""
 
 
-def sign_in(cfg, login, password, service_password=None):
-    """Binds as the person and reads their own entry and groups with that bind. service_password is unused (the vault is sealed)."""
+def sign_in(cfg, login, password, service_password=None, ca_data=None):
+    """Binds as the person and reads their own entry and groups with that bind. service_password is unused (the vault is sealed).
+    ca_data: the CA file's bytes when the caller has read them (else the file is read here)."""
     who, short = _split_login(cfg, login)
-    conn = connect(cfg, who, password)
+    conn = connect(cfg, who, password, ca_data=ca_data)
     try:
         esc = ldap3.utils.conv.escape_filter_chars
         if cfg["kind"] == "ad":      # ask the server who the bind is, so a look-alike name can't pick another entry

@@ -324,6 +324,43 @@ check("Duo preauth allow: a ticket", isinstance(to_ticket(), str))
 check("check_directory: an SSO connection is not a directory: bad_request",
       err(ask("check_directory", connection="s1", login="bob@acme.com", password="pw-bob")) == "bad_request")
 
+# ---------------------------------------------------------------- the directory's CA file: read with the caller's rights, never SYSTEM's
+import hashlib
+CAF = HDIR / "ca.pem"
+CAF.write_bytes(b"-----BEGIN CERTIFICATE-----\nnot a real one\n-----END CERTIFICATE-----\n")
+real_cfg, real_sign_in, CA_SEEN, READ = HELPER._cfg, directory.sign_in, [], []
+def with_ca(path, sha=None):
+    HELPER._cfg = lambda rec, conn, sso, read: {**real_cfg(rec, conn, sso, read), "ca_file": str(path),
+                                                "ca_sha256": sha or hashlib.sha256(CAF.read_bytes()).hexdigest()}
+directory.sign_in = lambda cfg, login, pw, ca_data=None, **k: (CA_SEEN.append(ca_data), real_sign_in(cfg, login, pw, ca_data=ca_data, **k))[1]
+def reader(path):
+    READ.append(path)
+    return server._read(path)
+def check_dir():
+    return HELPER.handle({"op": "check_directory", "v": protocol.PROTOCOL, "keys_path": KEYS, "connection": "d1",
+                          "login": "bob@acme.com", "password": "pw-bob"}, OWNER, None, reader)
+with_ca(CAF)
+a = check_dir()
+check("a CA file: read through the caller's reader, its bytes handed to the bind", a.get("ok") and CA_SEEN[-1] == CAF.read_bytes()
+      and os.path.normcase(str(CAF)) in READ, (a, READ))
+BIG = HDIR / "big.pem"
+BIG.write_bytes(b"x" * (server.MAX_KEYS + 1))
+with_ca(BIG, "0" * 64)
+n = len(CA_SEEN)
+check("a CA file over 1 MiB: bad_request, no bind", check_dir() == {"ok": False, "error": "bad_request"} and len(CA_SEEN) == n)
+with_ca(HDIR / "missing.pem", "0" * 64)
+check("a CA file that can't be read: bad_request (Toner then binds itself)", check_dir() == {"ok": False, "error": "bad_request"})
+with_ca("relative.pem", "0" * 64)
+check("a CA path that isn't absolute and local: bad_request", check_dir() == {"ok": False, "error": "bad_request"})
+if hasattr(os, "mkfifo"):
+    FIFO = HDIR / "ca.fifo"
+    os.mkfifo(FIFO)
+    started = time.time()
+    with_ca(FIFO, "0" * 64)
+    check("a CA path that is a FIFO: bad_request at once, nothing waits on it", check_dir() == {"ok": False, "error": "bad_request"}
+          and time.time() - started < 5)
+HELPER._cfg, directory.sign_in = real_cfg, real_sign_in
+
 # ---------------------------------------------------------------- release
 a = ask("release", ticket=PUSH_TICKET, name="bob@acme.com")
 check("release with a Tech's ticket: the enrolled data key, never the rules key", a.get("ok") and base64.b64decode(a["data_key"])
