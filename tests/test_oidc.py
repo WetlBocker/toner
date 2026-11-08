@@ -3,7 +3,7 @@
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import base64, hashlib, hmac, json, threading, time
+import base64, hashlib, hmac, json, threading, time, urllib.parse
 import requests
 from core import oidc
 from fake_oidc import FakeProvider
@@ -162,6 +162,18 @@ check("a second request to the port gets nothing (port closed)", raises(requests
 SECRETS.clear()
 flow()
 check("no stored secret: none sent", "client_secret" not in P.token_requests[-1])
+check("not Google: the offline_access scope, no access_type", P.authorize_seen[-1]["scope"] == "openid profile email offline_access"
+      and "access_type" not in P.authorize_seen[-1])
+GOOGLE = {**CFG, "provider": "google"}
+g = oidc.BrowserSignIn(GOOGLE, open_url=lambda u: None)
+gq = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(g.url).query))
+g.close()
+check("Google: access_type=offline instead of the offline_access scope, still prompt=login and max_age=0",
+      gq["access_type"] == "offline" and gq["scope"] == "openid profile email" and gq["prompt"] == "login" and gq["max_age"] == "0", gq)
+g = oidc.BrowserSignIn(GOOGLE, open_url=lambda u: None, scopes="openid profile email")
+gq = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(g.url).query))
+g.close()
+check("Google with no refresh token asked for (Test login): no access_type", "access_type" not in gq and gq["scope"] == "openid profile email")
 check("a given nonce is used", flow(nonce="mine")[0].nonce == "mine" and P.authorize_seen[-1]["nonce"] == "mine")
 P.id_claims = {"auth_time": now - 1000}
 check("a stale auth_time from the provider is NotFresh", raises(oidc.NotFresh, flow))
@@ -195,6 +207,9 @@ check("a timeout also raises Cancelled", raises(oidc.Cancelled, oidc.BrowserSign
 print("== refresh")
 tk = oidc.refresh(CFG, "rt-1")
 check("refresh gives new tokens", tk.access_token == "at-2" and tk.refresh_token == "rt-2" and tk.claims["sub"] == "sub-1")
+check("...asking for the sign-in's scopes again (Entra v2 needs them)", P.token_requests[-1].get("scope") == "openid profile email offline_access")
+oidc.refresh({**CFG, "provider": "google"}, "rt-1")
+check("...Google's without offline_access, which it refuses", P.token_requests[-1].get("scope") == "openid profile email")
 P.revoked.add("rt-1")
 check("a revoked refresh token is Refused", raises(oidc.Refused, oidc.refresh, CFG, "rt-1"))
 P.revoked.clear()

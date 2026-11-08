@@ -24,6 +24,7 @@ CACHE_SECONDS = 3600
 _DIRECT = {"proxies": {"http": "", "https": ""}}   # like every web connection in Toner: direct, whatever proxy the system has
 GRAPH = "https://graph.microsoft.com/v1.0"
 SSO_DONE_PAGE = "You're signed in. You can close this tab and go back to Toner."
+SCOPES = "openid profile email offline_access"          # a sign-in's, and its refresh's (Entra v2 needs them in the refresh too)
 
 
 class OidcError(Exception):
@@ -220,6 +221,11 @@ def _token_call(cfg, form):
     return got
 
 
+def _scopes(cfg, scopes):
+    """Google refuses the offline_access scope (it takes access_type=offline instead): the scopes without it there."""
+    return " ".join(s for s in scopes.split() if s != "offline_access") if cfg.get("provider") == "google" else scopes
+
+
 class _LoopbackServer(http.server.ThreadingHTTPServer):
     daemon_threads = True       # an idle pre-connection from the browser must not hold anything up
     owner = None
@@ -258,7 +264,7 @@ class BrowserSignIn:
     """One sign-in in the person's browser: authorization code with PKCE on a loopback port, forced fresh (prompt=login, max_age=0).
     The port is bound here (so .url has it); run() or close() frees it."""
 
-    def __init__(self, cfg, nonce=None, open_url=webbrowser.open, login_hint=None, scopes="openid profile email offline_access"):
+    def __init__(self, cfg, nonce=None, open_url=webbrowser.open, login_hint=None, scopes=SCOPES):
         self.cfg, self.open_url = cfg, open_url
         self.nonce = nonce or secrets.token_urlsafe(32)
         self._state = secrets.token_urlsafe(32)
@@ -270,11 +276,14 @@ class BrowserSignIn:
         self._server = _LoopbackServer(("127.0.0.1", 0), _Redirect)
         self._server.owner = self
         self.redirect_uri = f"http://localhost:{self._server.server_address[1]}/"     # the name providers register; the listener is 127.0.0.1 only
-        q = {"response_type": "code", "client_id": cfg["client_id"], "redirect_uri": self.redirect_uri, "scope": scopes, "state": self._state,
+        q = {"response_type": "code", "client_id": cfg["client_id"], "redirect_uri": self.redirect_uri, "scope": _scopes(cfg, scopes),
+             "state": self._state,
              "nonce": self.nonce, "prompt": "login", "max_age": "0", "code_challenge_method": "S256",
              "code_challenge": base64.urlsafe_b64encode(hashlib.sha256(self._verifier.encode()).digest()).rstrip(b"=").decode()}
         if login_hint:
             q["login_hint"] = login_hint
+        if cfg.get("provider") == "google" and "offline_access" in scopes.split():
+            q["access_type"] = "offline"                 # Google's way to send a refresh token
         self.url = endpoint + ("&" if "?" in endpoint else "?") + urllib.parse.urlencode(q)
 
     def open(self):
@@ -308,9 +317,11 @@ class BrowserSignIn:
         return Tokens(id_token, access, refresh_token, verify_id_token(self.cfg, id_token, self.nonce, max_age=300))
 
 
-def refresh(cfg, refresh_token):
-    """New tokens from a refresh token. A revoked one is Refused, no connection is Unreachable."""
-    id_token, access, new = _token_call(cfg, {"grant_type": "refresh_token", "refresh_token": refresh_token})
+def refresh(cfg, refresh_token, scopes=SCOPES):
+    """New tokens from a refresh token, asking for the sign-in's scopes again. A revoked one is Refused, no connection is
+    Unreachable."""
+    id_token, access, new = _token_call(cfg, {"grant_type": "refresh_token", "refresh_token": refresh_token,
+                                              "scope": _scopes(cfg, scopes)})
     claims = verify_id_token(cfg, id_token, None, max_age=None) if id_token else {}
     return Tokens(id_token or "", access, new, claims)
 

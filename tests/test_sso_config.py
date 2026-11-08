@@ -83,7 +83,7 @@ check("role_for: a mapped group beats everyone", directory.role_for(sso(everyone
 check("issuer_for entra", ssopresets.issuer_for("entra", "contoso-tenant-id") == "https://login.microsoftonline.com/contoso-tenant-id/v2.0")
 check("issuer_for others strips a trailing slash", ssopresets.issuer_for("okta", "https://acme.okta.com/") == "https://acme.okta.com")
 NOTES = {
-    "entra": "In the Entra admin center, register an app for Toner as a public client (mobile and desktop) with the redirect URI http://localhost. Add the groups claim to its ID token, and grant GroupMember.Read.All with admin consent so Toner can list groups.",
+    "entra": "In the Entra admin center, register an app for Toner as a public client (mobile and desktop) with the redirect URI http://localhost. Add the groups claim and the auth_time optional claim to its ID token, and grant GroupMember.Read.All with admin consent so Toner can list groups.",
     "okta": "In Okta, add an OIDC native app for Toner with the redirect URI http://localhost, and add a groups claim to its ID token.",
     "google": "In Google Cloud, create an OAuth client of type Desktop app for Toner. Google sends no groups, so everyone who signs in gets the role you choose under Roles.",
     "duo": "In Duo, add a Generic OIDC Relying Party for Toner with the redirect URI http://localhost, and send the groups attribute in its ID token.",

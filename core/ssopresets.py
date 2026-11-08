@@ -3,8 +3,8 @@
 PRESETS = {
     "entra": {"label": "Entra", "field": "Tenant ID", "groups_claim": "groups", "id_claim": "oid", "lists_groups": True,
               "note": "In the Entra admin center, register an app for Toner as a public client (mobile and desktop) with the "
-                      "redirect URI http://localhost. Add the groups claim to its ID token, and grant GroupMember.Read.All "
-                      "with admin consent so Toner can list groups."},
+                      "redirect URI http://localhost. Add the groups claim and the auth_time optional claim to its ID token, "
+                      "and grant GroupMember.Read.All with admin consent so Toner can list groups."},
     "okta": {"label": "Okta", "field": "Issuer URL", "groups_claim": "groups", "id_claim": "sub", "lists_groups": False,
              "note": "In Okta, add an OIDC native app for Toner with the redirect URI http://localhost, and add a groups "
                      "claim to its ID token."},
