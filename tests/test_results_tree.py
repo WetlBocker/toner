@@ -55,7 +55,13 @@ check("device row shows worst status and counts", d["core-sw1"].text(2) == "WARN
 check("all-OK device says so", d["quiet"].text(2) == "OK" and d["quiet"].text(4) == "all OK")
 check("error device", d["dead"].text(2) == "ERROR" and d["dead"].text(1) == "connection" and d["dead"].text(4) == "TimeoutError" and d["dead"].childCount() == 0 and d["dead"].toolTip(4) == "1 ERROR", d["dead"].text(4))
 check("checks are the children, worst first", [d["core-sw1"].child(i).text(1) for i in range(3)] == ["memory", "cpu", "uptime"] and d["core-sw1"].child(0).text(0) == "" and d["core-sw1"].child(0).text(3) == "85%" and d["core-sw1"].child(0).text(4) == "high")
-check("UniFi children name their sub-device", sorted(d["udm"].child(i).text(1) for i in range(3)) == ["ap-1: temperature", "ap-1: uptime", "usw: cpu"], [d["udm"].child(i).text(1) for i in range(3)])
+kids = [d["udm"].child(i) for i in range(d["udm"].childCount())]
+check("a UniFi console's devices each have a row under it, worst first, as in the Inventory", [k.text(0) for k in kids] == ["ap-1", "usw"], [k.text(0) for k in kids])
+check("...a device with several checks shows its worst and opens to them, named plainly", kids[0].text(1) == "2 checks" and kids[0].text(2) == "WARN"
+      and [kids[0].child(i).text(1) for i in range(kids[0].childCount())] == ["temperature", "uptime"], [kids[0].child(i).text(1) for i in range(kids[0].childCount())])
+check("...one with a single check shows it on its own row", kids[1].text(1) == "cpu" and kids[1].text(2) == "OK" and kids[1].childCount() == 0)
+kids[0].setExpanded(True)
+check("...and an opened device is remembered", "udm\x00ap-1" in w.expanded or any(k.endswith("\x00ap-1") for k in w.expanded), w.expanded)
 check("results still stored flat for reports/notifications", len(w.results) == len(RES) and w.results[0].status == "ERROR")
 check("chips count checks, summary counts devices", w.chips.counts == {"OK": 7, "WARN": 2, "FAIL": 1, "ERROR": 1} and w.summary.text() == "5 devices, 11 checks", (w.chips.counts, w.summary.text()))
 check("history saved", db.get_setting("retention_days") is not None)

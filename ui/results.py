@@ -332,7 +332,8 @@ class ResultsTab(QWidget):
         if item is None:
             return
         top = self.device_row(item)
-        device, check = top.data(0, ROLE), (item.text(1) if item.parent() or item.data(1, ROLE) == "check" else "")
+        device = top.data(0, ROLE)
+        check = item.text(1) if (item.parent() and item.data(1, ROLE) != "device") or item.data(1, ROLE) == "check" else ""
         menu = QMenu(self)
         menu.addAction("Copy row", lambda: QApplication.clipboard().setText(
             "\t".join(item.text(i) for i in range(self.table.columnCount()))))
@@ -446,18 +447,12 @@ class ResultsTab(QWidget):
                 top.setText(4, only.message if only.message else ("" if only.status in ("OK", "N/A") else only.value))
                 self._link(top, only)
                 listed = []
-            na = [r for r in listed if r.status == "N/A"]
-            for r in (listed if len(na) < 2 else [r for r in listed if r.status != "N/A"]):
-                top.addChild(self._check_row(r))
-            if len(na) >= 2:                                   # the checks that do not apply, folded into one row that opens
-                bundle = QTreeWidgetItem(["", f"{len(na)} checks do not apply", "N/A", "", self.NA_BUNDLE, ""])
-                key = f"{name}\x00na"
-                bundle.setData(0, ROLE, key)
-                bundle.setToolTip(1, "Open the row to see them")
-                for r in na:
-                    bundle.addChild(self._check_row(r))
-                top.addChild(bundle)
-                bundle.setExpanded(key in self.expanded)
+            own, subs = [], {}                                 # a UniFi console's devices each get a row of their own under it, as in the Inventory
+            for r in listed:
+                (own.append(r) if device_of(r.device) == r.device else subs.setdefault(r.device.split(" / ", 1)[1], []).append(r))
+            self._add_checks(top, own, name)
+            for label in sorted(subs, key=lambda l: (-worst(subs[l]), l.lower())):
+                self._add_sub_device(top, name, label, subs[label])
             top.setExpanded(name in self.expanded)
         if not self._active:
             self.chips.set_counts(self.visible_counts())
@@ -481,9 +476,48 @@ class ResultsTab(QWidget):
         self.table.header().setSectionResizeMode(4, self.table.header().ResizeMode.Stretch)
         self._fit()
 
+    def _add_checks(self, parent, rows, key):
+        """rows' check rows under `parent`; two or more that do not apply are folded into one row that opens."""
+        na = [r for r in rows if r.status == "N/A"]
+        for r in (rows if len(na) < 2 else [r for r in rows if r.status != "N/A"]):
+            parent.addChild(self._check_row(r))
+        if len(na) >= 2:
+            bundle = QTreeWidgetItem(["", f"{len(na)} checks do not apply", "N/A", "", self.NA_BUNDLE, ""])
+            bundle.setData(0, ROLE, f"{key}\x00na")
+            bundle.setToolTip(1, "Open the row to see them")
+            for r in na:
+                bundle.addChild(self._check_row(r))
+            parent.addChild(bundle)
+            bundle.setExpanded(f"{key}\x00na" in self.expanded)
+
+    def _add_sub_device(self, top, name, label, rows):
+        """One of a console's devices (a UniFi access point or switch) under it, as the Inventory lists them: its worst status, and its
+        checks below it when opened. A device with one check shows it on its own row."""
+        status = max(rows, key=lambda r: (SEVERITY.get(r.status, 0), r.status != "N/A")).status
+        node = QTreeWidgetItem([label, f"{len(rows)} check{'s' if len(rows) != 1 else ''}", status, "", "", ""])
+        key = f"{name}\x00{label}"
+        node.setData(0, ROLE, key)
+        node.setData(1, ROLE, "device")
+        top.addChild(node)
+        if len(rows) == 1:
+            only = rows[0]
+            node.setText(1, only.check)
+            node.setData(1, ROLE, "check")
+            node.setText(3, only.value)
+            node.setText(4, only.message if only.message else ("" if only.status in ("OK", "N/A") else only.value))
+            self._link(node, only)
+            return
+        bad = [r for r in rows if is_problem(r.status)]
+        if bad:
+            node.setText(4, display.said(bad[0].check, bad[0].message or bad[0].value) + (f"   (+{len(bad) - 1} more)" if len(bad) > 1 else ""))
+        else:
+            node.setText(4, "all OK")
+        self._add_checks(node, rows, key)
+        node.setExpanded(key in self.expanded)
+
     def _check_row(self, r):
-        """One check's row under its device."""
-        label = r.check if device_of(r.device) == r.device else f"{r.device.split(' / ', 1)[1]}: {r.check}"
+        """One check's row under its device (or under one of a console's devices)."""
+        label = r.check
         child = QTreeWidgetItem(["", label, r.status, r.value, r.message, ""])
         self._link(child, r)
         return child
