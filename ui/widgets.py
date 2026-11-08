@@ -305,6 +305,39 @@ class FilterButton(FunnelButton):
         self.changed.emit()
 
 
+class CentredCheck(QStyledItemDelegate):
+    """A tick box in the middle of its cell, under its column's name, drawn as the theme draws the lists' boxes. A click anywhere in
+    the cell, or Space, ticks or unticks it."""
+
+    def paint(self, p, opt, index):
+        o = QStyleOptionViewItem(opt)
+        self.initStyleOption(o, index)
+        checked = o.checkState == Qt.CheckState.Checked
+        o.features &= ~QStyleOptionViewItem.ViewItemFeature.HasCheckIndicator
+        style = o.widget.style() if o.widget else QApplication.style()
+        style.drawControl(QStyle.ControlElement.CE_ItemViewItem, o, p, o.widget)
+        side = int((theme.current() or {}).get("check_px", 16))
+        box = QStyleOptionViewItem(o)
+        box.rect = QRect(o.rect.center().x() - side // 2 + 1, o.rect.center().y() - side // 2 + 1, side, side)
+        box.state = (o.state & ~QStyle.StateFlag.State_HasFocus) | (QStyle.StateFlag.State_On if checked else QStyle.StateFlag.State_Off)
+        style.drawPrimitive(QStyle.PrimitiveElement.PE_IndicatorItemViewItemCheck, box, p, o.widget)
+
+    def editorEvent(self, event, model, opt, index):
+        flags = index.flags()
+        if not (flags & Qt.ItemFlag.ItemIsUserCheckable and flags & Qt.ItemFlag.ItemIsEnabled):
+            return False
+        kind = event.type()
+        if kind in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonDblClick):
+            return event.button() == Qt.MouseButton.LeftButton                   # the release ticks it
+        hit = (kind == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton
+               and opt.rect.contains(event.position().toPoint()))
+        key = kind == QEvent.Type.KeyPress and event.key() in (Qt.Key.Key_Space, Qt.Key.Key_Select)
+        if not (hit or key):
+            return False
+        now = Qt.CheckState(index.data(Qt.ItemDataRole.CheckStateRole)) == Qt.CheckState.Checked
+        return model.setData(index, Qt.CheckState.Unchecked if now else Qt.CheckState.Checked, Qt.ItemDataRole.CheckStateRole)
+
+
 class StatusDelegate(QStyledItemDelegate):
     """Draws a status word (OK / WARN / FAIL / ERROR) as a soft chip: a faint tint of the status colour behind a small icon and the word
     in the readable ink. Colours are looked up when painting, so a change in Settings > Appearance shows immediately."""

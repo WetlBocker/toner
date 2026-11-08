@@ -199,6 +199,18 @@ from PySide6.QtCore import Qt
 check("Roles table shows the defaults", page.perm_table.item(PUSH, 0).checkState() == Qt.CheckState.Checked
       and page.perm_table.item(PUSH, 1).checkState() == Qt.CheckState.Unchecked)
 check("no tamper banner", page.banner.isHidden())
+from PySide6.QtTest import QTest
+page.resize(900, 1400); page.show(); QApplication.processEvents()
+pt = page.perm_table
+check("Roles: whole rows show (none cut off at the foot), and the table is no wider than its two columns",
+      pt.viewport().height() % pt.rowHeight(0) == 0 and pt.viewport().width() == pt.horizontalHeader().length(),
+      (pt.viewport().height(), pt.rowHeight(0), pt.viewport().width(), pt.horizontalHeader().length()))
+mid = pt.visualRect(pt.model().index(PUSH, 1)).center()
+QTest.mouseClick(pt.viewport(), Qt.MouseButton.LeftButton, pos=mid); QApplication.processEvents()
+on = pt.item(PUSH, 1).checkState() == Qt.CheckState.Checked
+QTest.mouseClick(pt.viewport(), Qt.MouseButton.LeftButton, pos=mid); QApplication.processEvents()
+check("...a box sits in the middle of its cell, under its role, and a click there ticks it (and again unticks it)",
+      on and pt.item(PUSH, 1).checkState() == Qt.CheckState.Unchecked)
 n = acts().count("role permissions changed")
 page.perm_table.item(PUSH, 0).setCheckState(Qt.CheckState.Unchecked)
 page.save_roles.click()

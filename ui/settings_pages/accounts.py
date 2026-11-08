@@ -3,11 +3,12 @@ the idle-lock minutes and the session length follow Save."""
 import sys
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QLabel, QMenu, QMessageBox, QPushButton, QTableWidget,
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QHeaderView, QLabel, QMenu, QMessageBox, QPushButton, QTableWidget,
                                QTableWidgetItem)
 
 from core import audit, datakey, db, helperclient, osstore, passvault, passwords, perms, quiet, roles, session
 from ui.directorydlg import service_key
+from ui.widgets import CentredCheck
 from ui.identitywizard import IdentityWizard
 from ui.settings_base import Page, compact_row, note, spin
 from ui.setupdlg import RecoveryDialog, _CardDialog
@@ -183,7 +184,12 @@ class AccountsPage(Page):
         self.perm_table.setHorizontalHeaderLabels(["Engineer", "Tech"])
         self.perm_table.setVerticalHeaderLabels([label for _, label in perms.PERMISSIONS])
         self.perm_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-        self.perm_table.setMinimumHeight(200)
+        self.perm_table.setItemDelegate(CentredCheck(self.perm_table))           # the boxes centred under Engineer and Tech
+        for j in range(2):
+            self.perm_table.horizontalHeader().setSectionResizeMode(j, QHeaderView.ResizeMode.Fixed)
+            self.perm_table.setColumnWidth(j, 110)
+        self.perm_table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.perm_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)     # its room is kept, so the width is fixed
         self.perm_table.setAccessibleName("Roles")
         self.save_roles = QPushButton("Save roles")
         self.save_roles.clicked.connect(self._save_roles)
@@ -248,6 +254,11 @@ class AccountsPage(Page):
                 it.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
                 it.setCheckState(Qt.CheckState.Checked if self._shown[r][key] else Qt.CheckState.Unchecked)
                 self.perm_table.setItem(i, j, it)
+        t = self.perm_table                                             # whole rows only (none cut off at the foot), and no wider than its columns
+        t.resizeRowsToContents()
+        frame, rows = 2 * t.frameWidth(), min(t.rowCount(), 12)
+        t.setFixedHeight(sum(t.rowHeight(i) for i in range(rows)) + t.horizontalHeader().sizeHint().height() + frame)
+        t.setFixedWidth(t.verticalHeader().sizeHint().width() + t.horizontalHeader().length() + t.verticalScrollBar().sizeHint().width() + frame)
 
     def _selected(self):
         r = self.table.currentRow()
