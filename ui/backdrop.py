@@ -141,7 +141,7 @@ class Backdrop(QWidget):
         else:
             pts = [QPointF(centre.x() + (x - 320) * s, centre.y() + (y - 210) * s) for x, y in _DOTS]
         pen = QPen()
-        pen.setWidthF(1.0)
+        pen.setWidthF(1.4)                                             # the lines joining the dots: a touch heavier than a hairline
         for a, b, k in (self.links() if motion.lively() else [(a, b, 1.0) for a, b in _LINKS]):
             pen.setColor(_rgba(t["accent"], 0.09 * k))
             p.setPen(pen)
