@@ -9,7 +9,6 @@ import shutil
 import subprocess
 import tempfile
 import time
-from multiprocessing import connection
 from pathlib import Path
 
 from core import datakey, db, quiet, session, updates
