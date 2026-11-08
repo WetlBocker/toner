@@ -947,10 +947,12 @@ class Main(QMainWindow):
         if look.get("theme") == "Follows health":
             theme.apply(app, look, int(db.get_setting("font_size")), ctx=theme.context(app))
         _look = None                                   # what is shown is not the saved look any more
+        self._previewing = True                        # until Save or Cancel: relook leaves it on screen
         self._restyle()
 
     def reset_look(self):
         """Edits dropped: the saved look again (nothing to do when it is what is shown)."""
+        self._previewing = False
         if theme.current().get("accent") is None:
             return
         if apply_look(QApplication.instance()):
@@ -958,7 +960,9 @@ class Main(QMainWindow):
 
     def relook(self):
         """An interactive theme's input may have changed (a run finished, the hour or the organization changed, Windows switched
-        light/dark): apply the look again if so. Costs nothing otherwise."""
+        light/dark): apply the look again if so. Costs nothing otherwise. An unsaved preview stays as it is."""
+        if getattr(self, "_previewing", False):
+            return
         try:
             if apply_look(QApplication.instance()):
                 self._restyle()
@@ -982,6 +986,7 @@ class Main(QMainWindow):
     def settings_applied(self, lists=True):
         """Make a saved (or imported) settings change take effect everywhere, without a restart. lists=False leaves out the lists
         that follow the inventory: switching organization refills those once itself."""
+        self._previewing = False
         apply_look(QApplication.instance())
         self.tabs.restyle()
         self.dashboard.restyle()

@@ -72,6 +72,8 @@ check("...and shown when it is", page.custom_row.isVisibleTo(page) and page.acce
 page.custom_accent = "#ff00aa"; page.paint_accent(); page._preview(); settle()
 check("the accent you pick is previewed, and listed for Save", theme.current()["accent"] == "#ff00aa" and any(r[0] == "Accent" and r[2] == "#ff00aa"
       for t, rows in (w.settings.check_dirty(), w.settings.pending_changes())[1] if t == "Appearance" for r in rows), w.settings.pending_changes())
+w.relook()                                                     # the minute timer (Time of day) or a light/dark switch
+check("...and kept while it is unsaved, when the window re-applies the look", theme.current()["accent"] == "#ff00aa", theme.current()["accent"])
 page.base.setCurrentText("Light"); settle()
 check("a light base", not theme.current()["dark"])
 page.tint.setChecked(True); settle()
