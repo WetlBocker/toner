@@ -364,6 +364,15 @@ except Exception as e:
 check("an account outside the connection's email domains: SSO_BAD_ANSWER", isinstance(got, oidc.BadAnswer)
       and str(got) == S.SSO_BAD_ANSWER.format(provider="Contoso") and t.result == str(got), repr(got))
 P.id_claims = {"preferred_username": "ann@acme.com", "groups": ["id-net"]}
+P.mode = "denied"
+t = S.TestLogin(cfg)
+try:
+    t.check_sso(browse, threading.Event()); got = None
+except Exception as e:
+    got = e
+check("declined at the provider: the approved refused sentence", isinstance(got, oidc.Refused)
+      and str(got) == "Contoso refused the sign-in." and t.result == str(got), repr(got))
+P.mode = "ok"
 P.force = 503
 t = S.TestLogin(cfg)
 try:

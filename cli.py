@@ -15,7 +15,7 @@ import signal
 import sys
 import threading
 
-from core import backupsplit, datakey, db, directory, dirsignin, duo, lockdown, passvault, pinslot, quiet, service, session
+from core import backupsplit, datakey, db, directory, dirsignin, duo, lockdown, oidc, passvault, pinslot, quiet, service, session
 from drivers.base import SEVERITY
 
 SERVICE_OFF = ("Toner's background service is off while sign-in is turned on. "
@@ -89,7 +89,8 @@ def _sign_in(a):
             raise EOFError                                # input has no one typing, and getpass would wait on the console
         user = a.user or input("Username: ")
         kind = dirsignin.classify(user)
-        password = getpass.getpass("Password: ")
+        sso = kind[0] == "directory" and kind[1].get("kind") == "oidc"     # the browser instead of a password
+        password = None if sso else getpass.getpass("Password: ")
     except (EOFError, RuntimeError):           # Task Scheduler, redirected input, or input() that "lost sys.stdin": nobody to ask
         print("Sign in needs a terminal.", file=sys.stderr)
         return 3
@@ -100,7 +101,11 @@ def _sign_in(a):
         print("This file is damaged or was changed outside Toner.", file=sys.stderr)
         return 3
     try:
-        if kind[0] == "directory":
+        if sso:
+            if not _sso_sign_in(kind[1], user):
+                print(APPROVAL, file=sys.stderr)
+                return 3
+        elif kind[0] == "directory":
             if not _directory_sign_in(user, password):
                 print(APPROVAL, file=sys.stderr)       # approval needs an admin at the window; nothing was written for it
                 return 3
@@ -120,7 +125,10 @@ def _sign_in(a):
         print(UNFINISHED, file=sys.stderr)
         return 3
     except directory.Unreachable:
-        print(dirsignin.UNREACHABLE, file=sys.stderr)
+        print(dirsignin.SSO_UNREACHABLE.format(provider=kind[1]["name"]) if sso else dirsignin.UNREACHABLE, file=sys.stderr)
+        return 3
+    except oidc.OidcError as e:                # its own text names the provider's host: the approved sentence instead
+        print(dirsignin.sso_said(kind[1], e), file=sys.stderr)
         return 3
     except (datakey.WrongPassword, datakey.Throttled, dirsignin.NotInGroup, dirsignin.CaChanged, duo.Unavailable, duo.Denied,
             pinslot.WrongPin, pinslot.PinLocked) as e:      # WrongPin is a ValueError: keep it ahead of the damaged-file case
@@ -138,6 +146,34 @@ def _directory_sign_in(login, password):
         dirsignin.after_password(at)
     if at.stage == "duo":
         _duo(at)
+    if at.stage == "pin":
+        dirsignin.finish(at, getpass.getpass("PIN: "))
+    return at.stage == "done"
+
+
+def _sso_sign_in(cfg, login):
+    """The browser sign-in, then the PIN. True when signed in; False when it needs an admin's approval (a first sign-in, or a
+    new PIN). Ctrl+C stops the wait for the browser."""
+    at = dirsignin.sso_start(cfg, login)
+    if at.stage == "browser":                  # (offline, sso_start has gone straight to the PIN)
+        print(dirsignin.SSO_TEXT.format(provider=cfg["name"]))
+        cancel, failed = threading.Event(), []
+
+        def wait():
+            try:
+                dirsignin.sso_wait(at, cancel)
+            except Exception as e:
+                failed.append(e)
+        worker = threading.Thread(target=wait, daemon=True)
+        worker.start()
+        try:
+            while worker.is_alive():
+                worker.join(0.2)
+        except KeyboardInterrupt:
+            cancel.set()                        # the wait ends within a second, as Cancelled
+            worker.join()
+        if failed:
+            raise failed[0]
     if at.stage == "pin":
         dirsignin.finish(at, getpass.getpass("PIN: "))
     return at.stage == "done"

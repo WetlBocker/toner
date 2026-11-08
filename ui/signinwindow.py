@@ -29,7 +29,7 @@ CHOOSE_TEXT = "You'll use this PIN to unlock Toner on this computer."
 APPROVE_TITLE = "An admin needs to approve this"
 PIN_MISMATCH = "The two PINs don't match."
 SSO_TITLE = "Continue in your browser"
-SSO_TEXT = "Sign in on the {provider} page that opened in your browser. Toner carries on when you're done."
+SSO_TEXT = dirsignin.SSO_TEXT
 SSO_AGAIN = "Open the page again"
 APPROVE_WITH_ACCOUNT = "Approve with a directory account"
 APPROVER_TITLE = "Admin approval"
@@ -475,9 +475,7 @@ class SignInWindow(QDialog):
         elif isinstance(e, (directory.Unreachable, oidc.Unreachable)):
             say(label, self._unreachable())
         elif isinstance(e, oidc.OidcError):              # its own text names the provider's host: never shown
-            text = (dirsignin.SSO_CANCELLED if isinstance(e, oidc.Cancelled) else
-                    dirsignin.SSO_NOT_FRESH if isinstance(e, oidc.NotFresh) else dirsignin.SSO_BAD_ANSWER)
-            say(label, text.format(provider=self.sso["name"]))
+            say(label, dirsignin.sso_said(self.sso, e))
         elif isinstance(e, SAID):
             say(label, str(e))
         elif isinstance(e, DAMAGED_ERRORS):

@@ -165,7 +165,7 @@ no_wait()
 print("== refusals say the approved sentences, never the provider's details")
 for name, setup, text in [
         ("NotFresh", lambda: P.id_claims.update(auth_time=int(time.time()) - 3600), S.SSO_NOT_FRESH.format(provider="Contoso")),
-        ("Refused", lambda: setattr(P, "mode", "denied"), S.SSO_BAD_ANSWER.format(provider="Contoso")),
+        ("Refused", lambda: setattr(P, "mode", "denied"), "Contoso refused the sign-in."),
         ("BadAnswer", lambda: setattr(P, "mode", "bad_state"), S.SSO_BAD_ANSWER.format(provider="Contoso")),
         ("Unreachable, never checked here", lambda: setattr(P, "force", 503), S.SSO_UNREACHABLE.format(provider="Contoso"))]:
     setup()

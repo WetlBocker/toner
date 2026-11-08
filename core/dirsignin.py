@@ -39,12 +39,21 @@ CA_CHANGED = "The directory's CA file changed. An admin needs to save the direct
 NAME_TAKEN = "That name already belongs to another account on this copy. Ask an admin."     # Choose a PIN only
 TEST_OK = "Signed in as {name}. Role: {role}. Signed out."                                  # Test login only
 TEST_NOT_MAPPED = "{name} isn't in an OU or group that Toner maps to a role."
-SSO_CANCELLED = "The sign-in didn't finish in the browser."                                 # {provider}: the connection's name
+SSO_TEXT = "Sign in on the {provider} page that opened in your browser. Toner carries on when you're done."   # {provider}: the
+SSO_CANCELLED = "The sign-in didn't finish in the browser."                                 # connection's name
+SSO_DECLINED = "{provider} refused the sign-in."                                            # the person said no at the provider
 SSO_NOT_FRESH = "{provider} didn't confirm a fresh sign-in. Try again."
 SSO_BAD_ANSWER = "{provider}'s answer couldn't be checked, so the sign-in was refused."
 SSO_UNREACHABLE = "{provider} can't be reached, and this account hasn't been checked online in the last hour."
 SSO_REFUSED = "{provider} no longer allows this account. Sign in again."                  # the re-check's lock screen
 HELPER_APPROVER = "group membership"                                                        # {admin} in "sign-in approved"
+
+
+def sso_said(cfg, e):
+    """The approved sentence for an oidc error (its own text names the provider's host and is never shown)."""
+    text = (SSO_CANCELLED if isinstance(e, oidc.Cancelled) else SSO_NOT_FRESH if isinstance(e, oidc.NotFresh) else
+            SSO_DECLINED if isinstance(e, oidc.Refused) else SSO_BAD_ANSWER)
+    return text.format(provider=cfg["name"])
 
 
 def refused_text():
@@ -495,6 +504,8 @@ class TestLogin:
             failed = oidc.Cancelled(SSO_CANCELLED)
         except oidc.NotFresh:
             failed = oidc.NotFresh(SSO_NOT_FRESH.format(provider=provider))
+        except oidc.Refused:
+            failed = oidc.Refused(SSO_DECLINED.format(provider=provider))
         except (oidc.OidcError, KeyError):                  # KeyError: the ID token names no one
             failed = oidc.BadAnswer(SSO_BAD_ANSWER.format(provider=provider))
         finally:

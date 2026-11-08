@@ -404,6 +404,78 @@ TERMINAL.isatty, keep_tty = (lambda: False), TERMINAL.isatty
 rc, out, err = call("status", "--user", "bob@acme.com")
 TERMINAL.isatty = keep_tty
 check("Sign in needs a terminal., exit 3, nothing asked", rc == 3 and err.strip() == "Sign in needs a terminal." and not asked, (rc, err, asked))
+print("== an SSO account: the browser, then the PIN (a fake provider)")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import requests
+from core import oidc
+from fake_oidc import FakeProvider
+oidc._TEST_ALLOW_HTTP = True
+P = FakeProvider()
+ISS = P.start()
+SSO = {"id": "s1", "name": "Contoso", "kind": "oidc", "provider": "other", "issuer": ISS, "client_id": "toner-app",
+       "groups_claim": "groups", "id_claim": "sub", "suffixes": ["example.com"], "groups": {"Tech": ["g1"]},
+       "group_names": {"g1": "Techs"}, "everyone": None}
+def browse(url):
+    def go():
+        try:
+            requests.get(url, timeout=10, **oidc._DIRECT)
+        except requests.RequestException:
+            pass
+    threading.Thread(target=go, daemon=True).start()
+BROWSER = [browse]
+real_start = S.sso_start
+S.sso_start = lambda cfg, login, **k: real_start(cfg, login, open_url=BROWSER[0], **k)
+session.sign_out(); session.sign_in("Admin", PW); roles.set_directories([ACME, SSO]); session.sign_out()
+getpass.getpass = fake_dir_getpass
+who[0] = "ann@example.com"
+SSO_LINE = "Sign in on the Contoso page that opened in your browser. Toner carries on when you're done."
+asked.clear()
+rc, out, err = call("status")
+check("a first sign-in: no password asked, the approved browser line, then the approval sentence, exit 3",
+      rc == 3 and err.strip() == APPROVAL and asked == ["Username: "] and SSO_LINE in out, (rc, err, asked, out))
+a = S.sso_start(SSO, "ann@example.com"); S.sso_wait(a, threading.Event()); S.choose_pin(a, PIN); S.approve(a, "Admin", PW)
+check("(set up: Ann approved by Admin)", a.stage == "pin")
+asked.clear()
+rc, out, err = call("status")
+check("then: Username and PIN only, the browser line, the command ran", rc == 0 and asked == ["Username: ", "PIN: "]
+      and SSO_LINE in out and "No results yet" in out and not err, (rc, asked, out, err))
+check("...signed out afterwards, no token printed", session.state() == "signed_out" and "rt-1" not in out + err and "at-1" not in out + err)
+
+BROWSER[0] = lambda url: None                       # the browser never comes back: Ctrl+C
+CtrlC.hit = False
+real_thread, cli.threading.Thread = threading.Thread, CtrlC
+asked.clear()
+started = time.time()
+rc, out, err = call("status")
+cli.threading.Thread = real_thread
+BROWSER[0] = browse
+check("Ctrl+C while waiting for the browser: SSO_CANCELLED, exit 3, no PIN asked, within seconds", rc == 3
+      and err.strip() == "The sign-in didn't finish in the browser." and asked == ["Username: "] and time.time() - started < 10,
+      (rc, err, asked))
+for claims, mode, text in (({"auth_time": int(time.time()) - 3600}, "ok", "Contoso didn't confirm a fresh sign-in. Try again."),
+                           ({"preferred_username": "ann@evil.example"}, "ok",
+                            "Contoso's answer couldn't be checked, so the sign-in was refused."),
+                           ({}, "denied", "Contoso refused the sign-in.")):
+    S._clear_tries()
+    P.id_claims, P.mode = claims, mode
+    rc, out, err = call("status")
+    check(f"...{text!r}, exit 3", rc == 3 and err.strip() == text, (rc, err))
+P.id_claims, P.mode = {}, "ok"
+S._clear_tries()
+P.force = 503
+datakey.set_online("ann@example.com", time.time() - 5000)
+rc, out, err = call("status")
+check("the provider down, past the hour: SSO_UNREACHABLE, exit 3", rc == 3
+      and err.strip() == "Contoso can't be reached, and this account hasn't been checked online in the last hour.", (rc, err))
+datakey.set_online("ann@example.com", time.time())
+asked.clear()
+rc, out, err = call("status")
+check("...within the hour: the PIN alone, the command ran", rc == 0 and asked == ["Username: ", "PIN: "] and "No results yet" in out,
+      (rc, asked, err))
+P.force = None
+P.stop()
+S.sso_start = real_start
+
 getpass.getpass = fake_getpass
 builtins.input = real_input
 
