@@ -402,6 +402,9 @@ check("...and it says who it is made out to, who issued it, when it is valid, an
 pinned = dict(base, ca_file=CP, ca_sha256=hashlib.sha256(open(CP, "rb").read()).hexdigest(), tls_pinned=True)
 check("pinned: that exact certificate is accepted, though it has expired and is made out to another name", D.reachable(pinned))
 wrong = dict(base, ca_file=OTHER, ca_sha256=hashlib.sha256(open(OTHER, "rb").read()).hexdigest(), tls_pinned=True)
+for _ in range(100):                     # the server thread records reachable()'s goodbye late on a busy runner; let it land first
+    if GOT: break
+    time.sleep(0.02)
 GOT.clear()
 r = raises(getattr(D, "Untrusted", KeyError), D.connect, wrong, "x@corp.example", "pw")
 time.sleep(0.3)
