@@ -326,7 +326,7 @@ class SignInWindow(QDialog):
         if not name:
             say(self.name_error, "Enter a username.")
             return
-        self.sso = None
+        self.sso, self._forgot = None, False             # a new sign-in: an earlier Forgot your PIN? that failed doesn't carry over
         try:
             kind = dirsignin.classify(name)
             self.directory = kind[0] == "directory"

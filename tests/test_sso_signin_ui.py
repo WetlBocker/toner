@@ -220,5 +220,21 @@ lock.again.click()
 check("...Sign in signs out, so the next sign-in goes through the browser page", main.signed_out == 1)
 session.sign_out(); app.processEvents()
 
+print("== Forgot your PIN? that ends in Cancel doesn't carry over")
+no_wait()
+w = start()
+pump(lambda: w.pages.currentWidget() is w.pin_page)
+webbrowser.open = nowhere
+w.forgot.click()
+check("Forgot your PIN? goes through the browser again", w.pages.currentWidget() is w.sso_page)
+w.sso_cancel.click()
+pump(lambda: w.pages.currentWidget() is w.name_page and w.name_error.text())
+check("...Cancel: back to the name with SSO_CANCELLED", w.name_error.text() == S.SSO_CANCELLED)
+webbrowser.open = browse
+w.next.click()
+pump(lambda: w.pages.currentWidget() in (w.pin_page, w.choose_page))
+check("...the next sign-in lands on the PIN, not Choose a PIN", w.pages.currentWidget() is w.pin_page)
+w.reject()
+
 P.stop()
 print(f"\n{ok} passed, {bad} failed"); sys.exit(1 if bad else 0)
