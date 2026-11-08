@@ -103,6 +103,10 @@ check("port refused without test flag", raises(duo.Unavailable, lambda: duo.prea
 duo._TEST_ALLOW_HTTP = True
 duo.passcode(cfg, "bob", "123456"); check("passcode right", True)
 msg = raises(duo.Denied, lambda: duo.passcode(cfg, "bob", "999999")); check("passcode wrong", msg is not None)
+was_get = osstore.get; osstore.get = lambda n: None      # the helper's own copy of the secret key, the store not read
+check("skey given: used in place of the store", duo.preauth(cfg, "bob", skey=SKEY.encode()) == "auth"
+      and duo.passcode(cfg, "bob", "123456", skey=SKEY.encode()) is None)
+osstore.get = was_get
 check("requests signed", STATE["badsig"] == 0)
 srv.shutdown(); srv.server_close()
 msgs = [raises(duo.Unavailable, lambda: duo.preauth(cfg, "bob")), raises(duo.Unavailable, lambda: duo.passcode(cfg, "bob", "999999")), msg]

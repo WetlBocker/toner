@@ -1,5 +1,6 @@
 """Duo Auth API v2 client: push first, a passcode as the backup. Requests are signed with signature version 5
-(HMAC-SHA512, JSON body). The secret key comes from the OS store and is never logged or put in an exception."""
+(HMAC-SHA512, JSON body). The secret key comes from the OS store (or `skey`, the helper's own copy) and is never logged or put in
+an exception."""
 import base64
 import hashlib
 import hmac
@@ -51,9 +52,9 @@ class _ReadTimeout(Exception):
     pass
 
 
-def _call(cfg, method, path, params):
+def _call(cfg, method, path, params, skey=None):
     try:
-        return _call_(cfg, method, path, params)
+        return _call_(cfg, method, path, params, skey)
     except _ReadTimeout:
         if path.endswith("auth_status"):
             raise
@@ -64,12 +65,13 @@ def _call(cfg, method, path, params):
         raise Unavailable("Duo request failed") from None
 
 
-def _call_(cfg, method, path, params):
+def _call_(cfg, method, path, params, skey):
     duo = cfg["duo"]
     host, ikey = duo["host"], duo["ikey"]
     if not isinstance(host, str) or not (_HOST_PORT if _TEST_ALLOW_HTTP else _HOST).fullmatch(host):
         raise Unavailable("bad Duo host")
-    skey = osstore.get("duo:" + cfg["id"])
+    if skey is None:
+        skey = osstore.get("duo:" + cfg["id"])
     if not skey:
         raise Unavailable("no Duo secret key")
     date = formatdate(usegmt=False)
@@ -99,13 +101,13 @@ def _call_(cfg, method, path, params):
     return out["response"]
 
 
-def preauth(cfg, user):
-    r = _call(cfg, "POST", "/auth/v2/preauth", {"username": user}).get("result")
+def preauth(cfg, user, skey=None):
+    r = _call(cfg, "POST", "/auth/v2/preauth", {"username": user}, skey).get("result")
     return r if r in ("auth", "allow", "deny", "enroll") else "deny"
 
 
-def push(cfg, user, cancel):
-    txid = _call(cfg, "POST", "/auth/v2/auth", {"username": user, "factor": "push", "device": "auto", "async": "1"}).get("txid")
+def push(cfg, user, cancel, skey=None):
+    txid = _call(cfg, "POST", "/auth/v2/auth", {"username": user, "factor": "push", "device": "auto", "async": "1"}, skey).get("txid")
     if not isinstance(txid, str):
         raise Unavailable("Duo gave no transaction")
     end = time.monotonic() + PUSH_SECONDS
@@ -116,7 +118,7 @@ def push(cfg, user, cancel):
 
         def go():
             try:
-                box.append(_call(cfg, "GET", "/auth/v2/auth_status", {"txid": txid}))
+                box.append(_call(cfg, "GET", "/auth/v2/auth_status", {"txid": txid}, skey))
             except _ReadTimeout:
                 box.append({"result": "waiting"})       # the long poll ran out; ask again until the deadline
             except Exception as e:
@@ -138,7 +140,7 @@ def push(cfg, user, cancel):
     raise Denied("push not approved")
 
 
-def passcode(cfg, user, code):
-    r = _call(cfg, "POST", "/auth/v2/auth", {"username": user, "factor": "passcode", "passcode": code})
+def passcode(cfg, user, code, skey=None):
+    r = _call(cfg, "POST", "/auth/v2/auth", {"username": user, "factor": "passcode", "passcode": code}, skey)
     if r.get("result") != "allow":
         raise Denied("passcode refused")
