@@ -15,6 +15,26 @@ _EMPTY = re.compile(r"\b(not present|absent|not installed|unsupported|n/a|not co
 _TITLE = re.compile(r"^\s*(?:[A-Za-z]+ ){0,2}(fans?|power supply|power supplies|temperatures?|cooling|sensors?|thermal)\s*:?\s*$", re.I)
 
 
+_NUM = re.compile(r"^-?\d+(\.\d+)?%?$")
+_UNIT = re.compile(r"^(degrees?|deg|c|f|rpm|w|v|a|/)$", re.I)
+_FILLER = re.compile(r"^(--|is|:)$", re.I)
+
+
+def _part_name(line, word):
+    """The component in an environment line: the text before the status word (after it when nothing is before), without
+    the live readings (numbers, units), so one sensor keeps one name from run to run."""
+    toks = (line[:word.start()] or line[word.end():]).replace(":", " : ").split()
+    out, i = [], 0
+    while i < len(toks):
+        t = toks[i]
+        if _NUM.match(t) and i + 1 < len(toks) and (_NUM.match(toks[i + 1]) or _UNIT.match(toks[i + 1])) and out:
+            break                                       # a run of readings, or a reading with its unit: the name is over
+        if not (_UNIT.match(t) or _FILLER.match(t)):
+            out.append(t)
+        i += 1
+    return (" ".join(out) or line)[:90]
+
+
 def scan_environment(text, parts=None):
     """Fans, power supplies and temperature sensors in the output of an environment command: (lines understood, [(level, line)] with a problem).
     None when nothing in the text looks like a fan, power supply or sensor with a status. A table under a heading such as 'Fan:' counts
@@ -46,7 +66,8 @@ def scan_environment(text, parts=None):
         else:
             continue
         if parts is not None:
-            parts.append((line[:90], problems[-1][0] if (bad or (minor and not good)) else OK, (bad or minor or good).group(0)))
+            word = bad or (minor if minor and not good else good)
+            parts.append((_part_name(line, word), FAIL if bad else WARN if word is minor else OK, word.group(0)))
     return (seen, problems) if seen else None
 
 

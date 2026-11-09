@@ -94,13 +94,13 @@ class FortinetDriver(Driver):
                            numeric=float(days))
 
     def certificates(self):
-        found = apichecks.fortinet_cert_days(self._optional("system/available-certificates"))
+        found = apichecks.fortinet_cert_days(self._optional("system/available-certificates"), dates=True)
         if not found:
             return []
-        name, days = min(found, key=lambda x: x[1])
+        name, days, _when = min(found, key=lambda x: x[1])
         t = self.th["cert_days"]
         return self.result("certificates", grade_low(days, t["warn"], t["fail"]), f"{days:.0f} days" if days >= 0 else "expired", name, numeric=float(days),
-                           items=[self.item(n, numeric=float(d), data={"expires": "", "where": "store"}) for n, d in found])
+                           items=[self.item(n, numeric=float(d), data={"expires": w, "where": "store"}) for n, d, w in found])
 
     def _physical(self):
         ifs = self._get("system/interface?scope=global")

@@ -67,7 +67,7 @@ check("no certificates: an empty list, not None", win({**rep, "certs": []})["cer
 print("== Fortinet and TLS certificates")
 fg = DRIVERS["fortinet"]({"name": "fw", "vendor": "fortinet", "host": "h", "password": "x"}, TH, OPTS)
 fg._optional = lambda path: [{"name": "vpn.corp", "source": "user", "valid_to": NOW + 12 * 86400 + 60}, {"name": "web", "source": "user", "valid_to": NOW + 90 * 86400}]
-c = fg.certificates()
+c = fg.certificates(); c_items = c.items
 check("fortinet certificates: the row is as before", (c.value, c.message, round(c.numeric)) == ("12 days", "vpn.corp", 12), c)
 check("fortinet certificates: an item per certificate, in the store", [(i["name"], round(i["numeric"]), i["data"]["where"]) for i in c.items] == [("vpn.corp", 12, "store"), ("web", 90, "store")], c.items)
 class _S:
@@ -160,7 +160,7 @@ cisco = {**col("1.3.6.1.4.1.9.9.13.1.4.1.3", {1: Integer32(1), 2: Integer32(3)})
 e = snmp_rows(cisco)["environment"]
 check("SNMP environment: the row is as before", (e.status, e.value, e.numeric) == ("FAIL", "1 of 3 not ok", 1.0), e)
 check("SNMP environment: an item per component tested, OK ones too, the empty bay left out", [(i["name"], i["status"], i["text"]) for i in e.items]
-      == [("Fan A", "OK", "ok"), ("Fan B", "FAIL", "critical"), ("PS 1", "OK", "ok")], e.items)
+      == [("Fan A", "OK", "normal"), ("Fan B", "FAIL", "critical"), ("PS 1", "OK", "normal")], e.items)
 hr = N["hrStorageType"][:-2]
 disk = ObjectIdentifier("1.3.6.1.2.1.25.2.1.4")
 st = {**col(f"{hr}.2", {1: disk, 2: disk}), **col(f"{hr}.3", {1: S("C:\\"), 2: S("D:\\")}), **col(f"{hr}.4", {1: Integer32(4096), 2: Integer32(4096)}),
@@ -169,6 +169,25 @@ s_ = snmp_rows(st)["storage"]
 check("SNMP storage: the row is as before", (s_.value, s_.status, s_.message) == ("85%", "WARN", "C:\\"), s_)
 check("SNMP storage: an item per disk with used and total in bytes", [(i["name"], i["numeric"], i["data"]) for i in s_.items]
       == [("C:\\", 85.0, {"used": 850 * 4096, "total": 1000 * 4096}), ("D:\\", 25.0, {"used": 500 * 4096, "total": 2000 * 4096})], s_.items)
+
+from drivers import clichecks as C
+def parts_of(text):
+    p = []; C.scan_environment(text, p); return p
+nx = "Power Supply:\nVoltage: 12 Volts\nPS  Model          Output    Current   Status\n--  -------------- --------- --------- ----------\n1   N9K-PAC-650W   650.00 W  54.16 A   Ok\n\nTemperature:\n-----------------------------------\nModule   Sensor        MajorThresh   MinorThres   CurTemp     Status\n                       (Celsius)     (Celsius)    (Celsius)\n-----------------------------------\n1        Outlet        75            70           %d           Ok\n"
+a, b = parts_of(nx % 38), parts_of(nx % 52)
+check("CLI environment names carry no live readings: the same sensor at two temperatures keeps its name", [x[0] for x in a] == [x[0] for x in b] and "1 Outlet" in [x[0] for x in a], (a, b))
+jn = "Class Item Status Measurement\nTemp PEM 0 OK %d degrees C / %d degrees F\n"
+a, b = parts_of(jn % (37, 98)), parts_of(jn % (52, 125))
+check("Junos: the same", [x[0] for x in a] == [x[0] for x in b] == ["Temp PEM 0"], (a, b))
+check("the text is the word that decided the status", parts_of("Fans Fan Tray 0 Fan 1 OK High speed\n") == [("Fans Fan Tray 0 Fan 1", "OK", "OK")]
+      and parts_of("Fan Tray 0 Fan 2 Check Stopped\n")[0][1:] == ("FAIL", "Check"), parts_of("Fans Fan Tray 0 Fan 1 OK High speed\n"))
+check("fortinet certificates: the expiry date is filled", [i["data"]["expires"] for i in c_items] == [datetime.fromtimestamp(NOW + 12 * 86400 + 60, timezone.utc).strftime("%Y-%m-%d"), datetime.fromtimestamp(NOW + 90 * 86400, timezone.utc).strftime("%Y-%m-%d")], c_items)
+ent = {**col("1.3.6.1.2.1.99.1.1.1.5", {1: Integer32(1), 2: Integer32(2)}), **col("1.3.6.1.2.1.47.1.1.1.1.7", {1: S("Fan 1"), 2: S("Temp 2")})}
+e = snmp_rows(ent)["environment"]
+check("SNMP: a state that is not a fault says what it is (unavailable), not 'ok'", [(i["name"], i["status"], i["text"]) for i in e.items] == [("Fan 1", "OK", "ok"), ("Temp 2", "OK", "unavailable")], e.items)
+jx = col("1.3.6.1.4.1.2636.3.1.13.1.6", {1: Integer32(2), 2: Integer32(7)}); jx.update(col("1.3.6.1.4.1.2636.3.1.13.1.5", {1: S("FPC 0"), 2: S("FPC 1")}))
+e = snmp_rows(jx)["environment"]
+check("Juniper: running and standby are read as such", [(i["status"], i["text"]) for i in e.items] == [("OK", "running"), ("OK", "standby")], e.items)
 
 print("== TrueNAS pools, datasets and disks")
 import drivers.restapi as RA, requests as _rq
