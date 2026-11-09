@@ -202,15 +202,15 @@ check("the folded row starts closed and knows its device", not core.child(2).isE
 
 print("== History: reports, and a check's row choosing the chart")
 hs = w.history
-hs.refresh(); hs.show_run(); app.processEvents()
-check("the report buttons sit under the run's checks", [x.text() for x in (hs.csv_btn, hs.html_btn, hs.pdf_btn, hs.trend_btn)] == ["Export CSV", "HTML report", "PDF report", "Trend report"])
+hs.refresh(); app.processEvents()
+check("the report buttons sit under the checks table", [x.text() for x in (hs.csv_btn, hs.html_btn, hs.pdf_btn, hs.trend_btn)] == ["Export CSV", "HTML report", "PDF report", "Trend report"])
 rows = hs.report_rows()
-check("a report covers the chosen run's checks", len(rows) == 8 and {r.device for r in rows} == {"core-sw1", "edge-fw", "dist-sw2", "WITSDC01"}, len(rows))
+check("a report covers the checks of the time range", len(rows) == 8 and {r.device for r in rows} == {"core-sw1", "edge-fw", "dist-sw2", "WITSDC01"}, len(rows))
 import ui.history as HI
 HI.QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (os.path.join(SP, "adjust.csv"), ""))
 hs.export_csv()
 check("Export CSV writes it", os.path.exists(os.path.join(SP, "adjust.csv")) and "core-sw1" in open(os.path.join(SP, "adjust.csv"), encoding="utf-8").read())
-row = next(i for i in range(hs.detail.rowCount()) if hs.detail.item(i, 1).data(Qt.ItemDataRole.UserRole) == "memory")
+row = next(i for i in range(hs.proxy.rowCount()) if hs.proxy.index(i, 2).data() == display.check_name("memory"))
 hs.detail.selectRow(row); app.processEvents()
 check("choosing core-sw1's Memory row puts that device and check on the chart", hs.dev.currentData() == "core-sw1" and hs.chk.selected() == [display.check_name("memory")],
       (hs.dev.currentData(), hs.chk.selected()))

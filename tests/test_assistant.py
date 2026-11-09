@@ -481,7 +481,8 @@ check("Results: the selected device and its rows", sc["section"] == "Results" an
 check("what the screen holds is masked once it goes through the tool", PW in json.dumps(sc) and PW not in T.run("whats_on_screen", {}, sc))
 w.go("History"); settle(); w.history.refresh(); settle()
 sc = w.screen_context()
-check("History: the chosen run and its rows", sc["section"] == "History" and "selected_run" in sc and sc["selected_run"]["fail"] == "1" and any(r["device"] == "core-sw1" for r in sc["rows"]), sc)
+check("History: the time range and its rows", sc["section"] == "History" and sc["time_range"] == "Last 8 hours" and "selected_run" not in sc
+      and any(r["device"] == "core-sw1" and r["status"] == "FAIL" for r in sc["rows"]), sc)
 w.go("Configs"); settle(); w.configs.refresh(); w.configs.select_device("core-sw1"); settle(); w.configs.view.setCurrentIndex(w.configs.view.findData("full")); w.configs.show_text(); settle()
 sc = w.screen_context()
 check("Configs: the device, the version and the masked text", sc["section"] == "Configs" and sc["selected_device"] == "core-sw1" and sc["selected_versions"] and sc["view"] == "full configuration" and "hostname core-sw1" in sc["text"] and PW not in sc["text"] and "<masked>" in sc["text"], {k: v for k, v in sc.items() if k != "text"})

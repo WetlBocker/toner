@@ -39,7 +39,6 @@ db.save_run([Result(f"sw{i}", "cpu", "OK", f"{20+i*5}%", numeric=20.0 + i * 5) f
             + [Result(f"sw{i}", "link", "OK" if i < 2 else "FAIL", "connected" if i < 2 else "down") for i in range(3)]
             + [Result(f"sw{i}", "firmware", "OK", f"7.{i}.2") for i in range(3)])
 w = H.HistoryTab(); w.resize(1100, 600)
-w.runs.selectRow(0); w.show_run()
 p = webchart.palette()
 
 def pick(label):
@@ -60,7 +59,7 @@ check("a firmware version -> a table, no chart", opt is None and w.compare_stack
 t = w.compare_table
 check("table: Device, Value, Checked", [t.horizontalHeaderItem(i).text() for i in range(3)] == ["Device", "Value", "Checked"])
 check("table: a row per device with its value", t.rowCount() == 3 and sorted(t.item(i, 1).text() for i in range(3)) == ["7.0.2", "7.1.2", "7.2.2"])
-check("table: the Checked column holds the run time", t.item(0, 2).text() == w.runs.item(0, 0).text())
+check("table: the Checked column holds the run time", t.item(0, 2).text() == db.list_runs()[0]["started_at"])
 pick("CPU")
 check("back to a chart", w.compare_stack.currentWidget() is w.compare_chart)
 

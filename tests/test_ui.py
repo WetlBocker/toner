@@ -118,7 +118,7 @@ check("missing report folder is refused", msgs and "does not exist" in msgs[-1][
 captured = {}
 import ui.history as HI
 HI.QFileDialog.getSaveFileName = staticmethod(lambda parent, title, start, pattern: (captured.update(start=start), ("", ""))[1])
-w.history._run_rows = [{"device": "d", "check_name": "cpu", "status": "OK", "value": "1%", "message": ""}]
+w.history.model.set_rows([{"t": "2026-11-09 10:00:00", "device": "d", "check_name": "cpu", "status": "OK", "value": "1%", "message": ""}])
 w.history.export_html(); check("save dialog (reports live on History) opens in the default folder with a dated name", captured["start"].startswith(SP) and captured["start"].endswith(".html"), captured)
 
 print("== automation / scheduler")

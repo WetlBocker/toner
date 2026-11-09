@@ -131,7 +131,6 @@ w.go("Sessions")
 check("Sessions offers the usual first steps", [b.text() for b in w.sessions.welcome_buttons.values()] == ["New SSH session", "New Remote Desktop", "New serial console"])
 w.sessions._fill_more()
 check("Delete has moved into the More menu (the row stays one line)", "Delete" in [a.text() for a in w.sessions.more_menu.actions()] and not w.sessions.delete_btn.isVisibleTo(w.sessions))
-check("History's empty run list can run checks", [b.text() for b in w.history.runs_hint.buttons] == ["Run checks"])
 
 print("== section headers")
 for attr, title in w.HEADERS:
@@ -220,7 +219,7 @@ top = [inv.table.topLevelItem(i).text(0) for i in range(inv.table.topLevelItemCo
 check("the Inventory shows its own folders", top == ["Acme Dental  (3)"], top)
 check("Configs lists only its devices", sorted(w.configs.names) == ["acme-dc", "acme-fw", "acme-sw1"], w.configs.names)
 w.history.refresh(); check("History's charts list only its devices", all(n.startswith("acme") for n in w.history.map))
-w.history.show_run(); _rows = w.history.report_rows(); check("Reports (on History) cover only its devices", _rows and all(x.device.startswith("acme") for x in _rows), [x.device for x in _rows])
+w.history.show_rows(); _rows = w.history.report_rows(); check("Reports (on History) cover only its devices", _rows and all(x.device.startswith("acme") for x in _rows), [x.device for x in _rows])
 w.update_headers(); check("the headers count only its devices", w.headers["inventory"].context.text().startswith("3 devices"))
 ran = []; real_worker = A.ResultsTab.__init__.__globals__["Worker"]
 class W:
