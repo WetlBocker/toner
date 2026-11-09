@@ -223,5 +223,23 @@ check("choosing for a folder applies to everything in it", od.picks() == [acme, 
 od.tree.clearSelection(); od.tree.topLevelItem(0).child(1).setSelected(True); od.apply(0)
 check("single rows can still be changed", od.picks() == [acme, 0, globex, 0] and od.tree.topLevelItem(0).text(1) == "(several)")
 check("a top folder named like its organization is dropped", orgassign.strip_top(["Acme", "Core"], acme) == ["Core"] and orgassign.strip_top(["Branch"], acme) == ["Branch"])
+
+print("== Moving a device keeps its item history")
+with db.within(acme):
+    db.save_device(dev("disky"))
+    db.save_run([Result("disky", "disk", "OK", "40%", "", 40.0, items=[{"name": "C:", "numeric": 40.0, "status": "OK", "text": "40%"},
+                                                                       {"name": "D:", "numeric": 70.0, "status": "WARN", "text": "70%"}]),
+                 Result("disky", "certificates", "OK", "", "", None, items=[]), Result("disky", "uptime", "OK", "1d", "", 1.0)])
+    before = {c: db.items_of("disky", c) for c in ("disk", "certificates", "uptime")}
+orgs.move_devices([next(d for d in db.list_devices() if d["key"] == f"disky@@{acme}")], globex)
+with db.within(globex):
+    after = {c: db.items_of("disky", c) for c in ("disk", "certificates", "uptime")}
+    check("the moved device's items arrive in order", [i["name"] for i in after["disk"][0]["items"]] == ["C:", "D:"]
+          and after["disk"][0]["items"][1]["status"] == "WARN" and db.latest_items("disky", "disk")[1] == after["disk"][0]["items"], after)
+    check("...an empty list stays empty and a row without one stays without", db.latest_items("disky", "certificates")[1] == []
+          and db.latest_items("disky", "uptime")[1] is None, after)
+    check("...the same items as before the move", [r[0]["items"] for r in after.values()] == [r[0]["items"] for r in before.values()])
+with db.within(acme), db.connect() as c:
+    check("...and none are left behind in the old file", c.execute("SELECT COUNT(*) FROM result_items").fetchone()[0] == 0)
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)
