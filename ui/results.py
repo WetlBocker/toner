@@ -470,10 +470,6 @@ class ResultsTab(QWidget):
             self.hint.set_actions([(self.RUN, lambda: self.start())])
         self.hint.setVisible(empty)
         self.chips.restyle()
-        for i in range(self.table.columnCount()):
-            if i != 4:                                     # the message takes what is left
-                self.table.resizeColumnToContents(i)
-        self.table.header().setSectionResizeMode(4, self.table.header().ResizeMode.Stretch)
         self._fit()
 
     def _add_checks(self, parent, rows, key):

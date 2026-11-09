@@ -14,6 +14,8 @@ keyring.delete_password = lambda s, u: STORE.pop((s, u), None)
 from core import db
 db.init()
 from PySide6.QtWidgets import QApplication, QHeaderView, QTableWidget, QTableWidgetItem, QTreeWidget, QTreeWidgetItem
+from PySide6.QtCore import Qt, QPoint
+from PySide6.QtTest import QTest
 app = QApplication([])
 
 ok = bad = 0
@@ -22,6 +24,11 @@ def check(name, cond, extra=""):
     if cond: ok += 1; print("  ok  ", name)
     else: bad += 1; print("  FAIL", name, extra)
 
+def drag(tbl, col, w):
+    hv = tbl.horizontalHeader().viewport(); pt = QPoint(tbl.columnViewportPosition(col) + tbl.columnWidth(col) - 1, 5)
+    QTest.mousePress(hv, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, pt)
+    tbl.horizontalHeader().resizeSection(col, w)
+    QTest.mouseRelease(hv, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, pt)
 from ui.tablefit import fit_widths, fit, full_text_at, install_everywhere
 check("room for everything: each column is its content width", fit_widths([80, 200, 50], [40, 60, 40], 1000) == [80, 200, 50])
 w = fit_widths([80, 600, 300], [40, 60, 40], 500)
@@ -33,7 +40,7 @@ t.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContent
 t.setItem(0, 1, QTableWidgetItem("x" * 120)); t.resize(2000, 300); t.show(); fit(t); app.processEvents()
 check("a ResizeToContents header becomes Interactive, so it can be dragged", all(t.horizontalHeader().sectionResizeMode(i) == QHeaderView.ResizeMode.Interactive for i in range(2)))
 check("the long column shows all its text", t.columnWidth(1) >= t.fontMetrics().horizontalAdvance("x" * 120))
-t.horizontalHeader().resizeSection(0, 300)                      # the person drags it
+drag(t, 0, 300)                                                 # the person drags it
 t.setItem(1, 0, QTableWidgetItem("y")); app.processEvents(); app.processEvents()
 check("a dragged column keeps its width after the data changes", t.columnWidth(0) == 300)
 
@@ -52,5 +59,13 @@ check("a tree's Stretch column is Interactive and fits its text", tr.header().se
 install_everywhere(app)
 p = QTableWidget(1, 1); p.setHorizontalHeaderLabels(["H"]); p.setItem(0, 0, QTableWidgetItem("q" * 80)); p.resize(1500, 200); p.show(); app.processEvents(); app.processEvents()
 check("install_everywhere fits a table nobody called fit() on", p.horizontalHeader().sectionResizeMode(0) == QHeaderView.ResizeMode.Interactive and p.columnWidth(0) >= p.fontMetrics().horizontalAdvance("q" * 80))
+
+c = QTableWidget(2, 3); c.setHorizontalHeaderLabels(["A", "B", "C"]); c.resize(1500, 200); c.show(); fit(c); app.processEvents()
+c.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch); c.setItem(0, 0, QTableWidgetItem("data")); app.processEvents(); app.processEvents()
+check("a mode set to Stretch by code is Interactive again after the next data change", c.horizontalHeader().sectionResizeMode(1) == QHeaderView.ResizeMode.Interactive)
+c.setColumnWidth(0, 333); c.setItem(1, 0, QTableWidgetItem("more")); app.processEvents(); app.processEvents()
+check("a width set from code does not pin the column", c.columnWidth(0) != 333, c.columnWidth(0))
+drag(c, 0, 250); c.setItem(0, 0, QTableWidgetItem("changed")); app.processEvents(); app.processEvents()
+check("a press-drag-release on the header pins the column", c.columnWidth(0) == 250, c.columnWidth(0))
 
 print(f"\n{ok} passed, {bad} failed"); raise SystemExit(1 if bad else 0)

@@ -47,37 +47,32 @@ class _Fitter(QObject):
     def __init__(self, view):
         super().__init__(view)
         self.view, self.head = view, _header(view)
-        self.pinned, self.busy, self.model = set(), False, None
+        self.pinned, self.busy, self.pressed, self.model = set(), False, False, None
         self.timer = QTimer(self); self.timer.setSingleShot(True); self.timer.setInterval(0)
         self.timer.timeout.connect(self.run)
         self.head.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.head.sectionResized.connect(self._resized)
         self.head.setResizeContentsPrecision(200)                   # at most 200 rows are measured
         if isinstance(view, QTableView): view.verticalHeader().setResizeContentsPrecision(200)   # (the table asks this one)
-        view.installEventFilter(self); view.viewport().installEventFilter(self)
+        view.installEventFilter(self); view.viewport().installEventFilter(self); self.hv, self.vp = self.head.viewport(), view.viewport(); self.hv.installEventFilter(self)
         self.run()
 
     def schedule(self, *_):
         self.timer.start()
 
     def _resized(self, i, _old, _new):
-        # shortcut: the stretched last column is never pinned (Qt resizes it itself); a drag of it is meaningless anyway
-        if self.busy or (self.head.stretchLastSection() and self.head.visualIndex(i) == self.head.count() - 1 - self._hidden_tail()):
-            return
-        self.pinned.add(i)
-
-    def _hidden_tail(self):
-        n = 0
-        for v in range(self.head.count() - 1, -1, -1):
-            if self.head.isSectionHidden(self.head.logicalIndex(v)): n += 1
-            else: break
-        return n
+        if self.pressed and not self.busy:                          # only a drag with the mouse down pins; code never does
+            self.pinned.add(i)
 
     def eventFilter(self, o, e):
         t = e.type()
-        if t in (QEvent.Type.Resize, QEvent.Type.Show) and o is not self.view.viewport():
+        if o is self.hv:
+            if t == QEvent.Type.MouseButtonPress: self.pressed = True
+            elif t == QEvent.Type.MouseButtonRelease: self.pressed = False
+            return False
+        if t in (QEvent.Type.Resize, QEvent.Type.Show) and o is not self.vp:
             self.schedule()
-        elif t == QEvent.Type.ToolTip and o is self.view.viewport():
+        elif t == QEvent.Type.ToolTip and o is self.vp:
             text = full_text_at(self.view, e.pos())
             if text:
                 QToolTip.showText(e.globalPos(), text, self.view.viewport()); return True
@@ -93,6 +88,10 @@ class _Fitter(QObject):
                     sig.connect(self.schedule)
         if m is None or not view.isVisible() or view.viewport().width() <= 0:
             return
+        self.busy = True
+        for c in range(head.count()):                               # a mode set by code since the last fit is undone
+            if head.sectionResizeMode(c) != QHeaderView.ResizeMode.Interactive: head.setSectionResizeMode(c, QHeaderView.ResizeMode.Interactive)
+        self.busy = False
         cols = [c for c in range(head.count()) if not head.isSectionHidden(c) and c not in self.pinned]
         if not cols:
             return
