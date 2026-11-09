@@ -245,13 +245,21 @@ cs._live = None
 print("== Palo Alto: the XML API")
 from drivers import apichecks
 COUNTERS = ET.fromstring("""<result><ifnet><ifnet><entry><name>ethernet1/1.10</name><ibytes>1</ibytes><obytes>2</obytes></entry></ifnet></ifnet>
-<hw><entry><name>ethernet1/1</name><ibytes>5000</ibytes><obytes>7000</obytes><port><rx-bytes>5000</rx-bytes></port></entry>
+<hw><entry><name>ethernet1/1</name><ibytes>5100</ibytes><obytes>5800</obytes><port><rx-bytes>5000</rx-bytes><tx-bytes>7000</tx-bytes></port></entry>
 <entry><name>ethernet1/2</name><ibytes>0</ibytes><obytes>0</obytes></entry></hw></result>""")
 IFALL = ET.fromstring("""<result><hw><entry><name>ethernet1/1</name><state>up</state><speed>1000</speed></entry>
 <entry><name>ethernet1/2</name><state>down</state><speed>ukn</speed></entry></hw><ifnet/></result>""")
-check("each port's hardware counters, with its speed from show interface all ('ukn': no speed)",
+check("each port's MAC counters (what crossed the wire, not the CPU's ibytes/obytes), with its speed; with no MAC counters the CPU's",
       apichecks.pan_interface_bytes(COUNTERS, IFALL) == {"ethernet1/1": (5000, 7000, 1e9), "ethernet1/2": (0, 0, 0.0)},
       apichecks.pan_interface_bytes(COUNTERS, IFALL))
+PAVM = ET.fromstring("""<response status="success"><result><hw><entry><name>ethernet1/1</name><port><link-down>0</link-down>
+<rx-broadcast>0</rx-broadcast><rx-bytes>142969028</rx-bytes><rx-discards>0</rx-discards><rx-error>0</rx-error><rx-unicast>1754003</rx-unicast>
+<tx-broadcast>0</tx-broadcast><tx-bytes>76620</tx-bytes><tx-error>0</tx-error><tx-unicast>1089</tx-unicast></port><ibytes>148002660</ibytes>
+<obytes>58458</obytes><ipackets>1754003</ipackets><opackets>1089</opackets><ierrors>17</ierrors><idrops>0</idrops><interface>ethernet1/1</interface>
+</entry></hw><ifnet><ifnet><entry><name>ethernet1/1</name><ibytes>148001640</ibytes><obytes>58458</obytes><idrops>50</idrops><noroute>15</noroute>
+</entry></ifnet></ifnet></result></response>""").find("result")                 # a PA-VM's own reply (PAN-OS 11.1, 2026-11-09)
+check("a real PA-VM reply: its port's MAC counters", apichecks.pan_interface_bytes(PAVM) == {"ethernet1/1": (142969028, 76620, 0.0)},
+      apichecks.pan_interface_bytes(PAVM))
 check("no hardware counters: the logical interfaces' ones", apichecks.pan_interface_bytes(ET.fromstring(
       "<result><ifnet><ifnet><entry><name>ethernet1/3</name><ibytes>9</ibytes><obytes>8</obytes></entry></ifnet></ifnet></result>"))
       == {"ethernet1/3": (9, 8, 0.0)})
