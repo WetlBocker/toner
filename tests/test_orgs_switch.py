@@ -57,7 +57,8 @@ def tree_names(tree):
 
 
 def shown():
-    """What each section lists right now: {section: set of device or session names}."""
+    """What each section lists right now: {section: set of device or session names}. History reads its rows when it is shown."""
+    w.go("History"); app.processEvents()
     return {"inventory": {n for n in tree_names(w.inventory.table) if "-" in n},
             "results": {w.results.table.topLevelItem(i).text(0) for i in range(w.results.table.topLevelItemCount())},
             "history rows": {c[1].split(" (")[0] for c in w.history.model.cells},
