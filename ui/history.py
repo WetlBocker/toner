@@ -10,7 +10,7 @@ from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy,
                                QSplitter, QStackedWidget, QTabWidget, QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout, QWidget)
-from core import db, display, reports, scope, trends
+from core import db, display, heatgrid, reports, scope, trends
 from core.chartkinds import chart_kind  # noqa: F401  (moved to core; re-exported for importers)
 from core.reports import COLORS, fg_for
 from drivers.base import SEVERITY, Result
@@ -704,6 +704,8 @@ class HistoryTab(QWidget):
             self.fail_when.draw(lambda p: chartspec.empty(f"No failures or errors in the last {days} days"))
             self.fail_where.draw(lambda p: chartspec.empty(""))
             return
+        now = datetime.now()
+        self._fail_grid = grid = heatgrid.layout(now - timedelta(days=days), now)
         cells = {}
         per_device = {}
         for r in rows:
@@ -711,26 +713,31 @@ class HistoryTab(QWidget):
                 t = datetime.strptime(str(r["t"])[:16], "%Y-%m-%d %H:%M")
             except ValueError:
                 continue
-            cells[(t.hour, t.weekday())] = cells.get((t.hour, t.weekday()), 0) + 1
+            xy = grid.cell(t)
+            if xy is None:
+                continue
+            cells[xy] = cells.get(xy, 0) + 1
             self._fail_rows.append((t, r))
             per_device[r["device"]] = per_device.get(r["device"], 0) + 1
-        hours = [f"{h:02d}" for h in range(24)]
-        weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-        grid = [(h, d, n) for (h, d), n in cells.items()]
-        self.fail_when.draw(lambda p: chartspec.heatmap(p, hours, weekdays, grid, title=f"When: FAIL and ERROR rows, last {days} days"))
+        squares = [(x, y, n) for (x, y), n in cells.items()]
+        self.fail_when.draw(lambda p: chartspec.heatmap(p, grid.cols, grid.rows, squares, title=f"When: FAIL and ERROR rows, last {days} days"))
         worst = sorted(per_device.items(), key=lambda kv: (-kv[1], kv[0].lower()))[:12]
         self._fail_worst = [d for d, _n in worst]
         self.fail_where.draw(lambda p: chartspec.bars(p, [db.label_org(d) for d, _n in worst], [n for _d, n in worst], title="Where: devices with most",
                                                       horizontal=True, colors=[chartspec.status_color(p, "FAIL")] * len(worst)))
 
     def _fail_cell(self, hit):
-        """A heatmap cell (an hour of a weekday) was clicked: the FAIL and ERROR rows it counts."""
+        """A heatmap square (an hour of a date, or a date) was clicked: the FAIL and ERROR rows it counts."""
         v = hit.get("value") if hit.get("kind") == "series" else None
         if not (isinstance(v, list) and len(v) >= 2):
             return
-        hour, day = int(v[0]), int(v[1])
-        rows = [(t, r) for t, r in self._fail_rows if t.hour == hour and t.weekday() == day]
-        self._show_failures(f"Failures: {('Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun')[day]} {hour:02d}:00", rows)
+        grid = self._fail_grid
+        try:
+            a, b = grid.slot(int(v[0]), int(v[1]))
+        except IndexError:
+            return
+        rows = [(t, r) for t, r in self._fail_rows if a <= t < b]
+        self._show_failures(f"Failures: {grid.rows[int(v[1])]} {grid.cols[int(v[0])]}" + (":00" if grid.hourly else ""), rows)
 
     def _fail_bar(self, hit):
         """A device's bar was clicked: its FAIL and ERROR rows."""
