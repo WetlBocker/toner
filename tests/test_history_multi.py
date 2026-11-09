@@ -33,7 +33,7 @@ def lines():
     return [p.stack for p in w.panels.panels if hasattr(p, "stack")]
 names = lambda: [[c for c, _ in st_.series] for st_ in lines()]
 check("device listed, first check ticked by default", w.dev.currentText() == "sw1" and len(w.chk.selected()) == 1, w.chk.selected())
-check("the first check (BGP, a count of problems) drawn as squares, not a line", [p.kind for p in w.panels.panels] == ["heatmap"] and lines() == [],
+check("the first check (BGP, neighbors up) drawn as a table, not a line", [p.kind for p in w.panels.panels] == ["table"] and lines() == [],
       [p.kind for p in w.panels.panels])
 first = w.chk.selected()[0]
 check("all of the device's checks are offered", set(w.check_keys) == {"CPU", "Memory", "Uptime", "BGP"}, list(w.check_keys))
@@ -44,7 +44,7 @@ check("button text lists the ticked checks", w.chk.text() == "CPU, Memory", w.ch
 w.chk.set_selected(["CPU", "Memory", "Uptime", "BGP"]); w.chk._toggled()
 check("button text lists four short names", w.chk.text() == "BGP, CPU, Memory, Uptime", w.chk.text())
 check("a panel per check, lines of one scale together, uptime as its table", names() == [["cpu", "memory"]]
-      and [p.kind for p in w.panels.panels] == ["heatmap", "line", "uptime"], ([p.kind for p in w.panels.panels], names()))
+      and [p.kind for p in w.panels.panels] == ["table", "line", "uptime"], ([p.kind for p in w.panels.panels], names()))
 w.chk.set_selected(["CPU"]); w.chk._toggled()
 check("back to one check keeps its thresholds", names() == [["cpu"]] and lines()[0].th is not None and lines()[0].th["warn"] == 70, lines()[0].th)
 w.chk.clear()
