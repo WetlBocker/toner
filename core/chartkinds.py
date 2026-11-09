@@ -24,8 +24,8 @@ OVER_TIME = {
              "interface errors", "wan usage"),
     **_names("gauges", "disks", "disk", "storage", "flash", "log disk", "pool space", "datasets"),
     **_names("heatmap", "disk health", "pending reboot", "services", "tasks", "environment", "interfaces", "vpn", "ipsec tunnels",
-             "alarms", "alerts", "incidents", "core dumps", "bgp", "ospf", "eigrp"),          # counts of problems: when, not how many
-    **_names("table", "firewall", "last commit", "licenses", "panorama", "fortiaps", "fortiswitches", "antivirus", "firmware"),
+             "alarms", "alerts", "incidents", "core dumps"),          # counts of problems: when, not how many
+    **_names("table", "bgp", "ospf", "eigrp", "firewall", "last commit", "licenses", "panorama", "fortiaps", "fortiswitches", "antivirus", "firmware"),
     "certificates": "certs", "patches": "table", "config backup": "config", "uptime": "uptime", "ha": "ha", "resources": "hidden",
 }
 OVER_TIME_VENDOR = {("windows", "patches"): "wheel", ("truenas", "disks"): "heatmap"}

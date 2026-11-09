@@ -18,10 +18,13 @@ check("patches", o("patches", vendor="windows") == "wheel" and o("patches", vend
 check("config/uptime/ha/hidden", (o("config backup"), o("uptime"), o("ha"), o("ha sync"), o("resources")) == ("config", "uptime", "ha", "ha", "hidden"))
 check("certs", o("certificate :8443") == o("certificate") == o("certificates") == "certs")
 check("heatmaps", {o(c) for c in ("vpn", "ipsec tunnels", "tasks", "services", "pending reboot", "environment", "interfaces")} == {"heatmap"})
-problems = ("alarms", "alerts", "incidents", "core dumps", "bgp", "ospf", "eigrp")
-check("counts of problems (alarms, alerts, incidents, core dumps, routing neighbors) are heatmaps, not lines",
+problems = ("alarms", "alerts", "incidents", "core dumps")
+check("counts of problems (alarms, alerts, incidents, core dumps) are heatmaps, not lines",
       {o(c, rows=[row(numeric=1.0, t="a"), row(numeric=2.0, t="b")]) for c in problems} == {"heatmap"})
 check("...and across devices the health table, never a gauge", {a(c, [row(numeric=3.0)]) for c in problems} == {"health"})
+check("BGP, OSPF and EIGRP (neighbors up) are tables over time and across devices",
+      {o(c, rows=[row(numeric=3.0, t="a"), row(numeric=2.0, t="b")]) for c in ("bgp", "ospf", "eigrp")} == {"table"}
+      and {a(c, [row(numeric=3.0)]) for c in ("bgp", "ospf", "eigrp")} == {"table"})
 check("tables", {o(c) for c in ("firewall", "last commit", "licenses", "panorama", "fortiaps", "fortiswitches")} == {"table"})
 check("lines", {o(c) for c in ("reachability", "clock", "changes", "interface errors", "cpu", "wan usage")} == {"line"})
 check("fallback from rows", (o("zz", rows=[row(numeric=1.0, t="a"), row(numeric=2.0, t="b")]), o("zz", rows=[row(numeric=1.0)]),
