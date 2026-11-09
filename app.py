@@ -125,6 +125,7 @@ class Main(QMainWindow):
         self.resize(1240, 760)
         self.setMinimumSize(900, 560)
         self._quitting = False
+        self._discarding = False                         # the lock's "Discard changes and close"
         self._signing_out = False                        # Sign out: closing ends the process, and app.main starts Toner again
         self._told_about_tray = False
         self.views = {}                                  # open device windows by name
@@ -886,10 +887,30 @@ class Main(QMainWindow):
         else:
             self.tray.hide()
 
+    def close_blocker(self):
+        """Why Toner can't close while locked, without asking: (words, pending) -- pending when only unsaved changes stand in the way."""
+        from core import extstore
+        if self.automation.running():
+            return "a playbook is running.", False
+        if self.tools.firmware.transferring():
+            return "a firmware transfer is still running.", False
+        if self.tools.playbooks.dirty():
+            return "a playbook has unsaved changes.", True
+        if extstore.unsent():
+            return "some changes haven't reached the password vault yet.", True
+        if self.settings.unsaved_count():
+            return "there are unsaved settings.", True
+        return "", False
+
+    def discard_and_close(self):
+        self._discarding = self._quitting = True
+        if not self.close():
+            self._discarding = self._quitting = False
+
     def quit_for_real(self):
         self._quitting = True
-        self.close()
-        QApplication.quit()
+        if self.close():                                   # a closing question answered No/Cancel keeps Toner running
+            QApplication.quit()
 
     def on_run_finished(self):
         self.notifier.handle_run(self.results.results, self.results.last_ran, self.results.last_scheduled)
@@ -1030,34 +1051,48 @@ class Main(QMainWindow):
         if not self._quitting and self.background_mode():
             event.ignore()                         # keep scheduled checks and backups running from the tray
             self.hide()
+            self.lock_screen._cover_all()          # a lock up goes with the window and comes back when Toner is opened
             self.update_tray()
             if not self._told_about_tray:
                 self._told_about_tray = True
                 self.tray.showMessage("Toner is still running", "Scheduled checks and backups continue. "
                                       "Use the tray icon to open Toner or quit.", QSystemTrayIcon.MessageIcon.Information, 6000)
             return
-        if not self.tools.playbooks.leave():                 # an unsaved playbook: the person chose to keep editing
-            self._quitting = self._signing_out = False
-            event.ignore()
-            return
-        from core import extstore, extvault
-        n = extstore.unsent()
-        if n:
-            name = extvault.LABELS[extstore.active()]
-            text = (f"1 change hasn't reached {name} yet and will be lost if Toner closes. Close anyway?" if n == 1 else
-                    f"{n} changes haven't reached {name} yet and will be lost if Toner closes. Close anyway?")
-            if QMessageBox.question(self, "Toner", text) != QMessageBox.StandardButton.Yes:
+        discard = False
+        if self.lock_screen.locked and not self.lock_screen._passing:
+            reason, pending = self.close_blocker()
+            discard = bool(reason) and pending and self._discarding
+            if reason and not discard:                       # no question while locked: it would sit under the lock
+                self._quitting = self._signing_out = self._discarding = False
+                if not self.isVisible():
+                    self.show_window()                       # quitting from the tray: the lock comes back with the line
+                self.lock_screen.ask_unlock(reason, pending)
+                event.ignore()
+                return
+        self._discarding = False
+        if not discard:                                      # "Discard changes and close" (the lock): nothing is asked, saved or sent
+            if not self.tools.playbooks.leave():                 # an unsaved playbook: the person chose to keep editing
                 self._quitting = self._signing_out = False
                 event.ignore()
                 return
-        if self.settings.unsaved_count():
-            if not self.isVisible():
-                self.show_window()                           # quitting from the tray: show what the question is about
-            self.go("Settings")
-            if not self.settings.confirm_leave("closing Toner", reload=False):
-                self._quitting = self._signing_out = False
-                event.ignore()
-                return
+            from core import extstore, extvault
+            n = extstore.unsent()
+            if n:
+                name = extvault.LABELS[extstore.active()]
+                text = (f"1 change hasn't reached {name} yet and will be lost if Toner closes. Close anyway?" if n == 1 else
+                        f"{n} changes haven't reached {name} yet and will be lost if Toner closes. Close anyway?")
+                if QMessageBox.question(self, "Toner", text) != QMessageBox.StandardButton.Yes:
+                    self._quitting = self._signing_out = False
+                    event.ignore()
+                    return
+            if self.settings.unsaved_count():
+                if not self.isVisible():
+                    self.show_window()                           # quitting from the tray: show what the question is about
+                self.go("Settings")
+                if not self.settings.confirm_leave("closing Toner", reload=False):
+                    self._quitting = self._signing_out = False
+                    event.ignore()
+                    return
         if self.automation.running() and QMessageBox.question(self, "A playbook is running", "Ansible is still running a playbook. Stop it and quit?") != QMessageBox.StandardButton.Yes:
             self._quitting = self._signing_out = False
             event.ignore()
@@ -1079,6 +1114,7 @@ class Main(QMainWindow):
         demarc.stop()
         self.about.apply_on_exit()     # a downloaded update installs as Toner closes, if automatic updating is on
         self.about.shutdown()
+        self.lock_screen.release()     # the lock goes with Toner, or it would keep the app alive
         super().closeEvent(event)
 
 

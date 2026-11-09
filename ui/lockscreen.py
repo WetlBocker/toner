@@ -53,6 +53,8 @@ class LockScreen(QWidget):
         self.error = error_label()
         self.unlock = primary("Unlock")
         self.other = link("Sign in as someone else")
+        self.discard = link("Discard changes and close")     # shown with the "unlock to close" line when only unsaved changes block it
+        self.discard.hide()
         self.again = primary("Sign in")                  # after the session, with the directory reachable: the full sign-in
         self.again.hide()
         lay.addWidget(self.error)
@@ -61,6 +63,8 @@ class LockScreen(QWidget):
         lay.addWidget(self.again)
         lay.addSpacing(6)
         lay.addWidget(self.other, 0, Qt.AlignmentFlag.AlignLeft)
+        lay.addWidget(self.discard, 0, Qt.AlignmentFlag.AlignLeft)
+        self.discard.clicked.connect(lambda: self.main.discard_and_close())
         self.pw.returnPressed.connect(self.unlock.click)
         self.unlock.clicked.connect(self._unlock)
         self.other.clicked.connect(self._sign_out)
@@ -149,6 +153,7 @@ class LockScreen(QWidget):
         self.avatar.setStyleSheet(f"background: {t.get('surface2', '#12283d')}; border: 1px solid {t.get('edge', '#3d5a76')}; "
                                   f"border-radius: 22px; color: {t.get('accent_ink', '#22d3ee')}; font-weight: 600;")
         say(self.error, "")
+        self.discard.hide()
         self.pw.setText("")
         self._arrange("refused" if session.refused() else "directory" if directory_user else "local")
         self.locked = True
@@ -215,6 +220,7 @@ class LockScreen(QWidget):
         self.locked = False
         self.pw.setText("")
         say(self.error, "")
+        self.discard.hide()
         self.hide()
         for cover in self.covers.values():
             cover.hide()
@@ -225,6 +231,15 @@ class LockScreen(QWidget):
             except (RuntimeError, AttributeError):
                 pass                                     # closed meanwhile
         self.covers, self._on_top = {}, []
+
+    def ask_unlock(self, reason, pending=False):
+        say(self.error, f"Unlock to close Toner: {reason}")
+        self.discard.setVisible(pending)
+
+    def release(self):
+        """Toner is closing: the lock and its covers go, so it isn't the last window left."""
+        self._uncover()
+        self.close()
 
     def _unlock(self):
         pw = self.pw.text()
