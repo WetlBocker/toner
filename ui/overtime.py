@@ -53,6 +53,14 @@ def _found(where):
     return "Certificate store" if where == "store" else f"Port {m.group(1)}" if m else where or ""
 
 
+def cert_rows(check, last, items):
+    """The certificates table's rows from a certificate check's newest row and its items (Across devices shares it)."""
+    if items is None:                                                  # stored before each certificate was kept: the row itself
+        return [{"name": display.check_name(check), "days": last["numeric"]}]
+    return [{"name": it["name"], "expires": it["data"].get("expires", ""), "days": None if it["numeric"] is None else int(it["numeric"]),
+             "where": _found(it["data"].get("where"))} for it in items]
+
+
 def _day(stamp):
     """An RFC 3339 time (UTC) as a local date, '8 Nov 2026'; unreadable: as it is."""
     try:
@@ -439,13 +447,8 @@ class CheckPanels(QScrollArea):
         rows = []
         for c in panel.checks:
             last, items = self._latest(c)
-            if last is None:
-                continue
-            if items is None:                                          # stored before each certificate was kept: the row itself
-                rows.append({"name": display.check_name(c), "days": last["numeric"]})
-                continue
-            rows += [{"name": it["name"], "expires": it["data"].get("expires", ""), "days": None if it["numeric"] is None else int(it["numeric"]),
-                      "where": _found(it["data"].get("where"))} for it in items]
+            if last is not None:
+                rows += cert_rows(c, last, items)
         if not rows:
             return panel.note(EMPTY)
         self._add_table(panel, rows, CERTS)

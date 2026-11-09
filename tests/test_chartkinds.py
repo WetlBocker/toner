@@ -27,6 +27,8 @@ check("across explicit", (a("cpu"), a("wan usage"), a("antivirus"), a("firmware"
       == ("gauges", "gauges", "table", "firmware", "rings", "environment", "certs"))
 check("across derived", (a("unknown", [row(value="up")]), a("vpn"), a("tasks"), a("resources"), a("firewall"), a("uptime"), a("patches"), a("config backup"))
       == ("health", "health", "health", "hidden", "table", "table", "table", "table"))
+check("across by vendor: TrueNAS disks are SMART health, other disks gauges", (a("disks", vendor="truenas"), a("disks", vendor="windows"), a("disks"))
+      == ("health", "gauges", "gauges"))
 check("shown_name", (K.shown_name("certificate :8443"), K.shown_name("certificates"), K.shown_name("ha sync"), K.shown_name("cpu"))
       == ("certificates", "certificates", "ha", "cpu"))
 check("stored_names", K.stored_names("certificates", ["cpu", "certificate", "certificate :8443", "certificates"]) == ["certificate", "certificate :8443", "certificates"]

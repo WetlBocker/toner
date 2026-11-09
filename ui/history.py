@@ -2,22 +2,23 @@
 and the trend report), which used to be a section of their own."""
 import math
 import os
-import re
 from datetime import datetime, timedelta
 
 import pyqtgraph as pg
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSortFilterProxyModel, Qt, QUrl
 from PySide6.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy,
-                               QSplitter, QStackedWidget, QTabWidget, QTableView, QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout,
+                               QSplitter, QTabWidget, QTableView, QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout,
                                QWidget)
 from core import db, display, heatgrid, reports, scope, trends
-from core.chartkinds import chart_kind  # noqa: F401  (moved to core; re-exported for importers)
+from core.chartkinds import across_kind, shown_name, stored_names
+from core.firmware import human_size
 from core.reports import COLORS, fg_for
 from drivers.base import Result
 from ui import theme
+from ui.detaillist import DetailList
 from ui.toast import toast
-from ui.widgets import FlowLayout, GroupPicker, StatusDelegate, filling, flow, remember_sizes
+from ui.widgets import FlowLayout, GroupPicker, StatusDelegate, flow, remember_sizes
 from ui.finder import FilterButton, SearchBox, device_sections, listed_devices, shown_devices, wants_archived
 from ui import chartspec
 from ui.timerange import TimeRange
@@ -25,6 +26,11 @@ from ui.webchart import ChartView
 from ui import status as st
 
 PCT_CHECKS = ("cpu", "memory")
+ACROSS_SWITCH = (("Latest", 0), ("7-day average", 7), ("30-day average", 30), ("90-day average", 90))
+RING_SEGMENTS = (("Up", "OK"), ("Err-disabled", "WARN"), ("Down", "FAIL"))
+WORST = {"FAIL": 0, "ERROR": 0, "WARN": 1, "OK": 2}                     # worst first
+DISK_CHECKS = ("disk", "disks", "storage", "flash", "log disk", "pool space", "datasets")      # their marks are the "disk" thresholds
+PCT_GAUGES = DISK_CHECKS + ("cpu", "memory", "utilization", "sessions", "channel_util", "wan usage")
 
 
 SERIES_COLORS = ["#f59e0b", "#10b981", "#ef4444", "#8b5cf6", "#06b6d4", "#ec4899", "#84cc16", "#f97316"]
@@ -527,22 +533,23 @@ class HistoryTab(QWidget):
             w.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         rl.addLayout(flow("Device", self.dev, "Check", self.chk))
         rl.addWidget(self.panels, 1)                                        # a panel per ticked check, each drawn as its kind
-        # Across devices: each device's newest of the rows shown, one bar per device for the check picked here, coloured by its status
+        # Across devices: each device's latest reading of the check picked here (or its average), drawn as the check's kind; not the range
         self.compare_check = QComboBox()
         self.compare_check.setToolTip("The check to chart")
         self.compare_check.currentIndexChanged.connect(lambda _i: self.draw_compare())
-        self.compare_chart = ChartView(min_height=240)
-        self.compare_chart.setAccessibleName("Values across devices")
+        self.compare_switch = QComboBox()
+        for label, days in ACROSS_SWITCH:
+            self.compare_switch.addItem(label, days)
+        self.compare_switch.currentIndexChanged.connect(lambda _i: self.draw_compare())
+        self.compare_area = QScrollArea()
+        self.compare_area.setWidgetResizable(True)
+        self.compare_area.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.compare_names, self.compare_gauges, self.compare_rings, self.compare_table, self.compare_detail = [], [], [], None, None
         across = QWidget()
         al = QVBoxLayout(across)
         al.setContentsMargins(0, 8, 0, 0)
-        al.addLayout(flow("Check", self.compare_check))
-        self.compare_table = _table(["Device", "Value", "Checked"])       # a check of text (a version, a model) has no chart
-        self.compare_table.setAccessibleName("Values across devices")
-        self.compare_stack = QStackedWidget()
-        self.compare_stack.addWidget(self.compare_chart)
-        self.compare_stack.addWidget(self.compare_table)
-        al.addWidget(self.compare_stack, 1)
+        al.addLayout(flow("Check", self.compare_check, self.compare_switch))
+        al.addWidget(self.compare_area, 1)
         # Failures: when problems happen (weekday by hour) and where (the devices with most), over the trend period
         self.fail_period = QComboBox()
         for label, days in trends.PERIODS:
@@ -602,8 +609,10 @@ class HistoryTab(QWidget):
         names = self._group_names()
         with db.including_archived(wants_archived(self.funnel)):
             checks = db.device_all_checks()
-            self.vendors = {d["key"]: d["vendor"] for d in db.list_devices()}     # for the Over time panels, read once here
+            self.devs = {d["key"]: d for d in db.list_devices()}                 # for the charts' vendors and limits, read once here
+        self.vendors = {k: d["vendor"] for k, d in self.devs.items()}
         self.map = {d: c for d, c in checks.items() if names is None or self._base(d) in names}
+        self._fill_compare()
         cur = self.dev.currentData()
         self.dev.blockSignals(True)
         self.dev.clear()
@@ -631,7 +640,6 @@ class HistoryTab(QWidget):
         _a, rows, cells = self._read
         keep = [i for i, r in enumerate(rows) if names is None or self._base(r["device"]) in names]
         self.model.set_rows([rows[i] for i in keep], [cells[i] for i in keep])
-        self._fill_compare()
 
     # ---------- the charts beside the table
     def _chart_tab_shown(self, i):
@@ -642,61 +650,192 @@ class HistoryTab(QWidget):
             self.draw_failures()
 
     def restyle(self):
-        for c in (self.compare_chart, self.fail_when, self.fail_where):
+        for c in self.compare_area.findChildren(ChartView) + [self.fail_when, self.fail_where]:
             c.restyle()
         self.panels.restyle()
 
     def _fill_compare(self):
-        """The checks of the rows shown, for the Across devices box; the pick is kept when it still applies."""
-        names = {}
-        for r in self.model.rows:
-            names.setdefault(display.check_name(r["check_name"]), r["check_name"])
+        """Across devices' checks: every check the devices shown have stored (not only in the time range), each once under its shown
+        name, less those Across devices never draws; the pick is kept when it still applies."""
+        self.compare_names = sorted({c for cs in self.map.values() for c in cs})
+        shown = {shown_name(c) for c in self.compare_names if across_kind(c) != "hidden"}
         cur = self.compare_check.currentData()
         self.compare_check.blockSignals(True)
         self.compare_check.clear()
-        for label, key in sorted(names.items(), key=lambda kv: kv[0].lower()):
-            self.compare_check.addItem(label, key)
-        if cur in names.values():
+        for key in sorted(shown, key=lambda s: display.check_name(s).lower()):
+            self.compare_check.addItem(display.check_name(key), key)
+        if cur in shown:
             self.compare_check.setCurrentIndex(self.compare_check.findData(cur))
         self.compare_check.blockSignals(False)
         if self.chart_tabs.currentIndex() == 1:
             self.draw_compare()
 
     def draw_compare(self):
-        check = self.compare_check.currentData()
-        latest = {}
-        for r in self.model.rows if check else []:                       # each device's newest row, whatever the table's order
-            if r["check_name"] == check and (r["device"] not in latest or r["t"] > latest[r["device"]]["t"]):
-                latest[r["device"]] = r
-        rows = list(latest.values())
-        kind = chart_kind(rows) if rows else "bar"
-        self.compare_stack.setCurrentWidget(self.compare_table if kind == "table" else self.compare_chart)
-        title = display.check_name(check) if check else ""
-        if kind == "table":
-            with filling(self.compare_table):
-                self.compare_table.setRowCount(len(rows))
-                for i, r in enumerate(rows):
-                    for j, v in enumerate([db.label_org(r["device"]), display.value(r["value"]), r["t"]]):
-                        self.compare_table.setItem(i, j, QTableWidgetItem(v))
+        """Each device's latest reading of the picked check, drawn as its kind (a device's vendor can change it: TrueNAS disks are
+        SMART health), into a fresh page under the pickers."""
+        shown = self.compare_check.currentData()
+        stored = stored_names(shown, self.compare_names) if shown else []
+        names = self._group_names()
+        mine = lambda d: names is None or self._base(d) in names
+        rows = [r for r in db.latest_per_device(stored) if mine(r["device"])] if stored else []
+        kinds = {}
+        for r in rows:
+            kinds.setdefault(across_kind(r["check_name"], rows, self._vendor(r["device"])), []).append(r)
+        if shown and across_kind(shown) == "firmware":
+            kinds.setdefault("firmware", [])                         # devices that only have a version read (software_of)
+        body = QWidget()
+        lay = QVBoxLayout(body)
+        lay.setContentsMargins(0, 0, 0, 0)
+        self.compare_gauges, self.compare_rings, self.compare_table, self.compare_detail = [], [], None, None
+        for kind in ("gauges", "rings", "certs", "environment", "firmware", "table", "health"):
+            if kind in kinds:
+                getattr(self, "_across_" + kind)(lay, shown, stored, kinds[kind], mine)
+        if not (self.compare_gauges or self.compare_rings or self.compare_table):
+            view = ChartView(min_height=240)
+            view.setAccessibleName("Values across devices")
+            view.draw(lambda p: chartspec.empty("Nothing to show yet"))
+            lay.addWidget(view)
+        lay.addStretch(1)
+        self.compare_switch.setVisible("gauges" in kinds and shown != "datasets")      # datasets show their latest items only
+        self.compare_area.setWidget(body)                            # the previous page goes with it
+
+    def _vendor(self, key):
+        """A device key's vendor as the catalog names it ('truenas')."""
+        return (self.vendors.get(self._base(key)) or "").lower()
+
+    def _limits(self, key, check, cache):
+        """The warn and fail marks for a device's check from its own thresholds (its organization's, with its overrides)."""
+        if key not in cache:
+            dev = self.devs.get(self._base(key))
+            with db.within(db.split_key(key)[1]):
+                cache[key] = db.thresholds_for(dev) if dev else db.get_thresholds()
+        base = check.split(" (")[0]
+        return cache[key].get(base) or (cache[key].get("disk") if base in DISK_CHECKS else None) or {}
+
+    def _across_gauges(self, lay, shown, stored, rows, mine):
+        """A gauge per device, worst first; datasets and TrueNAS drive temperatures a gauge per item, labelled 'device / item'."""
+        days = self.compare_switch.currentData() if shown != "datasets" else 0
+        avg = db.average_per_device(stored, days) if days else {}
+        cache, dials = {}, []                                         # (label, value, status, limits, check, value text)
+
+        def band(v, lim):
+            return "FAIL" if lim.get("fail") and v >= lim["fail"] else "WARN" if lim.get("warn") and v >= lim["warn"] else "OK"
+
+        def per_item(r, check):
+            _t, items = db.latest_items(r["device"], r["check_name"])
+            lim, name = self._limits(r["device"], check, cache), db.label_org(r["device"])
+            for it in items or []:
+                if it["numeric"] is not None:
+                    d = it["data"] or {}
+                    size = f"\n{human_size(d['used'])} of {human_size(d['total'])}" if d.get("used") is not None and d.get("total") else ""
+                    dials.append((f"{name} / {it['name']}{size}", it["numeric"], band(it["numeric"], lim), lim, check, ""))
+            return bool(items)
+
+        for r in rows:
+            if shown == "datasets" and per_item(r, r["check_name"]):
+                continue
+            lim = self._limits(r["device"], r["check_name"], cache)
+            v = avg.get(r["device"]) if days else r["numeric"]
+            if v is not None:
+                dials.append((db.label_org(r["device"]), v, band(v, lim) if days else r["status"], lim, r["check_name"], r["value"] or ""))
+        if shown == "temperature" and not days:     # shortcut: drives show their latest only, as no per-drive averages are kept; add a query if wanted
+            for r in db.latest_per_device(["disks"]):
+                if self._vendor(r["device"]) == "truenas" and mine(r["device"]):
+                    per_item(r, "temperature")
+        dials.sort(key=lambda d: (WORST.get(d[2], 3), -d[1]))
+        box = QWidget()
+        grid = FlowLayout(8, 8)
+        box.setLayout(grid)
+        for label, value, _status, lim, check, text in dials:         # sized as the device page's dials are
+            base = check.split(" (")[0]
+            pct = "%" in text or base in PCT_GAUGES
+            top = 100 if pct else max(value * 1.25, float(lim.get("fail") or 0) * 1.1, 1)
+            unit = "%" if pct else (" °C" if base == "temperature" else "")
+            g = ChartView(min_height=170)
+            g.setFixedWidth(210)
+            g.setAccessibleName(f"{label} dial")
+            g.draw(lambda p, v=value, w=lim.get("warn"), f=lim.get("fail"), t=label, u=unit, m=top:
+                   chartspec.gauge(p, v, warn=w or None, fail=f or None, title=t, unit=u, maximum=m))
+            grid.addWidget(g)
+            self.compare_gauges.append(g)
+        lay.addWidget(box)
+
+    def _across_rings(self, lay, _shown, _stored, rows, _mine):
+        """A ring per device: its interfaces up, err-disabled and down, the total in the middle; a segment lists those underneath."""
+        box = QWidget()
+        grid = FlowLayout(8, 8)
+        box.setLayout(grid)
+        for r in sorted(rows, key=lambda r: (WORST.get(r["status"], 3), db.label_org(r["device"]).lower())):
+            _t, items = db.latest_items(r["device"], r["check_name"])
+            if not items:                                             # stored before each interface was kept
+                continue
+            label = db.label_org(r["device"])
+            ring = ChartView(min_height=220)
+            ring.setFixedWidth(240)
+            ring.setAccessibleName(label)
+            ring.draw(lambda p, its=items, t=label: chartspec.ring(
+                p, [(n, sum(1 for i in its if i["status"] == s), chartspec.status_color(p, s)) for n, s in RING_SEGMENTS], len(its), title=t))
+            ring.clicked.connect(lambda hit, row=r, its=items: self._ring_segment(row, its, hit))
+            grid.addWidget(ring)
+            self.compare_rings.append(ring)
+        lay.addWidget(box)
+        self.compare_detail = DetailList()
+        self.compare_detail.setMinimumHeight(160)
+        self.compare_detail.hide()
+        lay.addWidget(self.compare_detail)
+
+    def _ring_segment(self, row, items, hit):
+        from ui.overtime import DETAIL                               # (ui.overtime imports this module)
+        status = dict(RING_SEGMENTS).get(hit.get("name")) if hit.get("kind") == "series" else None
+        if status is None:
             return
-        if kind == "status":
-            names = [db.label_org(r["device"]) for r in rows[:40]]
-            series = [(s, [1 if r["status"] == s else 0 for r in rows[:40]]) for s in chartspec.STATUSES if any(r["status"] == s for r in rows[:40])]
-            self.compare_chart.draw(lambda p: chartspec.grouped_bars(p, names, series, title=title, stacked=True))
-            return
-        vals = [(db.label_org(r["device"]), r["numeric"], r["status"]) for r in rows if r.get("numeric") is not None]
-        if not vals:
-            self.compare_chart.draw(lambda p: chartspec.empty("Choose a run on the left and a check with a number"))
-            return
-        order = {"FAIL": 0, "ERROR": 0, "WARN": 1, "OK": 2}
-        vals.sort(key=lambda v: (order.get(v[2], 3), -v[1]))
-        vals = vals[:40]
-        unit = ""
-        m = re.search(r"\d\s*([%a-zA-Z/]+)\s*$", str(rows[0].get("value") or ""))
-        if m and len(m.group(1)) <= 4:
-            unit = (" " if m.group(1) != "%" else "") + m.group(1)
-        self.compare_chart.draw(lambda p: chartspec.bars(p, [v[0] for v in vals], [v[1] for v in vals], title=title, unit=unit, horizontal=True,
-                                                         colors=[chartspec.status_color(p, v[2]) for v in vals], extra=[v[0] for v in vals]))
+        self.compare_detail.show_rows([{"t": row["t"], "device": db.label_org(row["device"]), "status": it["status"], "value": it["name"],
+                                        "message": it["text"] or ""} for it in items if it["status"] == status], DETAIL)
+        self.compare_detail.show()
+
+    def _across_list(self, lay, rows, columns):
+        self.compare_table = DetailList()
+        self.compare_table.setMinimumHeight(200)
+        self.compare_table.show_rows(rows, columns)
+        lay.addWidget(self.compare_table, 1)
+
+    def _across_certs(self, lay, _shown, stored, _rows, mine):
+        """Every certificate of every device, from each certificate check's newest row, fewest days left first."""
+        from ui.overtime import CERTS, cert_rows                    # (ui.overtime imports this module)
+        out = []
+        for c in stored:
+            for r in db.latest_per_device([c]):
+                if mine(r["device"]):
+                    _t, items = db.latest_items(r["device"], c)
+                    out += [{"device": db.label_org(r["device"]), **x} for x in cert_rows(c, r, items)]
+        out.sort(key=lambda x: (x["days"] is None, x["days"] or 0))
+        self._across_list(lay, out, [("device", "Device")] + CERTS)
+
+    def _across_environment(self, lay, _shown, _stored, rows, _mine):
+        out = []
+        for r in rows:
+            _t, items = db.latest_items(r["device"], r["check_name"])
+            out += [{"device": db.label_org(r["device"]), "component": it["name"], "state": it["text"] or it["status"] or ""} for it in items or []]
+        self._across_list(lay, out, [("device", "Device"), ("component", "Component"), ("state", "State")])
+
+    def _across_firmware(self, lay, _shown, _stored, rows, mine):
+        """Each device's firmware row, and every other device whose version Toner has read (a Cisco ASA has no firmware row)."""
+        found = {r["device"]: display.value(r["value"]) for r in rows}
+        for key, dev in self.devs.items():
+            version = db.software_of(dev)["version"]
+            if version and key not in found and mine(key):
+                found[key] = version
+        out = sorted(({"device": db.label_org(k), "version": v} for k, v in found.items()), key=lambda x: x["device"].lower())
+        self._across_list(lay, out, [("device", "Device"), ("version", "Version")])
+
+    def _across_table(self, lay, _shown, _stored, rows, _mine):
+        out = sorted(({"device": db.label_org(r["device"]), "value": display.value(r["value"]), "t": r["t"]} for r in rows), key=lambda x: x["device"].lower())
+        self._across_list(lay, out, [("device", "Device"), ("value", "Value"), ("t", "Checked")])
+
+    def _across_health(self, lay, _shown, _stored, rows, _mine):
+        out = [{"device": db.label_org(r["device"]), "status": r["status"], "value": display.value(r["value"]), "message": r["message"] or "",
+                "t": r["t"]} for r in sorted(rows, key=lambda r: (WORST.get(r["status"], 3), db.label_org(r["device"]).lower()))]
+        self._across_list(lay, out, [("device", "Device"), ("status", "Status"), ("value", "Value"), ("message", "Message"), ("t", "Checked")])
 
     def draw_failures(self):
         days = int(self.fail_period.currentData() or 7)

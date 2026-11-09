@@ -51,10 +51,11 @@ def over_time_kind(check, vendor=None, rows=None):
     return OVER_TIME_VENDOR.get((vendor, name)) or OVER_TIME.get(name) or _FALLBACK[chart_kind(rows or [])]
 
 
-def across_kind(check, rows=None):
+def across_kind(check, rows=None, vendor=None):
     """"gauges", "table", "certs", "environment", "firmware", "rings", "health" or "hidden" (resources: Across devices leaves it out).
-    A check not listed follows its over-time kind, so a count of problems is never drawn as a gauge."""
-    return ACROSS.get(shown_name(check)) or _ACROSS_FROM.get(over_time_kind(check, None, rows), "table")
+    A check not listed follows its over-time kind (for that vendor: TrueNAS disks are SMART health), so a count of problems is never
+    drawn as a gauge."""
+    return ACROSS.get(shown_name(check)) or _ACROSS_FROM.get(over_time_kind(check, vendor, rows), "table")
 
 
 def is_measurement(check, vendor=None, rows=None):
