@@ -752,9 +752,14 @@ def _m15_result_items(c):
     """)
 
 
+def _m16_runs_started(c):
+    """History by time range finds its runs by when they started."""
+    c.execute("CREATE INDEX IF NOT EXISTS idx_runs_started ON runs(started_at)")
+
+
 MIGRATIONS = [(1, _m1_legacy_columns), (2, _m2_agent_history), (3, _m3_agent_tokens), (4, _m4_device_checks), (5, _m5_ansible_runs),
               (6, _m6_shared), (7, _m7_org_uids), (8, _m8_faster_history), (9, _m9_api_tester), (10, _m10_assistant), (11, _m11_device_software),
-              (12, _m12_assistant_searches), (13, _m13_backup_secrets), (14, _m14_unifi_seen), (15, _m15_result_items)]
+              (12, _m12_assistant_searches), (13, _m13_backup_secrets), (14, _m14_unifi_seen), (15, _m15_result_items), (16, _m16_runs_started)]
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 
 
@@ -1610,14 +1615,21 @@ def device_all_checks():
         return out
     return _per_device(here)
 
-def check_rows(device, check, limit=200):
-    """A check's stored rows, oldest first: [{'t', 'value', 'status', 'numeric'}]. `device` can be a key from the Global view."""
+def _ts(t):
+    """A time as runs.started_at stores it; strings pass through, None stays None."""
+    return t.strftime("%Y-%m-%d %H:%M:%S") if isinstance(t, datetime) else t
+
+def check_rows(device, check, limit=200, start=None, end=None):
+    """A check's stored rows, oldest first: [{'t', 'value', 'status', 'message', 'numeric'}]. With `start` there is no limit (the
+    range is the limit). `device` can be a key from the Global view."""
     device, org = split_key(device)
+    start, end = _ts(start), _ts(end)
     with within(org if (org is not None or not everything()) else GLOBAL):
         with connect() as c:
-            rows = c.execute("SELECT runs.started_at AS t, results.value AS value, results.status AS status, results.numeric AS numeric "
+            rows = c.execute("SELECT runs.started_at AS t, results.value AS value, results.status AS status, results.message AS message, results.numeric AS numeric "
                              "FROM results JOIN runs ON runs.id = results.run_id WHERE results.device=? AND results.check_name=? "
-                             "ORDER BY results.run_id DESC LIMIT ?", (device, check, limit)).fetchall()
+                             "AND (? IS NULL OR runs.started_at >= ?) AND (? IS NULL OR runs.started_at <= ?) "
+                             "ORDER BY results.run_id DESC LIMIT ?", (device, check, start, start, end, end, -1 if start else limit)).fetchall()
     return [dict(r) for r in reversed(rows)]
 
 def _items_here(device, check, start, end, newest=False):
@@ -1680,31 +1692,76 @@ def problems(days=7):
     return out
 
 
-def series(device, check, limit=200):
+def series(device, check, limit=200, start=None, end=None):
     """(time, value) points for one check, oldest first. A Windows agent reports far more often than checks run, so its
-    own reports are added in and the chart has a point per report. `device` can be a key from the Global view."""
+    own reports are added in and the chart has a point per report. With `start` there is no limit.
+    `device` can be a key from the Global view."""
     device, org = split_key(device)
+    args = (device, check, -1 if start else limit, _ts(start), _ts(end))
     if org is not None or not everything():
         with within(org):
-            return _series_here(device, check, limit)
+            return _series_here(*args)
     with within(GLOBAL):                               # a plain name in the Global view is Global's own device
-        return _series_here(device, check, limit)
+        return _series_here(*args)
 
-def _series_here(device, check, limit):
+def _series_here(device, check, limit, start=None, end=None):
     with connect() as c:
         rows = c.execute(
             "SELECT runs.started_at AS t, results.numeric AS v FROM results "
             "JOIN runs ON runs.id = results.run_id "
             "WHERE results.device=? AND results.check_name=? AND results.numeric IS NOT NULL "
-            "ORDER BY results.run_id DESC LIMIT ?", (device, check, limit)).fetchall()
+            "AND (? IS NULL OR runs.started_at >= ?) AND (? IS NULL OR runs.started_at <= ?) "
+            "ORDER BY results.run_id DESC LIMIT ?", (device, check, start, start, end, end, limit)).fetchall()
         pts = [(r["t"], r["v"]) for r in reversed(rows)]
         col = AGENT_COLUMNS.get(check)
         if col:
             extra = c.execute(f"SELECT at AS t, {col} AS v FROM agent_metrics WHERE device=? AND {col} IS NOT NULL "
-                              "ORDER BY id DESC LIMIT ?", (device, limit)).fetchall()
+                              "AND (? IS NULL OR at >= ?) AND (? IS NULL OR at <= ?) ORDER BY id DESC LIMIT ?",
+                              (device, start, start, end, end, limit)).fetchall()
             if extra:
-                pts = sorted(set(pts) | {(r["t"], r["v"]) for r in extra})[-limit:]
+                pts = sorted(set(pts) | {(r["t"], r["v"]) for r in extra})
+                pts = pts[-limit:] if limit >= 0 else pts
     return pts
+
+
+def _across_files(sql, args, key="device"):
+    """Rows of one query run on every file of the view (Shared devices only where that applies), devices keyed with dkey."""
+    out = []
+    for org, only in _each_file():
+        with within(org):
+            with connect() as c:
+                part = [dict(r) for r in c.execute(sql, args)]
+        for r in part:
+            if only is None or _base(r[key]) in only:
+                r[key] = dkey(r[key], org)
+                out.append(r)
+    return out
+
+_ROW = "runs.started_at AS t, results.device AS device, results.check_name AS check_name, results.status AS status, results.value AS value, results.message AS message, results.numeric AS numeric"
+
+def results_between(start, end):
+    """Every stored row from `start` to `end` (datetimes), newest first: [{'t', 'device', 'check_name', 'status', 'value', 'message',
+    'numeric'}], devices keyed with dkey, read from every file of the view as problems() does."""
+    out = _across_files(f"SELECT {_ROW} FROM results JOIN runs ON runs.id = results.run_id "
+                        "WHERE runs.started_at >= ? AND runs.started_at <= ?", (_ts(start), _ts(end)))
+    out.sort(key=lambda r: r["t"], reverse=True)
+    return out
+
+def latest_per_device(checks):
+    """Each device's newest row among `checks`: [{'device', 'check_name', 'status', 'value', 'message', 'numeric', 't'}]."""
+    ph = ",".join("?" * len(checks))
+    return _across_files(f"SELECT {_ROW} FROM results JOIN runs ON runs.id = results.run_id WHERE results.check_name IN ({ph}) "
+                         f"AND results.id = (SELECT MAX(r2.id) FROM results r2 WHERE r2.device = results.device AND r2.check_name IN ({ph}))",
+                         tuple(checks) * 2)
+
+def average_per_device(checks, days):
+    """{device: mean of the numbers} over the last `days` days for rows of `checks` that have a number, averaged in SQLite."""
+    ph = ",".join("?" * len(checks))
+    cutoff = _ts(datetime.now() - timedelta(days=days))
+    rows = _across_files(f"SELECT results.device AS device, AVG(results.numeric) AS avg FROM results JOIN runs ON runs.id = results.run_id "
+                         f"WHERE results.check_name IN ({ph}) AND results.numeric IS NOT NULL AND runs.started_at >= ? "
+                         "GROUP BY results.device", (*checks, cutoff))
+    return {r["device"]: r["avg"] for r in rows}
 
 
 # ---------- dashboard data ----------
