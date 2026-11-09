@@ -75,6 +75,16 @@ check("the nearest certificate expiry is graded (lower is worse)", ce.status == 
       and run(d, report(certs=[{"subject": "CN=a", "days": -3, "thumb": "x"}]))["certificates"].value == "expired")
 old = time.strftime("%Y-%m-%dT%H:%M:%S.0000000Z", time.gmtime(NOW - 120 * 86400))
 check("an old patch level is flagged", run(d, report(patched=old))["patches"].status == FAIL and run(d, report(patched=time.strftime("%Y-%m-%dT%H:%M:%S.0000000Z", time.gmtime(NOW - 60 * 86400))))["patches"].status == WARN)
+pu = run(d, report(pending_updates=[{"title": "2026-10 Cumulative Update", "kb": "KB5001", "severity": "Critical"}, {"title": "Driver", "kb": "", "severity": ""}], updates_searched="2026-11-08T03:00:00Z"))["patches"]
+check("pending updates become the patches items, with severity and the search date",
+      [(i["name"], i["text"], i["data"]["severity"], i["data"]["searched"]) for i in pu.items] == [("2026-10 Cumulative Update", "KB5001", "Critical", "2026-11-08T03:00:00Z"), ("Driver", "", "", "2026-11-08T03:00:00Z")]
+      and pu.status == OK and round(pu.numeric) == 10)
+check("nothing pending is an empty list, a report without the key is None",
+      run(d, report(pending_updates=[]))["patches"].items == [] and run(d, report())["patches"].items is None)
+far = run(d, report(certs=[{"subject": "CN=far", "days": 400, "thumb": "f", "expires": "2027-12-15T00:00:00Z"}, {"subject": "CN=gone", "days": -900, "thumb": "g"}]))["certificates"]
+check("every certificate is listed but grading ignores the far and long-expired ones",
+      far.status == OK and far.value == "none expiring" and len(far.items) == 2 and far.items[0]["data"]["expires"] == "2027-12-15T00:00:00Z"
+      and run(d, report(certs=[{"subject": "CN=a", "days": 5, "thumb": "x"}, {"subject": "CN=gone", "days": -900, "thumb": "g"}]))["certificates"].numeric == 5.0)
 check("a check can be switched off in Settings", "cpu" not in run(d, report(), disabled={"windows:cpu"}) and "memory" in run(d, report(), disabled={"windows:cpu"}))
 
 print("== services")

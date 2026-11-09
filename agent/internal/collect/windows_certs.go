@@ -16,8 +16,8 @@ import (
 	"github.com/WetlBocker/toner/agent/internal/report"
 )
 
-// winCerts lists the computer's own certificates (Cert:\LocalMachine\My) that end within 90 days or ended within the
-// last 30, leaving out the computer's own self-named one, as the script did.
+// winCerts lists every certificate of the computer's own store (Cert:\LocalMachine\My), leaving out the computer's own
+// self-named one, as the script did.
 func winCerts(r *report.Report) error {
 	storeName, _ := windows.UTF16PtrFromString("MY")
 	store, err := windows.CertOpenStore(windows.CERT_STORE_PROV_SYSTEM, 0, 0, windows.CERT_SYSTEM_STORE_LOCAL_MACHINE|windows.CERT_STORE_READONLY_FLAG|windows.CERT_STORE_OPEN_EXISTING_FLAG, uintptr(unsafe.Pointer(storeName)))
@@ -46,7 +46,7 @@ func winCerts(r *report.Report) error {
 			continue
 		}
 		sum := sha1.Sum(der) //nolint:gosec
-		out = append(out, report.Cert{Subject: subject, Days: int(math.Floor(cert.NotAfter.Sub(now).Hours() / 24)), Thumb: strings.ToUpper(hex.EncodeToString(sum[:]))})
+		out = append(out, report.Cert{Subject: subject, Days: int(math.Floor(cert.NotAfter.Sub(now).Hours() / 24)), Thumb: strings.ToUpper(hex.EncodeToString(sum[:])), Expires: cert.NotAfter.UTC().Format(time.RFC3339)})
 	}
 	r.Certs = &out
 	return nil

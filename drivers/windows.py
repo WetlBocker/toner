@@ -134,14 +134,18 @@ class WindowsDriver(Driver):
         certs = self.report.get("certs")
         if certs is None:
             return []
-        if not certs:
-            return self.result("certificates", OK, "none expiring", "", items=[])
+        items = [self.item(c["subject"], numeric=float(c["days"]), data={"expires": c.get("expires") or "", "where": "store"}) for c in certs]
+        # the report lists every certificate; grading still looks only at those ending within 90 days or ended within 30, as before
+        due = [c for c in certs if -30 <= c["days"] < 90]
+        if not due:
+            return self.result("certificates", OK, "none expiring", "", items=items)
+        certs = due
         worst = min(certs, key=lambda c: c.get("days", 9999))
         t = self.th["cert_days"]
         text = "; ".join(f"{c['subject'][:50]} ({c['days']} d)" for c in sorted(certs, key=lambda c: c["days"])[:4])
         return self.result("certificates", grade_low(worst["days"], t["warn"], t["fail"]),
                            f"{worst['days']} days" if worst["days"] >= 0 else "expired", text, numeric=float(worst["days"]),
-                           items=[self.item(c["subject"], numeric=float(c["days"]), data={"expires": c.get("expires") or "", "where": "store"}) for c in certs])
+                           items=items)
 
     def changes(self):
         """What changed since the last check: installed software, local administrators, listening ports. The first check
@@ -329,5 +333,8 @@ class WindowsDriver(Driver):
             return []
         days = max(0.0, (datetime.now(timezone.utc) - when).total_seconds() / 86400)
         t = self.th["patch_days"]
+        pending = self.report.get("pending_updates")           # absent = not reported; [] = nothing pending
+        searched = self.report.get("updates_searched") or ""
+        items = None if pending is None else [self.item(u.get("title", ""), text=u.get("kb", ""), data={"severity": u.get("severity", ""), "searched": searched}) for u in pending]
         return self.result("patches", grade(days, t["warn"], t["fail"]), f"{days:.0f} days",
-                           f"last update installed {when:%Y-%m-%d}", numeric=float(days))
+                           f"last update installed {when:%Y-%m-%d}", numeric=float(days), items=items)

@@ -6,10 +6,13 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/go-ole/go-ole"
+	"github.com/go-ole/go-ole/oleutil"
 	"golang.org/x/sys/windows/registry"
 
 	"github.com/WetlBocker/toner/agent/internal/report"
@@ -164,6 +167,112 @@ func winPatched(r *report.Report) error {
 		r.Patched = iso(newest)
 	}
 	return nil
+}
+
+// ---- pending updates: Windows' own cached search result. Online is false, so no search is ever started: a live one can take
+// minutes and contacts Microsoft or WSUS. An error (no cached catalog, the API refused) leaves the field nil.
+func winPendingUpdates(r *report.Report) error {
+	runtime.LockOSThread() // COM state belongs to the thread
+	defer runtime.UnlockOSThread()
+	if err := ole.CoInitializeEx(0, ole.COINIT_MULTITHREADED); err == nil {
+		defer ole.CoUninitialize()
+	} // already initialised on this thread (S_FALSE, RPC_E_CHANGED_MODE): carry on
+	obj, err := oleutil.CreateObject("Microsoft.Update.Session")
+	if err != nil {
+		return err
+	}
+	defer obj.Release()
+	session, err := obj.QueryInterface(ole.IID_IDispatch)
+	if err != nil {
+		return err
+	}
+	defer session.Release()
+	sv, err := oleutil.CallMethod(session, "CreateUpdateSearcher")
+	if err != nil {
+		return err
+	}
+	searcher := sv.ToIDispatch()
+	defer searcher.Release()
+	if _, err := oleutil.PutProperty(searcher, "Online", false); err != nil {
+		return err // without Online = false the search could go to the network: do not run it
+	}
+	rv, err := oleutil.CallMethod(searcher, "Search", "IsInstalled=0 and IsHidden=0")
+	if err != nil {
+		return err
+	}
+	result := rv.ToIDispatch()
+	defer result.Release()
+	uv, err := oleutil.GetProperty(result, "Updates")
+	if err != nil {
+		return err
+	}
+	updates := uv.ToIDispatch()
+	defer updates.Release()
+	var rows []rawUpdate
+	n, err := comCount(updates)
+	if err != nil {
+		return err
+	}
+	for i := 0; i < n; i++ {
+		iv, err := oleutil.GetProperty(updates, "Item", i)
+		if err != nil {
+			return err
+		}
+		u := iv.ToIDispatch()
+		row := rawUpdate{Title: comString(u, "Title"), Severity: comString(u, "MsrcSeverity")}
+		if kv, err := oleutil.GetProperty(u, "KBArticleIDs"); err == nil {
+			ids := kv.ToIDispatch()
+			k, _ := comCount(ids)
+			for j := 0; j < k; j++ {
+				if idv, err := oleutil.GetProperty(ids, "Item", j); err == nil {
+					row.KBs = append(row.KBs, idv.ToString())
+					idv.Clear()
+				}
+			}
+			ids.Release()
+		}
+		u.Release()
+		rows = append(rows, row)
+	}
+	out := updatesFrom(rows)
+	r.PendingUpdates = &out
+	// when Windows last searched successfully (the wheel shows it); a missing date does not spoil the list
+	if av, err := oleutil.CreateObject("Microsoft.Update.AutoUpdate"); err == nil {
+		defer av.Release()
+		if auto, err := av.QueryInterface(ole.IID_IDispatch); err == nil {
+			defer auto.Release()
+			if res, err := oleutil.GetProperty(auto, "Results"); err == nil {
+				rd := res.ToIDispatch()
+				defer rd.Release()
+				if d, err := oleutil.GetProperty(rd, "LastSearchSuccessDate"); err == nil {
+					if t, ok := d.Value().(time.Time); ok && t.Year() > 1900 {
+						r.UpdatesSearched = iso(t)
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func comCount(d *ole.IDispatch) (int, error) {
+	v, err := oleutil.GetProperty(d, "Count")
+	if err != nil {
+		return 0, err
+	}
+	return int(v.Val), nil
+}
+
+func comString(d *ole.IDispatch, prop string) string {
+	v, err := oleutil.GetProperty(d, prop)
+	if err != nil {
+		return ""
+	}
+	defer v.Clear()
+	if s, ok := v.Value().(string); ok {
+		return s
+	}
+	return ""
 }
 
 // ---- installed software: the Uninstall keys, both registry views, as Programs and Features lists them

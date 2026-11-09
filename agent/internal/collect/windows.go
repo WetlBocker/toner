@@ -52,6 +52,7 @@ func collectPlatform(ctx context.Context, r *report.Report, opts Options) {
 	part("events", func() error { return winEvents(r) })
 	part("certs", func() error { return winCerts(r) })
 	part("patched", func() error { return winPatched(r) })
+	part("updates", func() error { return winPendingUpdates(r) })
 	part("software", func() error { return winSoftware(r) })
 	part("admins", func() error { return winAdmins(r) })
 	part("ports", func() error { return winPorts(r) })
