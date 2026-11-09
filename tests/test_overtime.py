@@ -42,7 +42,7 @@ ChartView.draw = counting
 
 dev = lambda name, vendor: db.save_device(dict(name=name, vendor=vendor, host="10.0.0.1", port=0, platform="", username="u", site="default", verify_ssl=0,
                                                ha_expected=0, enabled=1, location="", details="", folder_id=None))
-dev("w1", "windows"); dev("w2", "windows"); dev("nas", "truenas")
+dev("w1", "windows"); dev("w2", "windows"); dev("w3", "windows"); dev("nas", "truenas")
 item = lambda name, numeric=None, status=None, text="", **data: {"name": name, "numeric": numeric, "status": status, "text": text, "data": data}
 GB = 1024 ** 3
 pending = [item("Cumulative update", text="KB1", severity="Critical", searched="2026-11-08T10:00:00Z"), item("Defender", text="KB2", severity="Critical"),
@@ -56,6 +56,8 @@ runs = [
      Result("w1", "interface errors", "OK", "0", numeric=0.0, items=[item("Gi1", 0.0), item("Gi2", 0.0)]),
      Result("w1", "config backup", "OK", "saved"),
      Result("w2", "disks", "OK", "33%", numeric=33.0), Result("w2", "patches", "OK", "3 days", numeric=3.0),
+     Result("w2", "pending reboot", "ERROR", "", "could not read"), Result("w2", "interface errors", "OK", "3", numeric=3.0),
+     Result("w3", "patches", "OK", "1 days", numeric=1.0, items=[]),
      Result("nas", "disks", "OK", "41 °C", numeric=41.0, items=[item("ada0", 41.0, "OK"), item("ada1", 38.0, "OK")])],
     [Result("w1", "cpu", "OK", "20%", numeric=20.0), Result("w1", "memory", "OK", "55%", numeric=55.0),
      Result("w1", "disk health", "FAIL", "1", "disk 1: Unhealthy", numeric=1.0),
@@ -84,7 +86,7 @@ cp.resize(900, 400)
 cp.setVisible(True)
 QApplication.processEvents()
 drawn.clear()
-cp.show("w1", "windows", ALL, START, END, th)
+cp.show_checks("w1", "windows", ALL, START, END, th)
 QApplication.processEvents()
 by = {O.shown_name(p.checks[0]): p for p in cp.panels}
 print("== a panel per shown check")
@@ -150,11 +152,12 @@ check("certificates: both checks' certificates and where each was found", sorted
 cfg = by["config backup"]
 check("config backup: a row per saved version, the newest shown as its changes", cfg.table.model().rowCount() == 2 and "+vlan 20" in cfg.config.toPlainText(),
       cfg.config.toPlainText())
+check("the first copy's Changed cell is empty", cfg.table.model().index(1, 1).data() == "", cfg.table.model().index(1, 1).data())
 cfg.switch.setCurrentIndex(1)
 check("or as the full configuration", cfg.config.toPlainText().startswith("hostname w1") and "vlan 20" in cfg.config.toPlainText())
 check("reachability: the check with no answer is a red mark", len(by["reachability"].stack.charts[0].marks) == 1)
 ie = by["interface errors"]
-check("interface errors: a line per interface, the picker starting with those that had errors", ie.picker.selected() == ["Gi2"] and
+check("interface errors: a line per interface, the picker starting with those that had errors", ie.picker.selected() == ["Gi2"] and ie.picker.all_text == "Choose interfaces" and
       [c for c, _p in ie.lines.series] == ["Gi2"], ie.picker.selected())
 ie.picker.set_selected(["Gi1", "Gi2"]); ie.picker._toggled()
 check("ticking another interface draws it too", [c for c, _p in ie.lines.series] == ["Gi1", "Gi2"])
@@ -172,25 +175,57 @@ ut.sortByColumn(1, Qt.SortOrder.DescendingOrder)
 check("durations sort as durations, not as text", ut.model().index(0, 1).data() == display.uptime_words(101.0), ut.model().index(0, 1).data())
 
 print("== the other devices")
-cp.show("w2", "windows", db.device_all_checks()["w2"], START, END, th)
+cp.show_checks("w2", "windows", db.device_all_checks()["w2"], START, END, th)
 for p in cp.panels:
     p.drawn or p.draw()
 by2 = {O.shown_name(p.checks[0]): p for p in cp.panels}
 check("an older agent: the wheel says so instead of a ring", by2["patches"].text.text() == O.OLD_AGENT and not hasattr(by2["patches"], "chart"))
 check("a disk row with no drives: one gauge from its number", len(by2["disks"].gauges) == 1 and by2["disks"].gauges[0].opt["series"][0]["data"][0]["value"] == 33.0)
-cp.show("nas", "truenas", ["disks"], START, END, th)
+sq = by2["pending reboot"].chart.opt["series"][0]["data"][0]
+check("an ERROR square says ERROR, in FAIL's red", sq["name"] == "ERROR" and sq["itemStyle"]["color"] == chartspec.status_color(P, "FAIL"), sq)
+check("interface errors from before items: one line under the check's shown name", by2["interface errors"].picker.boxes.keys() == {"Interface Errors"}
+      and by2["interface errors"].picker.all_text == "Choose interfaces", list(by2["interface errors"].picker.boxes))
+cp.show_checks("w3", "windows", ["patches"], START, END, th)
+for p in cp.panels:
+    p.drawn or p.draw()
+ring = cp.panels[0].chart.opt
+check("nothing pending: a grey ring with 0 in the middle", ring["graphic"][0]["style"]["text"] == "0" and ring["series"][0].get("silent")
+      and ring["series"][0]["data"][0]["itemStyle"]["color"] == P["border"], ring["series"][0]["data"])
+cp.show_checks("nas", "truenas", ["disks"], START, END, th)
 for p in cp.panels:
     p.drawn or p.draw()
 nas = cp.panels[0]
 check("TrueNAS disks: SMART squares and a temperature line per drive", nas.kind == "heatmap" and hasattr(nas, "chart") and
-      sorted(c for c, _p in nas.lines.series) == ["ada0", "ada1"], nas.kind)
+      sorted(c for c, _p in nas.lines.series) == ["temperature (ada0)", "temperature (ada1)"], [c for c, _p in nas.lines.series])
+import ui.history as H
+check("in °C, as the temperature check reads", H.fmt_value(nas.lines.series[0][0], 41.0) == "41 °C" and nas.picker.text() == "Choose drives"
+      and nas.picker.noun == "drives", (H.fmt_value(nas.lines.series[0][0], 41.0), nas.picker.text()))
+
+print("== reachability that never answered")
+fail_at = datetime.strptime(next(r["t"] for r in db.check_rows("w1", "reachability") if r["status"] == "FAIL"), "%Y-%m-%d %H:%M:%S")
+cp.show_checks("w1", "windows", ["reachability"], fail_at, fail_at, th)
+for p in cp.panels:
+    p.drawn or p.draw()
+rp = cp.panels[0]
+check("only FAIL rows: red marks, not the empty text", rp.text is None and len(rp.stack.charts[0].marks) == 1
+      and rp.stack.charts[0].plot.isVisibleTo(rp.stack.charts[0]), rp.text and rp.text.text())
+
+print("== nothing ticked")
+cp.show_checks("w1", "windows", [], START, END, th)
+check("the prompt to pick checks, and no panels", cp.panels == [] and cp.prompt.isVisibleTo(cp) and cp.prompt.text() == "Select one or more checks")
+cp.show_checks("w1", "windows", ["cpu"], START, END, th)
+check("gone once a check is ticked", not cp.prompt.isVisibleTo(cp))
 
 print("== an empty range")
-cp.show("w1", "windows", ALL, datetime(2001, 1, 1), datetime(2001, 1, 2), th)
+cp.show_checks("w1", "windows", ALL, datetime(2001, 1, 1), datetime(2001, 1, 2), th)
 for p in cp.panels:
     p.drawn or p.draw()
 texts = {p.checks[0]: p.text.text() if p.text else None for p in cp.panels}
-check("every panel says there were no readings", all(t == O.EMPTY for t in texts.values()), texts)
+latest = {"certificate :443", "disks", "patches"}                # gauges, certificates and the wheel: the latest reading, whatever the range
+check("every panel that follows the range says there were no readings", all(t == O.EMPTY for c, t in texts.items() if c not in latest), texts)
+eb = {O.shown_name(p.checks[0]): p for p in cp.panels}
+check("gauges, certificates and the wheel still show the latest reading", len(eb["disks"].gauges) == 2 and eb["certificates"].table.model().rowCount() == 2
+      and eb["patches"].chart.opt["graphic"][0]["style"]["text"] == "4", texts)
 
 print("== uptime words")
 check("days and hours, or hours and minutes under a day", display.uptime_words(12 * 24 + 4.2) == "12 days 4 hours" and display.uptime_words(5 + 20 / 60) == "5 hours 20 minutes"

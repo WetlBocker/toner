@@ -366,7 +366,7 @@ class DeviceView(QDialog):
         picked = [self.keys[k] for k in self.pick.selected() if k in self.keys]
         th = db.thresholds_for(self.dev)
         # shortcut: every stored reading (from 2000 on) until the page has its time range. Keyed with its organization: panels draw later.
-        self.panels.show(db.qualified(self.dev["name"], self.dev.get("org")), self.dev.get("vendor", ""), picked, datetime(2000, 1, 1),
+        self.panels.show_checks(db.qualified(self.dev["name"], self.dev.get("org")), self.dev.get("vendor", ""), picked, datetime(2000, 1, 1),
                          datetime.now(), th)
         self._draw_trend(self.panels.line_series(), th.get(picked[0].split(" (")[0]) if picked else None)
 

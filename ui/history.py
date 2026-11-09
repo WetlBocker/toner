@@ -212,7 +212,7 @@ class TrendChart(QFrame):
                 w.deleteLater()
         self.caption.setText(self.title)
         self.caption.setVisible(bool(self.title))
-        has = bool(self.series)
+        has = bool(self.series or self.marks)               # red marks alone (a device that never answered) still draw
         self.empty.setVisible(not has)
         self.plot.setVisible(has)
         many = len(self.series) > 1
@@ -223,9 +223,9 @@ class TrendChart(QFrame):
             return
         self.stamps = sorted({s for _, pts, _ in self.series for s, _ in pts} | {s for s, _ in self.marks})     # runs, evenly spaced in time order
         pos = {s: i for i, s in enumerate(self.stamps)}
-        allpct = all(is_percent(c) for c, _, _ in self.series)
-        peak = max(v for _, pts, _ in self.series for _, v in pts)
-        only_uptime = all(is_uptime(c) for c, _, _ in self.series)
+        allpct = bool(self.series) and all(is_percent(c) for c, _, _ in self.series)
+        peak = max((v for _, pts, _ in self.series for _, v in pts), default=0)
+        only_uptime = bool(self.series) and all(is_uptime(c) for c, _, _ in self.series)
         if only_uptime:
             hi, grid = uptime_axis(peak)                         # round days, so the lines read as 7 d, 14 d, 21 d
         elif allpct:
@@ -560,6 +560,7 @@ class HistoryTab(QWidget):
         names = self._group_names()
         with db.including_archived(wants_archived(self.funnel)):
             checks = db.device_all_checks()
+            self.vendors = {d["key"]: d["vendor"] for d in db.list_devices()}     # for the Over time panels, read once here
         self.map = {d: c for d, c in checks.items() if names is None or self._base(d) in names}
         cur = self.dev.currentData()
         self.dev.blockSignals(True)
@@ -826,9 +827,9 @@ class HistoryTab(QWidget):
         picked = [self.check_keys[k] for k in self.chk.selected() if k in self.check_keys]
         with db.within(db.split_key(d or "")[1]):                         # that organization's limits
             th = db.get_thresholds()
-        vendor = (db.find_device(self._base(d)) or {}).get("vendor", "") if d else ""
+        vendor = self.vendors.get(self._base(d), "") if d else ""
         # shortcut: every stored reading (from 2000 on) until the page has its time range
-        self.panels.show(d or "", vendor, picked if d else [], datetime(2000, 1, 1), datetime.now(), th)
+        self.panels.show_checks(d or "", vendor, picked if d else [], datetime(2000, 1, 1), datetime.now(), th)
 
     def screen_context(self):
         """What the Assistant is told about this page: the chosen run and its rows, and the device and checks on the chart."""

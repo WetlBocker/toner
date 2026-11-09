@@ -204,7 +204,8 @@ def heatmap(p, xlabels, ylabels, cells, title="", unit="", worst=None):
 
 
 def status_heatmap(p, xlabels, ylabels, cells, title=""):
-    """A grid coloured by status: cells is [(xi, yi, status)]. Blank squares are not sent. A click reports value: [x, y, n]. The third
+    """A grid coloured by status: cells is [(xi, yi, status)], ERROR as red as FAIL. Blank squares are not sent. A click reports
+    value: [x, y, n]. The third
     value is a number (the status's place in STATUSES) because ECharts skips heatmap squares whose value is not one; the tooltip names it."""
     if not cells:
         return empty("Nothing to show yet")
@@ -215,7 +216,7 @@ def status_heatmap(p, xlabels, ylabels, cells, title=""):
     y["inverse"] = True
     opt["xAxis"], opt["yAxis"] = x, y
     opt["series"] = [{"type": "heatmap", "data": [{"name": s, "value": [xi, yi, STATUSES.index(s) if s in STATUSES else len(STATUSES)],
-                                "itemStyle": {"color": status_color(p, s)}} for xi, yi, s in cells],
+                                "itemStyle": {"color": status_color(p, "FAIL" if s == "ERROR" else s)}} for xi, yi, s in cells],
                       "itemStyle": {"borderColor": p["surface"], "borderWidth": 1},
                       "emphasis": {"itemStyle": {"shadowBlur": 6, "shadowColor": "rgba(0,0,0,0.25)"}}}]
     return opt

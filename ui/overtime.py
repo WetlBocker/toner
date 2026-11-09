@@ -133,6 +133,9 @@ class CheckPanels(QScrollArea):
         self.col = QVBoxLayout(self.body)
         self.col.setContentsMargins(0, 0, 0, 0)
         self.col.setSpacing(16)
+        self.prompt = QLabel("Select one or more checks")
+        self.prompt.setProperty("muted", True)
+        self.col.addWidget(self.prompt)
         self.col.addStretch(1)
         self.setWidget(self.body)
         self.panels, self._series, self.th = [], {}, {}
@@ -142,9 +145,9 @@ class CheckPanels(QScrollArea):
         bar.rangeChanged.connect(self._reveal)
 
     # ---------- what to show
-    def show(self, device, vendor, checks, start, end, th):
-        """Panels for `checks` (stored names, in the picker's order) of `device` (a key) between start and end (datetimes). This takes
-        QWidget.show's name: make the widget itself visible with setVisible(True)."""
+    def show_checks(self, device, vendor, checks, start, end, th):
+        """Panels for `checks` (stored names, in the picker's order) of `device` (a key) between start and end (datetimes); with no
+        checks, the prompt to pick some."""
         self.device, self.vendor, self.th = device, (vendor or "").lower(), th or {}
         self.start, self.end, self.s, self.e = start, end, start.strftime(STAMP), end.strftime(STAMP)
         for p in self.panels:
@@ -152,6 +155,7 @@ class CheckPanels(QScrollArea):
             p.setParent(None)
             p.deleteLater()
         self.panels = []
+        self.prompt.setVisible(not checks)
         kinds = {c: over_time_kind(c, self.vendor, db.check_rows(device, c, 20, end=self.e)) for c in checks}
         self._series = {c: db.series(device, c, start=self.s, end=self.e) for c in checks if kinds[c] in ("line", "gauges")}
         groups = {}
@@ -220,15 +224,19 @@ class CheckPanels(QScrollArea):
         return db.check_rows(self.device, check, start=self.s, end=self.e)
 
     def _latest(self, check):
-        """The check's newest row at or before the end of the range, or None (gauges, certificates and the wheel show the latest)."""
-        rows = db.check_rows(self.device, check, 1, end=self.e)
-        return rows[-1] if rows else None
+        """(the check's newest row, that row's items as db.latest_items gives them) whatever the range, or (None, None): gauges,
+        certificates and the wheel show the latest reading."""
+        rows = db.check_rows(self.device, check, 1)
+        if not rows:
+            return None, None
+        t, items = db.latest_items(self.device, check)
+        return rows[-1], (items if t == rows[-1]["t"] else None)
 
     def _lines(self, panel):
         series = [(c, self._series.get(c) or []) for c in panel.checks]
-        if not any(pts for _c, pts in series):
-            return panel.note(EMPTY)
         marks = [(r["t"], r["numeric"] or 0) for r in self._rows("reachability") if r["status"] == "FAIL"] if "reachability" in panel.checks else []
+        if not marks and not any(pts for _c, pts in series):
+            return panel.note(EMPTY)
         panel.stack = ChartStack()
         panel.stack.setMinimumHeight(300)
         panel.stack.set_series(series, self.th.get(panel.checks[0].split(" (")[0]), marks=marks)
@@ -248,7 +256,7 @@ class CheckPanels(QScrollArea):
                 worst[xy] = r["status"]
         if not panel.rows:
             return panel.note(EMPTY)
-        cells = [(x, y, "FAIL" if s == "ERROR" else s) for (x, y), s in worst.items()]       # FAIL and ERROR are both red
+        cells = [(x, y, s) for (x, y), s in worst.items()]
         panel.chart = ChartView(min_height=240)
         panel.chart.setAccessibleName(display.check_name(check))
         panel.chart.draw(lambda p: chartspec.status_heatmap(p, grid.cols, grid.rows, cells))
@@ -260,7 +268,7 @@ class CheckPanels(QScrollArea):
         panel.detail.hide()
         panel.lay.addWidget(panel.detail)
         if self.vendor == "truenas" and shown_name(check) == "disks":     # each drive's temperature under its SMART squares
-            self._item_lines(panel, check, "disks")
+            self._item_lines(panel, check, "drives")
 
     def _square(self, panel, hit):
         """A heatmap square was selected: the readings in it, newest first."""
@@ -290,16 +298,17 @@ class CheckPanels(QScrollArea):
                 if it["numeric"] is not None:
                     lines.setdefault(it["name"], []).append((row["t"], it["numeric"]))
         if not lines and self._series.get(check):
-            lines = {check: self._series[check]}
+            lines = {display.check_name(shown_name(check)): self._series[check]}
         if not lines:
             return False
-        panel.picker = GroupPicker(all_text=display.check_name(check), noun=noun, clear_text="Clear selection")
+        panel.picker = GroupPicker(all_text=f"Choose {noun}", noun=noun, clear_text="Clear selection")
         panel.picker.set_labels(sorted(lines))
         if noun == "interfaces":
             panel.picker.set_selected([n for n, pts in lines.items() if any(v for _t, v in pts)])
         panel.lines = ChartStack()
         panel.lines.setMinimumHeight(300)
-        draw = lambda: panel.lines.set_series([(n, lines[n]) for n in panel.picker.selected() or sorted(lines)])
+        named = (lambda n: f"temperature ({n})") if noun == "drives" else (lambda n: n)     # drives: in °C, on the temperature scale
+        draw = lambda: panel.lines.set_series([(named(n), lines[n]) for n in panel.picker.selected() or sorted(lines)])
         panel.picker.changed.connect(draw)
         draw()
         row = QHBoxLayout()
@@ -327,10 +336,9 @@ class CheckPanels(QScrollArea):
 
     def _gauges(self, panel):
         check = panel.checks[0]
-        last = self._latest(check)
+        last, items = self._latest(check)
         if last is None:
             return panel.note(EMPTY)
-        _t, items = db.latest_items(self.device, check)
         dials = [(it["name"], it["numeric"], it["data"]) for it in items or [] if it["numeric"] is not None]
         if not dials and last["numeric"] is not None:                 # a reader that gives no drives: the row's own percentage
             dials = [(display.check_name(check), last["numeric"], {})]
@@ -353,9 +361,9 @@ class CheckPanels(QScrollArea):
 
     def _wheel(self, panel):
         check = panel.checks[0]
-        if self._latest(check) is None:
+        last, items = self._latest(check)
+        if last is None:
             return panel.note(EMPTY)
-        _t, items = db.latest_items(self.device, check)
         if items is None:                                              # an agent from before pending updates were reported
             return panel.note(OLD_AGENT)
         groups = {s: [] for s in SEVERITIES}
@@ -409,7 +417,7 @@ class CheckPanels(QScrollArea):
 
     def _config(self, panel):
         vers = backup.list_backups(self.device)
-        rows = [{"t": v["taken_at"], "changed": f"+{v['added']} / -{v['removed']}" if i + 1 < len(vers) else "(first copy)", "i": i}
+        rows = [{"t": v["taken_at"], "changed": f"+{v['added']} / -{v['removed']}" if i + 1 < len(vers) else "", "i": i}
                 for i, v in enumerate(vers) if self.s <= str(v["taken_at"]) <= self.e]
         if not rows:
             return panel.note(EMPTY)
@@ -430,10 +438,9 @@ class CheckPanels(QScrollArea):
     def _certs(self, panel):
         rows = []
         for c in panel.checks:
-            last = self._latest(c)
+            last, items = self._latest(c)
             if last is None:
                 continue
-            _t, items = db.latest_items(self.device, c)
             if items is None:                                          # stored before each certificate was kept: the row itself
                 rows.append({"name": display.check_name(c), "days": last["numeric"]})
                 continue
