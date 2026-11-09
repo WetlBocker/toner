@@ -347,3 +347,10 @@ The Assistant pane now slides like the sidebar (no fade, no second image). This 
 
 None left. The owner answered the last two on 2026-11-08: a time range replaces the runs list, and WAN usage is graded at
 80% (WARN) and 95% (FAIL).
+
+## Added after approval (owner, 2026-11-08)
+
+- **TrueNAS disk space:** the device page's Overview Disk dials for a TrueNAS device are its **pools** only ("pool space": one dial per pool, percent used, with used and total underneath). Datasets are not shown there. Pool rows are stored under per-pool labels ("<device> / <pool>"), so the device page gathers them from those labels.
+- **TrueNAS datasets:** History > Across devices shows **one dial per dataset** for the "datasets" check (percent used, used and total underneath), not one per device. Over time, "pool space" and "datasets" are gauges like disks *(my call)*.
+- **TrueNAS "disks"** stays SMART health: a heatmap over time, and the health table across devices.
+- **Device details facts:** long values (for example a Cisco ASA's Version: "9.12(4)67 (asa9-12-4-67-smp-k8.bin), read 8 Nov 2026 at 23:31") wrap onto as many lines as they need and are never cut off. This applies to the facts list shared by the device page and the Inventory details pane (`DeviceSummary`).

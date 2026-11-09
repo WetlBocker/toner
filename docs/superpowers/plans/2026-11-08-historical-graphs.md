@@ -526,3 +526,11 @@ These are the working wording. The owner approves or changes them before Task 1 
 | Exploited values | Yes / No |
 | Vulnerabilities, no scan | No scan yet. Scan this device on the Scanning page to see its advisories. |
 | Vulnerabilities, none found | No advisories for this version |
+
+## Addendum (owner, 2026-11-08, after approval)
+
+See the spec's "Added after approval" section. These join the tasks below; the task briefs carry them.
+
+- **Task 6:** `drivers/truenas.py`: each "pool space" row gets one item `{"name": <pool>, "numeric": pct, "data": {"used": allocated, "total": size}}`; "datasets" gets one item per dataset `{"name", "numeric": pct, "data": {"used", "total"}}`. `core/chartkinds.py`: "pool space" and "datasets" are "gauges" over time (across follows: "gauges").
+- **Task 11:** for "datasets", one gauge per dataset item (from each device's latest items), labelled "<device> / <dataset>" — not one per device.
+- **Task 12:** TrueNAS Overview Disk dials come from the device's "pool space" rows (stored under "<device> / <pool>" labels), one per pool — not from "disks" or "datasets". In `DeviceSummary._fill_info`, fact values wrap fully and are never clipped (test: a 120-character Version value's label shows every line — its height fits `heightForWidth` at the pane's width).
