@@ -30,7 +30,7 @@ check("Driver.result takes items", d.result("disks", "OK", "1", "", 1.0, items=[
 check("Driver.result items default None", d.result("disks", "OK").items is None)
 
 RID = db.save_run([r, Result("srv", "cpu", "OK", "5%", "", 5.0)])
-check("schema version", db.schema_version() == 15, db.schema_version())
+check("schema version", db.schema_version() == db.SCHEMA_VERSION >= 15, db.schema_version())
 t, items = db.latest_items("srv", "disks")
 check("latest_items data", items[0]["data"]["total"] == 100e9, items)
 check("latest_items time", bool(t))

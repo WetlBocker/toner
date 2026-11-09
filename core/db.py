@@ -1747,12 +1747,22 @@ def results_between(start, end):
     out.sort(key=lambda r: r["t"], reverse=True)
     return out
 
+_LATEST = ("WITH RECURSIVE ck(n) AS (VALUES {vals}), "
+           "dv(name) AS (SELECT MIN(device) FROM results UNION ALL SELECT (SELECT MIN(device) FROM results WHERE device > dv.name) FROM dv WHERE name IS NOT NULL) "
+           f"SELECT {_ROW}, results.run_id AS rid FROM dv d JOIN ck "
+           "JOIN results ON results.device = d.name AND results.check_name = ck.n "
+           "AND results.run_id = (SELECT MAX(run_id) FROM results WHERE device = d.name AND check_name = ck.n) "
+           "JOIN runs ON runs.id = results.run_id")
+
 def latest_per_device(checks):
-    """Each device's newest row among `checks`: [{'device', 'check_name', 'status', 'value', 'message', 'numeric', 't'}]."""
-    ph = ",".join("?" * len(checks))
-    return _across_files(f"SELECT {_ROW} FROM results JOIN runs ON runs.id = results.run_id WHERE results.check_name IN ({ph}) "
-                         f"AND results.id = (SELECT MAX(r2.id) FROM results r2 WHERE r2.device = results.device AND r2.check_name IN ({ph}))",
-                         tuple(checks) * 2)
+    """Each device's newest row among `checks`: [{'device', 'check_name', 'status', 'value', 'message', 'numeric', 't'}].
+    Seeks each (device, check)'s last run in idx_results_latest, so history length does not matter."""
+    rows = _across_files(_LATEST.format(vals=",".join(["(?)"] * len(checks))), tuple(checks))
+    best = {}
+    for r in rows:
+        if r["device"] not in best or r["rid"] > best[r["device"]]["rid"]:
+            best[r["device"]] = r
+    return [{k: v for k, v in r.items() if k != "rid"} for r in best.values()]
 
 def average_per_device(checks, days):
     """{device: mean of the numbers} over the last `days` days for rows of `checks` that have a number, averaged in SQLite."""

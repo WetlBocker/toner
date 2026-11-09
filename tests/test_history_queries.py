@@ -33,7 +33,7 @@ def save(org, rows, ago):
 
 # a: 250 hourly cpu rows (10 days), b (in Acme): 2 recent rows
 for i in range(250):
-    save(db.GLOBAL, [Result("a", "cpu", "OK", f"{i % 50}%", "load", numeric=float(i % 50))], timedelta(hours=i + 1))
+    save(db.GLOBAL, [Result("a", "cpu", "OK", f"{i % 50}%", "load", numeric=float(i % 50))], timedelta(hours=i + 1) - timedelta(minutes=30))
 save(acme, [Result("b", "cpu", "WARN", "80%", "busy", numeric=80.0)], timedelta(hours=2))
 save(acme, [Result("b", "cpu", "OK", "40%", "", numeric=40.0)], timedelta(hours=30))
 save(db.GLOBAL, [Result("a", "certificate", "OK", "90 days", "", numeric=90.0)], timedelta(hours=3))
@@ -53,21 +53,28 @@ rows = db.check_rows("a", "cpu", start=now - timedelta(days=90))
 check("a range has no 200 limit", len(rows) == 250, len(rows))
 check("rows have message", rows and "message" in rows[0] and rows[0]["message"] == "load")
 check("default still limited to 200", len(db.check_rows("a", "cpu")) == 200)
-check("end bounds the range", len(db.check_rows("a", "cpu", start=now - timedelta(days=90), end=now - timedelta(hours=100))) == 151)
+check("end bounds the range", len(db.check_rows("a", "cpu", start=now - timedelta(days=90), end=now - timedelta(hours=100))) == 150)
 check("series in a range has no limit", len(db.series("a", "cpu", start=now - timedelta(days=90))) == 250 and len(db.series("a", "cpu")) == 200)
 check("series reads an organization's device by key", len(db.series(bk, "cpu", start=now - timedelta(days=90))) == 2)
 
 print("== across devices")
-exp = sum(i % 50 for i in range(250) if i + 1 <= 7 * 24) / min(250, 7 * 24)
+# rows sit at (i + 1) h - 30 min, so none is on the 7-day edge whatever the clock does between seeding and the call
+inside = [i for i in range(250) if i + 0.5 <= 7 * 24]
+exp = sum(i % 50 for i in inside) / len(inside)
 avg = db.average_per_device(["cpu"], 7)
 check("average is the hand-computed mean", abs(avg["a"] - exp) < 1e-9 and avg[bk] == 60.0, (avg, exp))
 check("rows without a number are left out", db.average_per_device(["nothing"], 7) == {})
 lat = db.latest_per_device(["certificate", "certificates"])
 check("one row per device", sorted(x["device"] for x in lat) == sorted(["a", bk]), lat)
 check("the newest of its checks", {x["device"]: x["check_name"] for x in lat} == {"a": "certificate", bk: "certificates"})
+check("a device with several rows of those checks still gives its newest only", len(db.latest_per_device(["cpu", "certificate", "certificates"])) == 2)
 check("rows carry the keys", set(lat[0]) == {"device", "check_name", "status", "value", "message", "numeric", "t"})
 
 print("== index")
+sql = db._LATEST.format(vals="(?),(?)")
+with db.connect() as c:
+    plan = " ".join(str(tuple(r)) for r in c.execute("EXPLAIN QUERY PLAN " + sql, ("certificate", "certificates")))
+check("latest_per_device seeks the index and never scans results", "SCAN results" not in plan and "idx_results_latest" in plan, plan)
 with db.connect() as c:
     plan = " ".join(str(tuple(r)) for r in c.execute("EXPLAIN QUERY PLAN SELECT * FROM runs WHERE started_at >= ?", ("x",)))
 check("runs are found by start time through an index", "idx_runs_started" in plan, plan)
