@@ -48,6 +48,7 @@ DEFAULT_THRESHOLDS = {
     "rdp_disconnected": {"warn": 5, "fail": 20},    # Windows: Remote Desktop sessions left disconnected
     "content_age":  {"warn": 14, "fail": 45},       # Palo Alto: days since the newest application / threat / antivirus content
     "support_days": {"warn": 90, "fail": 30},       # any device: days until a support / warranty / licence date in its fields; LOWER is worse
+    "wan_usage":    {"warn": 80, "fail": 95},       # SNMP and Fortinet: the busiest WAN interface, % of its available bandwidth
 }
 THRESHOLD_LABELS = {"cpu": "CPU %", "memory": "Memory %", "channel_util": "Channel utilization %",
                     "temperature": "Temperature C", "port_errors": "Port errors (count)",
@@ -63,8 +64,9 @@ THRESHOLD_LABELS = {"cpu": "CPU %", "memory": "Memory %", "channel_util": "Chann
                     "support_days": "Support, warranty and licence days left", "clock_offset": "Windows clock difference (seconds)",
                     "failed_logons": "Windows failed sign-ins (24 h)", "lockouts": "Windows account lockouts (24 h)",
                     "av_age": "Windows antivirus signatures (days old)", "backup_days": "Windows Server Backup (days old)",
-                    "rdp_disconnected": "Windows disconnected sessions", "content_age": "Palo Alto content (days old)"}
-THRESHOLD_GROUPS = [("Network devices", ["cpu", "memory", "temperature", "uptime", "disk", "utilization", "port_errors", "sessions", "channel_util", "wifi_signal"]),
+                    "rdp_disconnected": "Windows disconnected sessions", "content_age": "Palo Alto content (days old)",
+                    "wan_usage": "WAN usage %"}
+THRESHOLD_GROUPS = [("Network devices", ["cpu", "memory", "temperature", "uptime", "disk", "utilization", "port_errors", "sessions", "channel_util", "wifi_signal", "wan_usage"]),
                     ("Windows computers", ["win_events", "patch_days", "cert_days", "agent_silent", "clock_offset", "failed_logons", "lockouts", "av_age", "backup_days", "rdp_disconnected"]),
                     ("UniFi (API)", ["tx_retries", "sensor_battery", "wan_uptime", "isp_latency", "isp_loss"]),
                     ("Any device", ["support_days"]),
@@ -1271,7 +1273,7 @@ def bad_pair(key, warn, fail):
 
 def normalize_checkopts(raw):
     """A device's own check settings, cleaned: {'checks': [keys that run] (only when it picks its own list),
-    'thresholds': {key: {'warn', 'fail'}} (only the ones it overrides), 'interfaces': [names] (only those are checked; missing = all)}. Empty when it has none: it then follows the global settings."""
+    'thresholds': {key: {'warn', 'fail'}} (only the ones it overrides), 'interfaces': [names] (only those are checked; missing = all), 'wan': {name: Mbps or None}}. Empty when it has none: it then follows the global settings."""
     if isinstance(raw, str):
         try:
             raw = json.loads(raw) if raw.strip() else {}
@@ -1286,6 +1288,17 @@ def normalize_checkopts(raw):
         names = [n for n in dict.fromkeys(str(x).strip() for x in raw["interfaces"]) if n]
         if names:
             out["interfaces"] = names
+    if isinstance(raw.get("wan"), dict):                                 # WAN interfaces: {name: circuit speed in Mbps, or None for the port speed}
+        wan = {}
+        for n, v in raw["wan"].items():
+            if str(n).strip():
+                try:
+                    v = float(v)
+                except (TypeError, ValueError):
+                    v = None
+                wan[str(n).strip()] = v if v and v > 0 else None
+        if wan:
+            out["wan"] = wan
     th = {}
     for key, pair in (raw.get("thresholds") or {}).items() if isinstance(raw.get("thresholds"), dict) else ():
         if key in DEFAULT_THRESHOLDS and isinstance(pair, dict):

@@ -17,6 +17,7 @@ class DeviceChecks(QWidget):
         self.vendor = ""
         self._own = None                                   # the device's own list of check keys, or None to follow the global one
         self._limits = {}                                  # threshold key -> {'warn', 'fail'} this device overrides
+        self._wan = {}                                     # the interfaces marked WAN: {name: Mbps or None for the port speed}
         self._ifs = []                                     # the interfaces this device is limited to (empty: all of them)
         self.fetch_interfaces = None                       # set by the device dialog: asks the device for its interfaces
         self.own = QCheckBox("Choose which checks run on this device")
@@ -111,7 +112,7 @@ class DeviceChecks(QWidget):
     def _show_ifs(self):
         """The interface choice, for the kinds of device that have an interfaces check."""
         self.if_box.setVisible(ifaces.available(self.vendor))
-        self.if_choose.setEnabled(self.pick_ifs.isChecked())
+        self.if_choose.setEnabled(self.pick_ifs.isChecked() or ifaces.wan_capable(self.vendor))
         n = len(self._ifs)
         self.if_summary.setText(
             ("All interfaces are checked." if not self.pick_ifs.isChecked() else
@@ -138,9 +139,13 @@ class DeviceChecks(QWidget):
             QMessageBox.warning(self, "Interfaces", f"Could not get the list of interfaces from the device:\n\n{e}\n\n"
                                 "Check the address and login on the General tab first.")
             return
-        dlg = InterfacePicker(found, self._ifs, parent=self)
+        capable = ifaces.wan_capable(self.vendor)
+        dlg = InterfacePicker(found, self._ifs, wan=self._wan if capable else None, choose_checked=self.pick_ifs.isChecked(), parent=self)
         if dlg.exec():
-            self._ifs = dlg.selected()
+            if self.pick_ifs.isChecked():
+                self._ifs = dlg.selected()
+            if capable:
+                self._wan = dlg.wan()
             self._show_ifs()
 
     def _fill_list(self):
@@ -185,7 +190,7 @@ class DeviceChecks(QWidget):
             self._refresh_globals()
 
     def reset(self):
-        self._own, self._limits, self._ifs = None, {}, []
+        self._own, self._limits, self._ifs, self._wan = None, {}, [], {}
         self.pick_ifs.setChecked(False)
         self.own.setChecked(False)
         for r in range(self.limits.rowCount()):
@@ -199,6 +204,7 @@ class DeviceChecks(QWidget):
         self._own = list(opts["checks"]) if "checks" in opts else None
         self._limits = {}
         self._ifs = list(opts.get("interfaces", []))
+        self._wan = dict(opts.get("wan", {}))
         self.pick_ifs.blockSignals(True)
         self.pick_ifs.setChecked(bool(self._ifs))
         self.pick_ifs.blockSignals(False)
@@ -232,6 +238,8 @@ class DeviceChecks(QWidget):
             out["checks"] = list(self._own)
         if self.pick_ifs.isChecked() and self._ifs and ifaces.available(self.vendor):
             out["interfaces"] = list(self._ifs)
+        if self._wan and ifaces.wan_capable(self.vendor):
+            out["wan"] = dict(self._wan)
         th = {}
         for r in range(self.limits.rowCount()):
             if self.limits.item(r, 0).checkState() == Qt.CheckState.Checked:

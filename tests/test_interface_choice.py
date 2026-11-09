@@ -65,7 +65,7 @@ class Resp:
                                          "port3": {"type": "physical", "link": False, "status": "down"}, "ssl.root": {"type": "tunnel"}}}
 FG.requests.get = lambda *a, **k: Resp()
 got = ifaces.listing({"name": "fw", "vendor": "fortinet", "host": "10.0.0.1", "password": "TOK", "verify_ssl": 0, "port": 0})
-check("the list has each name with its state in words", got == [("port1", "Up"), ("port2", "Down"), ("port3", "Switched off")], got)
+check("the list has each name with its state in words", got == [("port1", "Up", None), ("port2", "Down", None), ("port3", "Switched off", None)], got)
 try:
     ifaces.listing({"name": "x", "vendor": "windows", "host": "h"}); check("a Windows computer has none to list", False)
 except ValueError as e:
@@ -84,7 +84,7 @@ QMessageBox.warning = staticmethod(lambda *a, **k: warned.append(a[2]))
 QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes)
 LIST = [("port1", "Up"), ("port2", "Down"), ("port3", "Switched off"), ("lan", "Up")]
 pk = InterfacePicker(LIST, ["port2", "old9"])
-check("what was chosen is ticked, and one the device no longer has stays in the list", pk.selected() == ["old9", "port2"] and pk.rows[0] == ("old9", "Not on the device now"), pk.selected())
+check("what was chosen is ticked, and one the device no longer has stays in the list", pk.selected() == ["old9", "port2"] and pk.rows[0] == ("old9", "Not on the device now", None), pk.selected())
 pk.search.setText("port"); app.processEvents()
 check("the filter hides the rest", [pk.table.isRowHidden(i) for i in range(pk.table.rowCount())] == [True, False, False, False, True] and "3 of 5 interfaces shown" in pk.count.text(), pk.count.text())
 pk.shown_btn.click()
@@ -95,7 +95,7 @@ check("'Tick the ones that are up' picks by state, and 'Clear all' clears", sort
 print("== Edit device > Checks")
 w = DeviceChecks(); w.set_vendor("fortinet"); w.load(None)
 w.show(); app.processEvents()
-check("a firewall shows the choice; nothing is chosen, so everything is checked", w.if_box.isVisibleTo(w) and not w.pick_ifs.isChecked() and w.values() == {} and "All interfaces" in w.if_summary.text() and not w.if_choose.isEnabled())
+check("a firewall shows the choice; nothing is chosen, so everything is checked", w.if_box.isVisibleTo(w) and not w.pick_ifs.isChecked() and w.values() == {} and "All interfaces" in w.if_summary.text() and w.if_choose.isEnabled())   # Choose stays open on a firewall, for the WAN tick
 w.set_vendor("windows")
 check("a kind of device with no interfaces check does not show it", not w.if_box.isVisibleTo(w))
 w.set_vendor("snmp")
@@ -109,7 +109,7 @@ check("ticking the box asks the device, and cancelling puts it back to 'all'", a
 def accept(names):
     def go(self):
         self.none_btn.click()
-        for i, (n, _s) in enumerate(self.rows):
+        for i, (n, *_r) in enumerate(self.rows):
             if n in names: self.table.item(i, 0).setCheckState(Qt.CheckState.Checked)
         return 1
     return go

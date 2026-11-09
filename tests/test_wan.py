@@ -1,0 +1,98 @@
+# Run directly (python tests/test_wan.py). WAN usage: the check's rates and grades, the per-device WAN choice, and the picker's WAN columns.
+import os as _os, sys as _sys, tempfile as _tmp
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+_os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
+_os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+import os, sys, time
+SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = os.path.join(SP, "wan%d.db" % int(time.time() * 1000)); os.environ["APPDATA"] = SP
+import keyring
+STORE = {}
+keyring.set_password = lambda s, u, p: STORE.__setitem__((s, u), p)
+keyring.get_password = lambda s, u: STORE.get((s, u))
+keyring.delete_password = lambda s, u: STORE.pop((s, u), None)
+from core import db, ifaces
+db.init()
+from drivers.base import Driver, OK, WARN, FAIL
+import drivers.base as B
+from PySide6.QtWidgets import QApplication
+app = QApplication([])
+from ui.interfacepicker import InterfacePicker
+
+ok = bad = 0
+def check(name, cond, extra=""):
+    global ok, bad
+    if cond: ok += 1; print("  ok  ", name)
+    else: bad += 1; print("  FAIL", name, extra)
+
+TH = db.DEFAULT_THRESHOLDS
+check("the limits are 80 and 95 and can be set per device", TH["wan_usage"] == {"warn": 80, "fail": 95} and db.THRESHOLD_LABELS["wan_usage"] == "WAN usage %"
+      and "wan_usage" in dict(db.THRESHOLD_GROUPS)["Network devices"]
+      and db.normalize_checkopts({"thresholds": {"wan_usage": {"warn": 70, "fail": 90}}})["thresholds"] == {"wan_usage": {"warn": 70.0, "fail": 90.0}})
+check("the WAN choice is kept, cleaned",
+      db.normalize_checkopts({"wan": {"wan1": 300, "port2": None, "": 5}}) == {"wan": {"wan1": 300.0, "port2": None}})
+check("only SNMP and Fortinet offer it", ifaces.wan_capable("snmp") and ifaces.wan_capable("fortinet") and not ifaces.wan_capable("windows"))
+
+class Fake(Driver):
+    counters = {}
+    def interface_counters(self): return self.counters
+
+def run(wan, mbytes, name="fw-wan", port="wan1", speed=1e9, seconds=10):
+    """Two runs `seconds` apart with `mbytes` MB moving out; returns the second run's row."""
+    dev = {"name": name, "vendor": "fortinet", "host": "h", "checkopts": {"wan": wan}}
+    real = B.time.time
+    rows = []
+    try:
+        for n, now in enumerate((1000.0, 1000.0 + seconds)):
+            B.time.time = lambda now=now: now
+            d = Fake(dev, TH, {})
+            d.counters = {port: (0, int(n * mbytes * 1e6), speed), "lan": (0, 0, speed)}
+            rows.append(d.wan_usage()); d.flush_baselines()
+    finally:
+        B.time.time = real
+    return rows
+
+first, r = run({"wan1": None}, 375, name="a")
+check("the first run only records the counters", first.value == "baseline set" and first.status == OK and "next run" in first.message, first)
+check("375 MB in 10 s on a 1 Gbps port is 30% and OK", r.status == OK and round(r.numeric) == 30 and r.items[0]["name"] == "wan1"
+      and round(r.items[0]["numeric"]) == 30 and round(r.items[0]["data"]["out_bps"]) == 300_000_000 and r.items[0]["data"]["available_bps"] == 1e9, r)
+r = run({"wan1": 300}, 375, name="b")[1]
+check("with a 300 Mbps circuit the same traffic is 100% and FAIL", r.status == FAIL and round(r.numeric) == 100 and r.items[0]["data"]["available_bps"] == 300e6, r)
+r = run({"wan1": 300}, 312.5, name="c")[1]
+check("250 Mbps on that circuit is 83% and WARN", r.status == WARN and round(r.numeric) == 83, r)
+check("a WAN name the device no longer has is skipped, and with none left there is no row", run({"gone": None}, 375, name="d")[1] == [])
+check("a device with no WAN chosen has no row", run({}, 375, name="e")[1] == [])
+try:
+    Driver({"name": "x", "vendor": "x", "host": "x"}, TH, {}).interface_counters(); check("a driver without counters says so", False)
+except NotImplementedError:
+    check("a driver without counters says so", True)
+
+print("== the picker")
+LIST = [("wan1", "Up", 1e9), ("lan", "Up", 100e6), ("old", "Down")]
+pk = InterfacePicker(LIST, [], wan={"wan1": 300})
+t = pk.table
+check("the WAN columns are named", [t.horizontalHeaderItem(c).text() for c in (3, 4)] == ["WAN", "Available bandwidth"])
+check("wan1 is ticked WAN with 300; the others show the port speed",
+      pk.wan() == {"wan1": 300} and t.cellWidget(0, 4).text() == "300" and t.cellWidget(1, 4).placeholderText() == "100 Mbps (port speed)"
+      and t.cellWidget(0, 4).placeholderText() == "1 Gbps (port speed)" and t.cellWidget(1, 4).text() == "", pk.wan())
+from PySide6.QtCore import Qt
+t.item(1, 3).setCheckState(Qt.CheckState.Checked); t.cellWidget(0, 4).setText("")
+check("it round-trips: an empty box means the port speed", pk.wan() == {"wan1": None, "lan": None}, pk.wan())
+check("without wan there are no WAN columns", InterfacePicker(LIST, []).table.columnCount() == 3 and InterfacePicker(LIST, []).wan() == {})
+check("without the check-only tick the first column is hidden", InterfacePicker(LIST, [], wan={}, choose_checked=False).table.isColumnHidden(0))
+
+print("== Edit device > Checks")
+from ui.devicechecks import DeviceChecks
+w = DeviceChecks(); w.set_vendor("fortinet"); w.load(None)
+w.fetch_interfaces = lambda: LIST
+def pick(self):
+    self.table.item(0, 3).setCheckState(Qt.CheckState.Checked); self.table.cellWidget(0, 4).setText("300"); return 1
+InterfacePicker.exec = pick
+check("Choose is open without the check-only tick", not w.pick_ifs.isChecked() and w.if_choose.isEnabled())
+w.if_choose.click()
+w2 = DeviceChecks(); w2.set_vendor("fortinet"); w2.load(w.values())
+check("the WAN choice is saved without it, and loads back", w.values() == {"wan": {"wan1": 300.0}} and not w.pick_ifs.isChecked() and w2._wan == {"wan1": 300.0}, w.values())
+w.set_vendor("windows")
+check("a device that cannot read traffic drops it", w.values() == {})
+
+print(f"\n{ok} passed, {bad} failed")
+sys.exit(1 if bad else 0)

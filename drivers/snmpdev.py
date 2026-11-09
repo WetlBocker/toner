@@ -35,7 +35,7 @@ class SnmpDriver(SnmpExtras, Driver):
         return [("cpu", self.cpu), ("memory", self.memory), ("storage", self.storage),
                 ("uptime", self.uptime), ("temperature", self.temperature),
                 ("interfaces", self.interfaces), ("interface errors", self.errors),
-                ("bandwidth", self.bandwidth), ("environment", self.environment), ("load", self.load),
+                ("bandwidth", self.bandwidth), ("wan usage", self.wan_usage), ("environment", self.environment), ("load", self.load),
                 ("ups", self.ups), ("printer", self.printer), ("nas", self.nas)]
 
     # ---------------------------------------------------------------- identity
@@ -202,6 +202,20 @@ class SnmpDriver(SnmpExtras, Driver):
         inn, out = c.try_column(N["ifInErrors"]), c.try_column(N["ifOutErrors"])
         errs = {self._label(i): int((number_of(inn.get(i), 0) or 0) + (number_of(out.get(i), 0) or 0)) for i in ifs}
         return self.error_counter_rows("interface errors", errs)
+
+    def interface_counters(self):
+        if getattr(self, "c", None) is None:                         # asked outside a run (the Choose interfaces list): open our own client
+            creds, port = snmp.credentials_for(self.dev)
+            with snmp.Client(self.dev["host"], port, creds, timeout=min(self.opts["http_timeout"], 10), retries=1) as c:
+                self.c = c
+                return self.interface_counters()
+        c = self.c
+        hc_in, hc_out = c.try_column(N["ifHCInOctets"]), c.try_column(N["ifHCOutOctets"])
+        if not hc_in:
+            hc_in, hc_out = c.try_column(N["ifInOctets"]), c.try_column(N["ifOutOctets"])
+        high, low = c.try_column(N["ifHighSpeed"]), c.try_column(N["ifSpeed"])
+        return {self._label(i): (number_of(hc_in.get(i), 0) or 0, number_of(hc_out.get(i), 0) or 0,
+                                 (number_of(high.get(i), 0) or 0) * 1e6 or (number_of(low.get(i), 0) or 0)) for i in self._real_ifs()}
 
     def bandwidth(self):
         c = self.c

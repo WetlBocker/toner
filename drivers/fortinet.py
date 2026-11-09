@@ -49,7 +49,7 @@ class FortinetDriver(Driver):
         for name, fn in (("resources", self.resources), ("firmware", self.firmware),
                          ("wan links", self.wan), ("ha", self.ha), ("vpn", self.vpn), ("licenses", self.licenses), ("certificates", self.certificates),
                          ("interfaces", self.interfaces), ("ha sync", self.ha_sync), ("fortiaps", self.fortiaps), ("fortiswitches", self.fortiswitches),
-                         ("log disk", self.log_disk)):
+                         ("log disk", self.log_disk), ("wan usage", self.wan_usage)):
             if self.enabled(name):
                 self.safe(out, name, fn)
         return out
@@ -126,6 +126,10 @@ class FortinetDriver(Driver):
         if found:
             rows.append(found)
         return rows
+
+    def interface_counters(self):
+        return {n: (int(i.get("rx_bytes") or 0), int(i.get("tx_bytes") or 0), float(i.get("speed") or 0) * 1e6)
+                for n, i in self._physical().items() if "rx_bytes" in i}
 
     def ha_sync(self):
         differ = apichecks.fortinet_ha_sync(self._optional("system/ha-checksums"))

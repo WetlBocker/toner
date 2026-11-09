@@ -1,3 +1,4 @@
+import time
 from dataclasses import dataclass, field
 from typing import Optional
 from core import checks, db, profiles
@@ -144,6 +145,40 @@ class Driver:
     def list_interfaces(self):
         """[(name, state)] of every interface on the device, for choosing which ones are checked. Drivers with interfaces implement it."""
         raise NotImplementedError("this kind of device has no list of interfaces")
+
+    def interface_counters(self):
+        """{name: (in_octets, out_octets, speed_bps)} for every interface that has byte counters. Drivers that can read them implement it."""
+        raise NotImplementedError("this kind of device has no interface counters")
+
+    def wan_usage(self):
+        """The 'wan usage' row: the busier direction of each interface marked WAN, as a percent of its available bandwidth
+        (the circuit speed typed for it, else its port speed). Its own delta keys, so the bandwidth check's are left alone."""
+        wan = db.normalize_checkopts(self.dev.get("checkopts")).get("wan")
+        if not wan:
+            return []
+        counters = self.interface_counters()
+        mine = {n.lower(): v for n, v in wan.items()}
+        found = [(n, counters[n], mine[n.lower()]) for n in counters if n.lower() in mine]
+        if not found:
+            return []
+        elapsed = self.delta("wan:t", time.time())
+        items, worst = [], None
+        for name, (cin, cout, speed), mbps in found:
+            din, dout = self.delta(f"wan:in:{name}", cin), self.delta(f"wan:out:{name}", cout)
+            avail = mbps * 1e6 if mbps else speed
+            if not (elapsed and elapsed >= 5 and avail and din is not None and dout is not None):
+                continue
+            bps = max(din, dout) * 8 / elapsed
+            pct, t = bps / avail * 100, self.th["wan_usage"]
+            items.append(self.item(name, numeric=pct, status=grade(pct, t["warn"], t["fail"]), text=f"{bps / 1e6:.1f} Mbps",
+                                   data={"in_bps": din * 8 / elapsed, "out_bps": dout * 8 / elapsed, "available_bps": avail}))
+            if worst is None or pct > worst[0]:
+                worst = (pct, name, bps)
+        if worst is None:
+            return self.result("wan usage", OK, "baseline set", "rates are reported from the next run")
+        t = self.th["wan_usage"]
+        return self.result("wan usage", grade(worst[0], t["warn"], t["fail"]), f"{worst[0]:.0f}%",
+                           f"busiest: {worst[1]} at {worst[2] / 1e6:.1f} Mbps", numeric=float(worst[0]), items=items)
 
     def error_counter_rows(self, check, errs):
         """Row for cumulative error counters {name: count}: lifetime total, or only what is new since last run."""
