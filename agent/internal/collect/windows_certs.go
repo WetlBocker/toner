@@ -38,9 +38,6 @@ func winCerts(r *report.Report) error {
 		if perr != nil {
 			continue
 		}
-		if !(cert.NotAfter.Before(now.AddDate(0, 0, 90)) && cert.NotAfter.After(now.AddDate(0, 0, -30))) {
-			continue
-		}
 		subject := windowsSubject(cert)
 		if strings.EqualFold(subject, "CN="+r.Computer) {
 			continue

@@ -57,7 +57,7 @@ if ($evOk) {
 }
 $now = Get-Date
 $o.certs = @(Get-ChildItem Cert:\LocalMachine\My | Where-Object { $_.Subject -ne ('CN=' + $env:COMPUTERNAME) } | ForEach-Object {
-    [ordered]@{ subject = [string]$_.Subject; days = [math]::Floor(($_.NotAfter - $now).TotalDays); thumb = [string]$_.Thumbprint; expires = $_.NotAfter.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ') } })
+    [ordered]@{ subject = [string]$_.Subject; days = [math]::Floor(($_.NotAfter - $now).TotalDays); thumb = [string]$_.Thumbprint; expires = $_.NotAfter.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [cultureinfo]::InvariantCulture) } })
 $last = $null
 $t = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\Results\Install').LastSuccessTime
 if ($t) { try { $last = [datetime]::SpecifyKind([datetime]::Parse($t), 'Utc') } catch {} }
@@ -68,7 +68,10 @@ try {
     $us = (New-Object -ComObject Microsoft.Update.Session).CreateUpdateSearcher(); $us.Online = $false
     $found = $us.Search('IsInstalled=0 and IsHidden=0')
     $o.pending_updates = @($found.Updates | ForEach-Object { [ordered]@{ title = [string]$_.Title; kb = (@($_.KBArticleIDs | ForEach-Object { 'KB' + $_ }) -join ','); severity = [string]$_.MsrcSeverity } })
-    $o.updates_searched = ((New-Object -ComObject Microsoft.Update.AutoUpdate).Results.LastSearchSuccessDate).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    try {   # COM gives this date already in UTC (Kind Unspecified): do not convert it again
+        $d = (New-Object -ComObject Microsoft.Update.AutoUpdate).Results.LastSearchSuccessDate
+        if ($d -and $d.Year -gt 1900) { $o.updates_searched = [datetime]::SpecifyKind($d, 'Utc').ToString('yyyy-MM-ddTHH:mm:ssZ', [cultureinfo]::InvariantCulture) }
+    } catch {}
 } catch { $o.Remove('pending_updates') }
 # what is installed, who may administer the computer, what is listening: compared from one run to the next
 $sw = [ordered]@{}

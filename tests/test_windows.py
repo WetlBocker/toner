@@ -85,6 +85,10 @@ far = run(d, report(certs=[{"subject": "CN=far", "days": 400, "thumb": "f", "exp
 check("every certificate is listed but grading ignores the far and long-expired ones",
       far.status == OK and far.value == "none expiring" and len(far.items) == 2 and far.items[0]["data"]["expires"] == "2027-12-15T00:00:00Z"
       and run(d, report(certs=[{"subject": "CN=a", "days": 5, "thumb": "x"}, {"subject": "CN=gone", "days": -900, "thumb": "g"}]))["certificates"].numeric == 5.0)
+_ps = winmon.COLLECTOR
+check("the collector's dates are UTC and culture-proof, and the search date cannot drop the updates",
+      "SpecifyKind($d, 'Utc')" in _ps and "ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [cultureinfo]::InvariantCulture)" in _ps
+      and "$d.Year -gt 1900" in _ps and _ps.index("$o.pending_updates") < _ps.index("try {   # COM gives") < _ps.index("} catch { $o.Remove('pending_updates') }"))
 check("a check can be switched off in Settings", "cpu" not in run(d, report(), disabled={"windows:cpu"}) and "memory" in run(d, report(), disabled={"windows:cpu"}))
 
 print("== services")
