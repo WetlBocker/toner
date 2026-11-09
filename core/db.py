@@ -742,6 +742,8 @@ def _m14_unifi_seen(c):
 
 def _m15_result_items(c):
     """Detail a check keeps beside its row (one per disk, certificate, interface...), gone with the row it belongs to."""
+    if "itemized" not in {r[1] for r in c.execute("PRAGMA table_info(results)")}:   # 1: the row was stored with a list, maybe empty
+        c.execute("ALTER TABLE results ADD COLUMN itemized INTEGER DEFAULT 0")
     c.executescript("""
     CREATE TABLE IF NOT EXISTS result_items (
         result_id INTEGER NOT NULL REFERENCES results(id) ON DELETE CASCADE,
@@ -1466,12 +1468,13 @@ def _save_run_here(results):
                         (now, n("OK"), n("WARN"), n("FAIL"), n("ERROR")))
         rid = cur.lastrowid
         for r in results:
-            rrid = c.execute("INSERT INTO results(run_id, device, check_name, status, value, message, numeric) VALUES(?,?,?,?,?,?,?)",
-                             (rid, r.device, r.check, r.status, r.value, r.message, r.numeric)).lastrowid
-            if getattr(r, "items", None):
+            its = getattr(r, "items", None)
+            rrid = c.execute("INSERT INTO results(run_id, device, check_name, status, value, message, numeric, itemized) VALUES(?,?,?,?,?,?,?,?)",
+                             (rid, r.device, r.check, r.status, r.value, r.message, r.numeric, its is not None)).lastrowid
+            if its:
                 c.executemany("INSERT INTO result_items(result_id, pos, name, numeric, status, text, data) VALUES(?,?,?,?,?,?,?)",
                               [(rrid, i, it.get("name"), it.get("numeric"), it.get("status"), it.get("text", ""),
-                                json.dumps(it.get("data") or {})) for i, it in enumerate(r.items)])
+                                json.dumps(it.get("data") or {}, default=str)) for i, it in enumerate(its)])
         from core import unifikids
         unifikids.note(c, results, now)
         cutoff = (datetime.now() - timedelta(days=int(get_setting("retention_days")))
@@ -1617,32 +1620,38 @@ def check_rows(device, check, limit=200):
                              "ORDER BY results.run_id DESC LIMIT ?", (device, check, limit)).fetchall()
     return [dict(r) for r in reversed(rows)]
 
-def _items_here(device, check, start, end, limit=None):
-    q = ("SELECT results.id AS rid, runs.started_at AS t FROM results JOIN runs ON runs.id = results.run_id "
-         "WHERE results.device=? AND results.check_name=? AND (? IS NULL OR runs.started_at >= ?) AND (? IS NULL OR runs.started_at <= ?) "
-         "ORDER BY results.run_id " + ("DESC LIMIT 1" if limit else ""))
+def _items_here(device, check, start, end, newest=False):
+    """One query: results (left-joined to their items), grouped here. items is None for a row stored without a list."""
+    where = ("results.device=? AND results.check_name=? AND (? IS NULL OR runs.started_at >= ?) AND (? IS NULL OR runs.started_at <= ?)")
+    args = (device, check, start, start, end, end)
+    pick = f"AND results.id = (SELECT results.id FROM results JOIN runs ON runs.id = results.run_id WHERE {where} ORDER BY results.run_id DESC LIMIT 1)" if newest else ""
     with connect() as c:
-        out = []
-        for row in c.execute(q, (device, check, start, start, end, end)).fetchall():
-            its = [{"name": i["name"], "numeric": i["numeric"], "status": i["status"], "text": i["text"] or "",
-                    "data": json.loads(i["data"] or "{}")}
-                   for i in c.execute("SELECT * FROM result_items WHERE result_id=? ORDER BY pos", (row["rid"],))]
-            out.append({"t": row["t"], "items": its})
+        rows = c.execute("SELECT results.id AS rid, runs.started_at AS t, results.itemized AS itemized, i.name, i.numeric, i.status, i.text, i.data "
+                         "FROM results JOIN runs ON runs.id = results.run_id LEFT JOIN result_items i ON i.result_id = results.id "
+                         f"WHERE {where} {pick} ORDER BY results.run_id, i.pos", args + (args if newest else ())).fetchall()
+    out, last = [], None
+    for r in rows:
+        if r["rid"] != last:
+            out.append({"t": r["t"], "items": [] if r["itemized"] else None}); last = r["rid"]
+        if r["name"] is not None or r["data"] is not None:
+            out[-1]["items"].append({"name": r["name"], "numeric": r["numeric"], "status": r["status"], "text": r["text"] or "",
+                                     "data": json.loads(r["data"] or "{}")})
     return out
 
 def items_of(device, check, start=None, end=None):
-    """[{'t', 'items'}] for a check, oldest first, between start and end (times as stored; None: no limit). A run whose row had no
-    items gives an empty list. `device` can be a key from the Global view."""
+    """[{'t', 'items'}] for a check, oldest first, between start and end (times as stored; None: no limit). items is the list the
+    row was stored with (maybe empty), or None when the row was stored without one. `device` can be a key from the Global view."""
     device, org = split_key(device)
     with within(org if (org is not None or not everything()) else GLOBAL):
         return _items_here(device, check, start, end)
 
 def latest_items(device, check):
-    """(time, items) of the check's newest stored row; (None, []) when it has none."""
+    """(time, items) of the check's newest stored row: items is [] when that row reported an empty list and None when it was stored
+    without one (an agent that does not report it); (None, None) when the check has no row."""
     device, org = split_key(device)
     with within(org if (org is not None or not everything()) else GLOBAL):
-        rows = _items_here(device, check, None, None, limit=True)
-    return (rows[0]["t"], rows[0]["items"]) if rows else (None, [])
+        rows = _items_here(device, check, None, None, newest=True)
+    return (rows[0]["t"], rows[0]["items"]) if rows else (None, None)
 
 AGENT_COLUMNS = {"cpu": "cpu", "memory": "memory", "disks": "disk", "uptime": "uptime_h"}     # check name -> agent_metrics column
 
