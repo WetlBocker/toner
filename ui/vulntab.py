@@ -1,5 +1,7 @@
 """The device page's Vulnerabilities tab: the device's advisories in its latest scan as a pie by CVSS severity; selecting a slice
 lists those advisories underneath. The Scanning page's pie uses the same bands (band_slices)."""
+import re
+
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
@@ -12,11 +14,24 @@ from ui.webchart import ChartView
 NO_SCAN = "No scan yet. Scan this device on the Scanning page to see its advisories."
 NONE = "No advisories for this version"
 COLUMNS = [("id", "Advisory"), ("title", "Title"), ("cvss", "CVSS"), ("exploited", "Exploited"), ("link", "Link")]
+CVE = r"CVE-\d{4}-\d+"
 BAND_STATUS = {"Low": "OK", "Medium": "OK", "High": "WARN", "Critical": "FAIL"}          # the colours the Scanning page has used
 
 
 def band_of(score):
     return next((name for name, lo, hi in advisories.SEVERITY_BANDS if lo <= score < hi), None)
+
+
+def exploited(r, score, on_list):
+    """'Yes' or 'No' for an advisory row, or '' when it cannot be told. A row is FAIL exactly when its CVSS is 9 or more or one of its
+    CVEs is on CISA's list (advisories.status_of); a row named by its CVE is looked up in the list itself."""
+    if r["status"] != "FAIL":
+        return "No"
+    if score < 9:
+        return "Yes"
+    if re.fullmatch(CVE, r["check_name"]):
+        return "Yes" if r["check_name"] in on_list else "No"
+    return ""                                       # FAIL for its score alone or for the list too: the row does not say
 
 
 def band_slices(p, scores):
@@ -47,15 +62,17 @@ class VulnTab(QWidget):
         """The device's rows in the latest scan: its advisories (rows with a CVSS score) by severity, or why there are none."""
         key, org = db.key_of(dev), dev.get("org") or None
         mine = [r for r in db.latest_scan_results()[0] if r["device"] == key and (r["org"] or None) == org]
-        kev = next((r["message"] or "" for r in mine if r["check_name"] == advisories.KEV), "")
+        on_list = set(re.findall(CVE, next((r["message"] or "" for r in mine if r["check_name"] == advisories.KEV), "")))
+        software = next((r for r in mine if r["check_name"] == advisories.SOFTWARE), None)
         self.rows = []
         for r in mine:
             score = advisories.cvss_of(r["value"]) if r["check_name"] not in (advisories.SOFTWARE, advisories.ADVISORIES, advisories.KEV) else None
             if score is not None:
-                # shortcut: a Cisco advisory's CVEs are not stored with its row, so only an advisory named by its CVE can show Yes
                 self.rows.append({"id": r["check_name"], "title": (r["message"] or "").partition(" Fixed in ")[0].strip(), "cvss": score,
-                                  "exploited": "Yes" if r["check_name"] in kev else "No", "link": advisories.advisory_url(r["check_name"], dev.get("vendor") or "")})
-        self.empty.setText(NONE if mine else NO_SCAN)
+                                  "exploited": exploited(r, score, on_list), "link": advisories.advisory_url(r["check_name"], dev.get("vendor") or "")})
+        # nothing looked up (no source, lookups off, no version, the source refused): the version row says why
+        looked = software is None or software["status"] not in ("N/A", "ERROR")
+        self.empty.setText(NO_SCAN if not mine else NONE if looked else software["message"] or "")
         self.empty.setVisible(not self.rows)
         self.chart.setVisible(bool(self.rows))
         self.detail.hide()

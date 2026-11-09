@@ -387,7 +387,7 @@ class DeviceView(QDialog):
 
     def _fill_history(self):
         keep = self.pick.selected()
-        checks = (db.device_all_checks() if self.dev.get("kid") else db.device_checks()).get(self.dev["name"], [])
+        checks = db.device_all_checks().get(self.dev["name"], [])
         self.keys = {display.check_name(c): c for c in checks}
         self.pick.set_labels(list(self.keys))
         keep = [k for k in keep if k in self.keys] or list(self.keys)        # every check to start with

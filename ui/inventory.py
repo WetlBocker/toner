@@ -899,6 +899,7 @@ class DetailsPane(QWidget):
         self.chip = QLabel("")
         self.checked = QLabel("")                                      # "checked 31 Oct 2026 at 19:32", beside the chip (the Status row wrapped and was cut)
         self.checked.setProperty("muted", True)
+        self.checked.setWordWrap(True)                                 # unwrapped, it widened the pane past its width and the facts lost lines
         self.mark = QLabel()                                           # the maker's mark beside the name
         self.mark.setFixedSize(30, 30)
         self.mark.setAlignment(Qt.AlignmentFlag.AlignCenter)

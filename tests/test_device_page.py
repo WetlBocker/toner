@@ -46,7 +46,7 @@ ASA = "9.12(4)67 (asa9-12-4-67-smp-k8.bin), read 8 Nov 2026 at 23:31, with the l
 assert len(ASA) >= 120
 dev = lambda name, vendor, **k: db.save_device(dict(name=name, vendor=vendor, host="10.0.0.1", port=0, platform="", username="u", site="default", verify_ssl=0,
                                                     ha_expected=0, enabled=1, location="", details=k.get("details", ""), folder_id=None))
-dev("fw", "fortinet", details=ASA); dev("nas", "truenas")
+dev("fw", "fortinet", details=ASA); dev("nas", "truenas"); dev("rtr", "cisco"); dev("sw2", "juniper")
 item = lambda name, numeric=None, status=None, text="", **data: {"name": name, "numeric": numeric, "status": status, "text": text, "data": data}
 GB = 1024 ** 3
 db.save_run([Result("fw", "cpu", "OK", "12%", numeric=12.0), Result("fw", "memory", "OK", "40%", numeric=40.0),
@@ -92,16 +92,20 @@ check("a device with no uptime reading has no Uptime line", "Uptime" not in [k f
 from ui.inventory import DetailsPane
 pane = DetailsPane(); pane.resize(400, 900); pane.show(); pane.set_device(db.find_device("fw")); spin(80)
 pf = facts(pane.summary.info)
+check("the pane's 'checked ...' line wraps, so it never widens the pane past its width", pane.checked.wordWrap())
 check("the Inventory details pane shows Uptime too", "Uptime" in [k for k, _w in pf] and dict(pf)["Uptime"].text() == display.uptime_words(100.5), [k for k, _w in pf])
 def fits(label):
     return label.height() >= label.heightForWidth(label.width()) and label.heightForWidth(label.width()) > label.fontMetrics().height() * 2
 V.tabs.setCurrentIndex(0); spin(50)
 check("a 120-character fact wraps onto every line it needs on the device page", fits(dict(f)["Notes"]), (dict(f)["Notes"].height(), dict(f)["Notes"].heightForWidth(dict(f)["Notes"].width())))
-check("and in the Inventory pane", fits(dict(pf)["Notes"]), (dict(pf)["Notes"].height(), dict(pf)["Notes"].heightForWidth(dict(pf)["Notes"].width()), dict(pf)["Notes"].width()))
+for width in (300, 360, 400):                                # the pane is 300 to 460 wide
+    pane.resize(width, 900); spin(80)
+    notes = dict(facts(pane.summary.info))["Notes"]
+    check(f"and in the Inventory pane at {width} px", pane.width() == width and fits(notes), (pane.width(), notes.height(), notes.heightForWidth(notes.width()), notes.width()))
 
 print("== Picker, Trends and the time range")
 allk = list(V.keys)
-check("the picker starts with every check ticked", sorted(V.pick.selected()) == sorted(allk) and {"CPU", "Disk Health", "Uptime", "WAN Usage"} <= set(allk), (V.pick.selected(), allk))
+check("the picker starts with every check ticked, text checks too", sorted(V.pick.selected()) == sorted(allk) and {"CPU", "Disk Health", "Uptime", "WAN Usage", "Firmware"} <= set(allk), (V.pick.selected(), allk))
 shown = lambda: [c for p in V.panels.panels for c in p.checks]
 before = shown()
 V.pick.set_selected([k for k in allk if k != "CPU"]); V.pick.changed.emit()
@@ -109,7 +113,7 @@ check("unticking a check redraws without it", "cpu" in before and "cpu" not in s
 V.pick.set_selected(allk); V.pick.changed.emit()
 lines = [s["name"] for s in V.trend.opt["series"]]
 measured = {display.check_name(c) for c in V.keys.values() if is_measurement(c, "fortinet")}
-check("Trends draws only the measurements", set(lines) <= measured and "CPU" in lines and not {"Disk Health", "Uptime"} & set(lines), lines)
+check("Trends draws only the measurements", set(lines) <= measured and "CPU" in lines and not {"Disk Health", "Uptime", "Firmware"} & set(lines), lines)
 check("History and Trends start on the last 8 hours", V.range.describe() == "Last 8 hours" and abs((V.panels.start - (datetime.now() - timedelta(hours=8))).total_seconds()) < 60)
 V.tabs.setCurrentIndex(2); spin(30)
 check("the range is on the Trends tab too", V.range.isVisibleTo(V.tabs.widget(2)))
@@ -131,11 +135,17 @@ vt = V.vuln
 check("no scan yet says so and points to Scanning", vt.empty.isVisibleTo(vt) and vt.empty.text() == "No scan yet. Scan this device on the Scanning page to see its advisories.", vt.empty.text())
 db.save_scan([Result("fw", advisories.SOFTWARE, "FAIL", "7.2.5", "FortiOS 7.2.5, 3 advisories"),
               Result("fw", "CVE-2024-0001", "FAIL", "CVSS 9.8", "Heap overflow in sslvpnd Fixed in 7.2.7."),
-              Result("fw", "CVE-2024-0002", "WARN", "CVSS 7.5, EPSS 12%", "Path traversal in the GUI Fixed in 7.2.6."),
+              Result("fw", "CVE-2024-0002", "FAIL", "CVSS 7.5, EPSS 12%", "Path traversal in the GUI Fixed in 7.2.6."),
               Result("fw", "CVE-2024-0003", "OK", "CVSS 5", "Information disclosure"),
-              Result("fw", advisories.KEV, "FAIL", "", "CVE-2024-0002 on CISA's known exploited list"),
+              Result("fw", advisories.KEV, "FAIL", "", "CVE-2024-0002, CVE-2024-00011 on CISA's known exploited list"),
               Result("fw", "Hardening: admin over HTTP", "FAIL", "", "HTTP administration is on"),
-              Result("nas", advisories.SOFTWARE, "N/A", "", "No advisory source for this vendor yet.")])
+              Result("nas", advisories.SOFTWARE, "N/A", "", advisories.NO_SOURCE),
+              Result("sw2", advisories.SOFTWARE, "OK", "21.4R3", "Junos 21.4R3"), Result("sw2", advisories.ADVISORIES, "OK", "", advisories.NONE_FOUND),
+              Result("sw2", advisories.KEV, "OK", "", advisories.NONE_KEV),
+              Result("rtr", advisories.SOFTWARE, "FAIL", "17.9.4", "IOS XE 17.9.4, 3 advisories"),
+              Result("rtr", "cisco-sa-listed", "FAIL", "CVSS 8.1", "On the list"), Result("rtr", "cisco-sa-high", "WARN", "CVSS 8.1", "Not on the list"),
+              Result("rtr", "cisco-sa-critical", "FAIL", "CVSS 9.8", "Critical either way"),
+              Result("rtr", advisories.KEV, "FAIL", "", "CVE-2023-20198 on CISA's known exploited list")])
 V.reload(); spin(30)
 pie = vt.chart.opt["series"][0]["data"]
 check("a slice per severity: Critical 1, High 1, Medium 1, Low 0; hardening rules not counted",
@@ -148,15 +158,39 @@ check("the list's columns", heads == ["Advisory", "Title", "CVSS", "Exploited", 
 check("High lists the 7.5 advisory: id, title, score, exploited, link", m.rowCount() == 1 and row == ["CVE-2024-0002", "Path traversal in the GUI", 7.5, "Yes",
       advisories.advisory_url("CVE-2024-0002", "fortinet")] and vt.detail.isVisibleTo(vt), row)
 vt.chart.clicked.emit({"kind": "series", "name": "Critical"})
-check("an advisory not on CISA's list is not exploited", [m.index(0, j).data() for j in range(m.columnCount())][3] == "No")
+check("a CVE is matched whole: CVE-2024-0001 is not exploited because CVE-2024-00011 is", [m.index(0, j).data() for j in range(m.columnCount())][3] == "No")
+from ui.vulntab import VulnTab
+other = VulnTab()
+other.show_device(db.find_device("rtr"))
+said = {r["id"]: r["exploited"] for r in other.rows}
+check("a Cisco advisory: FAIL under 9 is exploited, WARN is not, FAIL at 9.8 cannot be told", said == {"cisco-sa-listed": "Yes", "cisco-sa-high": "No", "cisco-sa-critical": ""}, said)
 N.reload(); spin(30)
-check("a scan with no advisories says so", N.vuln.empty.isVisibleTo(N.vuln) and N.vuln.empty.text() == "No advisories for this version", N.vuln.empty.text())
+check("nothing looked up: the version row says why", N.vuln.empty.isVisibleTo(N.vuln) and N.vuln.empty.text() == advisories.NO_SOURCE, N.vuln.empty.text())
+other.show_device(db.find_device("sw2"))
+check("looked up and nothing found: no advisories for this version", other.empty.isVisibleTo(other) and other.empty.text() == "No advisories for this version"
+      and not other.chart.isVisibleTo(other), other.empty.text())
 
 print("== the Scanning page's pie uses the same bands")
 import ui.scanning as S
 tab = S.ScanningTab(); tab.charts_btn.setChecked(True); tab.resize(1280, 700); tab.show(); spin(50); tab.repopulate(); tab.draw_charts()
 sp = tab.cvss_chart.opt["series"][0]["data"]
-check("named Low, Medium, High, Critical, counting the same rows", [(d["name"], d["value"]) for d in sp] == [("Low", 0), ("Medium", 1), ("High", 1), ("Critical", 1)], sp)
+check("named Low, Medium, High, Critical, counting the same rows (fw's and rtr's)", [(d["name"], d["value"]) for d in sp] == [("Low", 0), ("Medium", 1), ("High", 3), ("Critical", 2)], sp)
+
+print("== a device in an organization's view")
+from core import orgs
+acme = orgs.create("Acme", "ACME")
+with db.within(acme):
+    dev("acme-fw", "fortinet")
+    db.save_scan([Result("acme-fw", advisories.SOFTWARE, "FAIL", "7.2.5", "FortiOS 7.2.5, 1 advisory"),
+                  Result("acme-fw", "CVE-2024-0009", "FAIL", "CVSS 9.1", "Something bad")])
+db.set_home(acme)
+other.show_device(db.find_device("acme-fw"))
+check("seen from its organization, its scan rows are found", [r["id"] for r in other.rows] == ["CVE-2024-0009"], other.rows)
+db.set_home(db.GLOBAL)
+other.show_device(db.find_device(db.qualified("acme-fw", acme)))
+check("and from Global", [r["id"] for r in other.rows] == ["CVE-2024-0009"], other.rows)
+other.show_device(db.find_device("fw"))
+check("Global's own device still finds only its own", sorted(r["id"] for r in other.rows) == ["CVE-2024-0001", "CVE-2024-0002", "CVE-2024-0003"], other.rows)
 
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)
