@@ -1185,6 +1185,8 @@ def main():
     from ui.widgets import KeyboardAccess
     app._keys = KeyboardAccess(app)                 # Tab gets out of lists; icon buttons and boxes have names for screen readers
     app.installEventFilter(app._keys)
+    from ui import tablefit
+    tablefit.install_everywhere(app)               # every table and tree: columns fit their text and can always be dragged
     from ui import ipmenu
     ipmenu.install(app)                            # right-click on a selected IP address anywhere: Ping and WHOIS Lookup
     from core import passvault
