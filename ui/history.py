@@ -418,19 +418,39 @@ def _plain(t):
 
 
 class RowsModel(QAbstractTableModel):
-    """The checks table: the stored rows of the time range, turned into text once, so thousands of rows stay quick."""
+    """The checks table: the stored rows of the time range, turned into text once, so thousands of rows stay quick. It sorts itself
+    (one Python sort) and keeps that order when new rows come."""
     COLS = ["Time", "Device", "Check", "Status", "Value", "Message"]
 
     def __init__(self):
         super().__init__()
-        self.rows, self.cells = [], []
+        self.rows, self.cells, self.key = [], [], (0, Qt.SortOrder.DescendingOrder)
 
-    def set_rows(self, rows):
+    @staticmethod
+    def cells_of(rows):
+        return [(r["t"], db.label_org(r["device"]), display.check_name(r["check_name"]), r["status"], display.value(r["value"]) or "",
+                 r["message"] or "") for r in rows]
+
+    def _order(self, cells):
+        col, order = self.key
+        return sorted(range(len(cells)), key=lambda i: cells[i][col], reverse=order == Qt.SortOrder.DescendingOrder)
+
+    def set_rows(self, rows, cells=None):
+        cells = self.cells_of(rows) if cells is None else cells
+        ix = self._order(cells)
         self.beginResetModel()
-        self.rows = rows
-        self.cells = [(r["t"], db.label_org(r["device"]), display.check_name(r["check_name"]), r["status"], display.value(r["value"]) or "",
-                       r["message"] or "") for r in rows]
+        self.rows, self.cells = [rows[i] for i in ix], [cells[i] for i in ix]
         self.endResetModel()
+
+    def sort(self, column, order=Qt.SortOrder.AscendingOrder):
+        self.layoutAboutToBeChanged.emit()
+        self.key = (column, order)
+        ix = self._order(self.cells)
+        moved = {old: new for new, old in enumerate(ix)}
+        self.rows, self.cells = [self.rows[i] for i in ix], [self.cells[i] for i in ix]
+        old = self.persistentIndexList()                      # the selection follows its row
+        self.changePersistentIndexList(old, [self.index(moved[p.row()], p.column()) for p in old])
+        self.layoutChanged.emit()
 
     def rowCount(self, parent=QModelIndex()):
         return 0 if parent.isValid() else len(self.cells)
@@ -447,12 +467,20 @@ class RowsModel(QAbstractTableModel):
         return None
 
 
+class RowsProxy(QSortFilterProxyModel):
+    """Hands sorting to the model: Qt's own sort would ask Python for both cells of every comparison (seconds at 10,000 rows)."""
+
+    def sort(self, column, order=Qt.SortOrder.AscendingOrder):
+        self.sourceModel().sort(column, order)
+
+
 class HistoryTab(QWidget):
     def __init__(self):
         super().__init__()
         self.range = TimeRange()                                            # one range for the table, the exports and Over time
+        self._read = None                                                   # (archived too?, the range's rows, their cells) from the last read
         self.range.changed.connect(self._range_changed)
-        self.model, self.proxy = RowsModel(), QSortFilterProxyModel()
+        self.model, self.proxy = RowsModel(), RowsProxy()
         self.proxy.setSourceModel(self.model)
         self.detail = _plain(QTableView())
         self.detail.setModel(self.proxy)
@@ -585,18 +613,24 @@ class HistoryTab(QWidget):
             self.dev.setCurrentIndex(self.dev.findData(cur))
         self.dev.blockSignals(False)
         self.fill_checks(self.dev.currentData())
-        self.show_rows()
+        self.show_rows(reread=reload_groups)                                # a search or funnel change only filters what was read
 
     def _range_changed(self):
         self.show_rows()
         self.draw()
 
-    def show_rows(self):
-        """The checks table: every stored row in the time range, newest first, for the devices the search box and the funnel leave."""
+    def show_rows(self, reread=True):
+        """The checks table: every stored row in the time range, newest first, for the devices the search box and the funnel leave.
+        The range is read again only when asked (a refresh, a new range) or when the funnel turns archived organizations on or off."""
+        archived = wants_archived(self.funnel)
+        if reread or self._read is None or self._read[0] != archived:
+            with db.including_archived(archived):
+                rows = db.results_between(*self.range.span())
+            self._read = (archived, rows, RowsModel.cells_of(rows))
         names = self._group_names()
-        with db.including_archived(wants_archived(self.funnel)):
-            rows = db.results_between(*self.range.span())
-        self.model.set_rows([r for r in rows if names is None or self._base(r["device"]) in names])
+        _a, rows, cells = self._read
+        keep = [i for i, r in enumerate(rows) if names is None or self._base(r["device"]) in names]
+        self.model.set_rows([rows[i] for i in keep], [cells[i] for i in keep])
         self._fill_compare()
 
     # ---------- the charts beside the table
@@ -631,9 +665,9 @@ class HistoryTab(QWidget):
     def draw_compare(self):
         check = self.compare_check.currentData()
         latest = {}
-        for r in self.model.rows if check else []:                       # newest first, so each device's first row is its newest
-            if r["check_name"] == check:
-                latest.setdefault(r["device"], r)
+        for r in self.model.rows if check else []:                       # each device's newest row, whatever the table's order
+            if r["check_name"] == check and (r["device"] not in latest or r["t"] > latest[r["device"]]["t"]):
+                latest[r["device"]] = r
         rows = list(latest.values())
         kind = chart_kind(rows) if rows else "bar"
         self.compare_stack.setCurrentWidget(self.compare_table if kind == "table" else self.compare_chart)
@@ -783,7 +817,7 @@ class HistoryTab(QWidget):
         start = os.path.join(folder, f"Toner-{datetime.now():%Y-%m-%d_%H%M}{ext}") if folder and os.path.isdir(folder) else ""
         path, _ = QFileDialog.getSaveFileName(self, title, start, pattern)
         if path:
-            fn(rows, path, scope=self.scope_text(), when=self.report_date())
+            fn(rows, path, scope=", ".join(p for p in (self.range.describe(), self.scope_text()) if p), when=None)     # dated when made
             if open_after:
                 QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 

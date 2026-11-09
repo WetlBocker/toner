@@ -1,16 +1,21 @@
 """The time range of the History page (and the device page): the last few hours, or a span of dates picked from a calendar."""
 from datetime import datetime, time, timedelta
 
-from PySide6.QtCore import QDate, Signal
+from PySide6.QtCore import QDate, QTimer, Signal
 from PySide6.QtWidgets import QComboBox, QDateEdit, QHBoxLayout, QLabel, QSpinBox, QWidget
 
 
 class TimeRange(QWidget):
-    """Last [n] hours (8 to start with) or From [date] to [date]. `changed` fires once for each change."""
+    """Last [n] hours (8 to start with) or From [date] to [date]. `changed` fires once for each change; a person's edits are
+    gathered for a moment first, so typing a date reads the history once, not once per digit."""
     changed = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.settle = QTimer(self)
+        self.settle.setSingleShot(True)
+        self.settle.setInterval(250)
+        self.settle.timeout.connect(self.changed)
         self.mode = QComboBox()
         self.mode.addItems(["Last hours", "Dates"])
         self.hours = QSpinBox()
@@ -26,7 +31,7 @@ class TimeRange(QWidget):
         for text, edit in (("From", self.d1), ("to", self.d2)):
             edit.setCalendarPopup(True)
             edit.setDisplayFormat("yyyy-MM-dd")
-            edit.dateChanged.connect(self.changed)
+            edit.dateChanged.connect(self._edited)
             label = QLabel(text)
             label.setBuddy(edit)
             dl.addWidget(label)
@@ -36,7 +41,7 @@ class TimeRange(QWidget):
         for w in (self.mode, self.hours, self.dates):
             lay.addWidget(w)
         self.mode.currentIndexChanged.connect(self._mode)
-        self.hours.valueChanged.connect(self.changed)
+        self.hours.valueChanged.connect(self._edited)
         self._mode(emit=False)
 
     def _mode(self, *_, emit=True):
@@ -44,7 +49,10 @@ class TimeRange(QWidget):
         self.hours.setVisible(not dates)
         self.dates.setVisible(dates)
         if emit:
-            self.changed.emit()
+            self._edited()
+
+    def _edited(self, *_):
+        self.settle.start()                                   # (not connected straight: start(int) would take the value as the wait)
 
     def _set(self, mode, fill):
         """Set the controls quietly, then say so once."""
@@ -55,7 +63,9 @@ class TimeRange(QWidget):
         fill()
         for w in parts:
             w.blockSignals(False)
-        self._mode()
+        self._mode(emit=False)
+        self.settle.stop()                                    # an edit still waiting is covered by this change
+        self.changed.emit()
 
     def set_hours(self, n):
         self._set(0, lambda: self.hours.setValue(int(n)))

@@ -15,6 +15,7 @@ from datetime import date, datetime, timedelta
 from core import db, display
 db.init()
 from drivers.base import Result
+from PySide6.QtCore import QCoreApplication, QDate
 from PySide6.QtWidgets import QApplication
 app = QApplication([])
 import app as A
@@ -25,6 +26,9 @@ def check(name, cond, extra=""):
     global ok, bad
     if cond: ok += 1; print("  ok  ", name)
     else: bad += 1; print("  FAIL", name, extra)
+def spin(ms):
+    end = time.time() + ms / 1000
+    while time.time() < end: QCoreApplication.processEvents(); time.sleep(0.005)
 
 print("== TimeRange")
 from ui.timerange import TimeRange
@@ -48,6 +52,20 @@ s, e = tr.span()
 check("one day is the whole of that day", s == datetime(2026, 11, 3) and e > s + timedelta(hours=23, minutes=59), (s, e))
 tr.set_hours(8)
 check("and back to hours", tr.describe() == "Last 8 hours" and tr.hours.isVisibleTo(tr) and not tr.dates.isVisibleTo(tr))
+fired.clear()
+tr.hours.setValue(12); spin(400)
+check("a person changing the hours fires changed once", fired == [1] and tr.describe() == "Last 12 hours", (fired, tr.describe()))
+fired.clear()
+tr.mode.setCurrentIndex(1); spin(400)
+check("switching to Dates fires it once", fired == [1] and tr.dates.isVisibleTo(tr), fired)
+fired.clear()
+for day in (1, 2, 3):                                        # typing a date: each valid date along the way, in quick succession
+    tr.d1.setDate(QDate(2026, 10, day))
+spin(400)
+check("editing a date fires it once, after the typing settles", fired == [1] and tr.span()[0] == datetime(2026, 10, 3), (fired, tr.span()))
+fired.clear()
+tr.hours.setValue(20); tr.set_hours(6); spin(400)
+check("a set_hours() right after an edit fires once, not twice", fired == [1] and tr.describe() == "Last 6 hours", fired)
 
 print("== History")
 for i in range(3):
@@ -101,13 +119,36 @@ check("clicking a row ticks that device and check on Over time", w.dev.currentDa
       (w.dev.currentData(), w.chk.selected()))
 
 w.detail.sortByColumn(3, H.Qt.SortOrder.AscendingOrder); app.processEvents()
-rep = [(r.device, display.check_name(r.check), r.status, display.value(r.value), r.message) for r in w.report_rows()]
+picked = table()[w.detail.currentIndex().row()]
+check("sorting by Status orders the rows, and the chosen row stays chosen", [r[3] for r in table()] == sorted(r[3] for r in table())
+      and picked[1:3] == ("sw2", display.check_name("memory")), picked)
+w.refresh(); app.processEvents()
+check("a refresh keeps the sort", [r[3] for r in table()] == sorted(r[3] for r in table()))
+rep =[(r.device, display.check_name(r.check), r.status, display.value(r.value), r.message) for r in w.report_rows()]
 check("report_rows() are the table's rows, in its order", rep == [t[1:] for t in table()], (rep, table()))
 check("the report's date is the range", w.report_date() == "Last 72 hours", w.report_date())
 sc = w.screen_context()
 check("the Assistant is told the range and the rows, and no run", sc.get("time_range") == "Last 72 hours" and len(sc.get("rows", [])) == 12
       and not any("run" in k for k in sc), sc)
 check("the export buttons no longer speak of a run", all("run" not in b.toolTip() for b in (w.csv_btn, w.html_btn, w.pdf_btn, w.trend_btn)))
+
+reads = []
+real_between = db.results_between
+db.results_between = lambda *a: (reads.append(a), real_between(*a))[1]
+for typed in ("s", "sw", "sw1"):
+    w.find.setText(typed); app.processEvents()
+check("typing a search filters what was read, without reading the range again", reads == [] and {r[1] for r in table()} == {"sw1"}, (len(reads), table()))
+out = os.path.join(SP, "range.html")
+H.QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (out, ""))
+H.QDesktopServices.openUrl = staticmethod(lambda u: True)
+w.export_html()
+head = open(out, encoding="utf-8").read()
+made = [f"Generated {t:%Y-%m-%d %H:%M} \u2014 Last 72 hours, search: sw1" for t in (datetime.now(), datetime.now() - timedelta(minutes=1))]
+check("the report says when it was made, then the range and the search", any(m in head for m in made), head[:400])
+w.find.setText(""); app.processEvents()
+w.range.set_hours(72); app.processEvents()
+check("a new range does read again", len(reads) == 1, len(reads))
+db.results_between = real_between
 
 print("== 10,000 rows")
 db.save_run([Result(f"bulk{d:03d}", f"check {c:03d}", ("OK", "WARN", "FAIL", "ERROR")[c % 4], f"{c}%", "", numeric=float(c))
@@ -118,6 +159,12 @@ w.show_rows(); app.processEvents()
 took = time.perf_counter() - t0
 check("10,000 rows fill the table in under 2 s", w.detail.model().rowCount() >= 10000 and took < 2.0, (w.detail.model().rowCount(), round(took, 2)))
 print(f"   ({took:.2f} s)")
+w.find.setText("sw1"); app.processEvents()
+t0 = time.perf_counter()
+w.find.setText(""); app.processEvents()                     # the search emptied: every row back, from what was read
+typed = time.perf_counter() - t0
+check("and changing the search over them is quick", w.detail.model().rowCount() >= 10000 and typed < 0.3, (w.detail.model().rowCount(), round(typed, 2)))
+print(f"   ({typed:.2f} s)")
 
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)
