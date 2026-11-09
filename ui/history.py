@@ -147,7 +147,7 @@ class TrendChart(QFrame):
     def __init__(self, title=""):
         super().__init__()
         self.title = title
-        self.series, self.th = [], None            # series: [(check name, [(time, value)], colour)]
+        self.series, self.th, self.marks = [], None, []    # series: [(check name, [(time, value)], colour)]; marks: [(time, value)] in red
         self.hover = None                          # index of the run under the mouse
         self.stamps, self.curves = [], {}
         self.setMinimumSize(320, 230)
@@ -179,10 +179,11 @@ class TrendChart(QFrame):
         lay.setStretch(3, 1)
         self.set_series([])
 
-    def set_series(self, series, th=None, title=None):
+    def set_series(self, series, th=None, title=None, marks=()):
         if title is not None:
             self.title = title
         self.series = [s for s in series if s[1]]
+        self.marks = list(marks)
         self.th = th if len(self.series) == 1 else None      # thresholds only make sense for one check
         self.hover = None
         self.draw()
@@ -220,7 +221,7 @@ class TrendChart(QFrame):
         if not has:
             self.stamps = []
             return
-        self.stamps = sorted({s for _, pts, _ in self.series for s, _ in pts})     # runs, evenly spaced in time order
+        self.stamps = sorted({s for _, pts, _ in self.series for s, _ in pts} | {s for s, _ in self.marks})     # runs, evenly spaced in time order
         pos = {s: i for i, s in enumerate(self.stamps)}
         allpct = all(is_percent(c) for c, _, _ in self.series)
         peak = max(v for _, pts, _ in self.series for _, v in pts)
@@ -262,6 +263,9 @@ class TrendChart(QFrame):
             self.curves[c] = curve
             if named:
                 self.legend_lay.addWidget(self._legend_button(c, color, text))
+        if self.marks:                                            # checks with no answer (reachability): red points
+            self.plot.plot([pos[s] for s, _ in self.marks], [v for _, v in self.marks], pen=None, symbol="o", symbolSize=9,
+                           symbolBrush=st.qink("FAIL"), symbolPen=pg.mkPen(surface, width=1.2))
 
     def _legend_button(self, check, color, text):
         b = QToolButton()
@@ -357,8 +361,8 @@ class ChartStack(QScrollArea):
         self.charts, self.series, self.th, self.requested = [], [], None, 0
         self.set_series([])
 
-    def set_series(self, series, th=None):
-        """series: [(check, [(time, value)])] in the order they were ticked."""
+    def set_series(self, series, th=None, marks=()):
+        """series: [(check, [(time, value)])] in the order they were ticked; marks: [(time, value)] drawn as red points."""
         self.requested = len(series)
         have = [(c, pts) for c, pts in series if pts]
         self.series = have
@@ -386,7 +390,7 @@ class ChartStack(QScrollArea):
             title = scale_title(key) if key is not None and len(groups) > 1 else ""
             if key == (2, 0) and len(members) == 1:                # one device's uptime: say how long, since when, and how often it restarted
                 title = uptime_caption(members[0][1])
-            ch.set_series(members, th if len(have) == 1 else None, title=title)
+            ch.set_series(members, th if len(have) == 1 else None, title=title, marks=marks)
             self.lay.addWidget(ch, 1)
             self.charts.append(ch)
         self.th = self.charts[0].th if self.charts else None
@@ -394,39 +398,6 @@ class ChartStack(QScrollArea):
     def set_data(self, points, check, th):                    # single-check form
         self.set_series([(check, points)], th)
 
-
-
-def draw_over_time(d, picked, th, chart, status_chart, table, stack):
-    """One device's ticked checks over time, drawn as their kind of data (chart_kind): numbers as lines on `chart` (a ChartStack); with
-    only status or text checks ticked, the first one's statuses per day on `status_chart`, or the times its value changed in `table`
-    (Device, Value, Checked). `stack` shows the one used. The History page and a device's page share it. Returns the line series."""
-    rows = {c: db.check_rows(d, c) for c in picked} if d else {}
-    kinds = {c: chart_kind(r) for c, r in rows.items()}
-    lines = any(k in ("line", "bar") for k in kinds.values())              # a number among the ticked checks: lines for those
-    first = picked[0] if picked else None
-    kind = "line" if lines or not first else kinds.get(first, "line")      # only text and status ticked: the first one's chart
-    stack.setCurrentWidget({"status": status_chart, "table": table}.get(kind, chart))
-    if kind == "status":
-        rs = rows[first]
-        days = sorted({r["t"][:10] for r in rs})
-        bars = [(s, [sum(1 for r in rs if r["t"][:10] == day and r["status"] == s) for day in days]) for s in chartspec.STATUSES
-                  if any(r["status"] == s for r in rs)]
-        title = display.check_name(first)
-        status_chart.draw(lambda p: chartspec.grouped_bars(p, days, bars, title=title, stacked=True))
-    elif kind == "table":
-        changes = []
-        for r in rows[first]:
-            if not changes or changes[-1]["value"] != r["value"]:
-                changes.append(r)
-        changes.reverse()                                              # newest first
-        with filling(table):
-            table.setRowCount(len(changes))
-            for i, r in enumerate(changes):
-                for j, v in enumerate([db.label_org(d), display.value(r["value"]), r["t"]]):
-                    table.setItem(i, j, QTableWidgetItem(v))
-    series = [(c, db.series(d, c)) for c in picked] if kind in ("line", "bar") else []     # one run so far is still a line
-    chart.set_series(series, th.get(picked[0].split(" (")[0]) if picked else None)
-    return series
 
 
 def _table(cols):
@@ -463,7 +434,8 @@ class HistoryTab(QWidget):
         self.funnel = FilterButton(lambda: device_sections(listed_devices(self.funnel)))
         self.find.textChanged.connect(lambda _t: self.group_changed())
         self.funnel.changed.connect(self.group_changed)
-        self.chart = ChartStack()
+        from ui.overtime import CheckPanels                     # (ui.overtime draws with this module's charts)
+        self.panels = CheckPanels()
         self.dev.currentIndexChanged.connect(lambda _i: self.fill_checks(self.dev.currentData()))
         self.chk.changed.connect(self.draw)
         self.detail.itemSelectionChanged.connect(self._pick_from_row)      # a check's row puts that device and check on the chart
@@ -497,14 +469,7 @@ class HistoryTab(QWidget):
         for w in (self.dev, self.chk):               # share the width, and wrap when the pane is narrow
             w.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         rl.addLayout(flow("Device", self.dev, "Check", self.chk))
-        self.over_chart = ChartView(min_height=240)                        # a status check: how often each status happened, by day
-        self.over_chart.setAccessibleName("Values over time")
-        self.over_table = _table(["Device", "Value", "Checked"])           # a text check: one row each time the value changed
-        self.over_table.setAccessibleName("Values over time")
-        self.over_stack = QStackedWidget()
-        for w_ in (self.chart, self.over_chart, self.over_table):
-            self.over_stack.addWidget(w_)
-        rl.addWidget(self.over_stack, 1)
+        rl.addWidget(self.panels, 1)                                        # a panel per ticked check, each drawn as its kind
         # Across devices: the run chosen on the left, one bar per device for the check picked here, coloured by its status
         self.compare_check = QComboBox()
         self.compare_check.setToolTip("The check to chart")
@@ -639,8 +604,9 @@ class HistoryTab(QWidget):
             self.draw_failures()
 
     def restyle(self):
-        for c in (self.over_chart, self.compare_chart, self.fail_when, self.fail_where):
+        for c in (self.compare_chart, self.fail_when, self.fail_where):
             c.restyle()
+        self.panels.restyle()
 
     def _fill_compare(self):
         """The checks of the chosen run, for the Across devices box; the pick is kept when it still applies."""
@@ -860,7 +826,9 @@ class HistoryTab(QWidget):
         picked = [self.check_keys[k] for k in self.chk.selected() if k in self.check_keys]
         with db.within(db.split_key(d or "")[1]):                         # that organization's limits
             th = db.get_thresholds()
-        draw_over_time(d, picked, th, self.chart, self.over_chart, self.over_table, self.over_stack)
+        vendor = (db.find_device(self._base(d)) or {}).get("vendor", "") if d else ""
+        # shortcut: every stored reading (from 2000 on) until the page has its time range
+        self.panels.show(d or "", vendor, picked if d else [], datetime(2000, 1, 1), datetime.now(), th)
 
     def screen_context(self):
         """What the Assistant is told about this page: the chosen run and its rows, and the device and checks on the chart."""

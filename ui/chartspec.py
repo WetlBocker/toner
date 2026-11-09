@@ -204,30 +204,37 @@ def heatmap(p, xlabels, ylabels, cells, title="", unit="", worst=None):
 
 
 def status_heatmap(p, xlabels, ylabels, cells, title=""):
-    """A grid coloured by status: cells is [(xi, yi, status)]. Blank squares are not sent. A click reports value: [x, y]."""
+    """A grid coloured by status: cells is [(xi, yi, status)]. Blank squares are not sent. A click reports value: [x, y, n]. The third
+    value is a number (the status's place in STATUSES) because ECharts skips heatmap squares whose value is not one; the tooltip names it."""
     if not cells:
         return empty("Nothing to show yet")
     opt = _base(p, title)
-    opt["tooltip"] = _tooltip(p, formatter="{c}")
+    opt["tooltip"] = _tooltip(p, formatter="{b}")
     x, y = _axis(p, "category", xlabels), _axis(p, "category", ylabels)
     x["splitArea"] = y["splitArea"] = {"show": False}
     y["inverse"] = True
     opt["xAxis"], opt["yAxis"] = x, y
-    opt["series"] = [{"type": "heatmap", "data": [{"value": [xi, yi, s], "itemStyle": {"color": status_color(p, s)}} for xi, yi, s in cells],
+    opt["series"] = [{"type": "heatmap", "data": [{"name": s, "value": [xi, yi, STATUSES.index(s) if s in STATUSES else len(STATUSES)],
+                                "itemStyle": {"color": status_color(p, s)}} for xi, yi, s in cells],
                       "itemStyle": {"borderColor": p["surface"], "borderWidth": 1},
                       "emphasis": {"itemStyle": {"shadowBlur": 6, "shadowColor": "rgba(0,0,0,0.25)"}}}]
     return opt
 
 
 def ring(p, segments, center_text, title=""):
-    """Segments as a ring: segments is [(name, value, colour)]. `center_text` sits in the middle; a click reports the name."""
+    """Segments as a ring: segments is [(name, value, colour)]. `center_text` sits in the middle; a click reports the name. With every
+    segment at zero the ring is a plain grey circle that cannot be selected, still with its centre text."""
     opt = pie(p, segments, title)
-    if opt.get("series"):
-        opt["series"][0]["radius"] = ["58%", "82%"]
-        opt["series"][0]["center"] = ["50%", "56%"]
-        opt["graphic"] = [{"type": "text", "left": "center", "top": "50%", "style": {"text": str(center_text), "fill": p["text"], "fontSize": 22,
-                                                                                  "fontWeight": "bold", "fontFamily": _font(p)["fontFamily"],
-                                                                                  "textAlign": "center"}}]
+    if not opt.get("series"):
+        opt = pie(p, [("", 1, p["border"])], title)
+        opt["legend"]["show"] = False
+        opt["tooltip"] = {"show": False}
+        opt["series"][0]["silent"] = True
+    opt["series"][0]["radius"] = ["58%", "82%"]
+    opt["series"][0]["center"] = ["50%", "56%"]
+    opt["graphic"] = [{"type": "text", "left": "center", "top": "50%", "style": {"text": str(center_text), "fill": p["text"], "fontSize": 22,
+                                                                              "fontWeight": "bold", "fontFamily": _font(p)["fontFamily"],
+                                                                              "textAlign": "center"}}]
     return opt
 
 

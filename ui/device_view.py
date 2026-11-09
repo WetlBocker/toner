@@ -1,14 +1,14 @@
 """Everything about one device in one window: details, latest checks, history, configuration, and quick actions."""
 import json
+from datetime import datetime
 
 from PySide6.QtCore import QThread, Qt, QUrl, Signal
-from PySide6.QtGui import QDesktopServices, QFontDatabase
-from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QFormLayout, QHBoxLayout, QLabel, QMessageBox, QPlainTextEdit,
-                               QPushButton, QStackedWidget, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
+from PySide6.QtGui import QDesktopServices
+from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QFormLayout, QHBoxLayout, QLabel, QMessageBox,
+                               QPushButton, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
 from core import backup, db, display, perms, profiles, sessions, snmp, unifikids, vendors
 from core.runner import run_one
-from ui.configs import DiffHighlighter
-from ui.history import ChartStack, _table as history_table, draw_over_time
+from ui.overtime import CheckPanels, config_switch, config_text, config_text_view
 from ui.widgets import GroupPicker, StatusDelegate
 from ui import chartspec, status as st
 from ui.webchart import ChartView
@@ -206,14 +206,7 @@ class DeviceView(QDialog):
         ol.addWidget(self.summary, 1)
 
         self.pick = GroupPicker(all_text="Choose checks", noun="checks", clear_text="Clear selection")
-        self.chart = ChartStack()
-        self.over_chart = ChartView(min_height=240)            # a status check: how often each status happened, by day (as on History)
-        self.over_chart.setAccessibleName("Values over time")
-        self.over_table = history_table(["Device", "Value", "Checked"])     # a text check: each time its value changed
-        self.over_table.setAccessibleName("Values over time")
-        self.over_stack = QStackedWidget()
-        for w_ in (self.chart, self.over_chart, self.over_table):
-            self.over_stack.addWidget(w_)
+        self.panels = CheckPanels()                            # a panel per ticked check, as on History > Over time
         hist = QWidget()
         hl = QVBoxLayout(hist)
         bar = QHBoxLayout()
@@ -221,7 +214,7 @@ class DeviceView(QDialog):
         bar.addWidget(self.pick)
         bar.addStretch()
         hl.addLayout(bar)
-        hl.addWidget(self.over_stack, 1)
+        hl.addWidget(self.panels, 1)
         self.pick.changed.connect(self.draw)
         self.trend = ChartView(min_height=260)         # the same checks as areas over time, with the limits as dashed lines
         self.trend.setAccessibleName("Trend of the chosen checks")
@@ -235,14 +228,8 @@ class DeviceView(QDialog):
         tl.addWidget(self.trend, 1)
 
         self.versions = QComboBox()
-        self.cfg_view = QComboBox()
-        self.cfg_view.addItem("Changes from the previous version", "diff")
-        self.cfg_view.addItem("Full configuration", "full")
-        self.cfg = QPlainTextEdit()
-        self.cfg.setReadOnly(True)
-        self.cfg.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
-        self.cfg.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
-        self.highlighter = DiffHighlighter(self.cfg.document())
+        self.cfg_view = config_switch()
+        self.cfg = config_text_view()
         cfgw = QWidget()
         cl = QVBoxLayout(cfgw)
         cb = QHBoxLayout()
@@ -362,8 +349,9 @@ class DeviceView(QDialog):
         self.gauges.setVisible(shown > 0)
 
     def restyle(self):
-        for g in self._gauges + [self.trend, self.over_chart]:
+        for g in self._gauges + [self.trend]:
             g.restyle()
+        self.panels.restyle()
 
     def _fill_history(self):
         keep = self.pick.selected()
@@ -377,8 +365,10 @@ class DeviceView(QDialog):
     def draw(self, *_):
         picked = [self.keys[k] for k in self.pick.selected() if k in self.keys]
         th = db.thresholds_for(self.dev)
-        series = draw_over_time(self.dev["name"], picked, th, self.chart, self.over_chart, self.over_table, self.over_stack)
-        self._draw_trend(series, th.get(picked[0].split(" (")[0]) if picked else None)
+        # shortcut: every stored reading (from 2000 on) until the page has its time range. Keyed with its organization: panels draw later.
+        self.panels.show(db.qualified(self.dev["name"], self.dev.get("org")), self.dev.get("vendor", ""), picked, datetime(2000, 1, 1),
+                         datetime.now(), th)
+        self._draw_trend(self.panels.line_series(), th.get(picked[0].split(" (")[0]) if picked else None)
 
     def _draw_trend(self, series, limits):
         """The Trends tab: every picked check as an area over time; the first check's limits as dashed lines when all share a scale."""
@@ -394,7 +384,6 @@ class DeviceView(QDialog):
             for t, v in pts:
                 vals[index[t]] = v
             cols.append((name, vals))
-        from datetime import datetime
         stamps = []
         for t in times:
             try:
@@ -423,16 +412,7 @@ class DeviceView(QDialog):
             self.cfg.setPlainText("No configuration backed up yet." if backup.supported(self.dev)
                                   else "Not available: " + backup.why_unsupported(self.dev))
             return
-        i = max(0, self.versions.currentIndex())
-        v = self.vers[i]
-        if self.cfg_view.currentData() == "diff" and i + 1 < len(self.vers):
-            lines, a, r = backup.diff_lines(backup.get_text(self.vers[i + 1]["id"]), backup.get_text(v["id"]),
-                                            self.vers[i + 1]["taken_at"], v["taken_at"])
-            self.cfg.setPlainText("\n".join(lines) or "No difference.")
-        elif self.cfg_view.currentData() == "diff":
-            self.cfg.setPlainText("This is the first copy; switch to 'Full configuration' to read it.")
-        else:
-            self.cfg.setPlainText(backup.get_text(v["id"]))
+        self.cfg.setPlainText(config_text(self.vers, max(0, self.versions.currentIndex()), self.cfg_view.currentData()))
 
     # ---------- actions
     def act(self, key):

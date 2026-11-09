@@ -69,20 +69,28 @@ for v, st in (("7.0.2", "OK"), ("7.0.2", "OK"), ("7.1.0", "WARN")):
     db.save_run([Result("sw0", "firmware", st, v), Result("sw0", "link", st, "connected" if st == "OK" else "down"), Result("sw0", "cpu", "OK", "5%", numeric=5.0)])
     time.sleep(1.05)
 w.refresh(); w.dev.setCurrentIndex(w.dev.findData("sw0"))
+def panels():
+    """Over time's panels, each drawn."""
+    for pn in w.panels.panels:
+        pn.drawn or pn.draw()
+    return w.panels.panels
 w.chk.set_selected(["Link"]); w.chk._toggled()
-opt = w.over_chart._builder(p)
-check("Over time: a status check -> stacked status bars", w.over_stack.currentWidget() is w.over_chart and all(s.get("stack") for s in opt["series"])
-      and {s["name"] for s in opt["series"]} == {"OK", "WARN"}, opt)
+pn = panels()
+opt = pn[0].chart._builder(p) if len(pn) == 1 and hasattr(pn[0], "chart") else {}
+check("Over time: a status check -> a status heatmap, a square taking its worst status", pn[0].kind == "heatmap"
+      and opt.get("series", [{}])[0].get("type") == "heatmap" and [d["name"] for d in opt["series"][0]["data"]] == ["WARN"], opt.get("series"))
 w.chk.set_selected(["Firmware"]); w.chk._toggled()
-t = w.over_table
-check("Over time: a text check -> the change table, no chart", w.over_stack.currentWidget() is t)
-rows_ = [t.item(i, 1).text() for i in range(t.rowCount())]
+pn = panels()
+t = getattr(pn[0], "table", None)
+check("Over time: a text check -> the change table, no chart", t is not None and not hasattr(pn[0], "chart"))
+rows_ = [t.model().index(i, 2).data() for i in range(t.model().rowCount())]
 check("two versions over time -> two change rows, newest first", rows_ == ["7.1.0", "7.0.2"], rows_)
 w.chk.set_selected(["Firmware", "Link"]); w.chk._toggled()
-check("Over time: only text/status ticked -> the first ticked check's table, not a blank chart",
-      w.over_stack.currentWidget() is w.over_table and w.over_table.rowCount() == 2, w.over_stack.currentIndex())
+check("Over time: text and status ticked -> a panel each, in the picker's order", [pn.kind for pn in panels()] == ["table", "heatmap"],
+      [pn.kind for pn in panels()])
 w.chk.set_selected(["CPU"]); w.chk._toggled()
-check("Over time: a number -> the line chart as before", w.over_stack.currentWidget() is w.chart and len(w.chart.series) == 1)
+pn = panels()
+check("Over time: a number -> the line chart as before", [pn_.kind for pn_ in pn] == ["line"] and len(pn[0].stack.series) == 1)
 check("the check picker's tooltip", w.compare_check.toolTip() == "The check to chart", w.compare_check.toolTip())
 
 print("== Failures: a cell or a bar lists the rows it counts")

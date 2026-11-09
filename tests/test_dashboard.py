@@ -141,7 +141,8 @@ check("latest checks with the worst first", V.checks.rowCount() == 1 and V.check
 check("buttons reflect what the device supports", V.buttons["ssh"].isEnabled() and V.buttons["backup"].isEnabled() and not V.buttons["snmp"].isEnabled())
 Vf = A.DeviceView([x for x in db.list_devices() if x["name"] == "edge-fw"][0]); check("an API firewall has no SSH button but can open its web page", not Vf.buttons["ssh"].isEnabled() and Vf.buttons["web"].isEnabled() and Vf.buttons["backup"].isEnabled())
 Vf.close()
-check("history lists the numeric checks and draws one", list(V.keys) == ["CPU"] and len(V.chart.series) == 1)
+check("history lists the numeric checks and draws one", list(V.keys) == ["CPU"] and [c for c, _p in V.panels.line_series()] == ["cpu"]
+      and [p.checks for p in V.panels.panels] == [["cpu"]])
 check("no configuration yet says so", "No configuration backed up yet" in V.cfg.toPlainText())
 backup.store("core1", "hostname core1\nvlan 10\n"); time.sleep(1.1); backup.store("core1", "hostname core1\nvlan 10\nvlan 20\n")
 V.reload(); V.cfg_view.setCurrentIndex(0)

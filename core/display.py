@@ -73,6 +73,15 @@ def uptime(hours=None, seconds=None):
     return f"{days}:{hrs:02d}:{mins:02d}:{secs:02d}"
 
 
+def uptime_words(hours):
+    """'12 days 4 hours', or '5 hours 20 minutes' under a day."""
+    mins = max(int(round(float(hours or 0) * 60)), 0)
+    days, rest = divmod(mins, 1440)
+    hrs, mins = divmod(rest, 60)
+    n = lambda k, word: f"{k} {word}{'s' if k != 1 else ''}"
+    return f"{n(days, 'day')} {n(hrs, 'hour')}" if days else f"{n(hrs, 'hour')} {n(mins, 'minute')}"
+
+
 def said(name, message):
     """'Disk D: very high' as 'Disk D: very high' (and 'cpu' + 'high' as 'cpu: high'): a check name that already ends in a colon does not get a second one."""
     name = (name or "").rstrip()

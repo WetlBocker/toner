@@ -153,10 +153,16 @@ check("and Enter opens its page", opened and opened[-1]["name"] == "gw / AP Lobb
 tab.table.clearSelection()
 labels = list(child.keys)
 check("its History lists its own checks, numbers and text alike", {"CPU", "Memory", "State"} <= set(labels), labels)
+def drawn_panels(view):
+    for p in view.panels.panels:
+        p.drawn or p.draw()
+    return view.panels.panels
 child.pick.set_selected(["CPU"]); child.draw()
-check("a reading over time is a line chart (chart_kind)", child.over_stack.currentWidget() is child.chart and child.chart.series and child.chart.series[0][0] == "cpu")
+pn = drawn_panels(child)
+check("a reading over time is a line chart", [p.kind for p in pn] == ["line"] and pn[0].stack.series and pn[0].stack.series[0][0] == "cpu")
 child.pick.set_selected(["State"]); child.draw()
-check("a status-only check is drawn as how often each status happened", child.over_stack.currentWidget() is child.over_chart)
+pn = drawn_panels(child)
+check("a status-only check is drawn as a status heatmap", [p.kind for p in pn] == ["heatmap"] and hasattr(pn[0], "chart"), [p.kind for p in pn])
 check("opening the list and the pages made no API calls", CALLS == [], [c["path"] for c in CALLS])
 
 print("== a device the controller no longer reports")
