@@ -3,9 +3,33 @@ package collect
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/WetlBocker/toner/agent/internal/report"
 )
+
+func TestSearchAgain(t *testing.T) {
+	day := time.Date(2026, 11, 8, 3, 0, 0, 0, time.UTC)
+	list := []report.Update{}
+	cases := []struct {
+		name               string
+		have               []report.Update
+		haveSearched, last time.Time
+		want               bool
+	}{
+		{"no list yet", nil, time.Time{}, day, true},
+		{"the same search date reuses the list", list, day, day, false},
+		{"an empty list is a list too", list, day, day, false},
+		{"Windows searched since", list, day, day.Add(time.Hour), true},
+		{"an older date reuses the list", list, day, day.Add(-time.Hour), false},
+		{"the date could not be read", list, day, time.Time{}, true},
+	}
+	for _, c := range cases {
+		if got := searchAgain(c.have, c.haveSearched, c.last); got != c.want {
+			t.Errorf("%s: searchAgain = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
 
 func TestUpdatesFrom(t *testing.T) {
 	got := updatesFrom([]rawUpdate{

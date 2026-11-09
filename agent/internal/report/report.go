@@ -24,15 +24,16 @@ type Report struct {
 	ServiceStates map[string]string `json:"service_states"` // name -> "R" running / "S" anything else
 	AutoStopped   []StoppedService  `json:"auto_stopped"`
 
-	Events   *Events           `json:"events,omitempty"`
-	Certs    *[]Cert           `json:"certs,omitempty"`
-	Patched  string            `json:"patched,omitempty"`
+	Events  *Events `json:"events,omitempty"`
+	Certs   *[]Cert `json:"certs,omitempty"`
+	Patched string  `json:"patched,omitempty"`
 	// PendingUpdates is Windows' cached update search: nil = the search could not run, empty = nothing pending.
-	PendingUpdates  *[]Update `json:"pending_updates,omitempty"`
-	UpdatesSearched string    `json:"updates_searched,omitempty"` // when Windows last searched successfully, RFC 3339 UTC
-	Software map[string]string `json:"software"`
-	Admins   *[]string         `json:"admins,omitempty"`
-	Ports    *[]string         `json:"ports,omitempty"` // "443/nginx", unique by port, sorted
+	PendingUpdates  *[]Update         `json:"pending_updates,omitempty"`
+	UpdatesSearched string            `json:"updates_searched,omitempty"` // when Windows last searched successfully, RFC 3339 UTC
+	UpdatesError    bool              `json:"updates_error,omitempty"`    // the search was refused or failed (PendingUpdates is then nil)
+	Software        map[string]string `json:"software"`
+	Admins          *[]string         `json:"admins,omitempty"`
+	Ports           *[]string         `json:"ports,omitempty"` // "443/nginx", unique by port, sorted
 
 	Physical   *[]PhysicalDisk    `json:"physical,omitempty"`
 	Volumes    *[]Volume          `json:"volumes,omitempty"`

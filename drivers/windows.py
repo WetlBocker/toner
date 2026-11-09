@@ -335,6 +335,9 @@ class WindowsDriver(Driver):
         t = self.th["patch_days"]
         pending = self.report.get("pending_updates")           # absent = not reported; [] = nothing pending
         searched = self.report.get("updates_searched") or ""
-        items = None if pending is None else [self.item(u.get("title", ""), text=u.get("kb", ""), data={"severity": u.get("severity", ""), "searched": searched}) for u in pending]
+        if pending is None and self.report.get("updates_error"):      # the search was refused (WinRM) or failed: not the old agent's silence
+            items = [self.item("", data={"updates_error": True})]
+        else:
+            items = None if pending is None else [self.item(u.get("title", ""), text=u.get("kb", ""), data={"severity": u.get("severity", ""), "searched": searched}) for u in pending]
         return self.result("patches", grade(days, t["warn"], t["fail"]), f"{days:.0f} days",
                            f"last update installed {when:%Y-%m-%d}", numeric=float(days), items=items)

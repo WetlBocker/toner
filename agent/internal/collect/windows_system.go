@@ -170,53 +170,102 @@ func winPatched(r *report.Report) error {
 }
 
 // ---- pending updates: Windows' own cached search result. Online is false, so no search is ever started: a live one can take
-// minutes and contacts Microsoft or WSUS. An error (no cached catalog, the API refused) leaves the field nil.
+// minutes and contacts Microsoft or WSUS. Even the cached search is slow, so it runs again only when Windows has searched since
+// the last one (LastSearchSuccessDate, cheap to read); otherwise the list kept from then is sent. An error (no cached catalog,
+// the API refused) leaves the field nil and says so in updates_error.
 func winPendingUpdates(r *report.Report) error {
 	runtime.LockOSThread() // COM state belongs to the thread
 	defer runtime.UnlockOSThread()
 	if err := ole.CoInitializeEx(0, ole.COINIT_MULTITHREADED); err == nil {
 		defer ole.CoUninitialize()
 	} // already initialised on this thread (S_FALSE, RPC_E_CHANGED_MODE): carry on
+	searched := lastUpdateSearch()
+	pendingCache.Lock()
+	defer pendingCache.Unlock()
+	if searchAgain(pendingCache.list, pendingCache.searched, searched) {
+		list, err := searchPending()
+		if err != nil {
+			r.UpdatesError = true
+			return err
+		}
+		pendingCache.list, pendingCache.searched = list, searched
+	}
+	out := append([]report.Update{}, pendingCache.list...)
+	r.PendingUpdates = &out
+	if !pendingCache.searched.IsZero() { // when Windows last searched successfully (the wheel shows it)
+		r.UpdatesSearched = iso(pendingCache.searched)
+	}
+	return nil
+}
+
+// lastUpdateSearch is when Windows last searched for updates successfully; zero when that cannot be read.
+func lastUpdateSearch() time.Time {
+	av, err := oleutil.CreateObject("Microsoft.Update.AutoUpdate")
+	if err != nil {
+		return time.Time{}
+	}
+	defer av.Release()
+	auto, err := av.QueryInterface(ole.IID_IDispatch)
+	if err != nil {
+		return time.Time{}
+	}
+	defer auto.Release()
+	res, err := oleutil.GetProperty(auto, "Results")
+	if err != nil {
+		return time.Time{}
+	}
+	rd := res.ToIDispatch()
+	defer rd.Release()
+	if d, err := oleutil.GetProperty(rd, "LastSearchSuccessDate"); err == nil {
+		if t, ok := d.Value().(time.Time); ok && t.Year() > 1900 {
+			return t
+		}
+	}
+	return time.Time{}
+}
+
+// searchPending runs Windows Update's offline search over its cached catalog: the updates not installed and not hidden.
+func searchPending() ([]report.Update, error) {
 	obj, err := oleutil.CreateObject("Microsoft.Update.Session")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer obj.Release()
 	session, err := obj.QueryInterface(ole.IID_IDispatch)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer session.Release()
 	sv, err := oleutil.CallMethod(session, "CreateUpdateSearcher")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	searcher := sv.ToIDispatch()
 	defer searcher.Release()
 	if _, err := oleutil.PutProperty(searcher, "Online", false); err != nil {
-		return err // without Online = false the search could go to the network: do not run it
+		return nil, err // without Online = false the search could go to the network: do not run it
 	}
 	rv, err := oleutil.CallMethod(searcher, "Search", "IsInstalled=0 and IsHidden=0")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	result := rv.ToIDispatch()
 	defer result.Release()
 	uv, err := oleutil.GetProperty(result, "Updates")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	updates := uv.ToIDispatch()
 	defer updates.Release()
 	var rows []rawUpdate
 	n, err := comCount(updates)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for i := 0; i < n; i++ {
 		iv, err := oleutil.GetProperty(updates, "Item", i)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		u := iv.ToIDispatch()
 		row := rawUpdate{Title: comString(u, "Title"), Severity: comString(u, "MsrcSeverity")}
@@ -234,25 +283,7 @@ func winPendingUpdates(r *report.Report) error {
 		u.Release()
 		rows = append(rows, row)
 	}
-	out := updatesFrom(rows)
-	r.PendingUpdates = &out
-	// when Windows last searched successfully (the wheel shows it); a missing date does not spoil the list
-	if av, err := oleutil.CreateObject("Microsoft.Update.AutoUpdate"); err == nil {
-		defer av.Release()
-		if auto, err := av.QueryInterface(ole.IID_IDispatch); err == nil {
-			defer auto.Release()
-			if res, err := oleutil.GetProperty(auto, "Results"); err == nil {
-				rd := res.ToIDispatch()
-				defer rd.Release()
-				if d, err := oleutil.GetProperty(rd, "LastSearchSuccessDate"); err == nil {
-					if t, ok := d.Value().(time.Time); ok && t.Year() > 1900 {
-						r.UpdatesSearched = iso(t)
-					}
-				}
-			}
-		}
-	}
-	return nil
+	return updatesFrom(rows), nil
 }
 
 func comCount(d *ole.IDispatch) (int, error) {

@@ -21,6 +21,7 @@ from ui.widgets import FlowLayout, GroupPicker
 EMPTY = "No readings in this time range"
 HINT = "Select a square to see what happened then"
 OLD_AGENT = "Not reported by this computer's agent yet"
+NOT_REPORTED = "Not reported by this computer"
 SEARCHED = "Windows last searched for updates on {date}"
 DETAIL = [("t", "Time"), ("device", "Device"), ("status", "Status"), ("value", "Value"), ("message", "Message")]
 CHANGES = [("t", "Checked"), ("status", "Status"), ("value", "Value"), ("message", "Message")]
@@ -374,6 +375,8 @@ class CheckPanels(QScrollArea):
             return panel.note(EMPTY)
         if items is None:                                              # an agent from before pending updates were reported
             return panel.note(OLD_AGENT)
+        if any((it["data"] or {}).get("updates_error") for it in items):   # it said its search was refused or failed
+            return panel.note(NOT_REPORTED)
         groups = {s: [] for s in SEVERITIES}
         for it in items:
             sev = (it["data"] or {}).get("severity") or ""

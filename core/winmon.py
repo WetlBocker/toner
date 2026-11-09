@@ -63,7 +63,7 @@ $t = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsU
 if ($t) { try { $last = [datetime]::SpecifyKind([datetime]::Parse($t), 'Utc') } catch {} }
 if (-not $last) { $h = Get-CimInstance Win32_QuickFixEngineering | Where-Object { $_.InstalledOn } | Sort-Object InstalledOn -Descending | Select-Object -First 1; if ($h) { $last = $h.InstalledOn.ToUniversalTime() } }
 if ($last) { $o.patched = $last.ToString('o') }
-# pending updates from Windows' cached search (Online = false: never starts a live one); left out when the API refuses
+# pending updates from Windows' cached search (Online = false: never starts a live one); left out, and updates_error set, when the API refuses
 try {
     $us = (New-Object -ComObject Microsoft.Update.Session).CreateUpdateSearcher(); $us.Online = $false
     $found = $us.Search('IsInstalled=0 and IsHidden=0')
@@ -72,7 +72,7 @@ try {
         $d = (New-Object -ComObject Microsoft.Update.AutoUpdate).Results.LastSearchSuccessDate
         if ($d -and $d.Year -gt 1900) { $o.updates_searched = [datetime]::SpecifyKind($d, 'Utc').ToString('yyyy-MM-ddTHH:mm:ssZ', [cultureinfo]::InvariantCulture) }
     } catch {}
-} catch { $o.Remove('pending_updates') }
+} catch { $o.Remove('pending_updates'); $o.updates_error = $true }
 # what is installed, who may administer the computer, what is listening: compared from one run to the next
 $sw = [ordered]@{}
 foreach ($k in 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*') {

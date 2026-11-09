@@ -194,6 +194,14 @@ for p in cp.panels:
 ring = cp.panels[0].chart.opt
 check("nothing pending: a grey ring with 0 in the middle", ring["graphic"][0]["style"]["text"] == "0" and ring["series"][0].get("silent")
       and ring["series"][0]["data"][0]["itemStyle"]["color"] == P["border"], ring["series"][0]["data"])
+dev("w4", "windows")
+db.save_run([Result("w4", "patches", "OK", "1 days", numeric=1.0, items=[item("", updates_error=True)])])
+cp.show_checks("w4", "windows", ["patches"], START, END, th)
+for p in cp.panels:
+    p.drawn or p.draw()
+check("a computer that refused the update search: 'Not reported by this computer', no ring", cp.panels[0].text.text() == O.NOT_REPORTED
+      == "Not reported by this computer" and not hasattr(cp.panels[0], "chart"), cp.panels[0].text.text())
+check("...while an older agent's row still says the agent has not reported it yet", O.OLD_AGENT == "Not reported by this computer's agent yet")
 cp.show_checks("nas", "truenas", ["disks"], START, END, th)
 for p in cp.panels:
     p.drawn or p.draw()

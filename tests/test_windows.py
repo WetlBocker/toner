@@ -88,7 +88,12 @@ check("every certificate is listed but grading ignores the far and long-expired 
 _ps = winmon.COLLECTOR
 check("the collector's dates are UTC and culture-proof, and the search date cannot drop the updates",
       "SpecifyKind($d, 'Utc')" in _ps and "ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [cultureinfo]::InvariantCulture)" in _ps
-      and "$d.Year -gt 1900" in _ps and _ps.index("$o.pending_updates") < _ps.index("try {   # COM gives") < _ps.index("} catch { $o.Remove('pending_updates') }"))
+      and "$d.Year -gt 1900" in _ps and _ps.index("$o.pending_updates") < _ps.index("try {   # COM gives") < _ps.index("} catch { $o.Remove('pending_updates'); $o.updates_error = $true }"))
+refused = run(d, report(updates_error=True))["patches"]
+check("a refused update search is carried into the patches row, apart from an older report's silence",
+      refused.items == [{"name": "", "numeric": None, "status": None, "text": "", "data": {"updates_error": True}}] and run(d, report())["patches"].items is None, refused.items)
+_go = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "agent", "internal", "report", "report.go"), encoding="utf-8").read()
+check("the PowerShell and Go collectors name it the same", '$o.updates_error = $true' in _ps and 'json:"updates_error,omitempty"' in _go)
 check("a check can be switched off in Settings", "cpu" not in run(d, report(), disabled={"windows:cpu"}) and "memory" in run(d, report(), disabled={"windows:cpu"}))
 
 print("== services")
