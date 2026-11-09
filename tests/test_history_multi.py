@@ -120,5 +120,18 @@ check("value formats", H.fmt_value("cpu", 85.0) == "85%" and H.fmt_value("memory
 w.chk.set_selected(["CPU", "Memory", "Uptime", "BGP"]); w.chk._toggled(); QApplication.processEvents()
 w.grab().save(SP + (r"\history_stack.png").replace("\\", os.sep))
 
+
+print("== The picker lists shown names")
+db.save_device(dict(name="pk", vendor="fortinet", host="10.0.0.2", port=0, platform="", username="u", site="default", verify_ssl=0, ha_expected=0,
+                    enabled=1, location="", details="", folder_id=None))
+db.save_run([Result("pk", c, "OK", "", numeric=n) for c, n in (("resources", 3.0), ("certificate", 30.0), ("certificate :443", 20.0),
+                                                                 ("certificates", 10.0), ("ha", 1.0), ("ha sync", 1.0), ("cpu", 12.0))])
+w.refresh(); w.dev.setCurrentIndex(w.dev.findData("pk"))
+check("one Certificates, one HA, no Resources", sorted(w.check_keys) == ["CPU", "Certificates", "HA"], list(w.check_keys))
+w.chk.set_selected(["Certificates", "HA"]); w.chk._toggled()
+panels = {p.kind: sorted(p.checks) for p in w.panels.panels}
+check("ticking them draws every certificate source and both HA checks", panels == {"certs": ["certificate", "certificate :443", "certificates"],
+      "ha": ["ha", "ha sync"]}, panels)
+
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

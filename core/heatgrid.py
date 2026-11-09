@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 DAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
 
-def _label(d):
+def label(d):
     return f"{DAYS[d.weekday()][:3]} {d.day} {d:%b}"
 
 
@@ -19,7 +19,7 @@ class Grid:
         step = 1 if self.hourly else 7
         n = (last - first).days // step + 1
         self._dates = [last - timedelta(days=step * i) for i in range(n)]  # newest first
-        self.rows = [_label(d) for d in self._dates]
+        self.rows = [label(d) for d in self._dates]
         self.cols = [f"{h:02d}" for h in range(24)] if self.hourly else list(DAYS)
 
     def cell(self, t):

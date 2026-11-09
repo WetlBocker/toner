@@ -7,9 +7,10 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QFormLayout, QHBoxLayout, QLabel, QMessageBox,
                                QPushButton, QScrollArea, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
 from core import backup, db, display, perms, profiles, sessions, snmp, unifikids, vendors
-from core.chartkinds import over_time_kind
+from core.chartkinds import over_time_kind, shown_name, stored_names
 from core.firmware import human_size
 from core.runner import run_one
+from ui.history import scale_key
 from ui.overtime import EMPTY, CheckPanels, config_switch, config_text, config_text_view
 from ui.timerange import TimeRange
 from ui.vulntab import VulnTab
@@ -230,8 +231,16 @@ class DeviceView(QDialog):
         hl.addLayout(bar)
         hl.addWidget(self.panels, 1)
         self.pick.changed.connect(self.draw)
-        self.trend = ChartView(min_height=260)         # the same checks as areas over time, with the limits as dashed lines
-        self.trend.setAccessibleName("Trend of the chosen checks")
+        self.trends = []                               # the same checks as areas over time, a chart per scale, with the limits as dashed lines
+        self.trend_col = QVBoxLayout()
+        self.trend_col.setContentsMargins(0, 0, 0, 0)
+        self.trend_col.addStretch(1)
+        trend_body = QWidget()
+        trend_body.setLayout(self.trend_col)
+        trend_scroll = QScrollArea()
+        trend_scroll.setWidgetResizable(True)
+        trend_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        trend_scroll.setWidget(trend_body)
         trend_tab = QWidget()
         tl = QVBoxLayout(trend_tab)
         tl.setContentsMargins(0, 8, 0, 0)
@@ -242,7 +251,7 @@ class DeviceView(QDialog):
         self.trend_note.setProperty("muted", True)
         self.trend_note.setWordWrap(True)
         tl.addWidget(self.trend_note)
-        tl.addWidget(self.trend, 1)
+        tl.addWidget(trend_scroll, 1)
 
         self.versions = QComboBox()
         self.cfg_view = config_switch()
@@ -380,35 +389,58 @@ class DeviceView(QDialog):
         self.gauges.setVisible(bool(self._gauges))
 
     def restyle(self):
-        for g in self._gauges + [self.trend]:
+        for g in self._gauges + self.trends:
             g.restyle()
         self.panels.restyle()
         self.vuln.restyle()
 
     def _fill_history(self):
         keep = self.pick.selected()
-        checks = db.device_all_checks().get(self.dev["name"], [])
-        self.keys = {display.check_name(c): c for c in checks}
+        self.stored = db.device_all_checks().get(self.dev["name"], [])
+        vendor = self.dev.get("vendor", "")              # each check once under its shown name, less those Over time never draws
+        shown = dict.fromkeys(shown_name(c) for c in self.stored if over_time_kind(c, vendor) != "hidden")
+        self.keys = {display.check_name(c): c for c in shown}
         self.pick.set_labels(list(self.keys))
         keep = [k for k in keep if k in self.keys] or list(self.keys)        # every check to start with
         self.pick.set_selected(keep)
         self.draw()
 
     def draw(self, *_):
-        picked = [self.keys[k] for k in self.pick.selected() if k in self.keys]
+        picked = [c for k in self.pick.selected() if k in self.keys for c in stored_names(self.keys[k], self.stored)]
         th = db.thresholds_for(self.dev)
         # keyed with its organization: panels draw later
         self.panels.show_checks(db.qualified(self.dev["name"], self.dev.get("org")), self.dev.get("vendor", ""), picked, *self.range.span(), th)
-        series = self.panels.line_series()
-        self._draw_trend(series, th.get(series[0][0].split(" (")[0]) if series else None)
+        self._draw_trends(self.panels.line_series(), th)
 
-    def _draw_trend(self, series, limits):
-        """The Trends tab: every picked measurement as an area over time; the first check's limits as dashed lines when all share a scale."""
-        note = EMPTY if series else "Choose checks on the History tab; a check with numbers is drawn here"
-        series = [(display.check_name(c), pts) for c, pts in series if pts]
-        if not series:
-            self.trend.draw(lambda p: chartspec.empty(note))
+    def _draw_trends(self, series, th):
+        """The Trends tab: the picked measurements as areas over time, a chart per scale (percentages together, and so on, as on Over
+        time), each with its own axis; a chart of one check has that check's limits as dashed lines."""
+        for v in self.trends:
+            v.hide()
+            v.setParent(None)
+            v.deleteLater()
+        self.trends = []
+        groups = {}
+        for c, pts in series:
+            if pts:
+                groups.setdefault(scale_key(c, pts), []).append((c, pts))
+        if not groups:
+            note = EMPTY if series else "Choose checks on the History tab; a check with numbers is drawn here"
+            self._trend_view().draw(lambda p: chartspec.empty(note))
             return
+        for group in groups.values():
+            limits = th.get(group[0][0].split(" (")[0]) if len(group) == 1 else None
+            self._draw_trend(self._trend_view(), [(display.check_name(c), pts) for c, pts in group], limits)
+
+    def _trend_view(self):
+        view = ChartView(min_height=260)
+        view.setAccessibleName("Trend of the chosen checks")
+        self.trend_col.insertWidget(self.trend_col.count() - 1, view)
+        self.trends.append(view)
+        return view
+
+    def _draw_trend(self, view, series, limits):
+        """One Trends chart: its checks as areas over time; its limits as dashed lines."""
         times = sorted({t for _n, pts in series for t, _v in pts})
         index = {t: i for i, t in enumerate(times)}
         cols = []
@@ -423,13 +455,12 @@ class DeviceView(QDialog):
                 stamps.append(datetime.strptime(str(t)[:19], "%Y-%m-%d %H:%M:%S") if not isinstance(t, datetime) else t)
             except ValueError:
                 stamps.append(datetime.strptime(str(t)[:16], "%Y-%m-%d %H:%M"))
-        one_scale = len(cols) == 1
         warn = fail = None
-        if limits and one_scale:
+        if limits:
             warn, fail = limits.get("warn") or None, limits.get("fail") or None
             if limits.get("warn", 0) and limits.get("fail", 0) and limits["warn"] > limits["fail"]:        # lower is worse (uptime): no bands
                 warn = fail = None
-        self.trend.draw(lambda p: chartspec.area(p, stamps, cols, warn=warn, fail=fail, stacked=False))
+        view.draw(lambda p: chartspec.area(p, stamps, cols, warn=warn, fail=fail, stacked=False))
 
     def _fill_versions(self):
         self.versions.blockSignals(True)

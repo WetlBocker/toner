@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QFileDialo
                                QSplitter, QTabWidget, QTableView, QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout,
                                QWidget)
 from core import db, display, heatgrid, reports, scope, trends
-from core.chartkinds import across_kind, shown_name, stored_names
+from core.chartkinds import across_kind, over_time_kind, shown_name, stored_names
 from core.firmware import human_size
 from core.reports import COLORS, fg_for
 from drivers.base import Result
@@ -552,7 +552,7 @@ class HistoryTab(QWidget):
         self.detail.setItemDelegateForColumn(3, StatusDelegate(self.detail))
         self.dev = QComboBox()
         self.chk = GroupPicker(all_text="Select checks", noun="checks", clear_text="Clear selection")
-        self.check_keys = {}                     # shown name -> stored check name
+        self.check_keys = {}                     # label -> shown name (core.chartkinds.shown_name)
         self.find = SearchBox("Search devices", "Type part of a name, address, vendor, location, tag or detail. Several words must all match.",
                               page=self)
         self.funnel = FilterButton(lambda: device_sections(listed_devices(self.funnel)))
@@ -976,7 +976,7 @@ class HistoryTab(QWidget):
         except IndexError:
             return
         rows = [(t, r) for t, r in self._fail_rows if a <= t < b]
-        self._show_failures(f"Failures: {grid.rows[int(v[1])]} {grid.cols[int(v[0])]}" + (":00" if grid.hourly else ""), rows)
+        self._show_failures(f"Failures: {heatgrid.label(a)}" + (f" {a:%H}:00" if grid.hourly else ""), rows)     # the square's own date
 
     def _fail_bar(self, hit):
         """A device's bar was clicked: its FAIL and ERROR rows."""
@@ -1019,7 +1019,7 @@ class HistoryTab(QWidget):
         if i < 0:
             return
         self.dev.setCurrentIndex(i)                               # fills the checks and ticks the first
-        label = display.check_name(check)
+        label = display.check_name(shown_name(check))
         if label in self.check_keys and self.chk.selected() != [label]:
             self.chk.set_selected([label])
             self.draw()
@@ -1079,9 +1079,11 @@ class HistoryTab(QWidget):
             QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
     def fill_checks(self, device):
-        """List this device's checks. Ticks that still apply are kept; a first visit ticks the first check."""
+        """List this device's checks, each once under its shown name, less those Over time never draws. Ticks that still apply are
+        kept; a first visit ticks the first check."""
         checks = self.map.get(device or "", [])
-        self.check_keys = {display.check_name(c): c for c in checks}
+        vendor = self.vendors.get(self._base(device), "") if device else ""
+        self.check_keys = {display.check_name(s): s for s in dict.fromkeys(shown_name(c) for c in checks if over_time_kind(c, vendor) != "hidden")}
         keep = self.chk.selected()
         self.chk.set_labels(list(self.check_keys))
         keep = [k for k in keep if k in self.check_keys]
@@ -1092,7 +1094,8 @@ class HistoryTab(QWidget):
 
     def draw(self, *_):
         d = self.dev.currentData()
-        picked = [self.check_keys[k] for k in self.chk.selected() if k in self.check_keys]
+        stored = self.map.get(d or "", [])
+        picked = [c for k in self.chk.selected() if k in self.check_keys for c in stored_names(self.check_keys[k], stored)]
         with db.within(db.split_key(d or "")[1]):                         # that organization's limits
             th = db.get_thresholds()
         vendor = self.vendors.get(self._base(d), "") if d else ""

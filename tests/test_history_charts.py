@@ -110,5 +110,11 @@ check("a device's bar opens that device's rows, titled by its name", dlg is not 
       and cells(dlg.table) and all(r[1] == "sw2" for r in cells(dlg.table)), dlg and (dlg.windowTitle(), cells(dlg.table)))
 w.fail_when.clicked.emit({"kind": "series", "value": [(now.hour + 12) % 24, 0, 0]})
 check("...an empty cell opens nothing new", dlg is not None and getattr(w, "_fail_list", None) is dlg)
+w.fail_period.setCurrentIndex(next(i for i in range(w.fail_period.count()) if w.fail_period.itemData(i) > 30))     # a grid of weeks
+check("a long period is a grid of weeks", not w._fail_grid.hourly)
+w.fail_when.clicked.emit({"kind": "series", "value": [now.weekday(), 0, 1]})
+dlg = getattr(w, "_fail_list", None)
+check("a week grid's square is titled by its own date, not the week and the weekday", dlg is not None and dlg.windowTitle() == f"Failures: {day}",
+      dlg and dlg.windowTitle())
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

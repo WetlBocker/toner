@@ -111,7 +111,8 @@ before = shown()
 V.pick.set_selected([k for k in allk if k != "CPU"]); V.pick.changed.emit()
 check("unticking a check redraws without it", "cpu" in before and "cpu" not in shown(), (before, shown()))
 V.pick.set_selected(allk); V.pick.changed.emit()
-lines = [s["name"] for s in V.trend.opt["series"]]
+trend_series = lambda view: [s for t in view.trends for s in t.opt.get("series", [])]
+lines = [s["name"] for s in trend_series(V)]
 measured = {display.check_name(c) for c in V.keys.values() if is_measurement(c, "fortinet")}
 check("Trends draws only the measurements", set(lines) <= measured and "CPU" in lines and not {"Disk Health", "Uptime", "Firmware"} & set(lines), lines)
 check("History and Trends start on the last 8 hours", V.range.describe() == "Last 8 hours" and abs((V.panels.start - (datetime.now() - timedelta(hours=8))).total_seconds()) < 60)
@@ -122,9 +123,36 @@ check("and on the History tab", V.range.isVisibleTo(V.tabs.widget(1)))
 old = datetime.now() - timedelta(days=40)
 V.range.set_dates(old, old + timedelta(days=1)); spin(30)
 check("History follows the range", V.panels.start == datetime.combine(old.date(), datetime.min.time()), V.panels.start)
-check("and Trends: nothing in that range", V.trend.opt.get("series") in (None, []) or not any(s.get("data") for s in V.trend.opt.get("series", [])), V.trend.opt)
+check("and Trends: nothing in that range", not any(s.get("data") for s in trend_series(V)), [t.opt for t in V.trends])
 V.range.set_hours(8); spin(30)
-check("back to recent: Trends draws again", any(s["name"] == "CPU" for s in V.trend.opt.get("series", [])))
+check("back to recent: Trends draws again", any(s["name"] == "CPU" for s in trend_series(V)))
+
+print("== Trends: a chart per scale")
+dev("tr", "fortinet")
+for i in range(3):
+    db.save_run([Result("tr", "cpu", "OK", "", numeric=10.0 + i), Result("tr", "memory", "OK", "", numeric=40.0 + i),
+                 Result("tr", "reachability", "OK", "", numeric=12.0 + i), Result("tr", "events", "OK", "", numeric=3.0 + i)])
+    time.sleep(1.05)
+T = DV.DeviceView(db.find_device("tr")); T.resize(900, 640); T.show(); spin(50)
+T.pick.set_selected(["CPU", "Memory", "Reachability", "Events"]); T.pick.changed.emit(); spin(30)
+groups = [[s["name"] for s in t.opt["series"] if s.get("type") == "line"] for t in T.trends]
+check("cpu, memory, reachability and events: three charts (percent, ms, count), not one",
+      sorted(groups) == [["CPU", "Memory"], ["Events"], ["Reachability"]], groups)
+marks = lambda: [str(t.opt).count("markLine") for t in T.trends]
+check("two checks on a chart: no limits", marks() == [0, 0, 0], marks())
+T.pick.set_selected(["CPU", "Reachability", "Events"]); T.pick.changed.emit(); spin(30)
+check("CPU alone on its chart has its limits; the charts without limits have none", marks() == [1, 0, 0], marks())
+
+print("== The picker lists shown names")
+dev("pk", "fortinet")
+db.save_run([Result("pk", c, "OK", "", numeric=n) for c, n in (("resources", 3.0), ("certificate", 30.0), ("certificate :443", 20.0),
+                                                                 ("certificates", 10.0), ("ha", 1.0), ("ha sync", 1.0), ("cpu", 12.0))])
+K = DV.DeviceView(db.find_device("pk")); K.show(); spin(50)
+check("one Certificates, one HA, no Resources", sorted(K.keys) == ["CPU", "Certificates", "HA"], list(K.keys))
+K.pick.set_selected(["Certificates", "HA"]); K.pick.changed.emit(); spin(30)
+panels = {p.kind: sorted(p.checks) for p in K.panels.panels}
+check("ticking them draws every certificate source and both HA checks", panels == {"certs": ["certificate", "certificate :443", "certificates"],
+      "ha": ["ha", "ha sync"]}, panels)
 
 print("== Vulnerabilities")
 tabs = [V.tabs.tabText(i) for i in range(V.tabs.count())]
