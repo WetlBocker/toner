@@ -185,7 +185,10 @@ class SnmpDriver(SnmpExtras, Driver):
         creds, port = snmp.credentials_for(self.dev)
         with snmp.Client(self.dev["host"], port, creds, timeout=min(self.opts["http_timeout"], 10), retries=1) as c:
             self.c = c
-            return self._if_states()
+            try:
+                return self._if_states()
+            finally:
+                self.c = None                                        # the client is closed now; interface_counters() must open its own
 
     def interfaces(self):
         return self.interfaces_row(self._if_states())
@@ -203,29 +206,34 @@ class SnmpDriver(SnmpExtras, Driver):
         errs = {self._label(i): int((number_of(inn.get(i), 0) or 0) + (number_of(out.get(i), 0) or 0)) for i in ifs}
         return self.error_counter_rows("interface errors", errs)
 
+    def _octets(self):
+        """The byte counters and speeds, walked once per run: bandwidth and wan usage both read them."""
+        if not hasattr(self, "_oct_cache"):
+            c = self.c
+            hc_in, hc_out = c.try_column(N["ifHCInOctets"]), c.try_column(N["ifHCOutOctets"])
+            if not hc_in:
+                hc_in, hc_out = c.try_column(N["ifInOctets"]), c.try_column(N["ifOutOctets"])
+            self._oct_cache = (hc_in, hc_out, c.try_column(N["ifHighSpeed"]), c.try_column(N["ifSpeed"]))
+        return self._oct_cache
+
     def interface_counters(self):
         if getattr(self, "c", None) is None:                         # asked outside a run (the Choose interfaces list): open our own client
             creds, port = snmp.credentials_for(self.dev)
             with snmp.Client(self.dev["host"], port, creds, timeout=min(self.opts["http_timeout"], 10), retries=1) as c:
                 self.c = c
-                return self.interface_counters()
-        c = self.c
-        hc_in, hc_out = c.try_column(N["ifHCInOctets"]), c.try_column(N["ifHCOutOctets"])
-        if not hc_in:
-            hc_in, hc_out = c.try_column(N["ifInOctets"]), c.try_column(N["ifOutOctets"])
-        high, low = c.try_column(N["ifHighSpeed"]), c.try_column(N["ifSpeed"])
+                try:
+                    return self.interface_counters()
+                finally:
+                    self.c = None
+        hc_in, hc_out, high, low = self._octets()
         return {self._label(i): (number_of(hc_in.get(i), 0) or 0, number_of(hc_out.get(i), 0) or 0,
                                  (number_of(high.get(i), 0) or 0) * 1e6 or (number_of(low.get(i), 0) or 0)) for i in self._real_ifs()}
 
     def bandwidth(self):
-        c = self.c
         ifs = self._up_ifs()
         if not ifs:
             return []
-        hc_in, hc_out = c.try_column(N["ifHCInOctets"]), c.try_column(N["ifHCOutOctets"])
-        if not hc_in:
-            hc_in, hc_out = c.try_column(N["ifInOctets"]), c.try_column(N["ifOutOctets"])
-        high, low = c.try_column(N["ifHighSpeed"]), c.try_column(N["ifSpeed"])
+        hc_in, hc_out, high, low = self._octets()
         elapsed = self.delta("bw:t", time.time())
         worst = None
         for i in ifs:

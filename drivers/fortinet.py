@@ -103,8 +103,10 @@ class FortinetDriver(Driver):
                            items=[self.item(n, numeric=float(d), data={"expires": w, "where": "store"}) for n, d, w in found])
 
     def _physical(self):
-        ifs = self._get("system/interface?scope=global")
-        return {n: i for n, i in ifs.items() if str(i.get("type", "physical")).lower() == "physical"}
+        if not hasattr(self, "_phys"):                               # read once per run: interfaces and wan usage both use it
+            ifs = self._get("system/interface?scope=global")
+            self._phys = {n: i for n, i in ifs.items() if str(i.get("type", "physical")).lower() == "physical"}
+        return self._phys
 
     @staticmethod
     def _if_state(i):

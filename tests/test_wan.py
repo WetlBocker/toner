@@ -66,6 +66,54 @@ try:
 except NotImplementedError:
     check("a driver without counters says so", True)
 
+print("== one read per link")
+from core import snmp
+from drivers import DRIVERS
+from pysnmp.proto.rfc1902 import Integer32, Gauge32, OctetString, Counter64
+N = snmp.NAMES
+def col(root, values): return {f"{root}.{i}": v for i, v in values.items()}
+DATA = {}
+DATA.update(col(N["ifDescr"], {1: OctetString("Gi0/1")})); DATA.update(col(N["ifType"], {1: Integer32(6)}))
+DATA.update(col(N["ifAdminStatus"], {1: Integer32(1)})); DATA.update(col(N["ifOperStatus"], {1: Integer32(1)}))
+DATA.update(col(N["ifHighSpeed"], {1: Gauge32(1000)}))
+DATA.update(col(N["ifHCInOctets"], {1: Counter64(5)})); DATA.update(col(N["ifHCOutOctets"], {1: Counter64(7)}))
+DATA[N["sysDescr"] + ".0"] = OctetString("x"); DATA[N["sysObjectID"] + ".0"] = OctetString("1.3"); DATA[N["sysName"] + ".0"] = OctetString("sw")
+DATA[N["sysUpTime"] + ".0"] = Gauge32(100)
+walks = []
+class FakeClient:
+    closed = False
+    def __init__(self, *a, **k): FakeClient.opened = getattr(FakeClient, "opened", 0) + 1
+    def __enter__(self): return self
+    def __exit__(self, *a): self.closed = True; return False
+    def get(self, *oids): return {o: DATA[o] for o in oids if o in DATA}
+    def column(self, root):
+        assert not self.closed, "walked on a closed client"
+        walks.append(root)
+        return {o[len(root) + 1:]: v for o, v in DATA.items() if o.startswith(root + ".")}
+    try_column = column
+snmp.Client = FakeClient
+snmp.credentials_for = lambda dev: (snmp.Credentials(community="public"), 161)
+dev = {"name": "sw-wan", "vendor": "snmp", "host": "10.0.0.1", "checkopts": {"wan": {"Gi0/1": None}}}
+drv = DRIVERS["snmp"](dev, TH, {**db.runtime_options()})
+rows = {r.check: r for r in drv.run()}
+check("bandwidth and wan usage both ran", "bandwidth" in rows and "wan usage" in rows, list(rows))
+check("the byte counters and speeds are walked once for both", walks.count(N["ifHCInOctets"]) == 1 and walks.count(N["ifHighSpeed"]) == 1, walks)
+got = ifaces.listing({"name": "sw2", "vendor": "snmp", "host": "10.0.0.1"})
+check("Choose interfaces gets the port speed through the real listing path", got == [("Gi0/1", "Up", 1e9)], got)
+
+import drivers.fortinet as FG
+reads = []
+class Resp:
+    status_code = 200
+    def raise_for_status(self): pass
+    def json(self): return {"results": {"wan1": {"type": "physical", "link": True, "rx_bytes": 11, "tx_bytes": 22, "speed": 1000},
+                                         "dmz": {"type": "physical", "link": True}, "ssl.root": {"type": "tunnel", "rx_bytes": 1}}}
+FG.requests.get = lambda url, *a, **k: (reads.append(url), Resp())[1]
+fg = FG.FortinetDriver({"name": "fw", "vendor": "fortinet", "host": "10.0.0.1", "password": "T"}, TH, {**db.runtime_options()})
+fg.interfaces()
+check("Fortinet counters: bytes and speed (Mbps to bps), tunnels and ports without counters left out", fg.interface_counters() == {"wan1": (11, 22, 1e9)}, fg.interface_counters())
+check("and the interface list is read once for the interfaces check and wan usage", len(reads) == 1, reads)
+
 print("== the picker")
 LIST = [("wan1", "Up", 1e9), ("lan", "Up", 100e6), ("old", "Down")]
 pk = InterfacePicker(LIST, [], wan={"wan1": 300})

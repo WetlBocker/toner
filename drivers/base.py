@@ -170,15 +170,15 @@ class Driver:
                 continue
             bps = max(din, dout) * 8 / elapsed
             pct, t = bps / avail * 100, self.th["wan_usage"]
-            items.append(self.item(name, numeric=pct, status=grade(pct, t["warn"], t["fail"]), text=f"{bps / 1e6:.1f} Mbps",
-                                   data={"in_bps": din * 8 / elapsed, "out_bps": dout * 8 / elapsed, "available_bps": avail}))
+            items.append(self.item(name, numeric=pct, status=grade(pct, t["warn"], t["fail"]), data={"in_bps": din * 8 / elapsed, "out_bps": dout * 8 / elapsed, "available_bps": avail}))
             if worst is None or pct > worst[0]:
                 worst = (pct, name, bps)
         if worst is None:
             return self.result("wan usage", OK, "baseline set", "rates are reported from the next run")
+        from core import snmp
         t = self.th["wan_usage"]
         return self.result("wan usage", grade(worst[0], t["warn"], t["fail"]), f"{worst[0]:.0f}%",
-                           f"busiest: {worst[1]} at {worst[2] / 1e6:.1f} Mbps", numeric=float(worst[0]), items=items)
+                           f"busiest: {worst[1]} at {snmp.fmt_bps(worst[2])}", numeric=float(worst[0]), items=items)
 
     def error_counter_rows(self, check, errs):
         """Row for cumulative error counters {name: count}: lifetime total, or only what is new since last run."""
