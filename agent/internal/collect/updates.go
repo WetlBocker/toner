@@ -36,10 +36,20 @@ var pendingCache struct {
 	sync.Mutex
 	list     []report.Update // nil: none read yet
 	searched time.Time
+	patched  string // r.Patched when the list was read: a change means an install since
 }
 
 // searchAgain says whether to run the cached search: when there is no list yet, when Windows' last search date is unknown, or
-// when Windows searched after the list was read.
-func searchAgain(have []report.Update, haveSearched, lastSearch time.Time) bool {
-	return have == nil || lastSearch.IsZero() || lastSearch.After(haveSearched)
+// when Windows searched after the list was read, or when the newest install date differs from the one the list was read at (an
+// update installed since Windows' last search would otherwise stay listed as pending).
+func searchAgain(have []report.Update, haveSearched, lastSearch time.Time, havePatched, patched string) bool {
+	return have == nil || lastSearch.IsZero() || lastSearch.After(haveSearched) || patched != havePatched
+}
+
+// updatesUnfinished marks a report whose update step was skipped (out of time) or panicked: updates_error says so, and
+// PendingUpdates stays nil unless the step had already set it.
+func updatesUnfinished(r *report.Report) {
+	if r.PendingUpdates == nil {
+		r.UpdatesError = true
+	}
 }

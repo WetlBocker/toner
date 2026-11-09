@@ -182,13 +182,13 @@ func winPendingUpdates(r *report.Report) error {
 	searched := lastUpdateSearch()
 	pendingCache.Lock()
 	defer pendingCache.Unlock()
-	if searchAgain(pendingCache.list, pendingCache.searched, searched) {
+	if searchAgain(pendingCache.list, pendingCache.searched, searched, pendingCache.patched, r.Patched) {
 		list, err := searchPending()
 		if err != nil {
 			r.UpdatesError = true
 			return err
 		}
-		pendingCache.list, pendingCache.searched = list, searched
+		pendingCache.list, pendingCache.searched, pendingCache.patched = list, searched, r.Patched
 	}
 	out := append([]report.Update{}, pendingCache.list...)
 	r.PendingUpdates = &out

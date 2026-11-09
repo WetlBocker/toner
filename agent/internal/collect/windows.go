@@ -33,11 +33,17 @@ func collectPlatform(ctx context.Context, r *report.Report, opts Options) {
 			return
 		}
 		if ctx.Err() != nil {
+			if name == "updates" {
+				updatesUnfinished(r)
+			}
 			return
 		}
 		defer func() {
 			if p := recover(); p != nil {
 				note(r, name, fmt.Errorf("%v", p))
+				if name == "updates" {
+					updatesUnfinished(r)
+				}
 			}
 		}()
 		note(r, name, fn())
