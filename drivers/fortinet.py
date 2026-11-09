@@ -99,7 +99,8 @@ class FortinetDriver(Driver):
             return []
         name, days = min(found, key=lambda x: x[1])
         t = self.th["cert_days"]
-        return self.result("certificates", grade_low(days, t["warn"], t["fail"]), f"{days:.0f} days" if days >= 0 else "expired", name, numeric=float(days))
+        return self.result("certificates", grade_low(days, t["warn"], t["fail"]), f"{days:.0f} days" if days >= 0 else "expired", name, numeric=float(days),
+                           items=[self.item(n, numeric=float(d), data={"expires": "", "where": "store"}) for n, d in found])
 
     def _physical(self):
         ifs = self._get("system/interface?scope=global")

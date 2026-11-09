@@ -101,7 +101,7 @@ class SnmpDriver(SnmpExtras, Driver):
         c = self.c
         base = N["hrStorageType"][:-2]
         types, descr, unit, size, used = (c.try_column(f"{base}.{i}") for i in (2, 3, 4, 5, 6))
-        worst = None
+        worst, disks = None, []
         for i, t in types.items():
             if str(t) != HR_DISK and text_of(t) != "hrStorageFixedDisk":
                 continue
@@ -109,13 +109,15 @@ class SnmpDriver(SnmpExtras, Driver):
             if not s or un is None:
                 continue
             pct = un / s * 100
+            unit_b = number_of(unit.get(i), 1) or 1
+            disks.append(self.item(text_of(descr.get(i, i)), numeric=float(pct), data={"used": un * unit_b, "total": s * unit_b}))
             if worst is None or pct > worst[0]:
                 worst = (pct, text_of(descr.get(i, i)))
         if worst is None:
             return []
         t = self.th["disk"]
         return self.result("storage", grade(worst[0], t["warn"], t["fail"]), f"{worst[0]:.0f}%", worst[1],
-                           numeric=float(worst[0]))
+                           numeric=float(worst[0]), items=disks)
 
     # ---------------------------------------------------------------- uptime / temperature
     def uptime(self):

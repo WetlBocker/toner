@@ -12,7 +12,8 @@ o = K.over_time_kind
 row = lambda **k: {"numeric": None, "value": "", "status": "OK", **k}
 check("disk health", o("disk health") == "heatmap")
 check("disks gauges, truenas heatmap", o("disks") == "gauges" and o("disks", vendor="truenas") == "heatmap")
-check("disk names", {o(c) for c in ("disk", "storage", "flash", "log disk")} == {"gauges"})
+check("disk names", {o(c) for c in ("disk", "storage", "flash", "log disk", "pool space", "datasets")} == {"gauges"})
+check("pool space and datasets: gauges over time, and across", {K.across_kind(c) for c in ("pool space", "datasets")} == {"gauges"})
 check("patches", o("patches", vendor="windows") == "wheel" and o("patches", vendor="ciscoise") == "table" and o("patches") == "table")
 check("config/uptime/ha/hidden", (o("config backup"), o("uptime"), o("ha"), o("ha sync"), o("resources")) == ("config", "uptime", "ha", "ha", "hidden"))
 check("certs", o("certificate :8443") == o("certificate") == o("certificates") == "certs")

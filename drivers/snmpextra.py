@@ -46,14 +46,16 @@ class SnmpExtras:
     # ---------------------------------------------------------------- fans, power supplies and sensors
     def environment(self):
         c = self.c
-        problems, total = [], 0
+        problems, total, comps = [], 0, []
         ops = c.try_column(ENT_SENSOR_STATUS)
         if ops:
             names, descr = c.try_column(ENT_NAME), c.try_column(ENT_DESCR)
             for i, v in ops.items():
                 total += 1
+                label = text_of(names.get(i)) or text_of(descr.get(i)) or 'sensor ' + i
+                comps.append(self.item(label, status=FAIL if number_of(v) == 3 else OK, text="not operating" if number_of(v) == 3 else "ok"))
                 if number_of(v) == 3:
-                    problems.append((FAIL, f"{text_of(names.get(i)) or text_of(descr.get(i)) or 'sensor ' + i}: not operating"))
+                    problems.append((FAIL, f"{label}: not operating"))
         for kind, root in CISCO_ENV:
             states = c.try_column(f"{root}.{3 if kind != 'temperature sensor' else 6}")
             if not states:
@@ -64,23 +66,26 @@ class SnmpExtras:
                 if state == "5":                                   # not present: an empty slot
                     continue
                 total += 1
+                level, word = CISCO_STATE.get(state, (OK, "ok"))
+                comps.append(self.item(text_of(descr.get(i)) or kind + ' ' + i, status=level, text=word))
                 if state in CISCO_STATE:
-                    level, word = CISCO_STATE[state]
                     problems.append((level, f"{text_of(descr.get(i)) or kind + ' ' + i}: {word}"))
         states = c.try_column(JNX_STATE)
         if states:
             descr = c.try_column(JNX_DESCR)
             for i, v in states.items():
                 total += 1
+                label = text_of(descr.get(i)) or 'component ' + i
+                comps.append(self.item(label, status=FAIL if number_of(v) == 6 else OK, text="down" if number_of(v) == 6 else "ok"))
                 if number_of(v) == 6:
-                    problems.append((FAIL, f"{text_of(descr.get(i)) or 'component ' + i}: down"))
+                    problems.append((FAIL, f"{label}: down"))
         if not total:
             return []
         status = _worst(problems)
         if not problems:
-            return self.result("environment", OK, f"{total} ok", "fans, power supplies and sensors", numeric=0.0)
+            return self.result("environment", OK, f"{total} ok", "fans, power supplies and sensors", numeric=0.0, items=comps)
         shown = "; ".join(m for _, m in problems[:4]) + (f"; and {len(problems) - 4} more" if len(problems) > 4 else "")
-        return self.result("environment", status, f"{len(problems)} of {total} not ok", shown, numeric=float(len(problems)))
+        return self.result("environment", status, f"{len(problems)} of {total} not ok", shown, numeric=float(len(problems)), items=comps)
 
     # ---------------------------------------------------------------- load average (Linux, BSD and anything running net-snmp)
     def load(self):

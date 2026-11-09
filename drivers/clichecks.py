@@ -15,10 +15,11 @@ _EMPTY = re.compile(r"\b(not present|absent|not installed|unsupported|n/a|not co
 _TITLE = re.compile(r"^\s*(?:[A-Za-z]+ ){0,2}(fans?|power supply|power supplies|temperatures?|cooling|sensors?|thermal)\s*:?\s*$", re.I)
 
 
-def scan_environment(text):
+def scan_environment(text, parts=None):
     """Fans, power supplies and temperature sensors in the output of an environment command: (lines understood, [(level, line)] with a problem).
     None when nothing in the text looks like a fan, power supply or sensor with a status. A table under a heading such as 'Fan:' counts
-    row by row (its rows may not name the part); an empty power-supply bay is not a fault."""
+    row by row (its rows may not name the part); an empty power-supply bay is not a fault.
+    A list passed as `parts` is filled with (name, status, text) for every part understood, the good ones too."""
     seen, problems, in_table = 0, [], False
     for raw in (text or "").splitlines():
         line = " ".join(raw.split())
@@ -42,25 +43,35 @@ def scan_environment(text):
             problems.append((WARN, line[:90]))
         elif good:
             seen += 1
+        else:
+            continue
+        if parts is not None:
+            parts.append((line[:90], problems[-1][0] if (bad or (minor and not good)) else OK, (bad or minor or good).group(0)))
     return (seen, problems) if seen else None
 
 
-def deep_status(obj, path=""):
-    """Walk parsed JSON (Arista's 'show ... | json') and list every 'status' / 'state' that is not a good one: [(level, 'path: value')]."""
+def deep_status(obj, path="", parts=None):
+    """Walk parsed JSON (Arista's 'show ... | json') and list every 'status' / 'state' that is not a good one: [(level, 'path: value')].
+    A list passed as `parts` is filled with (name, status, text) for every state read, the good ones too."""
     found = []
     if isinstance(obj, dict):
         for k, v in obj.items():
             if isinstance(v, (dict, list)):
-                found += deep_status(v, f"{path}{k}/")
+                found += deep_status(v, f"{path}{k}/", parts)
             elif str(k).lower() in ("status", "state", "systemstatus", "powerstatus", "operstatus") and isinstance(v, str):
                 low = v.lower()
-                if low in ("ok", "powerok", "coolingok", "temperatureok", "normal", "good", "up", "present", "active", "ready", "online", "poweredon", "on", "") \
-                        or "ok" == low[-2:] or low.startswith(("absent", "notpresent", "notinstalled", "unknown")):
+                absent = low.startswith(("absent", "notpresent", "notinstalled", "unknown"))
+                good = low in ("ok", "powerok", "coolingok", "temperatureok", "normal", "good", "up", "present", "active", "ready", "online", "poweredon", "on", "") \
+                    or "ok" == low[-2:]
+                level = OK if good else FAIL if re.search(r"fail|critical|shutdown|bad|notok|fault|over|high|loss", low) else WARN
+                if parts is not None and not absent and low:
+                    parts.append((path.rstrip("/") or str(k), level, v))
+                if good or absent:
                     continue
-                found.append((FAIL if re.search(r"fail|critical|shutdown|bad|notok|fault|over|high|loss", low) else WARN, f"{path}{k}: {v}"))
+                found.append((level, f"{path}{k}: {v}"))
     elif isinstance(obj, list):
         for i, v in enumerate(obj):
-            found += deep_status(v, f"{path}{i}/")
+            found += deep_status(v, f"{path}{i}/", parts)
     return found
 
 

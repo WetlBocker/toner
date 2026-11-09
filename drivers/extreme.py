@@ -105,5 +105,9 @@ class ExtremeDriver(CliRows, SshDriver):
             return []
         bad = [f"fan: {s}" for s in fans if re.search(r"fail|not operational|down", s, re.I)] + \
               [f"power supply: {s}" for s in psus if re.search(r"fail|off", s, re.I)]
+        comps = [self.item(f"{kind} {i}", text=s, status=FAIL if re.search(r"fail", s, re.I) else WARN if re.search(bad_re, s, re.I) else OK)
+                 for kind, states, bad_re in (("fan", fans, r"not operational|down"), ("power supply", psus, r"off"))
+                 for i, s in enumerate(states, 1) if not re.search(r"absent|empty|not present", s, re.I)]
         return self.result("environment", FAIL if any("fail" in b.lower() for b in bad) else WARN if bad else OK, "ok" if not bad else f"{len(bad)} not ok",
-                           "; ".join(bad[:4]) or f"{len(fans)} fan(s), {len(psus)} power suppl{'y' if len(psus) == 1 else 'ies'}", numeric=float(len(bad)))
+                           "; ".join(bad[:4]) or f"{len(fans)} fan(s), {len(psus)} power suppl{'y' if len(psus) == 1 else 'ies'}", numeric=float(len(bad)),
+                           items=comps)

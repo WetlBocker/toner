@@ -79,14 +79,15 @@ class WindowsDriver(Driver):
         rows = []
         for d in self.report.get("disks") or []:
             if d.get("size"):
-                rows.append((d["drive"], (1 - d["free"] / d["size"]) * 100, d["free"]))
+                rows.append((d["drive"], (1 - d["free"] / d["size"]) * 100, d["free"], d["size"]))
         if not rows:
             return []
         worst = max(rows, key=lambda r: r[1])
         t = self.th["disk"]
-        text = ", ".join(f"{drive} {pct:.0f}% ({winmon._fmt_bytes(free)} free)" for drive, pct, free in rows[:8])
+        text = ", ".join(f"{drive} {pct:.0f}% ({winmon._fmt_bytes(free)} free)" for drive, pct, free, _size in rows[:8])
         return self.result("disks", grade(worst[1], t["warn"], t["fail"]), f"{worst[1]:.0f}%",
-                           f"fullest {worst[0]}; {text}", numeric=float(worst[1]))
+                           f"fullest {worst[0]}; {text}", numeric=float(worst[1]),
+                           items=[self.item(drive, numeric=float(pct), data={"used": size - free, "total": size}) for drive, pct, free, size in rows])
 
     def uptime(self):
         hours = self.report.get("uptime_h")
@@ -134,12 +135,13 @@ class WindowsDriver(Driver):
         if certs is None:
             return []
         if not certs:
-            return self.result("certificates", OK, "none expiring", "")
+            return self.result("certificates", OK, "none expiring", "", items=[])
         worst = min(certs, key=lambda c: c.get("days", 9999))
         t = self.th["cert_days"]
         text = "; ".join(f"{c['subject'][:50]} ({c['days']} d)" for c in sorted(certs, key=lambda c: c["days"])[:4])
         return self.result("certificates", grade_low(worst["days"], t["warn"], t["fail"]),
-                           f"{worst['days']} days" if worst["days"] >= 0 else "expired", text, numeric=float(worst["days"]))
+                           f"{worst['days']} days" if worst["days"] >= 0 else "expired", text, numeric=float(worst["days"]),
+                           items=[self.item(c["subject"], numeric=float(c["days"]), data={"expires": c.get("expires") or "", "where": "store"}) for c in certs])
 
     def changes(self):
         """What changed since the last check: installed software, local administrators, listening ports. The first check

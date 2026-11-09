@@ -27,19 +27,20 @@ class AristaDriver(CliRows, SshDriver):
 
     # ---------------------------------------------------------------- health and redundancy
     def environment(self, c):
-        found, seen = [], 0
+        found, seen, parts = [], 0, []
         for part in ("cooling", "power"):
             try:
                 data = json.loads(self.cmd(c, f"show system environment {part} | json"))
             except ValueError:
                 continue
             seen += 1
-            found += clichecks.deep_status(data)
+            found += clichecks.deep_status(data, parts=parts)
         if not seen:
             return []
         if not found:
-            return self.result("environment", OK, "ok", "cooling and power", numeric=0.0)
-        return self.result("environment", FAIL if any(lv == FAIL for lv, _ in found) else WARN, f"{len(found)} not ok", "; ".join(m for _, m in found[:3]), numeric=float(len(found)))
+            return self.result("environment", OK, "ok", "cooling and power", numeric=0.0, items=self._parts(parts))
+        return self.result("environment", FAIL if any(lv == FAIL for lv, _ in found) else WARN, f"{len(found)} not ok", "; ".join(m for _, m in found[:3]), numeric=float(len(found)),
+                           items=self._parts(parts))
 
     def mlag(self, c):
         try:

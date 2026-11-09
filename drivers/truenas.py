@@ -45,7 +45,10 @@ class TruenasDriver(RestApi):
         th = self.th["temperature"]
         st = FAIL if failed else (grade(hottest, th["warn"], th["fail"]) if hottest is not None else OK)
         msg = ("SMART failed: " + ", ".join(failed[:5])) if failed else (f"hottest {hot_name} at {hottest:.0f}C" if hottest is not None else "")
-        return self.result("disks", st, f"{len(disks)} disk(s)", msg, numeric=hottest)
+        bad = {x.lower() for x in failed}
+        items = [self.item(n, numeric=float(temps[n]) if isinstance(temps.get(n), (int, float)) else None,
+                           status=FAIL if n.lower() in bad else OK, text="SMART failed" if n.lower() in bad else "") for n in names]
+        return self.result("disks", st, f"{len(disks)} disk(s)", msg, numeric=hottest, items=items)
 
     def _temperatures(self, names):
         """{disk: C} from the temperatures call (SCALE and newer CORE); nothing when the API lacks it."""
@@ -84,7 +87,8 @@ class TruenasDriver(RestApi):
         rows.sort(key=lambda r: -r[1])
         full = [f"{n} ({p:.0f}%)" for n, p, _u, _t in rows if grade(p, t["warn"], t["fail"]) != OK]
         worst = grade(rows[0][1], t["warn"], t["fail"])
-        return self.result("datasets", worst, f"{len(rows)} dataset(s)", "; ".join(full[:5]) if full else f"fullest {rows[0][0]} at {rows[0][1]:.0f}%", numeric=rows[0][1])
+        return self.result("datasets", worst, f"{len(rows)} dataset(s)", "; ".join(full[:5]) if full else f"fullest {rows[0][0]} at {rows[0][1]:.0f}%", numeric=rows[0][1],
+                           items=[self.item(n, numeric=p, data={"used": u, "total": tot}) for n, p, u, tot in rows])
 
     @staticmethod
     def _flatten(sets):
@@ -122,7 +126,9 @@ class TruenasDriver(RestApi):
             size, used = p.get("size"), p.get("allocated")
             if size and used is not None:
                 pct = float(used) / float(size) * 100
-                rows.append(self.result("pool space", grade(pct, t["warn"], t["fail"]), f"{pct:.0f}%", f"{float(size) / 2 ** 40:.1f} TiB pool", numeric=pct))
+                st = grade(pct, t["warn"], t["fail"])
+                rows.append(self.result("pool space", st, f"{pct:.0f}%", f"{float(size) / 2 ** 40:.1f} TiB pool", numeric=pct,
+                                        items=[self.item(p.get("name", "pool"), numeric=pct, status=st, data={"used": float(used), "total": float(size)})]))
             for r in rows:
                 r.device = label
             out += rows

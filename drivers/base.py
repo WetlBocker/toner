@@ -138,7 +138,8 @@ class Driver:
         if missing:
             parts.append("not found on the device: " + ", ".join(missing[:5]))
         status = FAIL if down else WARN if (bad or missing) else OK
-        return self.result("interfaces", status, f"{len(up)}/{len(counted)} up", "; ".join(parts), numeric=float(len(up)))
+        return self.result("interfaces", status, f"{len(up)}/{len(counted)} up", "; ".join(parts), numeric=float(len(up)),
+                           items=[self.item(n, status=FAIL if s == "down" else WARN if s == "errdisabled" else OK, text=s) for n, s in counted])
 
     def list_interfaces(self):
         """[(name, state)] of every interface on the device, for choosing which ones are checked. Drivers with interfaces implement it."""
@@ -151,10 +152,12 @@ class Driver:
             return None
         if not self.delta_mode:
             bad = [n for n, e in errs.items() if e > 0]
-            return self.result(check, WARN if bad else OK, len(bad), ", ".join(bad[:5]), numeric=float(len(bad)))
-        grew, first = {}, False
+            return self.result(check, WARN if bad else OK, len(bad), ", ".join(bad[:5]), numeric=float(len(bad)),
+                               items=[self.item(n, numeric=float(e)) for n, e in errs.items()])
+        grew, first, graded = {}, False, []
         for name, e in errs.items():
             d = self.delta(f"err:{name}", e)
+            graded.append(self.item(name, numeric=None if d is None else float(max(d, 0))))
             if d is None:
                 first = True
             elif d > 0:
@@ -162,7 +165,12 @@ class Driver:
         if first and not grew and not self._baseline:
             return self.result(check, OK, "baseline set", "counters recorded; changes are reported from the next run")
         return self.result(check, WARN if grew else OK, len(grew),
-                           ", ".join(f"{n} (+{d:.0f})" for n, d in list(grew.items())[:5]), numeric=float(len(grew)))
+                           ", ".join(f"{n} (+{d:.0f})" for n, d in list(grew.items())[:5]), numeric=float(len(grew)), items=graded)
+
+    @staticmethod
+    def item(name, numeric=None, status=None, text="", data=None):
+        """One per-component detail for a row's items: a drive, certificate, sensor or interface."""
+        return {"name": str(name), "numeric": numeric, "status": status, "text": text, "data": data or {}}
 
     def result(self, check, status, value="", message="", numeric=None, items=None):
         if self.on_check is not None:

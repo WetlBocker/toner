@@ -22,7 +22,7 @@ def _names(kind, *names):
 OVER_TIME = {
     **_names("line", "cpu", "memory", "temperature", "sessions", "load", "response time", "reachability", "clock", "changes",
              "interface errors", "wan usage"),
-    **_names("gauges", "disks", "disk", "storage", "flash", "log disk"),
+    **_names("gauges", "disks", "disk", "storage", "flash", "log disk", "pool space", "datasets"),
     **_names("heatmap", "disk health", "pending reboot", "services", "tasks", "environment", "interfaces", "vpn", "ipsec tunnels"),
     **_names("table", "firewall", "last commit", "licenses", "panorama", "fortiaps", "fortiswitches", "antivirus", "firmware"),
     "certificates": "certs", "patches": "table", "config backup": "config", "uptime": "uptime", "ha": "ha", "resources": "hidden",
