@@ -7,7 +7,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from PySide6.QtCore import QTimer, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence, QPainter, QPixmap, QShortcut
+from PySide6.QtGui import QAction, QIcon, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import QApplication, QMainWindow, QMenu, QMessageBox, QSplitter, QSystemTrayIcon, QWidget
 from core import agents, audit, checks, db, demarc, dircheck, display, legacyssh, notify, paths, perms, reports, roles, session, sessionlog, sessions, trends, trust, tunnel, updates
 from ui import theme
@@ -113,28 +113,6 @@ def restart():
     from PySide6.QtCore import QProcess
     args = sys.argv[1:] if getattr(sys, "frozen", False) else sys.argv
     QProcess.startDetached(os.environ.get("APPIMAGE") or sys.executable, [a for a in args if a != "--minimized"])
-
-
-class _PageSlide(QWidget):
-    """While the Assistant panel slides: the page as it was, turning into the page as it will be (mix 0 to 1), shown up to the panel's
-    edge (shown, in px), and the page colour beyond it, behind the panel's picture."""
-
-    def __init__(self, parent, before):
-        super().__init__(parent)
-        self.setObjectName("assistantPage")
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self.before, self.after, self.shown, self.mix = before, None, 0, 0.0
-
-    def paintEvent(self, _e):
-        from ui import theme
-        p = QPainter(self)
-        p.fillRect(self.rect(), QColor((theme.current() or {}).get("bg", "#000000")))
-        p.setClipRect(0, 0, self.shown, self.height())
-        p.drawPixmap(0, 0, self.before)
-        if self.after is not None and self.mix > 0:
-            p.setOpacity(self.mix)
-            p.drawPixmap(0, 0, self.after)
-        p.end()
 
 
 class Main(QMainWindow):
@@ -269,7 +247,7 @@ class Main(QMainWindow):
         self.ai_button = SideButton(self)                  # the round button at the right edge, on every section, while connected (a child of
         self.ai_button.setAutoFillBackground(True)         # the window, not of the splitter, which would make it a pane)
         self.ai_button.hide()
-        self.ai_button.clicked.connect(lambda: self.show_assistant(not self.assistant.isVisible()))
+        self.ai_button.clicked.connect(lambda: self.show_assistant(not self.assistant_open()))
         self.ai_button.moved.connect(self._ai_button_moved)
         self.ai_state_changed.connect(self._ai_state)
         AI.add_listener(lambda on, text: self.ai_state_changed.emit(on, text))
@@ -383,7 +361,7 @@ class Main(QMainWindow):
         self.ai_button.set_provider(AI.provider_id())
         connected = bool(connected) and perms.allowed("ai")
         self.ai_button.setVisible(connected)
-        if not connected and self.assistant.isVisible():
+        if not connected and self.assistant_open():
             self.show_assistant(False)
         self.assistant.show_model()
         self.automation.assistant_page.refresh()
@@ -408,28 +386,30 @@ class Main(QMainWindow):
         self.ai_button.setChecked(on)
         self._place_ai_button()
 
+    def assistant_open(self):
+        """Is the panel open, or on its way open? (While it slides the real panel is hidden; this is where it is going.)"""
+        target = getattr(self, "_panel_target", None)
+        return self.assistant.isVisible() if target is None else target
+
     def _slide_panel(self, on, width):
-        """The panel slides in from the right edge (or out), fading, ease-out, no bounce, and the page moves with it: its right edge
-        follows the panel while its picture before turns into its picture after. The splitter is set once, at the start, under a cover
-        (the page laid out once, not on every frame: that stuttered). With motion off it all happens at once."""
-        from PySide6.QtCore import QEasingCurve, QEvent, QPoint
-        from PySide6.QtWidgets import QGraphicsOpacityEffect, QLabel
+        """The panel slides in from the right edge (or out), ease-out, no bounce, no fade, and the page narrows (or widens) with it frame
+        by frame, as it does beside the sidebar. While it moves the page stands alone in the splitter, its contents held back by a right
+        margin the panel's width so far, and a picture of the panel rides over that margin; the real panel takes its place at the end.
+        (A margin, not a maximum width: the splitter, and the window's body with it, would shrink to that.) With motion off it all happens
+        at once."""
+        from PySide6.QtCore import QEasingCurve, QPoint
+        from PySide6.QtWidgets import QLabel
         from ui import motion
         total = sum(self.body.sizes())
         least = self.assistant.minimumWidth()
+        margins = self.tabs.contentsMargins()
         if on:
             width = min(width, max(least, total - 300))                 # the page keeps at least 300 px (a remembered width may not fit)
-        animated = motion.enabled() and self.isVisible()
-        if animated:
-            if on:
-                self.assistant.resize(width, self.body.height())        # laid out at its full width once, then photographed
-                self.assistant.layout().activate()
-            else:
-                width = self.assistant.width()
-            shot = self.assistant.grab()
-            before = self.tabs.grab()
+        else:
+            width = self.assistant.width()
 
         def settle():
+            self.tabs.setContentsMargins(margins)                        # the page's own room back
             self.assistant.setMinimumWidth(0)                           # (the splitter may take it to nothing)
             if on:
                 self.assistant.setVisible(True)
@@ -441,44 +421,41 @@ class Main(QMainWindow):
             self._place_ai_button()
             if on:
                 self.assistant.input.setFocus()
-        if not animated:
+        if not (motion.enabled() and self.isVisible()):
             settle()
             return
-        top = self.body.mapTo(self, QPoint(0, 0))
-        edge = top.x() + self.body.width()
-        page = _PageSlide(self, before)                                 # over the whole body: the page's pictures, the page colour beside them
-        page.setGeometry(top.x(), top.y(), self.body.width(), self.body.height())
-        page.shown = total - (width if not on else 0)
-        page.show()
+        if on:
+            self.assistant.resize(width, self.body.height())            # laid out at its full width once, then photographed
+            self.assistant.layout().activate()
+        shot = self.assistant.grab()
+        self.assistant.setVisible(False)                                # the picture stands in for it until the end
+        top, full = self.body.mapTo(self, QPoint(0, 0)), self.body.width()
+        edge = top.x() + full
         cover = QLabel(self)                                            # a child of the window, not of the splitter (which would adopt it)
         cover.setObjectName("assistantSlide")
         cover.setPixmap(shot)
         cover.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        fade = QGraphicsOpacityEffect(cover)
-        cover.setGraphicsEffect(fade)
-        fade.setOpacity(0.0 if on else 1.0)
-        cover.setGeometry(edge - (width if not on else 0), top.y(), width, self.body.height())
+        cover.resize(width, self.body.height())
         cover.show()
-        self.ai_button.raise_()
-        settle()                                                        # under the covers: the real page and panel take their places now
-        QApplication.sendPostedEvents(None, QEvent.Type.LayoutRequest)
-        page.after = self.tabs.grab()
+        b = self.ai_button
+        shut_x, open_x = full - b.width() - 8, full - width - b.width() // 2
 
         def step(p):
             q = p if on else 1 - p                                      # q: how far in the panel is
-            cover.move(round(edge - width * q), top.y())
-            fade.setOpacity(q)
-            page.shown, page.mix = round(total - width * q), p
-            page.update()
+            shown = round(width * q)
+            self.tabs.setContentsMargins(margins.left(), margins.top(), margins.right() + shown, margins.bottom())
+            cover.move(edge - shown, top.y())
+            self._place_ai_button(round(shut_x + (open_x - shut_x) * q))
+        step(0.0)
 
         def done():
             if self._panel_finish is not done:
                 return
-            self._panel_slide = self._panel_finish = None
-            for w in (cover, page):
-                w.setParent(None)
-                w.deleteLater()
-        self._panel_finish = done
+            self._panel_slide = self._panel_finish = self._panel_target = None
+            cover.setParent(None)
+            cover.deleteLater()
+            settle()
+        self._panel_finish, self._panel_target = done, on
         self._panel_slide = motion.animate(self, self.PANEL_MS, step, curve=QEasingCurve.Type.OutCubic, on_done=done)
 
     def open_assistant_conversation(self, conv_id, org):
@@ -495,9 +472,9 @@ class Main(QMainWindow):
         db.set_setting("assistant_button", {"side": side, "y": round(y, 3)})
         self._place_ai_button()
 
-    def _place_ai_button(self):
+    def _place_ai_button(self, slide_x=None):
         """Pinned at a side edge of the window (the right by default) at the remembered height; at the panel's left edge while the
-        panel is open on that side."""
+        panel is open on that side. slide_x: where it rides while the panel slides."""
         from ui.assistant import button_place
         b = self.ai_button
         if b.dragging():
@@ -505,6 +482,8 @@ class Main(QMainWindow):
         side, frac = button_place()
         if side == "left":
             x = 8
+        elif slide_x is not None:
+            x = slide_x
         else:
             x = (self.assistant.x() - b.width() // 2) if self.assistant.isVisible() else (self.body.width() - b.width() - 8)
         y = int(round(frac * self.body.height() - b.height() / 2))

@@ -1,6 +1,6 @@
-# Run directly (python tests/test_assistant_motion.py). The Assistant panel's slide and fade: the splitter and the page are laid
-# out once or twice per transition (not on every frame), about 220 ms, nothing at all with motion off, and a quick open then
-# close ends closed with no picture of the panel left behind.
+# Run directly (python tests/test_assistant_motion.py). The Assistant panel's slide: the page narrows with it frame by frame (no
+# fade, no ghost picture of the page), about 220 ms, nothing at all with motion off, and a quick open then close ends closed
+# with no picture of the panel left behind.
 import os as _os, sys as _sys, tempfile as _tmp
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
@@ -53,28 +53,30 @@ def run(on, wait_ms):
 print("== motion on")
 motion.force("Lively")
 w.show_assistant(True); spin(500); w.show_assistant(False); spin(500)          # warm up (first show lays out lazily)
-def pages(): return [c for c in w.findChildren(QWidget) if c.objectName() == "assistantPage"]
-run(True, 60)
+from PySide6.QtCore import QPoint
+def page_edge(): return w.tabs.mapTo(w, QPoint(w.tabs.contentsRect().right() + 1, 0)).x()
+def page_w(): return w.tabs.contentsRect().width()
+def ghosts(): return [c for c in w.findChildren(QWidget) if c.objectName() == "assistantPage"]
 total = sum(w.body.sizes())
-pg = pages()
-check("opening: the panel's picture slides in, and the page moves with it: its right edge follows the panel, mid-way",
-      len(overlays()) == 1 and len(pg) == 1 and total - overlays()[0].width() < pg[0].shown < total
-      and abs(pg[0].x() + pg[0].shown - overlays()[0].x()) <= 1, (len(overlays()), len(pg), pg and pg[0].shown, overlays() and overlays()[0].x()))
-check("...the page's picture after the slide is ready, so it turns into it rather than jumping at the end", pg and pg[0].after is not None and 0 < pg[0].mix < 1,
-      pg and pg[0].mix)
+run(True, 40)
+first = page_w()
+check("opening: the panel's picture slides in and the real page's right edge meets it, mid-way",
+      len(overlays()) == 1 and total - overlays()[0].width() < first < total and abs(page_edge() - overlays()[0].x()) <= 2,
+      (len(overlays()), first, page_edge(), overlays() and overlays()[0].x()))
+check("...no fade and no second picture of the page (the ghost)", not ghosts() and all(o.graphicsEffect() is None for o in overlays()))
+spin(60)
+check("...the page narrows frame by frame, as beside the sidebar", page_w() < first, (first, page_w()))
 spin(500)
-check("opening: ends open, the pictures gone, sizes set once", w.assistant.isVisible() and not overlays() and not pages() and len(calls) <= 2
-      and w.body.sizes()[1] > 100, (calls, w.body.sizes()))
+check("opening: ends open, the picture gone, the page sized by the splitter again", w.assistant.isVisible() and not overlays() and w.body.sizes()[1] > 100
+      and w.tabs.contentsMargins().right() == 0 and sum(w.body.sizes()) >= total - 2, (calls, w.body.sizes(), w.tabs.contentsMargins().right()))
 w.show_assistant(False); spin(60)
-pg = pages()
-check("closing: the page follows the panel out too", len(pg) == 1 and len(overlays()) == 1 and abs(pg[0].x() + pg[0].shown - overlays()[0].x()) <= 1
-      and pg[0].shown < total, (len(pg), pg and pg[0].shown))
-spin(500); w.show_assistant(True); spin(500)
-w.show_assistant(False); spin(500)
-run(True, 600)
-check("opening: the page was laid out at most twice", counter.n <= 2, counter.n)
-run(False, 600)
-check("closing: ends closed, sizes set at most twice, page laid out at most twice, no picture left", not w.assistant.isVisible() and len(calls) <= 2 and counter.n <= 2 and not overlays(), (calls, counter.n))
+check("closing: the page widens after the panel's picture as it leaves", len(overlays()) == 1 and abs(page_edge() - overlays()[0].x()) <= 2
+      and page_w() < total, (page_edge(), overlays() and overlays()[0].x()))
+spin(500)
+check("closing: ends closed, no picture left, the page full width", not w.assistant.isVisible() and not overlays() and page_w() >= total and w.tabs.contentsMargins().right() == 0, page_w())
+w.show_assistant(True); spin(40)
+w.ai_button.click(); spin(600)
+check("the button pressed mid-way through opening closes it", not w.assistant.isVisible() and not overlays() and not w.assistant_open())
 check("the slide lasts 180 to 260 ms", 180 <= A.Main.PANEL_MS <= 260, A.Main.PANEL_MS)
 w.show_assistant(True); spin(40); w.show_assistant(False); spin(600)
 check("open then quickly close: closed, no picture left, no error", not w.assistant.isVisible() and not overlays() and not w.ai_button.isChecked())
