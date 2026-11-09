@@ -265,6 +265,39 @@ def interface_bytes(text):
     return {n: (c["in"], c["out"], c["bw"]) for n, c in out.items() if c["in"] is not None and c["out"] is not None}
 
 
+def _junos(node, key):
+    """A value from Junos JSON, where every field is a list of {'data': ...}: node[key][0]['data'], or None."""
+    try:
+        return node[key][0]["data"]
+    except (KeyError, IndexError, TypeError):
+        return None
+
+
+def _junos_speed(text):
+    """'1000mbps', '10Gbps', '100Mbps' in bits per second; 'Auto', 'Unlimited' or nothing: 0."""
+    m = re.match(r"\s*(\d+(?:\.\d+)?)\s*([kmg])bps", text or "", re.I)
+    return float(m.group(1)) * {"k": 1e3, "m": 1e6, "g": 1e9}[m.group(2).lower()] if m else 0.0
+
+
+def junos_interface_bytes(text):
+    """`show interfaces detail | display json` (the Junos API's get-interface-information): {name: (bytes in, bytes out, speed in bps)}
+    for each physical interface with traffic statistics. Anything before the JSON (a '{master}' line, a warning) is skipped."""
+    import json
+    start = re.search(r'\{\s*"', text or "")                        # the JSON, not a '{master}' or '{primary:node0}' prompt line
+    try:
+        doc = json.loads(text[start.start():]) if start else {}
+    except ValueError:
+        return {}
+    out = {}
+    for info in doc.get("interface-information") or []:
+        for phy in info.get("physical-interface") or []:
+            name, stats = _junos(phy, "name"), (phy.get("traffic-statistics") or [None])[0]
+            rx, tx = _junos(stats, "input-bytes"), _junos(stats, "output-bytes")
+            if name and str(rx or "").isdigit() and str(tx or "").isdigit():
+                out[name.strip()] = (int(rx), int(tx), _junos_speed(_junos(phy, "speed")))
+    return out
+
+
 def bgp_running(text):
     """`show ip bgp summary` (IOS, NX-OS) / `show bgp summary` (ASA): BGP is configured when it names its router identifier."""
     return bool(re.search(r"BGP router identifier", text or "", re.I))

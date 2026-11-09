@@ -157,6 +157,9 @@ w.set_vendor("windows")
 check("a device that cannot read traffic drops it", w.values() == {})
 
 print("== every network device")
+import xml.etree.ElementTree as ET
+real_op = DRIVERS["paloalto"]._op
+DRIVERS["paloalto"]._op = lambda self, cmd: ET.fromstring("<result/>")      # a firewall whose API names no counters: SNMP decides here
 NOSNMP = {"name": "pa-nosnmp", "vendor": "paloalto", "host": "10.0.0.9", "checkopts": {"wan": {"ethernet1/1": None}}}
 r = DRIVERS["paloalto"](NOSNMP, TH, {**db.runtime_options()}).wan_usage()
 check("WAN chosen but no SNMP set up: an N/A row that says how", r.status == "N/A" and r.value == "no traffic counters"
@@ -238,6 +241,57 @@ try:
 except B.NoCounters:
     check("NX-OS goes to SNMP (none set up here: says so)", conn.sent == [], conn.sent)
 cs._live = None
+
+print("== Palo Alto: the XML API")
+from drivers import apichecks
+COUNTERS = ET.fromstring("""<result><ifnet><ifnet><entry><name>ethernet1/1.10</name><ibytes>1</ibytes><obytes>2</obytes></entry></ifnet></ifnet>
+<hw><entry><name>ethernet1/1</name><ibytes>5000</ibytes><obytes>7000</obytes><port><rx-bytes>5000</rx-bytes></port></entry>
+<entry><name>ethernet1/2</name><ibytes>0</ibytes><obytes>0</obytes></entry></hw></result>""")
+IFALL = ET.fromstring("""<result><hw><entry><name>ethernet1/1</name><state>up</state><speed>1000</speed></entry>
+<entry><name>ethernet1/2</name><state>down</state><speed>ukn</speed></entry></hw><ifnet/></result>""")
+check("each port's hardware counters, with its speed from show interface all ('ukn': no speed)",
+      apichecks.pan_interface_bytes(COUNTERS, IFALL) == {"ethernet1/1": (5000, 7000, 1e9), "ethernet1/2": (0, 0, 0.0)},
+      apichecks.pan_interface_bytes(COUNTERS, IFALL))
+check("no hardware counters: the logical interfaces' ones", apichecks.pan_interface_bytes(ET.fromstring(
+      "<result><ifnet><ifnet><entry><name>ethernet1/3</name><ibytes>9</ibytes><obytes>8</obytes></entry></ifnet></ifnet></result>"))
+      == {"ethernet1/3": (9, 8, 0.0)})
+check("nothing readable: nothing", apichecks.pan_interface_bytes(ET.fromstring("<result/>")) == {} and apichecks.pan_interface_bytes(None) == {})
+asked = []
+def pan_op(self, cmd):
+    asked.append(cmd)
+    return COUNTERS if "<counter>" in cmd else IFALL
+DRIVERS["paloalto"]._op = pan_op
+try:
+    pa = DRIVERS["paloalto"]({**NOSNMP, "name": "pa-api"}, TH, {**db.runtime_options()})
+    first = pa.wan_usage()
+    check("a Palo Alto reads WAN traffic through its API, no SNMP needed", first.value == "baseline set" and pa.interface_counters()["ethernet1/1"] == (5000, 7000, 1e9), first)
+    pa.list_interfaces()
+    check("...and `show interface all` is asked once for the interfaces and the speeds", asked.count("<show><interface>all</interface></show>") == 1, asked)
+    DRIVERS["paloalto"]._op = lambda self, cmd: ET.fromstring("<result/>")
+    r = DRIVERS["paloalto"]({**NOSNMP, "name": "pa-none"}, TH, {**db.runtime_options()}).wan_usage()
+    check("a reply with no counters goes to SNMP, and without SNMP says so", r.status == "N/A" and r.value == "no traffic counters", r)
+finally:
+    DRIVERS["paloalto"]._op = real_op
+
+print("== Juniper: the Junos API's interface information")
+JUNOS = r"""{master}
+{"interface-information": [{"physical-interface": [
+  {"name": [{"data": "ge-0/0/0"}], "speed": [{"data": "1000mbps"}],
+   "traffic-statistics": [{"input-bytes": [{"data": "123456"}], "output-bytes": [{"data": "654321"}]}],
+   "logical-interface": [{"name": [{"data": "ge-0/0/0.0"}], "traffic-statistics": [{"input-bytes": [{"data": "1"}], "output-bytes": [{"data": "2"}]}]}]},
+  {"name": [{"data": "\nxe-0/0/1\n"}], "speed": [{"data": "10Gbps"}],
+   "traffic-statistics": [{"input-bytes": [{"data": "10"}], "output-bytes": [{"data": "20"}]}]},
+  {"name": [{"data": "lo0"}], "speed": [{"data": "Unlimited"}]}]}]}"""
+check("each physical interface's bytes and speed (not its logical units); a '{master}' line before the JSON is skipped",
+      clichecks.junos_interface_bytes(JUNOS) == {"ge-0/0/0": (123456, 654321, 1e9), "xe-0/0/1": (10, 20, 1e10)}, clichecks.junos_interface_bytes(JUNOS))
+check("older Junos without JSON: nothing (so SNMP)", clichecks.junos_interface_bytes("error: syntax error, expecting <command>: display") == {})
+jn = DRIVERS["juniper"]({"name": "mx", "vendor": "juniper", "host": "h", "checkopts": {"wan": {"ge-0/0/0": None}}}, TH, {**db.runtime_options()})
+conn = Conn(JUNOS)
+first = jn._wan_on(conn)
+check("a Juniper run reads it on its own connection", conn.sent == ["show interfaces detail | display json"] and first.value == "baseline set", (conn.sent, first))
+check("...as a check in its run", "wan usage" in [k for k, _f in jn.checks()] and DRIVERS["juniper"].wan_in_run)
+r = jn._wan_on(Conn("error: syntax error"))
+check("...and an older Junos without SNMP gets the N/A row", r.status == "N/A", r)
 
 print("== the hint")
 from ui import interfacepicker as IP

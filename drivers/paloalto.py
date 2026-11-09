@@ -156,8 +156,20 @@ class PaloAltoDriver(Driver):
             status, msgs = worse(status, WARN), msgs + [f"config {sync}"]
         return self.result("ha", status, f"{local} / peer {peer}", "; ".join(msgs))
 
+    def _if_all(self):
+        """`show interface all`, asked once per run: the interfaces check and the WAN port speeds both read it."""
+        if not hasattr(self, "_ifall"):
+            self._ifall = self._op("<show><interface>all</interface></show>")
+        return self._ifall
+
+    def interface_counters(self):
+        """Each port's byte counters through the XML API (`show counter interface all`), with its speed from `show interface all`;
+        a firewall that names none: by SNMP once it is set up (Driver.interface_counters)."""
+        found = apichecks.pan_interface_bytes(self._op("<show><counter><interface>all</interface></counter></show>"), self._if_all())
+        return found or super().interface_counters()
+
     def _if_states(self):
-        hw = self._op("<show><interface>all</interface></show>").findall("hw/entry")
+        hw = self._if_all().findall("hw/entry")
         if not hw:
             raise ValueError("no interfaces in the reply")
         return [(e.findtext("name") or "?", "up" if (e.findtext("state") or "").lower() == "up" else "down") for e in hw]

@@ -106,6 +106,27 @@ def fortinet_status_list(rows, name_keys=("name", "serial", "wtp-id", "switch-id
 
 
 # ---------------------------------------------------------------- Palo Alto
+def _speed_mbps(text):
+    """A PAN-OS port speed ('1000', '10000', 'ukn', '[n/a]') in bits per second, or 0 when it is not a number."""
+    try:
+        return float(text) * 1e6
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def pan_interface_bytes(counters, interfaces=None):
+    """`show counter interface all` (and `show interface all` for the speeds): {name: (bytes in, bytes out, port speed in bps)} for each
+    port in its hardware counters ('hw/entry' with 'ibytes' and 'obytes'); a reply without them falls back to the logical interfaces."""
+    speed = {e.findtext("name"): _speed_mbps(e.findtext("speed")) for e in (interfaces.findall("hw/entry") if interfaces is not None else [])}
+    entries = (counters.findall("hw/entry") or counters.findall("ifnet/ifnet/entry") or counters.findall(".//entry")) if counters is not None else []
+    out = {}
+    for e in entries:
+        name, rx, tx = e.findtext("name"), e.findtext("ibytes"), e.findtext("obytes")
+        if name and (rx or "").strip().isdigit() and (tx or "").strip().isdigit() and name not in out:
+            out[name] = (int(rx), int(tx), speed.get(name, 0.0))
+    return out
+
+
 def pan_licenses(entries, today=None):
     """`request license info`: [(feature, days left or None for 'Never', expired?)] from <entry> elements (children feature, expires, expired)."""
     today = today or date.today()

@@ -1,7 +1,7 @@
 import re
 
 from .base import OK, WARN, FAIL
-from .sshbase import SshDriver, compact_hours, uptime_hours
+from .sshbase import Recorder, SshDriver, compact_hours, uptime_hours
 from .clirows import CliRows
 from . import clichecks
 
@@ -10,12 +10,13 @@ PHYSICAL = re.compile(r"^(ge-|xe-|et-|fe-|mge-|ae\d|em\d|me\d|fxp\d)")
 
 class JuniperDriver(CliRows, SshDriver):
     DEFAULT_PLATFORM = "juniper_junos"
+    wan_in_run = True                    # wan usage reads the interfaces' statistics on the run's own connection
 
     def checks(self):
         return [("cpu", self.cpu), ("memory", self.memory), ("uptime", self.uptime), ("alarms", self.alarms),
                 ("interfaces", self.interfaces), ("bgp", self.bgp), ("ospf", self.ospf),
                 ("environment", self.environment), ("ntp", self.ntp), ("uncommitted", self.uncommitted), ("core dumps", self.core_dumps),
-                ("bfd", self.bfd), ("storage", self.storage), ("virtual chassis", self.virtual_chassis)]
+                ("bfd", self.bfd), ("storage", self.storage), ("virtual chassis", self.virtual_chassis), ("wan usage", self._wan_on)]
 
     # ---------------------------------------------------------------- health and redundancy
     def software(self, c):
@@ -141,6 +142,30 @@ class JuniperDriver(CliRows, SshDriver):
         if not phys:
             raise self.unreadable("interfaces", cmd)
         return [(n, "off" if a != "up" else "up" if l == "up" else "down") for n, a, l in phys]       # off: an admin switched the port off
+
+    def _wan_on(self, c):
+        self._live = c
+        try:
+            return self.wan_usage()
+        finally:
+            self._live = None
+
+    def interface_counters(self):
+        """Each physical interface's byte counters and speed from the Junos API's interface information (`show interfaces detail |
+        display json`, Junos 14.2 and later); older Junos, or a reply that names none: by SNMP once it is set up."""
+        c = getattr(self, "_live", None)
+        if c is None:                                                # asked outside a run (the Choose interfaces list): our own connection
+            self._cache = {}
+            self.plat = self.dev.get("platform") or self.DEFAULT_PLATFORM
+            with self.connect() as conn:
+                self._live = Recorder(conn, self.transcript)
+                try:
+                    self.prepare(self._live)
+                    return self.interface_counters()
+                finally:
+                    self._live = None
+        found = clichecks.junos_interface_bytes(c.send_command("show interfaces detail | display json"))
+        return found or super().interface_counters()
 
     def bgp(self, c):
         out = self.cmd(c, "show bgp summary")
