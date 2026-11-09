@@ -1760,12 +1760,13 @@ def results_between(start, end):
     out.sort(key=lambda r: r["t"], reverse=True)
     return out
 
-_LATEST = ("WITH RECURSIVE ck(n) AS (VALUES {vals}), "
-           "dv(name) AS (SELECT MIN(device) FROM results UNION ALL SELECT (SELECT MIN(device) FROM results WHERE device > dv.name) FROM dv WHERE name IS NOT NULL) "
-           f"SELECT {_ROW}, results.run_id AS rid FROM dv d JOIN ck "
-           "JOIN results ON results.device = d.name AND results.check_name = ck.n "
-           "AND results.run_id = (SELECT MAX(run_id) FROM results WHERE device = d.name AND check_name = ck.n) "
-           "JOIN runs ON runs.id = results.run_id")
+_LATEST_OF = ("WITH RECURSIVE ck(n) AS (VALUES {vals}), "
+              "dv(name) AS (SELECT MIN(device) FROM results UNION ALL SELECT (SELECT MIN(device) FROM results WHERE device > dv.name) FROM dv WHERE name IS NOT NULL) "
+              "SELECT {cols} FROM dv d JOIN ck "
+              "JOIN results ON results.device = d.name AND results.check_name = ck.n "
+              "AND results.run_id = (SELECT MAX(run_id) FROM results WHERE device = d.name AND check_name = ck.n) "
+              "JOIN runs ON runs.id = results.run_id")
+_LATEST = _LATEST_OF.format(vals="{vals}", cols=f"{_ROW}, results.run_id AS rid")
 
 def latest_per_device(checks):
     """Each device's newest row among `checks`: [{'device', 'check_name', 'status', 'value', 'message', 'numeric', 't'}].
@@ -1785,6 +1786,35 @@ def average_per_device(checks, days):
                          f"WHERE results.check_name IN ({ph}) AND results.numeric IS NOT NULL AND runs.started_at >= ? "
                          "GROUP BY results.device", (*checks, cutoff))
     return {r["device"]: r["avg"] for r in rows}
+
+def average_items_per_device(checks, days):
+    """{(device, item name): mean of the item's numbers} over the last `days` days for rows of `checks` (a drive's temperature, a
+    dataset's percent used), averaged in SQLite."""
+    ph = ",".join("?" * len(checks))
+    cutoff = _ts(datetime.now() - timedelta(days=days))
+    rows = _across_files(f"SELECT results.device AS device, i.name AS name, AVG(i.numeric) AS avg FROM result_items i "
+                         "JOIN results ON results.id = i.result_id JOIN runs ON runs.id = results.run_id "
+                         f"WHERE results.check_name IN ({ph}) AND i.numeric IS NOT NULL AND runs.started_at >= ? "
+                         "GROUP BY results.device, i.name", (*checks, cutoff))
+    return {(r["device"], r["name"]): r["avg"] for r in rows}
+
+def latest_items_per_device(checks):
+    """{(device, check): (time, items)} of every device's newest row of each of `checks`, items as latest_items gives them ([] for an
+    empty list, None for a row stored without one): one query per file, however many devices."""
+    if not checks:
+        return {}
+    cols = ("results.id AS rid, runs.started_at AS t, results.device AS device, results.check_name AS check_name, results.itemized AS itemized, "
+            "i.name AS item, i.numeric AS numeric, i.status AS status, i.text AS text, i.data AS data")
+    sql = _LATEST_OF.format(vals=",".join(["(?)"] * len(checks)), cols=cols) + " LEFT JOIN result_items i ON i.result_id = results.id ORDER BY results.id, i.pos"
+    out = {}
+    for r in _across_files(sql, tuple(checks)):
+        key = (r["device"], r["check_name"])
+        if key not in out:
+            out[key] = (r["t"], [] if r["itemized"] else None)
+        if r["item"] is not None or r["data"] is not None:
+            out[key][1].append({"name": r["item"], "numeric": r["numeric"], "status": r["status"], "text": r["text"] or "",
+                                "data": json.loads(r["data"] or "{}")})
+    return out
 
 
 # ---------- dashboard data ----------

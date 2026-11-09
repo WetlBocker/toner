@@ -49,7 +49,7 @@ def pick(label):
 labels = [w.compare_check.itemText(i) for i in range(w.compare_check.count())]
 check("every stored check is offered, text ones too", {"CPU", "Link", "Firmware"} <= set(labels), labels)
 pick("CPU")
-check("a number per device -> a gauge each", sorted(g._builder(p)["series"][0]["data"][0]["value"] for g in w.compare_gauges) == [20.0, 25.0, 30.0]
+check("a number per device -> a gauge each", sorted(g.builder(p)["series"][0]["data"][0]["value"] for g in w.compare_gauges) == [20.0, 25.0, 30.0]
       and w.compare_table is None)
 pick("Link")
 t = w.compare_table

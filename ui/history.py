@@ -2,10 +2,11 @@
 and the trend report), which used to be a section of their own."""
 import math
 import os
+import re
 from datetime import datetime, timedelta
 
 import pyqtgraph as pg
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSortFilterProxyModel, Qt, QUrl
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, QPoint, QSortFilterProxyModel, Qt, QUrl
 from PySide6.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy,
                                QSplitter, QTabWidget, QTableView, QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout,
@@ -480,6 +481,59 @@ class RowsProxy(QSortFilterProxyModel):
         self.sourceModel().sort(column, order)
 
 
+class LazyChart(QWidget):
+    """A chart's place in Across devices' grid: its web view is made only when it first scrolls into view (see LazyArea), so a fleet of
+    hundreds does not build hundreds of browser views on every redraw."""
+
+    def __init__(self, width, height, name, builder, clicked=None):
+        super().__init__()
+        self.setFixedSize(width, height)
+        self.name, self.builder, self.on_click, self.view = name, builder, clicked, None
+        self.lay = QVBoxLayout(self)
+        self.lay.setContentsMargins(0, 0, 0, 0)
+
+    def draw(self):
+        self.view = ChartView(min_height=self.height())
+        self.view.setAccessibleName(self.name)
+        self.view.draw(self.builder)
+        if self.on_click:
+            self.view.clicked.connect(self.on_click)
+        self.lay.addWidget(self.view)
+
+
+class LazyArea(QScrollArea):
+    """Across devices' page: draws its LazyCharts as they come into view, as the Over time panels are (ui.overtime.CheckPanels)."""
+
+    def __init__(self):
+        super().__init__()
+        self.setWidgetResizable(True)
+        self.setFrameShape(QScrollArea.Shape.NoFrame)
+        bar = self.verticalScrollBar()
+        bar.valueChanged.connect(self.reveal)
+        bar.rangeChanged.connect(self.reveal)
+
+    def reveal(self, *_):
+        body = self.widget()
+        if body is None or not self.isVisible():
+            return
+        body.layout().activate()                                  # place the charts now, as the scroll area would at its next turn
+        body.resize(self.viewport().width(), max(self.viewport().height(), body.heightForWidth(self.viewport().width()), body.minimumSizeHint().height()))
+        vp = self.viewport()
+        for s in body.findChildren(LazyChart):
+            if s.view is None:
+                y = s.mapTo(vp, QPoint(0, 0)).y()
+                if y < vp.height() and y + s.height() > 0:
+                    s.draw()
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        self.reveal()
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self.reveal()
+
+
 class HistoryTab(QWidget):
     def __init__(self):
         super().__init__()
@@ -541,9 +595,7 @@ class HistoryTab(QWidget):
         for label, days in ACROSS_SWITCH:
             self.compare_switch.addItem(label, days)
         self.compare_switch.currentIndexChanged.connect(lambda _i: self.draw_compare())
-        self.compare_area = QScrollArea()
-        self.compare_area.setWidgetResizable(True)
-        self.compare_area.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.compare_area = LazyArea()
         self.compare_names, self.compare_gauges, self.compare_rings, self.compare_table, self.compare_detail = [], [], [], None, None
         across = QWidget()
         al = QVBoxLayout(across)
@@ -672,32 +724,35 @@ class HistoryTab(QWidget):
 
     def draw_compare(self):
         """Each device's latest reading of the picked check, drawn as its kind (a device's vendor can change it: TrueNAS disks are
-        SMART health), into a fresh page under the pickers."""
+        SMART health), into a fresh page under the pickers. Read as the checks list was: with archived organizations when the funnel
+        asks for them."""
         shown = self.compare_check.currentData()
         stored = stored_names(shown, self.compare_names) if shown else []
         names = self._group_names()
         mine = lambda d: names is None or self._base(d) in names
-        rows = [r for r in db.latest_per_device(stored) if mine(r["device"])] if stored else []
-        kinds = {}
-        for r in rows:
-            kinds.setdefault(across_kind(r["check_name"], rows, self._vendor(r["device"])), []).append(r)
-        if shown and across_kind(shown) == "firmware":
-            kinds.setdefault("firmware", [])                         # devices that only have a version read (software_of)
         body = QWidget()
         lay = QVBoxLayout(body)
         lay.setContentsMargins(0, 0, 0, 0)
         self.compare_gauges, self.compare_rings, self.compare_table, self.compare_detail = [], [], None, None
-        for kind in ("gauges", "rings", "certs", "environment", "firmware", "table", "health"):
-            if kind in kinds:
-                getattr(self, "_across_" + kind)(lay, shown, stored, kinds[kind], mine)
+        with db.including_archived(wants_archived(self.funnel)):
+            rows = [r for r in db.latest_per_device(stored) if mine(r["device"])] if stored else []
+            kinds = {}
+            for r in rows:
+                kinds.setdefault(across_kind(r["check_name"], rows, self._vendor(r["device"])), []).append(r)
+            if shown and across_kind(shown) == "firmware":
+                kinds.setdefault("firmware", [])                     # devices that only have a version read (software_of)
+            for kind in ("gauges", "rings", "certs", "environment", "firmware", "table", "health"):
+                if kind in kinds:
+                    getattr(self, "_across_" + kind)(lay, shown, stored, kinds[kind], mine)
         if not (self.compare_gauges or self.compare_rings or self.compare_table):
             view = ChartView(min_height=240)
             view.setAccessibleName("Values across devices")
             view.draw(lambda p: chartspec.empty("Nothing to show yet"))
             lay.addWidget(view)
         lay.addStretch(1)
-        self.compare_switch.setVisible("gauges" in kinds and shown != "datasets")      # datasets show their latest items only
+        self.compare_switch.setVisible("gauges" in kinds)
         self.compare_area.setWidget(body)                            # the previous page goes with it
+        self.compare_area.reveal()
 
     def _vendor(self, key):
         """A device key's vendor as the catalog names it ('truenas')."""
@@ -707,41 +762,48 @@ class HistoryTab(QWidget):
         """The warn and fail marks for a device's check from its own thresholds (its organization's, with its overrides)."""
         if key not in cache:
             dev = self.devs.get(self._base(key))
+            if dev:                                                   # Global lists another organization's device without its folder
+                dev = {**dev, "folder_id": dev.get("_folder_id", dev.get("folder_id"))}
             with db.within(db.split_key(key)[1]):
                 cache[key] = db.thresholds_for(dev) if dev else db.get_thresholds()
         base = check.split(" (")[0]
         return cache[key].get(base) or (cache[key].get("disk") if base in DISK_CHECKS else None) or {}
 
     def _across_gauges(self, lay, shown, stored, rows, mine):
-        """A gauge per device, worst first; datasets and TrueNAS drive temperatures a gauge per item, labelled 'device / item'."""
-        days = self.compare_switch.currentData() if shown != "datasets" else 0
+        """A gauge per device, worst first; datasets and TrueNAS drive temperatures a gauge per item, labelled 'device / item' (the
+        latest items name them; an average is of each item's own numbers)."""
+        days = self.compare_switch.currentData()
         avg = db.average_per_device(stored, days) if days else {}
         cache, dials = {}, []                                         # (label, value, status, limits, check, value text)
 
         def band(v, lim):
             return "FAIL" if lim.get("fail") and v >= lim["fail"] else "WARN" if lim.get("warn") and v >= lim["warn"] else "OK"
 
-        def per_item(r, check):
-            _t, items = db.latest_items(r["device"], r["check_name"])
-            lim, name = self._limits(r["device"], check, cache), db.label_org(r["device"])
+        def per_item(device, check, items, averages):
+            lim, name = self._limits(device, check, cache), db.label_org(device)
             for it in items or []:
-                if it["numeric"] is not None:
+                v = averages.get((device, it["name"])) if days else it["numeric"]
+                if v is not None:
                     d = it["data"] or {}
                     size = f"\n{human_size(d['used'])} of {human_size(d['total'])}" if d.get("used") is not None and d.get("total") else ""
-                    dials.append((f"{name} / {it['name']}{size}", it["numeric"], band(it["numeric"], lim), lim, check, ""))
+                    dials.append((f"{name} / {it['name']}{size}", v, band(v, lim), lim, check, ""))
             return bool(items)
 
+        itemized = shown == "datasets"
+        latest = db.latest_items_per_device(stored) if itemized else {}
+        item_avg = db.average_items_per_device(stored, days) if itemized and days else {}
         for r in rows:
-            if shown == "datasets" and per_item(r, r["check_name"]):
+            if itemized and per_item(r["device"], r["check_name"], latest.get((r["device"], r["check_name"]), (None, None))[1], item_avg):
                 continue
             lim = self._limits(r["device"], r["check_name"], cache)
             v = avg.get(r["device"]) if days else r["numeric"]
             if v is not None:
                 dials.append((db.label_org(r["device"]), v, band(v, lim) if days else r["status"], lim, r["check_name"], r["value"] or ""))
-        if shown == "temperature" and not days:     # shortcut: drives show their latest only, as no per-drive averages are kept; add a query if wanted
-            for r in db.latest_per_device(["disks"]):
-                if self._vendor(r["device"]) == "truenas" and mine(r["device"]):
-                    per_item(r, "temperature")
+        if shown == "temperature":                                    # TrueNAS drives: their "disks" items are temperatures
+            drives = {k: v for k, v in db.latest_items_per_device(["disks"]).items() if self._vendor(k[0]) == "truenas" and mine(k[0])}
+            drive_avg = db.average_items_per_device(["disks"], days) if days and drives else {}
+            for (device, _c), (_t, items) in drives.items():
+                per_item(device, "temperature", items, drive_avg)
         dials.sort(key=lambda d: (WORST.get(d[2], 3), -d[1]))
         box = QWidget()
         grid = FlowLayout(8, 8)
@@ -750,32 +812,40 @@ class HistoryTab(QWidget):
             base = check.split(" (")[0]
             pct = "%" in text or base in PCT_GAUGES
             top = 100 if pct else max(value * 1.25, float(lim.get("fail") or 0) * 1.1, 1)
-            unit = "%" if pct else (" °C" if base == "temperature" else "")
-            g = ChartView(min_height=170)
-            g.setFixedWidth(210)
-            g.setAccessibleName(f"{label} dial")
-            g.draw(lambda p, v=value, w=lim.get("warn"), f=lim.get("fail"), t=label, u=unit, m=top:
-                   chartspec.gauge(p, v, warn=w or None, fail=f or None, title=t, unit=u, maximum=m))
+            m = re.search(r"\d\s*([%a-zA-Z/]+)\s*$", text)               # a measurement's own unit: '12 ms'
+            unit = "%" if pct else " °C" if base == "temperature" else f" {m.group(1)}" if m and len(m.group(1)) <= 4 else ""
+            g = LazyChart(210, 170, f"{label} dial", lambda p, v=value, w=lim.get("warn"), f=lim.get("fail"), t=label, u=unit, m=top:
+                          chartspec.gauge(p, v, warn=w or None, fail=f or None, title=t, unit=u, maximum=m))
             grid.addWidget(g)
             self.compare_gauges.append(g)
         lay.addWidget(box)
 
-    def _across_rings(self, lay, _shown, _stored, rows, _mine):
+    def _across_rings(self, lay, _shown, stored, rows, _mine):
         """A ring per device: its interfaces up, err-disabled and down, the total in the middle; a segment lists those underneath."""
+        from ui.overtime import DETAIL                               # (ui.overtime imports this module)
+        latest = db.latest_items_per_device(stored)
         box = QWidget()
         grid = FlowLayout(8, 8)
         box.setLayout(grid)
         for r in sorted(rows, key=lambda r: (WORST.get(r["status"], 3), db.label_org(r["device"]).lower())):
-            _t, items = db.latest_items(r["device"], r["check_name"])
-            if not items:                                             # stored before each interface was kept
-                continue
+            _t, items = latest.get((r["device"], r["check_name"]), (None, None))
             label = db.label_org(r["device"])
-            ring = ChartView(min_height=220)
-            ring.setFixedWidth(240)
-            ring.setAccessibleName(label)
-            ring.draw(lambda p, its=items, t=label: chartspec.ring(
-                p, [(n, sum(1 for i in its if i["status"] == s), chartspec.status_color(p, s)) for n, s in RING_SEGMENTS], len(its), title=t))
-            ring.clicked.connect(lambda hit, row=r, its=items: self._ring_segment(row, its, hit))
+            if items is None:                                         # stored before each interface was kept: the row's 'up/counted'
+                m = re.match(r"\s*(\d+)\s*/\s*(\d+)", r["value"] or "")
+                if not m:
+                    continue
+                up, total = int(m.group(1)), int(m.group(2))
+                counts = {"OK": up, "FAIL" if r["status"] == "FAIL" else "WARN": total - up}     # shortcut: a FAIL row's err-disabled count as down
+                listed = {s: [{"t": r["t"], "device": label, "status": r["status"], "value": display.value(r["value"]), "message": r["message"] or ""}]
+                          for s in counts}
+            else:
+                total = len(items)
+                counts = {s: sum(1 for i in items if i["status"] == s) for _n, s in RING_SEGMENTS}
+                listed = {s: [{"t": r["t"], "device": label, "status": i["status"], "value": i["name"], "message": i["text"] or ""}
+                              for i in items if i["status"] == s] for _n, s in RING_SEGMENTS}
+            ring = LazyChart(240, 220, label, lambda p, c=counts, n=total, t=label: chartspec.ring(
+                p, [(name, c.get(s, 0), chartspec.status_color(p, s)) for name, s in RING_SEGMENTS], n, title=t),
+                clicked=lambda hit, rows_=listed: self._ring_segment(rows_, hit, DETAIL))
             grid.addWidget(ring)
             self.compare_rings.append(ring)
         lay.addWidget(box)
@@ -784,13 +854,11 @@ class HistoryTab(QWidget):
         self.compare_detail.hide()
         lay.addWidget(self.compare_detail)
 
-    def _ring_segment(self, row, items, hit):
-        from ui.overtime import DETAIL                               # (ui.overtime imports this module)
+    def _ring_segment(self, listed, hit, columns):
         status = dict(RING_SEGMENTS).get(hit.get("name")) if hit.get("kind") == "series" else None
         if status is None:
             return
-        self.compare_detail.show_rows([{"t": row["t"], "device": db.label_org(row["device"]), "status": it["status"], "value": it["name"],
-                                        "message": it["text"] or ""} for it in items if it["status"] == status], DETAIL)
+        self.compare_detail.show_rows(listed.get(status, []), columns)
         self.compare_detail.show()
 
     def _across_list(self, lay, rows, columns):
@@ -803,18 +871,20 @@ class HistoryTab(QWidget):
         """Every certificate of every device, from each certificate check's newest row, fewest days left first."""
         from ui.overtime import CERTS, cert_rows                    # (ui.overtime imports this module)
         out = []
-        for c in stored:
-            for r in db.latest_per_device([c]):
-                if mine(r["device"]):
-                    _t, items = db.latest_items(r["device"], c)
-                    out += [{"device": db.label_org(r["device"]), **x} for x in cert_rows(c, r, items)]
+        for (device, c), (_t, items) in db.latest_items_per_device(stored).items():
+            if mine(device):
+                last = db.check_rows(device, c, 1)[-1] if items is None else None      # stored before each certificate was kept: its own row
+                out += [{"device": db.label_org(device), **x} for x in cert_rows(c, last, items)]
         out.sort(key=lambda x: (x["days"] is None, x["days"] or 0))
         self._across_list(lay, out, [("device", "Device")] + CERTS)
 
-    def _across_environment(self, lay, _shown, _stored, rows, _mine):
+    def _across_environment(self, lay, _shown, stored, rows, _mine):
+        latest = db.latest_items_per_device(stored)
         out = []
         for r in rows:
-            _t, items = db.latest_items(r["device"], r["check_name"])
+            _t, items = latest.get((r["device"], r["check_name"]), (None, None))
+            if items is None:                                         # stored before each component was kept: the row itself
+                out.append({"device": db.label_org(r["device"]), "component": display.check_name(r["check_name"]), "state": display.value(r["value"])})
             out += [{"device": db.label_org(r["device"]), "component": it["name"], "state": it["text"] or it["status"] or ""} for it in items or []]
         self._across_list(lay, out, [("device", "Device"), ("component", "Component"), ("state", "State")])
 

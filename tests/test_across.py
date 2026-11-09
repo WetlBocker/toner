@@ -52,7 +52,7 @@ def save(org, rows, ago):
 item = lambda name, numeric=None, status=None, text="", **data: {"name": name, "numeric": numeric, "status": status, "text": text, "data": data}
 GB = 1024 ** 3
 
-for n, v in (("w1", "windows"), ("w2", "windows"), ("nas", "truenas"), ("sw1", "cisco")):
+for n, v in (("w1", "windows"), ("w2", "windows"), ("nas", "truenas"), ("sw1", "cisco"), ("sw2", "cisco")):
     dev(n, v)
 dev("asa", "cisco", platform="asa")
 dev("b", "windows", org=acme)
@@ -60,7 +60,9 @@ asa = next(d for d in db.list_devices() if d["name"] == "asa")
 db.set_software(asa, {"version": "9.12(4)67"})
 
 save(db.GLOBAL, [Result("w1", "cpu", "OK", "10%", numeric=10.0)], timedelta(days=20))          # outside 7 days, inside 30
-save(db.GLOBAL, [Result("w1", "cpu", "OK", "20%", numeric=20.0), Result("w2", "cpu", "OK", "40%", numeric=40.0)], timedelta(days=2))
+save(db.GLOBAL, [Result("w1", "cpu", "OK", "20%", numeric=20.0), Result("w2", "cpu", "OK", "40%", numeric=40.0),
+                 Result("nas", "disks", "OK", "40 °C", numeric=40.0, items=[item("ada0", 39.0, "OK"), item("ada1", 40.0, "OK")]),
+                 Result("nas", "datasets", "OK", "60%", numeric=60.0, items=[item("tank/a", 30.0), item("tank/b", 60.0)])], timedelta(days=2))
 save(db.GLOBAL, [
     Result("w1", "cpu", "OK", "30%", numeric=30.0), Result("w2", "cpu", "FAIL", "95%", numeric=95.0), Result("asa", "cpu", "OK", "5%", numeric=5.0),
     Result("w1", "antivirus", "OK", "Defender, up to date"), Result("w2", "antivirus", "WARN", "Defender, 9 days old"),
@@ -77,10 +79,16 @@ save(db.GLOBAL, [
     Result("sw1", "environment", "FAIL", "1 of 2 not ok", numeric=1.0, items=[item("Fan 1", status="OK", text="ok"), item("PSU 2", status="FAIL", text="failed")]),
     Result("sw1", "firmware", "OK", "17.3.1"),
     Result("sw1", "link", "FAIL", "down", "uplink lost"), Result("w1", "link", "OK", "connected"),
+    Result("w1", "reachability", "OK", "5 ms", numeric=5.0),
+    Result("sw2", "interfaces", "FAIL", "3/4 up", "down: Gi9", numeric=3.0), Result("sw2", "environment", "OK", "3 ok", numeric=0.0),    # stored before items
 ], timedelta(hours=1))
 save(acme, [Result("b", "cpu", "OK", "60%", numeric=60.0),
             Result("b", "certificates", "WARN", "20 days", numeric=20.0, items=[item("CN=b", 20.0, expires="2026-11-29", where="store")])],
      timedelta(hours=2))
+old = orgs.create("Old", "old")
+dev("o1", "windows", org=old)
+save(old, [Result("o1", "cpu", "OK", "12%", numeric=12.0)], timedelta(hours=1))
+orgs.set_archived(old, True)
 db.set_home(db.GLOBAL)
 bk = db.dkey("b", acme)
 check("the organization's device is keyed for Global", bk != "b" and "@@" in bk, bk)
@@ -105,7 +113,11 @@ def pick(shown, mode=0):
     QApplication.processEvents()
 
 def gauges():
-    return [(g.opt["series"][0]["data"][0]["name"], g.opt["series"][0]["data"][0]["value"]) for g in w.compare_gauges]
+    return [(g.view.opt["series"][0]["data"][0]["name"], g.view.opt["series"][0]["data"][0]["value"]) for g in w.compare_gauges]
+
+calls = []                                                    # every per-device items read: Across devices must not make them
+real_latest_items = db.latest_items
+db.latest_items = lambda *a: calls.append(a) or real_latest_items(*a)
 
 print("== gauges")
 pick("cpu")
@@ -115,8 +127,8 @@ check("cpu: one gauge per device, worst first, Global keys labelled with their o
 check("the switch has the approved labels", [w.compare_switch.itemText(i) for i in range(w.compare_switch.count())]
       == ["Latest", "7-day average", "30-day average", "90-day average"] and w.compare_switch.isVisibleTo(w))
 check("gauges sit in a wrapping grid", all(isinstance(g.parentWidget().layout(), H.FlowLayout) for g in w.compare_gauges))
-check("a gauge carries the device's warn and fail marks", w.compare_gauges[0].opt["series"][0]["axisLine"]["lineStyle"]["color"][0][0] == 0.7,
-      w.compare_gauges[0].opt["series"][0]["axisLine"])
+check("a gauge carries the device's warn and fail marks", w.compare_gauges[0].view.opt["series"][0]["axisLine"]["lineStyle"]["color"][0][0] == 0.7,
+      w.compare_gauges[0].view.opt["series"][0]["axisLine"])
 pick("cpu", 1)
 avg = db.average_per_device(["cpu"], 7)
 got = dict(gauges())
@@ -128,16 +140,24 @@ pick("temperature")
 got = gauges()
 check("temperature: a device's gauge and one per TrueNAS drive, labelled device / drive",
       {n for n, _v in got} == {"sw1", "nas / ada0", "nas / ada1"} and dict(got)["nas / ada1"] == 44.0, got)
-g = next(g for g in w.compare_gauges if g.opt["series"][0]["data"][0]["name"] == "sw1")
+g = next(g for g in w.compare_gauges if g.view.opt["series"][0]["data"][0]["name"] == "sw1").view
 check("a temperature gauge is in °C with a maximum past its fail mark", g.opt["series"][0]["detail"]["formatter"] == "{value} °C"
       and g.opt["series"][0]["max"] >= 85 * 1.1 - 1e-9, g.opt["series"][0])
 pick("temperature", 1)
-check("...averages: the device's average only (no per-drive averages are kept)", gauges() == [("sw1", 45.0)], gauges())
+avg = db.average_items_per_device(["disks"], 7)
+check("...7-day averages: the device's and each drive's own", dict(gauges()) == {"sw1": 45.0, "nas / ada0": 40.0, "nas / ada1": 42.0}
+      and avg[("nas", "ada1")] == 42.0, (gauges(), avg))
 pick("datasets")
 got = gauges()
 check("datasets: one gauge per dataset, labelled device / dataset, used and total under it",
       [n.split("\n")[0] for n, _v in got] == ["nas / tank/b", "nas / tank/a"] and got[1] == (f"nas / tank/a\n{human_size(50 * GB)} of {human_size(100 * GB)}", 50.0), got)
-check("...the datasets' latest items whatever the switch says, so the switch is hidden", not w.compare_switch.isVisibleTo(w))
+SIZE = f"\n{human_size(50 * GB)} of {human_size(100 * GB)}"
+pick("datasets", 1)
+check("...7-day averages of each dataset, under the latest names and sizes, with the switch shown",
+      gauges() == [("nas / tank/b", 70.0), ("nas / tank/a" + SIZE, 40.0)] and w.compare_switch.isVisibleTo(w), gauges())
+pick("reachability")
+check("a measurement keeps its own unit", w.compare_gauges[0].view.opt["series"][0]["detail"]["formatter"] == "{value} ms",
+      w.compare_gauges[0].view.opt["series"][0]["detail"])
 pick("disks")
 check("disks: Windows disks as gauges, never the TrueNAS drives", sorted(n for n, _v in gauges()) == ["w1", "w2"], gauges())
 rows = w.compare_table.rows if w.compare_table else []
@@ -161,7 +181,8 @@ check("certificates: a row per certificate, across certificate and certificates,
 pick("environment")
 t = w.compare_table
 check("environment: a row per component, Device, Component, State", headers(t) == ["Device", "Component", "State"]
-      and sorted((r["device"], r["component"], r["state"]) for r in t.rows) == [("sw1", "Fan 1", "ok"), ("sw1", "PSU 2", "failed")], t and t.rows)
+      and sorted((r["device"], r["component"], r["state"]) for r in t.rows) == [("sw1", "Fan 1", "ok"), ("sw1", "PSU 2", "failed"),
+                                                                              ("sw2", "Environment", "3 ok")], t and t.rows)
 pick("firmware")
 t = w.compare_table
 check("firmware: Device, Version, with the ASA from software_of", headers(t) == ["Device", "Version"]
@@ -173,8 +194,12 @@ check("an unlisted status check: the health table", t is not None and headers(t)
 
 print("== interfaces")
 pick("interfaces")
-check("interfaces: a ring per device", len(w.compare_rings) == 1)
-ring = w.compare_rings[0]
+check("interfaces: a ring per device", sorted(r.name for r in w.compare_rings) == ["sw1", "sw2"])
+old_ring = next(r for r in w.compare_rings if r.name == "sw2").view
+segs = {d["name"]: d["value"] for d in old_ring.opt["series"][0]["data"]}
+check("a row stored before items: its ring from the row's own 3/4 up", segs == {"Up": 3, "Err-disabled": 0, "Down": 1}
+      and old_ring.opt["graphic"][0]["style"]["text"] == "4", segs)
+ring = next(r for r in w.compare_rings if r.name == "sw1").view
 segs = {d["name"]: d["value"] for d in ring.opt["series"][0]["data"]}
 check("up, err-disabled and down counts, the total in the middle", segs == {"Up": 2, "Err-disabled": 1, "Down": 1}
       and ring.opt["graphic"][0]["style"]["text"] == "4" and ring.opt["title"]["text"] == "sw1", (segs, ring.opt.get("graphic"), ring.opt.get("title")))
@@ -190,12 +215,34 @@ check("...another segment, its interfaces", [r["value"] for r in w.compare_detai
 print("== the time range does not touch it")
 w.range.changed.emit()
 QApplication.processEvents()
-check("a range change leaves the list and the chart", w.compare_check.currentData() == "interfaces" and len(w.compare_rings) == 1)
+check("a range change leaves the list and the chart", w.compare_check.currentData() == "interfaces" and len(w.compare_rings) == 2)
+check("no per-device items reads: one batched read per file", calls == [], calls[:5])
+
+print("== charts are drawn as they scroll into view")
+w.compare_area.setFixedHeight(120)
+pick("cpu")
+drawn = [g.view is not None for g in w.compare_gauges]
+check("gauges below the view wait", any(drawn) and not all(drawn), drawn)
+bar = w.compare_area.verticalScrollBar()
+while bar.value() < bar.maximum():
+    bar.setValue(bar.value() + 100)
+    QApplication.processEvents()
+check("scrolled down, every gauge is drawn", all(g.view is not None for g in w.compare_gauges), [g.view is not None for g in w.compare_gauges])
+w.compare_area.setMinimumHeight(0)
+w.compare_area.setMaximumHeight(16777215)
+
+print("== archived organizations, when the funnel picks them")
+w.funnel.set("org", {old})
+QApplication.processEvents()
+pick("cpu")
+check("their devices' gauges show too", gauges() == [("o1 (Old)", 12.0)], gauges())
+w.funnel.clear()
+QApplication.processEvents()
 print("== the search box narrows the devices")
 w.find.setText("w2")
 QApplication.processEvents()
 pick("cpu")
 check("only the devices the search leaves", gauges() == [("w2", 95.0)], gauges())
-check("...and only their checks are listed", w.compare_check.findData("interfaces") < 0)
+check("...and only their checks are listed", w.compare_check.findData("datasets") < 0)
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)
