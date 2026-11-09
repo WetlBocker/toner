@@ -210,8 +210,7 @@ import ui.history as HI
 HI.QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (os.path.join(SP, "adjust.csv"), ""))
 hs.export_csv()
 check("Export CSV writes it", os.path.exists(os.path.join(SP, "adjust.csv")) and "core-sw1" in open(os.path.join(SP, "adjust.csv"), encoding="utf-8").read())
-row = next(i for i in range(hs.proxy.rowCount()) if hs.proxy.index(i, 2).data() == display.check_name("memory"))
-hs.detail.selectRow(row); app.processEvents()
+hs.detail.setCurrentIndex(hs.model.find(("core-sw1", display.check_name("memory")))); app.processEvents()
 check("choosing core-sw1's Memory row puts that device and check on the chart", hs.dev.currentData() == "core-sw1" and hs.chk.selected() == [display.check_name("memory")],
       (hs.dev.currentData(), hs.chk.selected()))
 

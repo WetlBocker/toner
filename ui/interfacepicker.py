@@ -58,6 +58,13 @@ class InterfacePicker(QDialog):
                 edit = QLineEdit("" if wanted.get(name.lower()) is None else f"{wanted[name.lower()]:g}")
                 edit.setPlaceholderText(f"{speed_text(speed)} (port speed)" if speed else "")
                 self.table.setCellWidget(i, 4, edit)
+        edits = [self.table.cellWidget(i, 4) for i in range(len(self.rows))] if self.has_wan else []
+        if edits:                                                    # every box as wide as the longest port speed, rows tall enough for one
+            wide = max(e.fontMetrics().horizontalAdvance(e.placeholderText()) for e in edits) + 32
+            for e in edits:
+                e.setMinimumWidth(wide)
+            vh = self.table.verticalHeader()
+            vh.setDefaultSectionSize(max(vh.defaultSectionSize(), edits[0].sizeHint().height() + 12))
         hh = self.table.horizontalHeader()
         hh.setSectionResizeMode(0, hh.ResizeMode.ResizeToContents)
         hh.setSectionResizeMode(1, hh.ResizeMode.Stretch)

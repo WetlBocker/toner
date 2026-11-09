@@ -67,6 +67,7 @@ save(db.GLOBAL, [
     Result("w1", "cpu", "OK", "30%", numeric=30.0), Result("w2", "cpu", "FAIL", "95%", numeric=95.0), Result("asa", "cpu", "OK", "5%", numeric=5.0),
     Result("w1", "antivirus", "OK", "Defender, up to date"), Result("w2", "antivirus", "WARN", "Defender, 9 days old"),
     Result("w1", "resources", "ERROR", "", "could not read"),
+    Result("w2", "certificates", "ERROR", "", "could not read"),          # holds no certificate: no blank "Certificates" row (FortiGate seen 2026-11-09)
     Result("w1", "certificate :443", "OK", "200 days", numeric=200.0, items=[item("w1.example", 200.0, expires="2027-05-27", where="port 443")]),
     Result("w1", "certificates", "OK", "30 days", numeric=30.0, items=[item("CN=w1", 30.0, expires="2026-12-08", where="store"),
                                                                        item("CN=w1-old", 5.0, expires="2026-11-14", where="store")]),
@@ -179,7 +180,7 @@ pick("certificates")
 t = w.compare_table
 check("certificates: a row per certificate, across certificate and certificates, both organizations",
       headers(t) == ["Device", "Certificate", "Expires", "Days left", "Found in"]
-      and sorted((r["device"], r["name"], r["where"]) for r in t.rows) == [("b (Acme)", "CN=b", "Certificate store"), ("w1", "CN=w1", "Certificate store"),
+      and sorted((r["device"], r["name"], r.get("where")) for r in t.rows) == [("b (Acme)", "CN=b", "Certificate store"), ("w1", "CN=w1", "Certificate store"),
                                                                            ("w1", "CN=w1-old", "Certificate store"), ("w1", "w1.example", "Port 443")],
       t and (headers(t), t.rows))
 pick("environment")

@@ -129,6 +129,13 @@ check("wan1 is ticked WAN with 300; the others show the port speed",
 from PySide6.QtCore import Qt
 t.item(1, 3).setCheckState(Qt.CheckState.Checked); t.cellWidget(0, 4).setText("")
 check("it round-trips: an empty box means the port speed", pk.wan() == {"wan1": None, "lan": None}, pk.wan())
+pk.resize(880, 500); pk.show(); app.processEvents()
+edits = [t.cellWidget(i, 4) for i in range(t.rowCount())]
+check("each bandwidth box sits inside its own row, every box as wide, and the port speed shows whole",
+      all(t.rowViewportPosition(i) <= e.y() and e.geometry().bottom() < t.rowViewportPosition(i) + t.rowHeight(i) for i, e in enumerate(edits))
+      and len({e.width() for e in edits}) == 1 and all(e.width() > e.fontMetrics().horizontalAdvance(e.placeholderText()) + 16 for e in edits),
+      [(t.rowViewportPosition(i), t.rowHeight(i), e.geometry().getRect()) for i, e in enumerate(edits)])
+pk.hide()
 check("without wan there are no WAN columns", InterfacePicker(LIST, []).table.columnCount() == 3 and InterfacePicker(LIST, []).wan() == {})
 check("without the check-only tick the first column is hidden", InterfacePicker(LIST, [], wan={}, choose_checked=False).table.isColumnHidden(0))
 

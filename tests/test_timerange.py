@@ -88,26 +88,55 @@ db.save_run([Result(f"sw{i}", "cpu", "FAIL" if i == 1 else "OK", f"{30 + i}%", "
 w = H.HistoryTab(); w.resize(1100, 600); w.show(); app.processEvents()
 check("with results the hint is gone", not w.empty.isVisible() and not w.capped.isVisible())
 w.range.set_dates(date(2020, 1, 1), date(2020, 1, 2)); app.processEvents()
-check("a range with nothing in it is simply empty, no hint", w.detail.model().rowCount() == 0 and not w.empty.isVisible())
+check("a range with nothing in it is simply empty, no hint", w.detail.model().rowCount() == 0 and not w.model.cells and not w.empty.isVisible())
 w.range.set_hours(8); app.processEvents()
 check("the runs list is gone", not hasattr(w, "runs") and not hasattr(w, "show_run") and not hasattr(w, "run_ids"))
 check("the page has a time range, the last 8 hours", isinstance(w.range, TimeRange) and w.range.describe() == "Last 8 hours")
 
 def table():
-    """The checks table as shown: [(time, device, check, status, value, message)]."""
-    m = w.detail.model()
+    """Every result the checks table holds, in its order: [(time, device, check, status, value, message)]."""
+    return list(w.model.cells)
+
+def tops():
+    """The device rows as shown: [(device, checks, newest time, worst status, value, message)]."""
+    m = w.model
     return [tuple(m.index(i, j).data() for j in range(m.columnCount())) for i in range(m.rowCount())]
+
+def under(ix):
+    m = w.model
+    return [tuple(m.index(k, j, ix).data() for j in range(m.columnCount())) for k in range(m.rowCount(ix))]
+
+def at(device, check=None):
+    return w.model.find(device if check is None else (device, display.check_name(check)))
 
 def wanted(keep=lambda r: True):
     return sorted((r["t"], r["device"], display.check_name(r["check_name"]), r["status"]) for r in db.results_between(*w.range.span()) if keep(r))
 
 shown = lambda: sorted((t, d, c, s) for t, d, c, s, _v, _m in table())
 heads = [w.detail.model().headerData(j, H.Qt.Orientation.Horizontal) for j in range(w.detail.model().columnCount())]
-check("the checks table: Time, Device, Check, Status, Value, Message", heads == ["Time", "Device", "Check", "Status", "Value", "Message"], heads)
+check("the checks table: Device, Check, Time, Status, Value, Message", heads == ["Device", "Check", "Time", "Status", "Value", "Message"], heads)
 check("it holds exactly the rows of the range (not the run two days ago)", shown() == wanted() and len(table()) == 9, (len(table()), shown()))
-check("newest first", [r[0] for r in table()] == sorted((r[0] for r in table()), reverse=True))
-check("a model/view table behind a sort proxy, sortable", isinstance(w.detail, H.QTableView) and isinstance(w.detail.model(), H.QSortFilterProxyModel)
-      and w.detail.isSortingEnabled())
+check("a row per device, every one closed", sorted(t[0] for t in tops()) == ["sw0", "sw1", "sw2"]
+      and not any(w.detail.isExpanded(at(d)) for d in ("sw0", "sw1", "sw2")), tops())
+top = {t[0]: t for t in tops()}
+check("a device row counts its checks, shows its worst status and names its first problem", top["sw1"][1] == "2 checks" and top["sw1"][3] == "FAIL"
+      and top["sw1"][5] == display.said(display.check_name("cpu"), "high"), top["sw1"])
+check("...and says all OK when nothing is wrong", top["sw0"][3:] == ("OK", "", "all OK"), top["sw0"])
+kids = {r[1]: r for r in under(at("sw1"))}
+cpu = kids[display.check_name("cpu")]
+check("under it, a row per check showing its newest result", cpu[0] == "" and cpu[3:5] == ("FAIL", "31%")
+      and cpu[2] == max(t[0] for t in table() if t[1] == "sw1"), cpu)
+runs = under(at("sw1", "cpu"))
+check("...and under the check its earlier results", [r[3:5] for r in runs] == [("OK", "21%")] and runs[0][:2] == ("", ""), runs)
+check("newest first: each check's row is newer than every run under it", all(c[2] >= r[2] for d in tops() for c in under(at(d[0]))
+                                                                            for r in under(w.model.find((d[0], c[1])))))
+check("a tree view, sortable, starting newest first", isinstance(w.detail, H.QTreeView) and w.detail.isSortingEnabled()
+      and w.model.key == (2, H.Qt.SortOrder.DescendingOrder))
+w.expand_btn.click(); app.processEvents()
+check("Expand all opens every device and check", all(w.detail.isExpanded(at(d)) for d in ("sw0", "sw1", "sw2")) and w.detail.isExpanded(at("sw1", "cpu")))
+w.collapse_btn.click(); app.processEvents()
+check("Collapse all closes them again", not any(w.detail.isExpanded(at(d)) for d in ("sw0", "sw1", "sw2")))
+check("the buttons say Expand all and Collapse all", (w.expand_btn.text(), w.collapse_btn.text()) == ("Expand all", "Collapse all"))
 check("Status is drawn by the StatusDelegate", isinstance(w.detail.itemDelegateForColumn(3), H.StatusDelegate))
 w.find.setText("sw1"); app.processEvents()
 check("the search box narrows it", shown() == wanted(lambda r: r["device"] == "sw1") and len(table()) == 3, shown())
@@ -121,17 +150,19 @@ w.range.set_hours(72); app.processEvents()
 check("a longer range brings in the older run", shown() == wanted() and len(table()) == 12, len(table()))
 check("Over time follows the same range", got and abs((got["end"] - got["start"]) - timedelta(hours=72)) < timedelta(seconds=2), got)
 
-row = next(i for i, r in enumerate(table()) if r[1] == "sw2" and r[2] == display.check_name("memory"))
-w.detail.selectRow(row); app.processEvents()
+w.detail.expand(at("sw2")); app.processEvents()
+w.detail.setCurrentIndex(at("sw2", "memory")); app.processEvents()
 check("clicking a row ticks that device and check on Over time", w.dev.currentData() == "sw2" and w.chk.selected() == [display.check_name("memory")],
       (w.dev.currentData(), w.chk.selected()))
 
+sev = lambda rows: [H.SEVERITY[t[3]] for t in rows]
 w.detail.sortByColumn(3, H.Qt.SortOrder.AscendingOrder); app.processEvents()
-picked = table()[w.detail.currentIndex().row()]
-check("sorting by Status orders the rows, and the chosen row stays chosen", [r[3] for r in table()] == sorted(r[3] for r in table())
-      and picked[1:3] == ("sw2", display.check_name("memory")), picked)
+picked = w.model.ident(w.detail.currentIndex())
+check("sorting by Status puts the worst device last, and the chosen row stays chosen with its device open",
+      sev(tops()) == sorted(sev(tops())) and picked == ("sw2", display.check_name("memory")) and w.detail.isExpanded(at("sw2")), (tops(), picked))
 w.refresh(); app.processEvents()
-check("a refresh keeps the sort", [r[3] for r in table()] == sorted(r[3] for r in table()))
+check("a refresh keeps the sort, the open device and the chosen row", sev(tops()) == sorted(sev(tops())) and w.detail.isExpanded(at("sw2"))
+      and w.model.ident(w.detail.currentIndex()) == ("sw2", display.check_name("memory")))
 rep =[(r.device, display.check_name(r.check), r.status, display.value(r.value), r.message) for r in w.report_rows()]
 check("report_rows() are the table's rows, in its order", rep == [t[1:] for t in table()], (rep, table()))
 check("the report's date is the range", w.report_date() == "Last 72 hours", w.report_date())
@@ -165,13 +196,13 @@ w.range.set_hours(8); app.processEvents()
 t0 = time.perf_counter()
 w.show_rows(); app.processEvents()
 took = time.perf_counter() - t0
-check("10,000 rows fill the table in under 2 s", w.detail.model().rowCount() >= 10000 and took < 2.0, (w.detail.model().rowCount(), round(took, 2)))
+check("10,000 rows fill the table in under 2 s", len(table()) >= 10000 and took < 2.0, (len(table()), round(took, 2)))
 print(f"   ({took:.2f} s)")
 w.find.setText("sw1"); app.processEvents()
 t0 = time.perf_counter()
 w.find.setText(""); app.processEvents()                     # the search emptied: every row back, from what was read
 typed = time.perf_counter() - t0
-check("and changing the search over them is quick", w.detail.model().rowCount() >= 10000 and typed < 0.3, (w.detail.model().rowCount(), round(typed, 2)))
+check("and changing the search over them is quick", len(table()) >= 10000 and typed < 0.3, (len(table()), round(typed, 2)))
 print(f"   ({typed:.2f} s)")
 
 
@@ -180,12 +211,12 @@ everything = db.results_between(*w.range.span())
 check("results_between(limit=n) is the newest n of the range", db.results_between(*w.range.span(), limit=50) == everything[:50]
       and len(everything) > 50)
 check("the shipped cap is 50,000 rows", db.HISTORY_CAP == 50_000)
-check("under the cap the line is hidden", not w.capped.isVisible() and w.detail.model().rowCount() == len(everything))
+check("under the cap the line is hidden", not w.capped.isVisible() and len(table()) == len(everything))
 db.HISTORY_CAP = len(everything) - 1
 row_key = lambda r: (r["t"], r["device"], r["check_name"])
 w.show_rows(); app.processEvents()
-check("over the cap the table holds the newest rows only", w.detail.model().rowCount() == db.HISTORY_CAP
-      and sorted(map(row_key, w.model.rows)) == sorted(map(row_key, everything[:db.HISTORY_CAP])), w.detail.model().rowCount())
+check("over the cap the table holds the newest rows only", len(table()) == db.HISTORY_CAP
+      and sorted(map(row_key, w.model.rows)) == sorted(map(row_key, everything[:db.HISTORY_CAP])), len(table()))
 check("...and says so above the checks table", w.capped.isVisible() and w.capped.text() ==
       f"Showing the newest {db.HISTORY_CAP:,} results. Narrow the time range to see older ones.", w.capped.text())
 db.HISTORY_CAP = 50_000

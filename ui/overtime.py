@@ -56,8 +56,8 @@ def _found(where):
 
 def cert_rows(check, last, items):
     """The certificates table's rows from a certificate check's newest row and its items (Across devices shares it)."""
-    if items is None:                                                  # stored before each certificate was kept: the row itself
-        return [{"name": display.check_name(check), "days": last["numeric"]}]
+    if items is None:                                                  # stored before each certificate was kept: the row itself,
+        return [] if last is None or last["numeric"] is None else [{"name": display.check_name(check), "days": last["numeric"]}]   # unless it holds none (an error)
     return [{"name": it["name"], "expires": it["data"].get("expires", ""), "days": None if it["numeric"] is None else int(it["numeric"]),
              "where": _found(it["data"].get("where"))} for it in items]
 

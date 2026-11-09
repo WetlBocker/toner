@@ -2,7 +2,7 @@
 import json
 from datetime import datetime
 
-from PySide6.QtCore import QThread, Qt, QUrl, Signal
+from PySide6.QtCore import QEvent, QThread, QTimer, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QFormLayout, QHBoxLayout, QLabel, QMessageBox,
                                QPushButton, QScrollArea, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
@@ -33,6 +33,22 @@ class _Job(QThread):
             self.done.emit(e)
 
 
+class _Facts(QWidget):
+    """The facts' form. A wrapped value needs more height than Qt gives it when the pane is short (the checks table under it takes
+    the room, and the second line is cut off), so the form keeps the height its width needs; the checks table shrinks and scrolls."""
+
+    def pin(self):
+        need = self.layout().heightForWidth(self.width()) if self.layout() else -1
+        if need > 0 and need != self.minimumHeight():
+            self.setMinimumHeight(need)
+
+    def event(self, e):
+        done = super().event(e)
+        if e.type() in (QEvent.Type.LayoutRequest, QEvent.Type.Resize):     # measured once Qt has laid the new rows out, not before
+            QTimer.singleShot(0, self.pin)
+        return done
+
+
 class DeviceSummary(QWidget):
     """A device's facts (status, version, folder, location, tags...) beside its latest checks. The device window's Overview tab,
     and the details pane on the Inventory."""
@@ -43,7 +59,7 @@ class DeviceSummary(QWidget):
         self.stacked = stacked                              # the pane shows the status as a chip above, so its facts leave the Status row out
         self.info = QFormLayout()
         self.info.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)      # too narrow for a long value: it goes under its name, never cut off
-        info_w = QWidget()
+        info_w = self.info_w = _Facts()
         info_w.setLayout(self.info)
         self.checks = QTableWidget(0, 4)
         self.checks.setHorizontalHeaderLabels(["Check", "Status", "Value", "Message"])

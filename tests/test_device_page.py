@@ -102,6 +102,10 @@ for width in (300, 360, 400):                                # the pane is 300 t
     pane.resize(width, 900); spin(80)
     notes = dict(facts(pane.summary.info))["Notes"]
     check(f"and in the Inventory pane at {width} px", pane.width() == width and fits(notes), (pane.width(), notes.height(), notes.heightForWidth(notes.width()), notes.width()))
+short = DetailsPane(); short.resize(360, 480); short.show(); spin(50)      # a short pane, laid out once: no resize to put it right
+short.set_device(db.find_device("fw")); spin(150)
+cut = [(w.text()[:20], w.height(), w.heightForWidth(w.width())) for _k, w in facts(short.summary.info) if w.height() < w.heightForWidth(w.width())]
+check("a short pane gives every fact all its lines on its first layout (the checks table shrinks instead)", not cut, cut)
 
 print("== Picker, Trends and the time range")
 allk = list(V.keys)

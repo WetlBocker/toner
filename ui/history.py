@@ -6,16 +6,16 @@ import re
 from datetime import datetime, timedelta
 
 import pyqtgraph as pg
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, QPoint, QSortFilterProxyModel, Qt, QUrl
-from PySide6.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPixmap
+from PySide6.QtCore import QAbstractItemModel, QModelIndex, QPoint, Qt, QUrl
+from PySide6.QtGui import QColor, QDesktopServices, QFont, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy,
-                               QSplitter, QTabWidget, QTableView, QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout,
+                               QSplitter, QTabWidget, QTableView, QTableWidget, QTreeView, QTableWidgetItem, QToolButton, QVBoxLayout,
                                QWidget)
 from core import db, display, heatgrid, reports, scope, trends
 from core.chartkinds import across_kind, over_time_kind, shown_name, stored_names
 from core.firmware import human_size
 from core.reports import COLORS, fg_for
-from drivers.base import Result
+from drivers.base import SEVERITY, Result, is_problem
 from ui import theme
 from ui.detaillist import DetailList
 from ui.toast import toast
@@ -426,61 +426,203 @@ def _plain(t):
     return t
 
 
-class RowsModel(QAbstractTableModel):
-    """The checks table: the stored rows of the time range, turned into text once, so thousands of rows stay quick. It sorts itself
-    (one Python sort) and keeps that order when new rows come."""
-    COLS = ["Time", "Device", "Check", "Status", "Value", "Message"]
+class RowsModel(QAbstractItemModel):
+    """The checks table, by device: a row per device (its checks counted, its worst status, its first problem), under it a row per
+    check showing that check's newest result in the time range, and under that the check's earlier results. The rows are turned into
+    text once, so tens of thousands stay quick; it sorts itself (one Python sort per level) and keeps that order when new rows come.
+    `rows` and `cells` are every result, in the order the tree lists them (the reports and the Assistant take them so)."""
+    COLS = ["Device", "Check", "Time", "Status", "Value", "Message"]
+    CELL = (1, 2, 0, 3, 4, 5)                                  # column -> place in a row's cells (t, device, check, status, value, message)
+    ROOT = 0
 
     def __init__(self):
         super().__init__()
-        self.rows, self.cells, self.key = [], [], (0, Qt.SortOrder.DescendingOrder)
+        self.rows, self.cells, self.key = [], [], (2, Qt.SortOrder.DescendingOrder)
+        self.devs = []                                          # [{"key", "label", "checks": [{"label", "rows": [i, ...] newest first}]}]
+        self._pid = [("root",)]                                 # an index's internalId: which row it hangs under
 
     @staticmethod
     def cells_of(rows):
         return [(r["t"], db.label_org(r["device"]), display.check_name(r["check_name"]), r["status"], display.value(r["value"]) or "",
                  r["message"] or "") for r in rows]
 
-    def _order(self, cells):
-        col, order = self.key
-        return sorted(range(len(cells)), key=lambda i: cells[i][col], reverse=order == Qt.SortOrder.DescendingOrder)
-
+    # ---------- building and ordering
     def set_rows(self, rows, cells=None):
         cells = self.cells_of(rows) if cells is None else cells
-        ix = self._order(cells)
+        groups = {}
+        for i, r in enumerate(rows):
+            base, _sep, part = (r["device"] or "").partition(" / ")       # a UniFi or TrueNAS part goes under its device
+            label = f"{part}: {cells[i][2]}" if part else cells[i][2]
+            groups.setdefault(base, {}).setdefault((part, r["check_name"]), {"label": label, "rows": []})["rows"].append(i)
         self.beginResetModel()
-        self.rows, self.cells = [rows[i] for i in ix], [cells[i] for i in ix]
+        self._all_rows, self._all_cells = rows, cells
+        self.devs = [{"key": base, "label": db.label_org(base), "checks": list(checks.values())} for base, checks in groups.items()]
+        for d in self.devs:
+            for c in d["checks"]:
+                c["rows"].sort(key=lambda i: cells[i][0], reverse=True)    # the check's row is its newest result
+        self._order()
         self.endResetModel()
 
+    def _sev(self, i):
+        return SEVERITY.get(self._all_cells[i][3], 0)
+
+    def _value(self, i, col):
+        """Row i's cell under column col, as it sorts (Status by severity)."""
+        return self._sev(i) if col == 3 else self._all_cells[i][self.CELL[col]]
+
+    def _order(self):
+        col, order = self.key
+        down = order == Qt.SortOrder.DescendingOrder
+        for d in self.devs:
+            newest = [c["rows"][0] for c in d["checks"]]
+            d["worst"] = max(newest, key=lambda i: (self._sev(i), self._all_cells[i][3] != "N/A"))
+            d["newest"] = max(self._all_cells[i][0] for i in newest)
+            d["checks"].sort(key=lambda c: c["label"].lower())
+            if col not in (0, 1):                                            # the check's own name is the order for Device and Check
+                d["checks"].sort(key=lambda c: self._value(c["rows"][0], col), reverse=down)
+            elif down:
+                d["checks"].reverse()
+            for c in d["checks"]:
+                c["rows"][1:] = sorted(c["rows"][1:], key=lambda i: self._value(i, col), reverse=down)
+            d["summary"] = self._summary(d)
+        by = {0: lambda d: d["label"].lower(), 1: lambda d: len(d["checks"]), 2: lambda d: d["newest"], 3: lambda d: self._sev(d["worst"]),
+              4: lambda d: d["label"].lower(), 5: lambda d: d["summary"].lower()}[col]
+        self.devs.sort(key=lambda d: d["label"].lower())
+        self.devs.sort(key=by, reverse=down)                                 # stable: equal devices stay by name
+        self._pid = [("root",)] + [("dev", n) for n in range(len(self.devs))]
+        self._chk_id = {}
+        for n, d in enumerate(self.devs):
+            for m in range(len(d["checks"])):
+                self._chk_id[(n, m)] = len(self._pid)
+                self._pid.append(("chk", n, m))
+        flat = [i for d in self.devs for c in d["checks"] for i in c["rows"]]
+        self.rows, self.cells = [self._all_rows[i] for i in flat], [self._all_cells[i] for i in flat]
+
+    def _summary(self, d):
+        """What a closed device row says: its first problem (and how many more), or that all is OK, as the Results page says it."""
+        bad = [c for c in d["checks"] if is_problem(self._all_cells[c["rows"][0]][3])]
+        bad.sort(key=lambda c: -self._sev(c["rows"][0]))
+        if not bad:
+            return "all OK"
+        first = self._all_cells[bad[0]["rows"][0]]
+        return display.said(bad[0]["label"], first[5] or first[4]) + (f"   (+{len(bad) - 1} more)" if len(bad) > 1 else "")
+
     def sort(self, column, order=Qt.SortOrder.AscendingOrder):
-        self.layoutAboutToBeChanged.emit()
+        if not hasattr(self, "_all_cells"):
+            self.key = (column, order)
+            return
+        self.beginResetModel()                                  # HistoryTab puts the open devices and the chosen row back (modelReset)
         self.key = (column, order)
-        ix = self._order(self.cells)
-        moved = {old: new for new, old in enumerate(ix)}
-        self.rows, self.cells = [self.rows[i] for i in ix], [self.cells[i] for i in ix]
-        old = self.persistentIndexList()                      # the selection follows its row
-        self.changePersistentIndexList(old, [self.index(moved[p.row()], p.column()) for p in old])
-        self.layoutChanged.emit()
+        self._order()
+        self.endResetModel()
+
+    # ---------- the tree
+    def node(self, index):
+        """('dev', d), ('chk', d, c) or ('res', d, c, k) for an index; k counts the check's earlier results (its newest is the check row)."""
+        p = self._pid[index.internalId()]
+        if p[0] == "root":
+            return ("dev", index.row())
+        if p[0] == "dev":
+            return ("chk", p[1], index.row())
+        return ("res", p[1], p[2], index.row())
+
+    def row_of(self, index):
+        """The stored result an index shows (a check row: its newest), or None for a device row."""
+        n = self.node(index)
+        if n[0] == "dev":
+            return None
+        rows = self.devs[n[1]]["checks"][n[2]]["rows"]
+        return self._all_rows[rows[0] if n[0] == "chk" else rows[n[3] + 1]]
+
+    def ident(self, index):
+        """What an index stands for, unchanged by sorting or a new read: the device key, (device, check label), or the result's identity."""
+        n = self.node(index)
+        d = self.devs[n[1]]
+        if n[0] == "dev":
+            return d["key"]
+        if n[0] == "chk":
+            return (d["key"], d["checks"][n[2]]["label"])
+        r = self.row_of(index)
+        return (d["key"], d["checks"][n[2]]["label"], r["t"])
+
+    def find(self, ident):
+        """The index of what ident() named, or an invalid index when it is gone."""
+        key = ident if isinstance(ident, str) else ident[0]
+        n = next((n for n, d in enumerate(self.devs) if d["key"] == key), None)
+        if n is None:
+            return QModelIndex()
+        top = self.index(n, 0)
+        if isinstance(ident, str):
+            return top
+        m = next((m for m, c in enumerate(self.devs[n]["checks"]) if c["label"] == ident[1]), None)
+        if m is None:
+            return QModelIndex()
+        chk = self.index(m, 0, top)
+        if len(ident) == 2:
+            return chk
+        rows = self.devs[n]["checks"][m]["rows"]
+        k = next((k for k, i in enumerate(rows[1:]) if self._all_rows[i]["t"] == ident[2]), None)
+        return chk if k is None else self.index(k, 0, chk)
+
+    def index(self, row, column, parent=QModelIndex()):
+        if not self.hasIndex(row, column, parent):
+            return QModelIndex()
+        if not parent.isValid():
+            return self.createIndex(row, column, self.ROOT)
+        n = self.node(parent)
+        return self.createIndex(row, column, 1 + n[1] if n[0] == "dev" else self._chk_id[(n[1], n[2])])
+
+    def parent(self, index=QModelIndex()):
+        if not index.isValid():
+            return QModelIndex()
+        p = self._pid[index.internalId()]
+        if p[0] == "root":
+            return QModelIndex()
+        if p[0] == "dev":
+            return self.createIndex(p[1], 0, self.ROOT)
+        return self.createIndex(p[2], 0, 1 + p[1])
 
     def rowCount(self, parent=QModelIndex()):
-        return 0 if parent.isValid() else len(self.cells)
+        if not parent.isValid():
+            return len(self.devs)
+        if parent.column() != 0:
+            return 0
+        n = self.node(parent)
+        if n[0] == "dev":
+            return len(self.devs[n[1]]["checks"])
+        if n[0] == "chk":
+            return len(self.devs[n[1]]["checks"][n[2]]["rows"]) - 1
+        return 0
 
     def columnCount(self, parent=QModelIndex()):
-        return 0 if parent.isValid() else len(self.COLS)
+        return len(self.COLS)
 
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
-        return self.cells[index.row()][index.column()] if role == Qt.ItemDataRole.DisplayRole else None
+        if not index.isValid():
+            return None
+        n = self.node(index)
+        if role == Qt.ItemDataRole.FontRole and n[0] == "dev":
+            f = QFont()
+            f.setBold(True)
+            return f
+        if role != Qt.ItemDataRole.DisplayRole:
+            return None
+        col = index.column()
+        d = self.devs[n[1]]
+        if n[0] == "dev":
+            k = len(d["checks"])
+            return (d["label"], f"{k} check{'s' if k != 1 else ''}", d["newest"], self._all_cells[d["worst"]][3], "", d["summary"])[col]
+        if col == 0:
+            return ""
+        if col == 1:
+            return d["checks"][n[2]]["label"] if n[0] == "chk" else ""
+        rows = d["checks"][n[2]]["rows"]
+        return self._all_cells[rows[0] if n[0] == "chk" else rows[n[3] + 1]][self.CELL[col]]
 
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
         if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
             return self.COLS[section]
         return None
-
-
-class RowsProxy(QSortFilterProxyModel):
-    """Hands sorting to the model: Qt's own sort would ask Python for both cells of every comparison (seconds at 10,000 rows)."""
-
-    def sort(self, column, order=Qt.SortOrder.AscendingOrder):
-        self.sourceModel().sort(column, order)
 
 
 class LazyChart(QWidget):
@@ -543,13 +685,24 @@ class HistoryTab(QWidget):
         self._read = None                                                   # (archived too?, the range's rows, their cells) from the last read
         self._stale = False                                                 # a re-read was asked for while the page was hidden
         self.range.changed.connect(self._range_changed)
-        self.model, self.proxy = RowsModel(), RowsProxy()
-        self.proxy.setSourceModel(self.model)
-        self.detail = _plain(QTableView())
-        self.detail.setModel(self.proxy)
+        self.model = RowsModel()
+        self.detail = QTreeView()                                           # a row per device, closed; its checks under it, their runs under those
+        self.detail.setAccessibleName("Checks by device")
+        self.detail.setModel(self.model)
+        self.detail.setUniformRowHeights(True)
+        self.detail.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.detail.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.detail.setAllColumnsShowFocus(True)
+        self.detail.header().setStretchLastSection(True)
         self.detail.setSortingEnabled(True)
-        self.detail.sortByColumn(0, Qt.SortOrder.DescendingOrder)            # newest first
+        self.detail.sortByColumn(2, Qt.SortOrder.DescendingOrder)            # newest first
         self.detail.setItemDelegateForColumn(3, StatusDelegate(self.detail))
+        self._kept = (set(), None)                                          # what was open and chosen, put back after a new read or a sort
+        self.model.modelAboutToBeReset.connect(self._keep_open)
+        self.model.modelReset.connect(self._reopen)
+        self.expand_btn, self.collapse_btn = QPushButton("Expand all"), QPushButton("Collapse all")
+        self.expand_btn.clicked.connect(self.detail.expandAll)
+        self.collapse_btn.clicked.connect(self.detail.collapseAll)
         self.dev = QComboBox()
         self.chk = GroupPicker(all_text="Select checks", noun="checks", clear_text="Clear selection")
         self.check_keys = {}                     # label -> shown name (core.chartkinds.shown_name)
@@ -585,6 +738,7 @@ class HistoryTab(QWidget):
         self.capped.setWordWrap(True)
         self.capped.hide()
         lowl.addWidget(self.capped)
+        lowl.addLayout(flow(self.expand_btn, self.collapse_btn))
         lowl.addWidget(self.detail, 1)
         self.empty = EmptyHint(self.detail, "No runs yet", "Press Run checks (Results tab) to start the history", wrap=True)
         lowl.addLayout(bar)
@@ -1007,13 +1161,41 @@ class HistoryTab(QWidget):
         self._fail_list = dlg
         dlg.show()
 
+    def _keep_open(self):
+        """Before the table is rebuilt (a new read, the search, a sort): note the open devices and checks, and the chosen row."""
+        m, opened = self.model, set()
+        for n in range(m.rowCount()):
+            top = m.index(n, 0)
+            if self.detail.isExpanded(top):
+                opened.add(m.ident(top))
+                opened |= {m.ident(m.index(k, 0, top)) for k in range(m.rowCount(top)) if self.detail.isExpanded(m.index(k, 0, top))}
+        cur = self.detail.currentIndex()
+        self._kept = (opened, m.ident(cur) if cur.isValid() else None)
+
+    def _reopen(self):
+        """...and after it: what was open opens again, and the chosen row is chosen again, wherever the new order puts them."""
+        opened, cur = self._kept
+        for ident in sorted(opened, key=lambda i: isinstance(i, tuple)):          # devices before their checks
+            ix = self.model.find(ident)
+            if ix.isValid():
+                self.detail.expand(ix)
+        if cur is not None:
+            ix = self.model.find(cur)
+            if ix.isValid():
+                self.detail.selectionModel().blockSignals(True)                   # the chart already shows it
+                self.detail.setCurrentIndex(ix)
+                self.detail.selectionModel().select(ix, self.detail.selectionModel().SelectionFlag.ClearAndSelect
+                                                    | self.detail.selectionModel().SelectionFlag.Rows)
+                self.detail.selectionModel().blockSignals(False)
+                self.detail.viewport().update()
+
     def _pick_from_row(self, *_):
         """A check's row was chosen in the table: that device and that check go on the chart (a check with no numbers
         to chart leaves the device's usual pick)."""
         ix = self.detail.currentIndex()
-        if not ix.isValid():
+        r = self.model.row_of(ix) if ix.isValid() else None          # a device's own row names no check
+        if r is None:
             return
-        r = self.model.rows[self.proxy.mapToSource(ix).row()]
         device, check = self._base(r["device"]), r["check_name"]
         i = self.dev.findData(device)
         if i < 0:
@@ -1026,10 +1208,9 @@ class HistoryTab(QWidget):
 
     # ---------- reports
     def report_rows(self):
-        """The rows the checks table shows, in its order, as the report writers take them (Global: another organization's device
+        """Every result the checks table holds, device by device in its order, as the report writers take them (Global: another organization's device
         named with it)."""
-        rows = (self.model.rows[self.proxy.mapToSource(self.proxy.index(i, 0)).row()] for i in range(self.proxy.rowCount()))
-        return [Result(db.label_org(r["device"]), r["check_name"], r["status"], r["value"] or "", r["message"] or "") for r in rows]
+        return [Result(db.label_org(r["device"]), r["check_name"], r["status"], r["value"] or "", r["message"] or "") for r in self.model.rows]
 
     def report_date(self):
         return self.range.describe()
@@ -1105,7 +1286,7 @@ class HistoryTab(QWidget):
         """What the Assistant is told about this page: the time range and the rows shown, and the device and checks on the chart."""
         keys = ("time", "device", "check", "status", "value", "message")
         out = {"page": "History", "time_range": self.range.describe(),
-               "rows": [{k: self.proxy.index(i, j).data() for j, k in enumerate(keys)} for i in range(min(self.proxy.rowCount(), 400))]}
+               "rows": [dict(zip(keys, c)) for c in self.model.cells[:400]]}
         if self.dev.currentData():
             out["chart"] = {"device": db.label(self.dev.currentData()), "checks": self.chk.selected()}
         return out
