@@ -11,6 +11,7 @@ from PySide6.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy,
                                QSplitter, QStackedWidget, QTabWidget, QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout, QWidget)
 from core import db, display, reports, scope, trends
+from core.chartkinds import chart_kind  # noqa: F401  (moved to core; re-exported for importers)
 from core.reports import COLORS, fg_for
 from drivers.base import SEVERITY, Result
 from ui import theme
@@ -25,20 +26,6 @@ PCT_CHECKS = ("cpu", "memory")
 
 
 SERIES_COLORS = ["#f59e0b", "#10b981", "#ef4444", "#8b5cf6", "#06b6d4", "#ec4899", "#84cc16", "#f97316"]
-
-
-STATE_WORDS = {"up", "down", "ok", "warn", "warning", "fail", "failed", "error", "enabled", "disabled", "online", "offline", "connected",
-               "disconnected", "active", "inactive", "true", "false", "yes", "no", "present", "absent", "running", "stopped"}
-
-
-def chart_kind(rows):
-    """How a check's rows are drawn: "line" (numbers over more than one time), "bar" (numbers at one time, one per device),
-    "status" (no numbers, and every value empty or a state word such as up or enabled: how often each OK/WARN/FAIL happened) or "table" (text such
-    as a version or model). Rows are dicts with numeric, value, status and, over time, t."""
-    if any(r.get("numeric") is not None for r in rows):
-        return "line" if len({r.get("t") for r in rows}) > 1 else "bar"
-    states = all(str(r.get("value") or "").strip().lower() in STATE_WORDS | {""} for r in rows)
-    return "status" if rows and states else "table"
 
 
 def is_percent(check):
