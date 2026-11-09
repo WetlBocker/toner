@@ -218,7 +218,7 @@ class Main(QMainWindow):
         self.tools.playbooks.library_changed.connect(self.automation.refresh)
         self.about.update_available.connect(self._update_available)
         self.about.update_cleared.connect(lambda: self.tabs.setBadge(self.about, False))
-        self.about.quit_requested.connect(self.quit_for_real)           # the installer has been started
+        self.about.quit_requested.connect(self.quit_after_update)           # the installer has been started
         tabs = self.tabs = NavStack("Toner")
         # the sections, in the order Ctrl+1..9 and go() know them, each under its group in the sidebar
         for page, label, icon, group in ((self.dashboard, "Overview", "dashboard", "Observability"), (self.results, "Results", "results", "Observability"),
@@ -906,6 +906,11 @@ class Main(QMainWindow):
         self._discarding = self._quitting = True
         if not self.close():
             self._discarding = self._quitting = False
+
+    def quit_after_update(self):
+        self._quitting = True                              # the installer has started: Toner goes whatever a closing question says
+        self.close()
+        QApplication.quit()
 
     def quit_for_real(self):
         self._quitting = True

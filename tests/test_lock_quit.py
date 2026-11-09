@@ -7,13 +7,14 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import os, subprocess, sys, time
-CASES = ["close", "unsaved", "vault", "settings", "running", "firmware", "both", "bg", "tray_no", "tray_yes", "signout",
+CASES = ["close", "unsaved", "vault", "settings", "running", "firmware", "both", "bg", "tray_no", "tray_yes", "signout", "locked_tray", "update",
          "discard_unsaved", "discard_vault", "discard_settings"]
 if len(sys.argv) < 2:
     ok = bad = 0
     for c in CASES:
         try:
-            out = subprocess.run([sys.executable, "-u", os.path.abspath(__file__), c], capture_output=True, text=True, timeout=60).stdout
+            r = subprocess.run([sys.executable, "-u", os.path.abspath(__file__), c], capture_output=True, text=True, timeout=60)
+            out = r.stdout + ("  FAIL %s: exit code %s %s" % (c, r.returncode, r.stderr[-300:]) + chr(10) if r.returncode else "")
         except subprocess.TimeoutExpired:
             out = "  FAIL %s: hung (a question box nobody can answer?)" % c + chr(10)
         print(out, end="")
@@ -100,6 +101,18 @@ elif case.startswith("tray"):
     w.quit_for_real(); spin(300)
     check("quit only when close accepted", bool(quits) == (case == "tray_yes"), str(quits))
 elif case == "signout":
-    w.sign_out(); spin(300)
+    w.settings.unsaved_count = lambda: 1
+    lock.other.click(); spin(300)
+    check("settings question asked, not the lock's line", "settings" in asked and "Unlock to close" not in lock.error.text(), str(asked))
     check("signed out", session.state() != "locked" and bool(quits), f"{session.state()} {quits}")
+elif case == "locked_tray":
+    w.settings.unsaved_count = lambda: 1
+    w.hide(); lock._cover_all(); spin(200)
+    w.quit_for_real(); spin(300)
+    check("nothing quit", not quits and not asked, str((quits, asked)))
+    check("line and button visible", lock.isVisible() and not lock.discard.isHidden() and lock.error.text() == "Unlock to close Toner: there are unsaved settings.", lock.error.text())
+elif case == "update":
+    w.settings.unsaved_count = lambda: 1
+    w.about.quit_requested.emit(); spin(300)
+    check("update path quits though the close was refused", bool(quits), str(quits))
 os._exit(0)

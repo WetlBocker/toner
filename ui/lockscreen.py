@@ -172,6 +172,7 @@ class LockScreen(QWidget):
         self.again.setVisible(mode == "again")
         self.other.setVisible(mode != "again")
         if not full:
+            self.discard.hide()
             self.wait.timer.stop()                       # (a PIN countdown doesn't go on over these screens)
             say(self.error, "")
             self.pw.setText("")

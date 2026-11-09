@@ -357,7 +357,7 @@ check("the About page lists none of them and says why", not ab3.revert_btns and 
 datakey.exists = real_exists; del sys.frozen; sys.executable = saved_exe
 for p in olds:
     os.remove(p)
-check("the installer closing Toner is wired to a real quit", "self.about.quit_requested.connect(self.quit_for_real)" in open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "app.py")).read())
+check("the installer closing Toner is wired to a real quit", "self.about.quit_requested.connect(self.quit_after_update)" in open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "app.py")).read())
 w.about.shutdown()
 
 print(f"\n{ok} passed, {bad} failed")
