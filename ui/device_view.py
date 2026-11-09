@@ -5,11 +5,15 @@ from datetime import datetime
 from PySide6.QtCore import QThread, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QFormLayout, QHBoxLayout, QLabel, QMessageBox,
-                               QPushButton, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
+                               QPushButton, QScrollArea, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
 from core import backup, db, display, perms, profiles, sessions, snmp, unifikids, vendors
+from core.chartkinds import over_time_kind
+from core.firmware import human_size
 from core.runner import run_one
-from ui.overtime import CheckPanels, config_switch, config_text, config_text_view
-from ui.widgets import GroupPicker, StatusDelegate
+from ui.overtime import EMPTY, CheckPanels, config_switch, config_text, config_text_view
+from ui.timerange import TimeRange
+from ui.vulntab import VulnTab
+from ui.widgets import FlowLayout, GroupPicker, StatusDelegate
 from ui import chartspec, status as st
 from ui.webchart import ChartView
 
@@ -37,6 +41,7 @@ class DeviceSummary(QWidget):
         self.dev = None
         self.stacked = stacked                              # the pane shows the status as a chip above, so its facts leave the Status row out
         self.info = QFormLayout()
+        self.info.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)      # too narrow for a long value: it goes under its name, never cut off
         info_w = QWidget()
         info_w.setLayout(self.info)
         self.checks = QTableWidget(0, 4)
@@ -53,7 +58,11 @@ class DeviceSummary(QWidget):
         else:                                                       # the window: side by side
             lay = QHBoxLayout(self)
             lay.setContentsMargins(0, 0, 0, 0)
-            lay.addWidget(info_w, 2)
+            facts = QScrollArea()                                   # a short window scrolls the facts rather than cutting their last lines
+            facts.setWidgetResizable(True)
+            facts.setFrameShape(QScrollArea.Shape.NoFrame)
+            facts.setWidget(info_w)
+            lay.addWidget(facts, 2)
             right = QVBoxLayout()
             right.addWidget(self.checks_title)
             right.addWidget(self.checks, 1)
@@ -81,7 +90,9 @@ class DeviceSummary(QWidget):
         except ValueError:
             fields = {}
         health = db.device_health().get(d["name"])
+        up = db.check_rows(db.qualified(d["name"], d.get("org")), "uptime", 1)
         rows = [("Status", (health["status"] + f"  ({health['at']})") if health else "no results yet"),
+                ("Uptime", display.uptime_words(up[-1]["numeric"]) if up and up[-1]["numeric"] is not None else ""),
                 ("Version", display.software_line(db.software_of(d), long=True)),     # "17.09.04a (INSTALL mode, ...), read 26 Oct 2026 at 14:02"
                 ("Checks and limits", self._own_settings(d)),
                 ("Folder", db.folder_paths().get(d.get("folder_id"), "(top level)")),
@@ -194,10 +205,10 @@ class DeviceView(QDialog):
 
         self.summary = DeviceSummary()                 # the facts and the latest checks (the Inventory's details pane shows the same)
         self.info, self.checks = self.summary.info, self.summary.checks
-        self.gauges = QWidget()                        # the latest readings that have limits (CPU, memory, disk...), as dials
-        self.gauges_lay = QHBoxLayout(self.gauges)
+        self.gauges = QWidget()                        # CPU, memory, each disk and each WAN link, as dials
+        self.gauges_lay = FlowLayout(8, 8)
         self.gauges_lay.setContentsMargins(0, 0, 0, 0)
-        self.gauges_lay.setSpacing(8)
+        self.gauges.setLayout(self.gauges_lay)
         self._gauges = []
         over = QWidget()
         ol = QVBoxLayout(over)
@@ -207,11 +218,14 @@ class DeviceView(QDialog):
 
         self.pick = GroupPicker(all_text="Choose checks", noun="checks", clear_text="Clear selection")
         self.panels = CheckPanels()                            # a panel per ticked check, as on History > Over time
+        self.range = TimeRange()                               # History and Trends: one range, shown on whichever of the two is open
+        self.range.changed.connect(self.draw)
         hist = QWidget()
         hl = QVBoxLayout(hist)
-        bar = QHBoxLayout()
+        self.hist_bar = bar = QHBoxLayout()
         bar.addWidget(QLabel("Checks"))
         bar.addWidget(self.pick)
+        bar.addWidget(self.range)
         bar.addStretch()
         hl.addLayout(bar)
         hl.addWidget(self.panels, 1)
@@ -221,6 +235,9 @@ class DeviceView(QDialog):
         trend_tab = QWidget()
         tl = QVBoxLayout(trend_tab)
         tl.setContentsMargins(0, 8, 0, 0)
+        self.trend_bar = QHBoxLayout()
+        self.trend_bar.addStretch()
+        tl.addLayout(self.trend_bar)
         self.trend_note = QLabel("The checks chosen on the History tab, over time. Hover for the values at a moment.")
         self.trend_note.setProperty("muted", True)
         self.trend_note.setWordWrap(True)
@@ -244,7 +261,10 @@ class DeviceView(QDialog):
         self.tabs.addTab(over, "Overview")
         self.tabs.addTab(hist, "History")
         self.tabs.addTab(trend_tab, "Trends")
+        self.vuln = VulnTab()
+        self.tabs.addTab(self.vuln, "Vulnerabilities")
         self.tabs.addTab(cfgw, "Configuration")
+        self.tabs.currentChanged.connect(self._place_range)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(18, 16, 18, 16)
         lay.setSpacing(10)
@@ -291,11 +311,20 @@ class DeviceView(QDialog):
             for b in self.buttons.values():
                 b.setVisible(False)
             self.tabs.setTabVisible(3, False)
+            self.tabs.setTabVisible(4, False)
         self._fill_info()
         self._fill_checks()
         self._fill_history()
         if not d.get("kid"):
+            self.vuln.show_device(d)
             self._fill_versions()
+
+    def _place_range(self, i):
+        """The time range moves to the History or Trends tab, whichever is opened."""
+        if i == 1:
+            self.hist_bar.insertWidget(2, self.range)
+        elif i == 2:
+            self.trend_bar.insertWidget(0, self.range)
 
     def _fill_info(self):
         self.summary.dev = self.dev
@@ -312,69 +341,73 @@ class DeviceView(QDialog):
         self.summary._fill_checks()
         self._fill_gauges()
 
-    GAUGED = ("cpu", "memory", "disk", "storage", "temperature", "utilization", "sessions", "channel_util", "load")
-
     def _fill_gauges(self):
-        """A dial for each of the latest readings that is a percentage (or has limits in Settings > Thresholds): CPU, memory, disk and
-        the like. Nothing with a number means no dials and no empty strip."""
+        """The Overview dials: CPU, memory, one per disk (a TrueNAS pool each, from its '<device> / <pool>' rows) and one per WAN
+        link, from the latest readings. Nothing with a number means no dials and no empty strip."""
         for g in self._gauges:
             g.setParent(None)
             g.deleteLater()
         self._gauges = []
         th = db.thresholds_for(self.dev)
-        shown = 0
+        vendor = (self.dev.get("vendor") or "").lower()
+        dials = {"cpu": [], "memory": [], "disk": [], "wan_usage": []}          # limits key -> [(title, value)], in the strip's order
         for r in self._latest_rows():
-            base = (r["check_name"] or "").split(" (")[0]
-            key = next((k for k in self.GAUGED if base == k or base.startswith(k + " ") or base.startswith(k + "_")), None)
-            if key is None or r.get("numeric") is None or shown >= 6:
+            check = r["check_name"] or ""
+            base = check.split(" (")[0]
+            key = base if base in ("cpu", "memory") else "wan_usage" if check == "wan usage" else \
+                "disk" if check != "datasets" and over_time_kind(check, vendor) == "gauges" else None
+            if key is None:
                 continue
-            limits = th.get(key) or th.get(base) or {}
-            value = float(r["numeric"])
-            pct = "%" in (r.get("value") or "") or key in ("cpu", "memory", "disk", "storage", "utilization", "sessions", "channel_util")
-            maximum = 100 if pct else max(value * 1.25, float(limits.get("fail") or 0) * 1.1, 1)
-            unit = "%" if pct else (" °C" if key == "temperature" else "")
-            title = display.check_name(r["check_name"])
-            g = ChartView(min_height=150)
-            g.setMaximumHeight(170)
-            g.setFixedWidth(210)
-            g.setAccessibleName(f"{title} dial")
-            g.draw(lambda p, v=value, w=limits.get("warn"), f=limits.get("fail"), t=title, u=unit, m=maximum:
-                   chartspec.gauge(p, v, warn=w or None, fail=f or None, title=t, unit=u, maximum=m))
-            self.gauges_lay.addWidget(g)
-            self._gauges.append(g)
-            shown += 1
-        if shown and not getattr(self, "_gauge_stretch", False):
-            self.gauges_lay.addStretch(1)                          # the dials sit together on the left, as the facts do
-            self._gauge_stretch = True
-        self.gauges.setVisible(shown > 0)
+            items = db.latest_items(r["device"], check)[1] if key in ("disk", "wan_usage") else None
+            shown = [it for it in items or [] if it["numeric"] is not None]
+            for it in shown:
+                data = it["data"] or {}
+                size = f"\n{human_size(data['used'])} of {human_size(data['total'])}" if data.get("used") is not None and data.get("total") else ""
+                dials[key].append((display.said(display.check_name(check), it["name"]) + size, float(it["numeric"])))
+            if not shown and r.get("numeric") is not None:                       # no items (an older row): the row's own number
+                dials[key].append((display.check_name(check), float(r["numeric"])))
+        for key, found in dials.items():
+            limits = th.get(key) or {}
+            for title, value in found:
+                g = ChartView(min_height=170)
+                g.setMaximumHeight(190)
+                g.setFixedWidth(210)
+                g.setAccessibleName(f"{title.splitlines()[0]} dial")
+                g.draw(lambda p, v=value, w=limits.get("warn"), f=limits.get("fail"), t=title:
+                       chartspec.gauge(p, v, warn=w or None, fail=f or None, title=t, unit="%", maximum=100))
+                self.gauges_lay.addWidget(g)
+                self._gauges.append(g)
+        self.gauges.setVisible(bool(self._gauges))
 
     def restyle(self):
         for g in self._gauges + [self.trend]:
             g.restyle()
         self.panels.restyle()
+        self.vuln.restyle()
 
     def _fill_history(self):
         keep = self.pick.selected()
         checks = (db.device_all_checks() if self.dev.get("kid") else db.device_checks()).get(self.dev["name"], [])
         self.keys = {display.check_name(c): c for c in checks}
         self.pick.set_labels(list(self.keys))
-        keep = [k for k in keep if k in self.keys] or list(self.keys)[:1]
+        keep = [k for k in keep if k in self.keys] or list(self.keys)        # every check to start with
         self.pick.set_selected(keep)
         self.draw()
 
     def draw(self, *_):
         picked = [self.keys[k] for k in self.pick.selected() if k in self.keys]
         th = db.thresholds_for(self.dev)
-        # shortcut: every stored reading (from 2000 on) until the page has its time range. Keyed with its organization: panels draw later.
-        self.panels.show_checks(db.qualified(self.dev["name"], self.dev.get("org")), self.dev.get("vendor", ""), picked, datetime(2000, 1, 1),
-                         datetime.now(), th)
-        self._draw_trend(self.panels.line_series(), th.get(picked[0].split(" (")[0]) if picked else None)
+        # keyed with its organization: panels draw later
+        self.panels.show_checks(db.qualified(self.dev["name"], self.dev.get("org")), self.dev.get("vendor", ""), picked, *self.range.span(), th)
+        series = self.panels.line_series()
+        self._draw_trend(series, th.get(series[0][0].split(" (")[0]) if series else None)
 
     def _draw_trend(self, series, limits):
-        """The Trends tab: every picked check as an area over time; the first check's limits as dashed lines when all share a scale."""
+        """The Trends tab: every picked measurement as an area over time; the first check's limits as dashed lines when all share a scale."""
+        note = EMPTY if series else "Choose checks on the History tab; a check with numbers is drawn here"
         series = [(display.check_name(c), pts) for c, pts in series if pts]
         if not series:
-            self.trend.draw(lambda p: chartspec.empty("Choose checks on the History tab; a check with numbers is drawn here"))
+            self.trend.draw(lambda p: chartspec.empty(note))
             return
         times = sorted({t for _n, pts in series for t, _v in pts})
         index = {t: i for i, t in enumerate(times)}

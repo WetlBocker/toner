@@ -5,14 +5,13 @@ from datetime import datetime
 
 from PySide6.QtCore import QThread, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
-import re
-
 from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QMenu, QPushButton, QWidget
 
 from core import advisories, db, reports
 from ui import chartspec
 from ui.results import ResultsTab
 from ui.toast import toast
+from ui.vulntab import band_slices
 from ui.webchart import ChartView
 
 REPORT_TITLE = "Toner Vulnerability Report"
@@ -100,9 +99,9 @@ class ScanningTab(ResultsTab):
         for r in self.shown_rows():
             if r.check in fixed:
                 continue
-            m = re.search(r"CVSS\s+(\d+(?:\.\d+)?)", r.value or "")
-            if m:
-                out.append((r, float(m.group(1))))
+            score = advisories.cvss_of(r.value)
+            if score is not None:
+                out.append((r, score))
         return out
 
     def draw_charts(self):
@@ -125,8 +124,7 @@ class ScanningTab(ResultsTab):
         series = [(st, [by_vendor[v][st] for v in vendors_]) for st in ("FAIL", "WARN", "OK")]
         self.vendor_chart.draw(lambda p: chartspec.grouped_bars(p, vendors_, series, title="Advisories by vendor", stacked=True))
         scores = [sc for _r, sc in rows]
-        bands = (("0–4", 0, 4, "OK"), ("4–7", 4, 7, "OK"), ("7–9", 7, 9, "WARN"), ("9–10", 9, 10.01, "FAIL"))
-        self.cvss_chart.draw(lambda p: chartspec.pie(p, [(n, sum(lo <= v < hi for v in scores), chartspec.status_color(p, st)) for n, lo, hi, st in bands], title="CVSS scores"))
+        self.cvss_chart.draw(lambda p: chartspec.pie(p, band_slices(p, scores), title="CVSS scores"))
 
     def _vendor_clicked(self, hit):
         """A vendor's bar: the search box narrows the list to that vendor (its name is in every device's search text)."""

@@ -198,7 +198,7 @@ check("it opens on the latest stored scan", tab.stored and tab.summary.text().st
 tab.charts_btn.setChecked(True); tab.resize(1280, 700); app.processEvents(); tab.draw_charts()
 import ui.chartspec as cs_mod
 pal = cs_mod.palette(); opt = tab.cvss_chart._builder(pal); ser = opt["series"][0]
-check("CVSS scores is a doughnut with the four labels and the bars' colours", ser["type"] == "pie" and [d["name"] for d in ser["data"]] == ["0–4", "4–7", "7–9", "9–10"]
+check("CVSS scores is a doughnut with the four severities and the bars' colours", ser["type"] == "pie" and [d["name"] for d in ser["data"]] == ["Low", "Medium", "High", "Critical"]
       and [d["itemStyle"]["color"] for d in ser["data"]] == [cs_mod.status_color(pal, s) for s in ("OK", "OK", "WARN", "FAIL")], opt)
 a, b = tab.vendor_chart.geometry(), tab.cvss_chart.geometry()
 check("at 1280 px the two cards are the same height and do not overlap", a.height() == b.height() and a.right() < b.left() and a.top() == b.top(), (a, b))
