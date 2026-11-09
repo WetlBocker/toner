@@ -740,9 +740,19 @@ def _m14_unifi_seen(c):
     """)
 
 
+def _m15_result_items(c):
+    """Detail a check keeps beside its row (one per disk, certificate, interface...), gone with the row it belongs to."""
+    c.executescript("""
+    CREATE TABLE IF NOT EXISTS result_items (
+        result_id INTEGER NOT NULL REFERENCES results(id) ON DELETE CASCADE,
+        pos INTEGER, name TEXT, numeric REAL, status TEXT, text TEXT, data TEXT);
+    CREATE INDEX IF NOT EXISTS idx_result_items ON result_items(result_id);
+    """)
+
+
 MIGRATIONS = [(1, _m1_legacy_columns), (2, _m2_agent_history), (3, _m3_agent_tokens), (4, _m4_device_checks), (5, _m5_ansible_runs),
               (6, _m6_shared), (7, _m7_org_uids), (8, _m8_faster_history), (9, _m9_api_tester), (10, _m10_assistant), (11, _m11_device_software),
-              (12, _m12_assistant_searches), (13, _m13_backup_secrets), (14, _m14_unifi_seen)]
+              (12, _m12_assistant_searches), (13, _m13_backup_secrets), (14, _m14_unifi_seen), (15, _m15_result_items)]
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 
 
@@ -1455,10 +1465,13 @@ def _save_run_here(results):
         cur = c.execute("INSERT INTO runs(started_at, ok, warn, fail, error) VALUES(?,?,?,?,?)",
                         (now, n("OK"), n("WARN"), n("FAIL"), n("ERROR")))
         rid = cur.lastrowid
-        c.executemany(
-            "INSERT INTO results(run_id, device, check_name, status, value, message, numeric) "
-            "VALUES(?,?,?,?,?,?,?)",
-            [(rid, r.device, r.check, r.status, r.value, r.message, r.numeric) for r in results])
+        for r in results:
+            rrid = c.execute("INSERT INTO results(run_id, device, check_name, status, value, message, numeric) VALUES(?,?,?,?,?,?,?)",
+                             (rid, r.device, r.check, r.status, r.value, r.message, r.numeric)).lastrowid
+            if getattr(r, "items", None):
+                c.executemany("INSERT INTO result_items(result_id, pos, name, numeric, status, text, data) VALUES(?,?,?,?,?,?,?)",
+                              [(rrid, i, it.get("name"), it.get("numeric"), it.get("status"), it.get("text", ""),
+                                json.dumps(it.get("data") or {})) for i, it in enumerate(r.items)])
         from core import unifikids
         unifikids.note(c, results, now)
         cutoff = (datetime.now() - timedelta(days=int(get_setting("retention_days")))
@@ -1603,6 +1616,33 @@ def check_rows(device, check, limit=200):
                              "FROM results JOIN runs ON runs.id = results.run_id WHERE results.device=? AND results.check_name=? "
                              "ORDER BY results.run_id DESC LIMIT ?", (device, check, limit)).fetchall()
     return [dict(r) for r in reversed(rows)]
+
+def _items_here(device, check, start, end, limit=None):
+    q = ("SELECT results.id AS rid, runs.started_at AS t FROM results JOIN runs ON runs.id = results.run_id "
+         "WHERE results.device=? AND results.check_name=? AND (? IS NULL OR runs.started_at >= ?) AND (? IS NULL OR runs.started_at <= ?) "
+         "ORDER BY results.run_id " + ("DESC LIMIT 1" if limit else ""))
+    with connect() as c:
+        out = []
+        for row in c.execute(q, (device, check, start, start, end, end)).fetchall():
+            its = [{"name": i["name"], "numeric": i["numeric"], "status": i["status"], "text": i["text"] or "",
+                    "data": json.loads(i["data"] or "{}")}
+                   for i in c.execute("SELECT * FROM result_items WHERE result_id=? ORDER BY pos", (row["rid"],))]
+            out.append({"t": row["t"], "items": its})
+    return out
+
+def items_of(device, check, start=None, end=None):
+    """[{'t', 'items'}] for a check, oldest first, between start and end (times as stored; None: no limit). A run whose row had no
+    items gives an empty list. `device` can be a key from the Global view."""
+    device, org = split_key(device)
+    with within(org if (org is not None or not everything()) else GLOBAL):
+        return _items_here(device, check, start, end)
+
+def latest_items(device, check):
+    """(time, items) of the check's newest stored row; (None, []) when it has none."""
+    device, org = split_key(device)
+    with within(org if (org is not None or not everything()) else GLOBAL):
+        rows = _items_here(device, check, None, None, limit=True)
+    return (rows[0]["t"], rows[0]["items"]) if rows else (None, [])
 
 AGENT_COLUMNS = {"cpu": "cpu", "memory": "memory", "disks": "disk", "uptime": "uptime_h"}     # check name -> agent_metrics column
 

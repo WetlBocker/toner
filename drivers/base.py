@@ -31,6 +31,7 @@ class Result:
     org: Optional[int] = field(default=None, compare=False, repr=False)    # the organization whose file the device lives in (None: the current one)
     kid: Optional[tuple] = field(default=None, compare=False, repr=False)  # a UniFi console's device: (its id or MAC, its model); see core/unifikids.py
     seen: Optional[list] = field(default=None, compare=False, repr=False)  # more of that console's devices, listed with no row of their own: [(label, kid)]
+    items: Optional[list] = field(default=None, compare=False, repr=False)  # per-disk/certificate/interface detail: [{name, numeric, status, text, data}]
 
 def grade(value, warn, fail):
     """Higher value = worse."""
@@ -163,13 +164,13 @@ class Driver:
         return self.result(check, WARN if grew else OK, len(grew),
                            ", ".join(f"{n} (+{d:.0f})" for n, d in list(grew.items())[:5]), numeric=float(len(grew)))
 
-    def result(self, check, status, value="", message="", numeric=None):
+    def result(self, check, status, value="", message="", numeric=None, items=None):
         if self.on_check is not None:
             try:
                 self.on_check(self.name, check)
             except Exception:                                # noqa: BLE001  (a progress line must never spoil a result)
                 quiet.ignored("noqa: BLE001  (a progress line must never spoil a result)")
-        return Result(self.name, check, status, str(value), message, numeric)
+        return Result(self.name, check, status, str(value), message, numeric, items=items)
 
     def not_applicable(self, check, value, message=""):
         """A row saying the check ran and does not apply to this device, so a chosen check never just goes missing."""
