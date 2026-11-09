@@ -264,6 +264,7 @@ def _move_data(src, dst, dev_name):
             backups = _rows(c, "config_backups", "device=?", (dev_name,))
             blog = _rows(c, "backup_log", "device=?", (dev_name,))
             results = _rows(c, "results", where, args)
+            items = _rows(c, "result_items", "result_id IN (SELECT id FROM results WHERE " + where + ")", args)
             runs = {r["id"]: dict(r) for r in c.execute("SELECT * FROM runs WHERE id IN (SELECT DISTINCT run_id FROM results WHERE "
                                                          + where + ")", args)}
             sessions = _rows(c, "sessions", "device=?", (dev_name,))
@@ -287,8 +288,10 @@ def _move_data(src, dst, dev_name):
                 count = lambda s: sum(1 for r in mine if r["status"] == s)
                 new_run[rid] = _insert(c, "runs", {"started_at": run["started_at"], "ok": count("OK"), "warn": count("WARN"),
                                                    "fail": count("FAIL"), "error": count("ERROR")})
-            for r in results:
-                _insert(c, "results", {**r, "run_id": new_run[r["run_id"]]})
+            new_result = {r["id"]: _insert(c, "results", {**r, "run_id": new_run[r["run_id"]]}) for r in results}
+            for i in items:                                # the detail travels with its row (deleting the source row drops it)
+                c.execute("INSERT INTO result_items(result_id, pos, name, numeric, status, text, data) VALUES(?,?,?,?,?,?,?)",
+                          (new_result[i["result_id"]], i["pos"], i["name"], i["numeric"], i["status"], i["text"], i["data"]))
     moved_sessions = []
     for s in sessions:
         path = spaths.get(s.get("folder_id"))

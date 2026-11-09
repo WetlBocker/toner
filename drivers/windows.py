@@ -79,14 +79,15 @@ class WindowsDriver(Driver):
         rows = []
         for d in self.report.get("disks") or []:
             if d.get("size"):
-                rows.append((d["drive"], (1 - d["free"] / d["size"]) * 100, d["free"]))
+                rows.append((d["drive"], (1 - d["free"] / d["size"]) * 100, d["free"], d["size"]))
         if not rows:
             return []
         worst = max(rows, key=lambda r: r[1])
         t = self.th["disk"]
-        text = ", ".join(f"{drive} {pct:.0f}% ({winmon._fmt_bytes(free)} free)" for drive, pct, free in rows[:8])
+        text = ", ".join(f"{drive} {pct:.0f}% ({winmon._fmt_bytes(free)} free)" for drive, pct, free, _size in rows[:8])
         return self.result("disks", grade(worst[1], t["warn"], t["fail"]), f"{worst[1]:.0f}%",
-                           f"fullest {worst[0]}; {text}", numeric=float(worst[1]))
+                           f"fullest {worst[0]}; {text}", numeric=float(worst[1]),
+                           items=[self.item(drive, numeric=float(pct), data={"used": size - free, "total": size}) for drive, pct, free, size in rows])
 
     def uptime(self):
         hours = self.report.get("uptime_h")
@@ -133,13 +134,18 @@ class WindowsDriver(Driver):
         certs = self.report.get("certs")
         if certs is None:
             return []
-        if not certs:
-            return self.result("certificates", OK, "none expiring", "")
+        items = [self.item(c["subject"], numeric=float(c["days"]), data={"expires": c.get("expires") or "", "where": "store"}) for c in certs]
+        # the report lists every certificate; grading still looks only at those ending within 90 days or ended within 30, as before
+        due = [c for c in certs if -30 <= c["days"] < 90]
+        if not due:
+            return self.result("certificates", OK, "none expiring", "", items=items)
+        certs = due
         worst = min(certs, key=lambda c: c.get("days", 9999))
         t = self.th["cert_days"]
         text = "; ".join(f"{c['subject'][:50]} ({c['days']} d)" for c in sorted(certs, key=lambda c: c["days"])[:4])
         return self.result("certificates", grade_low(worst["days"], t["warn"], t["fail"]),
-                           f"{worst['days']} days" if worst["days"] >= 0 else "expired", text, numeric=float(worst["days"]))
+                           f"{worst['days']} days" if worst["days"] >= 0 else "expired", text, numeric=float(worst["days"]),
+                           items=items)
 
     def changes(self):
         """What changed since the last check: installed software, local administrators, listening ports. The first check
@@ -327,5 +333,11 @@ class WindowsDriver(Driver):
             return []
         days = max(0.0, (datetime.now(timezone.utc) - when).total_seconds() / 86400)
         t = self.th["patch_days"]
+        pending = self.report.get("pending_updates")           # absent = not reported; [] = nothing pending
+        searched = self.report.get("updates_searched") or ""
+        if pending is None and self.report.get("updates_error"):      # the search was refused (WinRM) or failed: not the old agent's silence
+            items = [self.item("", data={"updates_error": True})]
+        else:
+            items = None if pending is None else [self.item(u.get("title", ""), text=u.get("kb", ""), data={"severity": u.get("severity", ""), "searched": searched}) for u in pending]
         return self.result("patches", grade(days, t["warn"], t["fail"]), f"{days:.0f} days",
-                           f"last update installed {when:%Y-%m-%d}", numeric=float(days))
+                           f"last update installed {when:%Y-%m-%d}", numeric=float(days), items=items)

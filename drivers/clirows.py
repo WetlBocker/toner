@@ -1,6 +1,8 @@
 """Result rows shared by the SSH drivers (Cisco, Juniper, Arista, HPE, MikroTik): fans and power supplies, the clock, flash space. They turn what
 drivers/clichecks.py read into a row. A device with no fans or sensors to report gets an N/A row for the environment; for the
 clock and flash a platform without the command, or output that is not understood, gives no row."""
+import re
+
 from . import clichecks
 from .base import OK, WARN, FAIL, grade
 
@@ -12,15 +14,21 @@ class CliRows:
 
     def env_row(self, c, *commands):
         """Fans, power supplies and temperature, from one or more environment commands (those the platform lacks are ignored)."""
-        scan = clichecks.scan_environment("\n".join(self._out(c, x) for x in commands))
+        parts = []
+        scan = clichecks.scan_environment("\n".join(self._out(c, x) for x in commands), parts)
         if scan is None:                                 # a virtual appliance, or a platform without the command
             return self.not_applicable("environment", "no sensors", "this device reports no fans, power supplies or temperature")
         seen, problems = scan
         if not problems:
-            return self.result("environment", OK, f"{seen} ok", "fans, power supplies and temperature", numeric=0.0)
+            return self.result("environment", OK, f"{seen} ok", "fans, power supplies and temperature", numeric=0.0, items=self._parts(parts))
         level = FAIL if any(lv == FAIL for lv, _ in problems) else WARN
         shown = "; ".join(m for _, m in problems[:3]) + (f"; and {len(problems) - 3} more" if len(problems) > 3 else "")
-        return self.result("environment", level, f"{len(problems)} of {seen} not ok", shown, numeric=float(len(problems)))
+        return self.result("environment", level, f"{len(problems)} of {seen} not ok", shown, numeric=float(len(problems)), items=self._parts(parts))
+
+    @staticmethod
+    def _parts(parts):
+        """Items for an environment row from (name, status, text) of every component tested."""
+        return [{"name": n, "numeric": None, "status": st, "text": t, "data": {}} for n, st, t in parts]
 
     def ntp_row(self, state):
         if state is None:
@@ -35,6 +43,8 @@ class CliRows:
             used = clichecks.flash_usage(self._out(c, command))
             if used:
                 pct, free = used
+                total = int(re.search(r"(\d+)\s+bytes total", self._out(c, command)).group(1))
                 t = self.th["disk"]
-                return self.result("flash", grade(pct, t["warn"], t["fail"]), f"{pct:.0f}%", f"{free / 1e6:.0f} MB free ({command.split()[-1]})", numeric=float(pct))
+                return self.result("flash", grade(pct, t["warn"], t["fail"]), f"{pct:.0f}%", f"{free / 1e6:.0f} MB free ({command.split()[-1]})", numeric=float(pct),
+                                   items=[self.item(command.split()[-1].rstrip(":"), numeric=float(pct), data={"used": total - free, "total": total})])
         return []

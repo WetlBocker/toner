@@ -49,7 +49,7 @@ class FortinetDriver(Driver):
         for name, fn in (("resources", self.resources), ("firmware", self.firmware),
                          ("wan links", self.wan), ("ha", self.ha), ("vpn", self.vpn), ("licenses", self.licenses), ("certificates", self.certificates),
                          ("interfaces", self.interfaces), ("ha sync", self.ha_sync), ("fortiaps", self.fortiaps), ("fortiswitches", self.fortiswitches),
-                         ("log disk", self.log_disk)):
+                         ("log disk", self.log_disk), ("wan usage", self.wan_usage)):
             if self.enabled(name):
                 self.safe(out, name, fn)
         return out
@@ -94,16 +94,19 @@ class FortinetDriver(Driver):
                            numeric=float(days))
 
     def certificates(self):
-        found = apichecks.fortinet_cert_days(self._optional("system/available-certificates"))
+        found = apichecks.fortinet_cert_days(self._optional("system/available-certificates"), dates=True)
         if not found:
             return []
-        name, days = min(found, key=lambda x: x[1])
+        name, days, _when = min(found, key=lambda x: x[1])
         t = self.th["cert_days"]
-        return self.result("certificates", grade_low(days, t["warn"], t["fail"]), f"{days:.0f} days" if days >= 0 else "expired", name, numeric=float(days))
+        return self.result("certificates", grade_low(days, t["warn"], t["fail"]), f"{days:.0f} days" if days >= 0 else "expired", name, numeric=float(days),
+                           items=[self.item(n, numeric=float(d), data={"expires": w, "where": "store"}) for n, d, w in found])
 
     def _physical(self):
-        ifs = self._get("system/interface?scope=global")
-        return {n: i for n, i in ifs.items() if str(i.get("type", "physical")).lower() == "physical"}
+        if not hasattr(self, "_phys"):                               # read once per run: interfaces and wan usage both use it
+            ifs = self._get("system/interface?scope=global")
+            self._phys = {n: i for n, i in ifs.items() if str(i.get("type", "physical")).lower() == "physical"}
+        return self._phys
 
     @staticmethod
     def _if_state(i):
@@ -125,6 +128,10 @@ class FortinetDriver(Driver):
         if found:
             rows.append(found)
         return rows
+
+    def interface_counters(self):
+        return {n: (int(i.get("rx_bytes") or 0), int(i.get("tx_bytes") or 0), float(i.get("speed") or 0) * 1e6)
+                for n, i in self._physical().items() if "rx_bytes" in i}
 
     def ha_sync(self):
         differ = apichecks.fortinet_ha_sync(self._optional("system/ha-checksums"))

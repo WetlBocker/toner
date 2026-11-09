@@ -1,5 +1,5 @@
 """The interfaces a device has, asked live, so a person can choose which ones Toner checks (Edit device > Checks)."""
-from core import db, profiles
+from core import db, profiles, quiet
 
 STATE_TEXT = {"up": "Up", "down": "Down", "off": "Switched off", "errdisabled": "Err-disabled"}
 
@@ -10,8 +10,14 @@ def available(vendor):
     return any(k == "interfaces" for k, _label in checks.CATALOG.get(vendor, []))
 
 
+def wan_capable(vendor):
+    """True for the kinds of device where Toner can read interface traffic, so interfaces can be marked as WAN."""
+    from core import checks
+    return any(k == "wan usage" for k, _label in checks.CATALOG.get(vendor, []))
+
+
 def listing(dev, opts=None):
-    """[(name, state text)] for every interface on the device, in the order the device gives them. Raises with a readable reason."""
+    """[(name, state text, port speed in bps or None)] for every interface on the device, in the order the device gives them. Raises with a readable reason."""
     from drivers import DRIVERS
     dev = profiles.resolve(dev)
     vendor = dev["vendor"]
@@ -19,4 +25,10 @@ def listing(dev, opts=None):
         raise ValueError("this kind of device has no list of interfaces to choose from")
     drv = DRIVERS[vendor](dev, db.get_thresholds(), opts or db.runtime_options())
     rows = drv.list_interfaces()
-    return [(str(n), STATE_TEXT.get(s, s)) for n, s in rows]
+    speeds = {}
+    if wan_capable(vendor):
+        try:
+            speeds = {str(n): c[2] for n, c in drv.interface_counters().items()}
+        except Exception:                                            # noqa: BLE001  (no speeds only means no placeholder in the picker)
+            quiet.ignored("noqa: BLE001  (no speeds only means no placeholder in the picker)")
+    return [(str(n), STATE_TEXT.get(s, s), speeds.get(str(n)) or None) for n, s in rows]

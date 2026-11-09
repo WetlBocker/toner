@@ -191,7 +191,6 @@ class Main(QMainWindow):
         self.results.open_device.connect(self.open_device_by_name)
         self.dashboard.open_device.connect(self.open_device_by_name)
         self.dashboard.goto.connect(self.go)
-        self.history.runs_hint.set_actions([("Run checks", lambda: (self.go("Results"), self.results.start()))])
         self.inventory.scan_requested.connect(lambda: (self.go("Tools"), self.tools.tabs.setCurrentWidget(self.tools.discovery)))
         self.dashboard.device_action.connect(self.on_device_action)
         self.dashboard.show_results.connect(lambda what: (self.go("Results"), self.results.show_filter(what)))
@@ -1029,7 +1028,7 @@ class Main(QMainWindow):
             self.inventory.refresh()
         self.results.repopulate()
         self.scanning.repopulate()
-        self.history.show_run()
+        self.history.show_rows()
         self.sessions.apply_settings()
         self.scheduler.apply()
         self.backup_scheduler.apply()
@@ -1226,6 +1225,8 @@ def main():
     from ui.widgets import KeyboardAccess
     app._keys = KeyboardAccess(app)                 # Tab gets out of lists; icon buttons and boxes have names for screen readers
     app.installEventFilter(app._keys)
+    from ui import tablefit
+    tablefit.install_everywhere(app)               # every table and tree: columns fit their text and can always be dragged
     from ui import ipmenu
     ipmenu.install(app)                            # right-click on a selected IP address anywhere: Ping and WHOIS Lookup
     from core import passvault

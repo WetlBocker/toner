@@ -1,7 +1,7 @@
 """Readers for the answers of the Fortinet, Palo Alto and Meraki APIs, kept apart from the drivers so they can be tested on samples. Each takes what
 the API returned and gives a small, plain result; anything that is not in the expected shape gives None or an empty list, never a guess."""
 import re
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 
 def _epoch_days(value, now):
@@ -47,8 +47,8 @@ def fortinet_licenses(results, now=None):
     return out
 
 
-def fortinet_cert_days(certs, now=None):
-    """`monitor/system/available-certificates`: [(name, days left)] for certificates that you manage (the factory ones are ignored)."""
+def fortinet_cert_days(certs, now=None, dates=False):
+    """`monitor/system/available-certificates`: [(name, days left)] for certificates that you manage (the factory ones are ignored). With dates=True each is (name, days, "YYYY-MM-DD" of expiry)."""
     now = now or datetime.now(timezone.utc)
     out = []
     for c in certs if isinstance(certs, list) else []:
@@ -58,7 +58,8 @@ def fortinet_cert_days(certs, now=None):
             if key in c:
                 days = _epoch_days(c[key], now)
                 if days is not None:
-                    out.append((str(c.get("name") or c.get("cn") or "certificate"), days))
+                    row = (str(c.get("name") or c.get("cn") or "certificate"), days)
+                    out.append(row + (((now + timedelta(days=days)).strftime("%Y-%m-%d"),) if dates else ()))
                 break
     return out
 

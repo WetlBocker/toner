@@ -1,3 +1,4 @@
+import time
 from dataclasses import dataclass, field
 from typing import Optional
 from core import checks, db, profiles
@@ -31,6 +32,7 @@ class Result:
     org: Optional[int] = field(default=None, compare=False, repr=False)    # the organization whose file the device lives in (None: the current one)
     kid: Optional[tuple] = field(default=None, compare=False, repr=False)  # a UniFi console's device: (its id or MAC, its model); see core/unifikids.py
     seen: Optional[list] = field(default=None, compare=False, repr=False)  # more of that console's devices, listed with no row of their own: [(label, kid)]
+    items: Optional[list] = field(default=None, compare=False, repr=False)  # per-disk/certificate/interface detail: [{name, numeric, status, text, data}]
 
 def grade(value, warn, fail):
     """Higher value = worse."""
@@ -137,11 +139,47 @@ class Driver:
         if missing:
             parts.append("not found on the device: " + ", ".join(missing[:5]))
         status = FAIL if down else WARN if (bad or missing) else OK
-        return self.result("interfaces", status, f"{len(up)}/{len(counted)} up", "; ".join(parts), numeric=float(len(up)))
+        return self.result("interfaces", status, f"{len(up)}/{len(counted)} up", "; ".join(parts), numeric=float(len(up)),
+                           items=[self.item(n, status=FAIL if s == "down" else WARN if s == "errdisabled" else OK, text=s) for n, s in counted])
 
     def list_interfaces(self):
         """[(name, state)] of every interface on the device, for choosing which ones are checked. Drivers with interfaces implement it."""
         raise NotImplementedError("this kind of device has no list of interfaces")
+
+    def interface_counters(self):
+        """{name: (in_octets, out_octets, speed_bps)} for every interface that has byte counters. Drivers that can read them implement it."""
+        raise NotImplementedError("this kind of device has no interface counters")
+
+    def wan_usage(self):
+        """The 'wan usage' row: the busier direction of each interface marked WAN, as a percent of its available bandwidth
+        (the circuit speed typed for it, else its port speed). Its own delta keys, so the bandwidth check's are left alone."""
+        wan = db.normalize_checkopts(self.dev.get("checkopts")).get("wan")
+        if not wan:
+            return []
+        counters = self.interface_counters()
+        mine = {n.lower(): v for n, v in wan.items()}
+        found = [(n, counters[n], mine[n.lower()]) for n in counters if n.lower() in mine]
+        if not found:
+            return []
+        elapsed = self.delta("wan:t", time.time())
+        items, worst = [], None
+        for name, (cin, cout, speed), mbps in found:
+            din, dout = self.delta(f"wan:in:{name}", cin), self.delta(f"wan:out:{name}", cout)
+            avail = mbps * 1e6 if mbps else speed
+            if not (elapsed and elapsed >= 5 and avail and din is not None and dout is not None):
+                continue
+            bps = max(din, dout) * 8 / elapsed
+            pct, t = bps / avail * 100, self.th["wan_usage"]
+            items.append(self.item(name, numeric=pct, status=grade(pct, t["warn"], t["fail"]), data={"in_bps": din * 8 / elapsed, "out_bps": dout * 8 / elapsed, "available_bps": avail}))
+            if worst is None or pct > worst[0]:
+                worst = (pct, name, bps)
+        if worst is None:                                    # nothing to rate: say so only on the very first run, else no row
+            first = not any(k.startswith("wan:") for k in self._baseline)
+            return self.result("wan usage", OK, "baseline set", "rates are reported from the next run") if first else []
+        from core import snmp
+        t = self.th["wan_usage"]
+        return self.result("wan usage", grade(worst[0], t["warn"], t["fail"]), f"{worst[0]:.0f}%",
+                           f"busiest: {worst[1]} at {snmp.fmt_bps(worst[2])}", numeric=float(worst[0]), items=items)
 
     def error_counter_rows(self, check, errs):
         """Row for cumulative error counters {name: count}: lifetime total, or only what is new since last run."""
@@ -150,10 +188,12 @@ class Driver:
             return None
         if not self.delta_mode:
             bad = [n for n, e in errs.items() if e > 0]
-            return self.result(check, WARN if bad else OK, len(bad), ", ".join(bad[:5]), numeric=float(len(bad)))
-        grew, first = {}, False
+            return self.result(check, WARN if bad else OK, len(bad), ", ".join(bad[:5]), numeric=float(len(bad)),
+                               items=[self.item(n, numeric=float(e)) for n, e in errs.items()])
+        grew, first, graded = {}, False, []
         for name, e in errs.items():
             d = self.delta(f"err:{name}", e)
+            graded.append(self.item(name, numeric=None if d is None else float(max(d, 0))))
             if d is None:
                 first = True
             elif d > 0:
@@ -161,15 +201,20 @@ class Driver:
         if first and not grew and not self._baseline:
             return self.result(check, OK, "baseline set", "counters recorded; changes are reported from the next run")
         return self.result(check, WARN if grew else OK, len(grew),
-                           ", ".join(f"{n} (+{d:.0f})" for n, d in list(grew.items())[:5]), numeric=float(len(grew)))
+                           ", ".join(f"{n} (+{d:.0f})" for n, d in list(grew.items())[:5]), numeric=float(len(grew)), items=graded)
 
-    def result(self, check, status, value="", message="", numeric=None):
+    @staticmethod
+    def item(name, numeric=None, status=None, text="", data=None):
+        """One per-component detail for a row's items: a drive, certificate, sensor or interface."""
+        return {"name": str(name), "numeric": numeric, "status": status, "text": text, "data": data or {}}
+
+    def result(self, check, status, value="", message="", numeric=None, items=None):
         if self.on_check is not None:
             try:
                 self.on_check(self.name, check)
             except Exception:                                # noqa: BLE001  (a progress line must never spoil a result)
                 quiet.ignored("noqa: BLE001  (a progress line must never spoil a result)")
-        return Result(self.name, check, status, str(value), message, numeric)
+        return Result(self.name, check, status, str(value), message, numeric, items=items)
 
     def not_applicable(self, check, value, message=""):
         """A row saying the check ran and does not apply to this device, so a chosen check never just goes missing."""

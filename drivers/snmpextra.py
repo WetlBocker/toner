@@ -14,6 +14,9 @@ ENT_SENSOR_STATUS = "1.3.6.1.2.1.99.1.1.1.5"           # 1 ok, 2 unavailable, 3 
 ENT_NAME, ENT_DESCR = "1.3.6.1.2.1.47.1.1.1.1.7", "1.3.6.1.2.1.47.1.1.1.1.2"
 CISCO_ENV = (("fan", "1.3.6.1.4.1.9.9.13.1.4.1"), ("power supply", "1.3.6.1.4.1.9.9.13.1.5.1"), ("temperature sensor", "1.3.6.1.4.1.9.9.13.1.3.1"))
 CISCO_STATE = {"2": (WARN, "warning"), "3": (FAIL, "critical"), "4": (FAIL, "shutdown"), "6": (FAIL, "not functioning")}
+ENT_STATE = {1: "ok", 2: "unavailable", 3: "nonoperational"}
+CISCO_NORMAL = "normal"
+JNX_STATES = {1: "unknown", 2: "running", 3: "ready", 4: "reset", 5: "running at full speed", 6: "down", 7: "standby"}
 JNX_STATE, JNX_DESCR = "1.3.6.1.4.1.2636.3.1.13.1.6", "1.3.6.1.4.1.2636.3.1.13.1.5"
 
 LA_LOAD = "1.3.6.1.4.1.2021.10.1.3"                      # laLoad.1 / .2 / .3 : 1, 5 and 15 minutes, as text
@@ -46,14 +49,16 @@ class SnmpExtras:
     # ---------------------------------------------------------------- fans, power supplies and sensors
     def environment(self):
         c = self.c
-        problems, total = [], 0
+        problems, total, comps = [], 0, []
         ops = c.try_column(ENT_SENSOR_STATUS)
         if ops:
             names, descr = c.try_column(ENT_NAME), c.try_column(ENT_DESCR)
             for i, v in ops.items():
                 total += 1
+                label = text_of(names.get(i)) or text_of(descr.get(i)) or 'sensor ' + i
+                comps.append(self.item(label, status=FAIL if number_of(v) == 3 else OK, text=ENT_STATE.get(int(number_of(v, 0) or 0), "unknown")))
                 if number_of(v) == 3:
-                    problems.append((FAIL, f"{text_of(names.get(i)) or text_of(descr.get(i)) or 'sensor ' + i}: not operating"))
+                    problems.append((FAIL, f"{label}: not operating"))
         for kind, root in CISCO_ENV:
             states = c.try_column(f"{root}.{3 if kind != 'temperature sensor' else 6}")
             if not states:
@@ -64,23 +69,26 @@ class SnmpExtras:
                 if state == "5":                                   # not present: an empty slot
                     continue
                 total += 1
+                level, word = CISCO_STATE.get(state, (OK, CISCO_NORMAL))
+                comps.append(self.item(text_of(descr.get(i)) or kind + ' ' + i, status=level, text=word))
                 if state in CISCO_STATE:
-                    level, word = CISCO_STATE[state]
                     problems.append((level, f"{text_of(descr.get(i)) or kind + ' ' + i}: {word}"))
         states = c.try_column(JNX_STATE)
         if states:
             descr = c.try_column(JNX_DESCR)
             for i, v in states.items():
                 total += 1
+                label = text_of(descr.get(i)) or 'component ' + i
+                comps.append(self.item(label, status=FAIL if number_of(v) == 6 else OK, text=JNX_STATES.get(int(number_of(v, 0) or 0), "unknown")))
                 if number_of(v) == 6:
-                    problems.append((FAIL, f"{text_of(descr.get(i)) or 'component ' + i}: down"))
+                    problems.append((FAIL, f"{label}: down"))
         if not total:
             return []
         status = _worst(problems)
         if not problems:
-            return self.result("environment", OK, f"{total} ok", "fans, power supplies and sensors", numeric=0.0)
+            return self.result("environment", OK, f"{total} ok", "fans, power supplies and sensors", numeric=0.0, items=comps)
         shown = "; ".join(m for _, m in problems[:4]) + (f"; and {len(problems) - 4} more" if len(problems) > 4 else "")
-        return self.result("environment", status, f"{len(problems)} of {total} not ok", shown, numeric=float(len(problems)))
+        return self.result("environment", status, f"{len(problems)} of {total} not ok", shown, numeric=float(len(problems)), items=comps)
 
     # ---------------------------------------------------------------- load average (Linux, BSD and anything running net-snmp)
     def load(self):

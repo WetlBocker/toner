@@ -57,10 +57,11 @@ def tree_names(tree):
 
 
 def shown():
-    """What each section lists right now: {section: set of device or session names}."""
+    """What each section lists right now: {section: set of device or session names}. History reads its rows when it is shown."""
+    w.go("History"); app.processEvents()
     return {"inventory": {n for n in tree_names(w.inventory.table) if "-" in n},
             "results": {w.results.table.topLevelItem(i).text(0) for i in range(w.results.table.topLevelItemCount())},
-            "history runs": {w.history.runs.item(i, 5).text() for i in range(w.history.runs.rowCount())},
+            "history rows": {c[1].split(" (")[0] for c in w.history.model.cells},
             "history devices": {w.history.dev.itemText(i).split(" (")[0] for i in range(w.history.dev.count())},
             "configs": {w.configs.devs.item(i, 0).text() for i in range(w.configs.devs.rowCount())},
             "sessions": {n for n in tree_names(w.sessions.tree) if n.endswith("-ssh")}}
@@ -69,7 +70,7 @@ def shown():
 def expect(org):
     names = set(NAMES[org]) if org else {n for ns in NAMES.values() for n in ns}
     return {"inventory": names, "results": names, "history devices": names, "configs": names,
-            "history runs": {orgs.name(org)} if org else {orgs.name(o) for o in NAMES},
+            "history rows": names,
             "sessions": {f"{NAMES[org][0]}-ssh"} if org else {f"{ns[0]}-ssh" for ns in NAMES.values()}}
 
 

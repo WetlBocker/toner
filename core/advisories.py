@@ -59,6 +59,15 @@ def pan_title(cve):
 
 SECRETS = {"psirt_id": "service:psirt-id", "psirt_secret": "service:psirt-secret", "nvd_key": "service:nvd-key"}
 SOFTWARE, ADVISORIES, KEV = "Software version", "Advisories", "Known exploited (CISA)"
+SEVERITY_BANDS = (("Low", 0, 4), ("Medium", 4, 7), ("High", 7, 9), ("Critical", 9, 10.01))     # CVSS: from <= score < to
+
+
+def cvss_of(value):
+    """The CVSS score an advisory row's value states ('CVSS 7.5, EPSS 12%' -> 7.5), or None (fixed rows, hardening rules)."""
+    m = re.search(r"CVSS\s+(\d+(?:\.\d+)?)", value or "")
+    return float(m.group(1)) if m else None
+
+
 NO_VERSION = "No version on record. Run the health checks first; they read it."
 NO_SOURCE = "No advisory source for this vendor yet."
 OFF = "Vulnerability lookups are off under Settings > Scanning."

@@ -33,11 +33,17 @@ func collectPlatform(ctx context.Context, r *report.Report, opts Options) {
 			return
 		}
 		if ctx.Err() != nil {
+			if name == "updates" {
+				updatesUnfinished(r)
+			}
 			return
 		}
 		defer func() {
 			if p := recover(); p != nil {
 				note(r, name, fmt.Errorf("%v", p))
+				if name == "updates" {
+					updatesUnfinished(r)
+				}
 			}
 		}()
 		note(r, name, fn())
@@ -70,6 +76,7 @@ func collectPlatform(ctx context.Context, r *report.Report, opts Options) {
 	part("hyperv", func() error { return winHyperV(r) })
 	part("backup", func() error { return winBackup(ctx, r) })
 	part("tasks", func() error { return winTasks(r) })
+	part("updates", func() error { return winPendingUpdates(r) }) // last: the slowest part, so it cannot hold up the others
 }
 
 // query runs one WMI query in root\CIMV2.

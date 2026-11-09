@@ -203,6 +203,43 @@ def heatmap(p, xlabels, ylabels, cells, title="", unit="", worst=None):
     return opt
 
 
+def status_heatmap(p, xlabels, ylabels, cells, title=""):
+    """A grid coloured by status: cells is [(xi, yi, status)], ERROR as red as FAIL. Blank squares are not sent. A click reports
+    value: [x, y, n]. The third
+    value is a number (the status's place in STATUSES) because ECharts skips heatmap squares whose value is not one; the tooltip names it."""
+    if not cells:
+        return empty("Nothing to show yet")
+    opt = _base(p, title)
+    opt["tooltip"] = _tooltip(p, formatter="{b}")
+    x, y = _axis(p, "category", xlabels), _axis(p, "category", ylabels)
+    x["splitArea"] = y["splitArea"] = {"show": False}
+    y["inverse"] = True
+    opt["xAxis"], opt["yAxis"] = x, y
+    opt["series"] = [{"type": "heatmap", "data": [{"name": s, "value": [xi, yi, STATUSES.index(s) if s in STATUSES else len(STATUSES)],
+                                "itemStyle": {"color": status_color(p, "FAIL" if s == "ERROR" else s)}} for xi, yi, s in cells],
+                      "itemStyle": {"borderColor": p["surface"], "borderWidth": 1},
+                      "emphasis": {"itemStyle": {"shadowBlur": 6, "shadowColor": "rgba(0,0,0,0.25)"}}}]
+    return opt
+
+
+def ring(p, segments, center_text, title=""):
+    """Segments as a ring: segments is [(name, value, colour)]. `center_text` sits in the middle; a click reports the name. With every
+    segment at zero the ring is a plain grey circle that cannot be selected, still with its centre text."""
+    opt = pie(p, segments, title)
+    if not opt.get("series"):
+        opt = pie(p, [("", 1, p["border"])], title)
+        opt["legend"]["show"] = False
+        opt["tooltip"] = {"show": False}
+        opt["series"][0]["silent"] = True
+    # with a title the legend sits lower (see _base): a smaller, lower ring keeps clear of it
+    opt["series"][0]["radius"] = ["50%", "72%"] if title else ["58%", "82%"]
+    opt["series"][0]["center"] = ["50%", "60%"] if title else ["50%", "56%"]
+    opt["graphic"] = [{"type": "text", "left": "center", "top": "55%" if title else "50%",            # in the ring's middle
+                       "style": {"text": str(center_text), "fill": p["text"], "fontSize": 22, "fontWeight": "bold", "fontFamily": _font(p)["fontFamily"],
+                                 "textAlign": "center"}}]
+    return opt
+
+
 def gauge(p, value, warn=None, fail=None, title="", unit="%", maximum=100, lower_is_worse=False):
     """One reading against its limits: a half ring, coloured by the band the value is in. `lower_is_worse` for uptime-like readings."""
     if value is None:
@@ -225,7 +262,8 @@ def gauge(p, value, warn=None, fail=None, title="", unit="%", maximum=100, lower
     stops = sorted(stops, key=lambda s: s[0])
     opt = _base(p, "", animate=True)
     opt["grid"] = {"show": False}
-    opt["series"] = [{"type": "gauge", "startAngle": 200, "endAngle": -20, "min": 0, "max": mx, "radius": "100%", "center": ["50%", "62%"],
+    high = "54%" if "\n" in (title or "") else "62%"          # a second line under the name (used and total) is not cut off at the bottom
+    opt["series"] = [{"type": "gauge", "startAngle": 200, "endAngle": -20, "min": 0, "max": mx, "radius": "100%", "center": ["50%", high],
                       "progress": {"show": False},
                       "axisLine": {"lineStyle": {"width": 14, "color": stops}},
                       "pointer": {"width": 4, "length": "55%", "offsetCenter": [0, 0], "itemStyle": {"color": p["text"]}},

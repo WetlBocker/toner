@@ -70,6 +70,16 @@ check("the ring is green to the warn limit, amber to the fail limit, red to the 
 lo = js(cs.gauge(p, 20, warn=48, fail=24, title="Uptime", unit=" h", maximum=168, lower_is_worse=True))
 check("a reading where lower is worse runs red, amber, then green", [s[1] for s in lo["series"][0]["axisLine"]["lineStyle"]["color"]] == [p["status"]["FAIL"], p["status"]["WARN"], p["status"]["OK"]])
 check("no reading is the empty note", cs.gauge(p, None) == cs.empty("No reading yet"))
+two, one = (js(cs.gauge(p, 50, title=t))["series"][0]["center"][1] for t in ("C:\n412.0 GB of 500.0 GB", "C:"))
+check("a name with used and total under it raises the dial, so the second line is not cut off", float(two[:-1]) < float(one[:-1]), (two, one))
+
+print("== ring")
+pct = lambda v: float(v[:-1]) / 100
+for t in ("sw1", ""):
+    rg = js(cs.ring(p, [("Up", 3, "#0f0"), ("Down", 1, "#f00")], 4, title=t))["series"][0]
+    top = pct(rg["center"][1]) * 220 - pct(rg["radius"][1]) * 220 / 2          # Across devices' ring: 240 x 220
+    legend = (22 if t else 0) + 14
+    check(f"the ring clears its legend ({'with' if t else 'without'} a title)", top > legend, (top, legend))
 
 print("== area over time")
 t0 = datetime(2026, 11, 1, 12, 0)

@@ -35,7 +35,7 @@ class SnmpDriver(SnmpExtras, Driver):
         return [("cpu", self.cpu), ("memory", self.memory), ("storage", self.storage),
                 ("uptime", self.uptime), ("temperature", self.temperature),
                 ("interfaces", self.interfaces), ("interface errors", self.errors),
-                ("bandwidth", self.bandwidth), ("environment", self.environment), ("load", self.load),
+                ("bandwidth", self.bandwidth), ("wan usage", self.wan_usage), ("environment", self.environment), ("load", self.load),
                 ("ups", self.ups), ("printer", self.printer), ("nas", self.nas)]
 
     # ---------------------------------------------------------------- identity
@@ -101,7 +101,7 @@ class SnmpDriver(SnmpExtras, Driver):
         c = self.c
         base = N["hrStorageType"][:-2]
         types, descr, unit, size, used = (c.try_column(f"{base}.{i}") for i in (2, 3, 4, 5, 6))
-        worst = None
+        worst, disks = None, []
         for i, t in types.items():
             if str(t) != HR_DISK and text_of(t) != "hrStorageFixedDisk":
                 continue
@@ -109,13 +109,15 @@ class SnmpDriver(SnmpExtras, Driver):
             if not s or un is None:
                 continue
             pct = un / s * 100
+            unit_b = number_of(unit.get(i), 1) or 1
+            disks.append(self.item(text_of(descr.get(i, i)), numeric=float(pct), data={"used": un * unit_b, "total": s * unit_b}))
             if worst is None or pct > worst[0]:
                 worst = (pct, text_of(descr.get(i, i)))
         if worst is None:
             return []
         t = self.th["disk"]
         return self.result("storage", grade(worst[0], t["warn"], t["fail"]), f"{worst[0]:.0f}%", worst[1],
-                           numeric=float(worst[0]))
+                           numeric=float(worst[0]), items=disks)
 
     # ---------------------------------------------------------------- uptime / temperature
     def uptime(self):
@@ -183,7 +185,10 @@ class SnmpDriver(SnmpExtras, Driver):
         creds, port = snmp.credentials_for(self.dev)
         with snmp.Client(self.dev["host"], port, creds, timeout=min(self.opts["http_timeout"], 10), retries=1) as c:
             self.c = c
-            return self._if_states()
+            try:
+                return self._if_states()
+            finally:
+                self.c = None                                        # the client is closed now; interface_counters() must open its own
 
     def interfaces(self):
         return self.interfaces_row(self._if_states())
@@ -201,15 +206,34 @@ class SnmpDriver(SnmpExtras, Driver):
         errs = {self._label(i): int((number_of(inn.get(i), 0) or 0) + (number_of(out.get(i), 0) or 0)) for i in ifs}
         return self.error_counter_rows("interface errors", errs)
 
+    def _octets(self):
+        """The byte counters and speeds, walked once per run: bandwidth and wan usage both read them."""
+        if not hasattr(self, "_oct_cache"):
+            c = self.c
+            hc_in, hc_out = c.try_column(N["ifHCInOctets"]), c.try_column(N["ifHCOutOctets"])
+            if not hc_in:
+                hc_in, hc_out = c.try_column(N["ifInOctets"]), c.try_column(N["ifOutOctets"])
+            self._oct_cache = (hc_in, hc_out, c.try_column(N["ifHighSpeed"]), c.try_column(N["ifSpeed"]))
+        return self._oct_cache
+
+    def interface_counters(self):
+        if getattr(self, "c", None) is None:                         # asked outside a run (the Choose interfaces list): open our own client
+            creds, port = snmp.credentials_for(self.dev)
+            with snmp.Client(self.dev["host"], port, creds, timeout=min(self.opts["http_timeout"], 10), retries=1) as c:
+                self.c = c
+                try:
+                    return self.interface_counters()
+                finally:
+                    self.c = None
+        hc_in, hc_out, high, low = self._octets()
+        return {self._label(i): (number_of(hc_in.get(i), 0) or 0, number_of(hc_out.get(i), 0) or 0,
+                                 (number_of(high.get(i), 0) or 0) * 1e6 or (number_of(low.get(i), 0) or 0)) for i in self._real_ifs()}
+
     def bandwidth(self):
-        c = self.c
         ifs = self._up_ifs()
         if not ifs:
             return []
-        hc_in, hc_out = c.try_column(N["ifHCInOctets"]), c.try_column(N["ifHCOutOctets"])
-        if not hc_in:
-            hc_in, hc_out = c.try_column(N["ifInOctets"]), c.try_column(N["ifOutOctets"])
-        high, low = c.try_column(N["ifHighSpeed"]), c.try_column(N["ifSpeed"])
+        hc_in, hc_out, high, low = self._octets()
         elapsed = self.delta("bw:t", time.time())
         worst = None
         for i in ifs:

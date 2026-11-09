@@ -7,6 +7,7 @@ from core.sqldb import sqlite3
 import threading
 import time
 from datetime import datetime, timedelta
+from itertools import islice
 from pathlib import Path
 
 import keyring
@@ -48,6 +49,7 @@ DEFAULT_THRESHOLDS = {
     "rdp_disconnected": {"warn": 5, "fail": 20},    # Windows: Remote Desktop sessions left disconnected
     "content_age":  {"warn": 14, "fail": 45},       # Palo Alto: days since the newest application / threat / antivirus content
     "support_days": {"warn": 90, "fail": 30},       # any device: days until a support / warranty / licence date in its fields; LOWER is worse
+    "wan_usage":    {"warn": 80, "fail": 95},       # SNMP and Fortinet: the busiest WAN interface, % of its available bandwidth
 }
 THRESHOLD_LABELS = {"cpu": "CPU %", "memory": "Memory %", "channel_util": "Channel utilization %",
                     "temperature": "Temperature C", "port_errors": "Port errors (count)",
@@ -63,8 +65,9 @@ THRESHOLD_LABELS = {"cpu": "CPU %", "memory": "Memory %", "channel_util": "Chann
                     "support_days": "Support, warranty and licence days left", "clock_offset": "Windows clock difference (seconds)",
                     "failed_logons": "Windows failed sign-ins (24 h)", "lockouts": "Windows account lockouts (24 h)",
                     "av_age": "Windows antivirus signatures (days old)", "backup_days": "Windows Server Backup (days old)",
-                    "rdp_disconnected": "Windows disconnected sessions", "content_age": "Palo Alto content (days old)"}
-THRESHOLD_GROUPS = [("Network devices", ["cpu", "memory", "temperature", "uptime", "disk", "utilization", "port_errors", "sessions", "channel_util", "wifi_signal"]),
+                    "rdp_disconnected": "Windows disconnected sessions", "content_age": "Palo Alto content (days old)",
+                    "wan_usage": "WAN usage %"}
+THRESHOLD_GROUPS = [("Network devices", ["cpu", "memory", "temperature", "uptime", "disk", "utilization", "port_errors", "sessions", "channel_util", "wifi_signal", "wan_usage"]),
                     ("Windows computers", ["win_events", "patch_days", "cert_days", "agent_silent", "clock_offset", "failed_logons", "lockouts", "av_age", "backup_days", "rdp_disconnected"]),
                     ("UniFi (API)", ["tx_retries", "sensor_battery", "wan_uptime", "isp_latency", "isp_loss"]),
                     ("Any device", ["support_days"]),
@@ -740,9 +743,26 @@ def _m14_unifi_seen(c):
     """)
 
 
+def _m15_result_items(c):
+    """Detail a check keeps beside its row (one per disk, certificate, interface...), gone with the row it belongs to."""
+    if "itemized" not in {r[1] for r in c.execute("PRAGMA table_info(results)")}:   # 1: the row was stored with a list, maybe empty
+        c.execute("ALTER TABLE results ADD COLUMN itemized INTEGER DEFAULT 0")
+    c.executescript("""
+    CREATE TABLE IF NOT EXISTS result_items (
+        result_id INTEGER NOT NULL REFERENCES results(id) ON DELETE CASCADE,
+        pos INTEGER, name TEXT, numeric REAL, status TEXT, text TEXT, data TEXT);
+    CREATE INDEX IF NOT EXISTS idx_result_items ON result_items(result_id);
+    """)
+
+
+def _m16_runs_started(c):
+    """History by time range finds its runs by when they started."""
+    c.execute("CREATE INDEX IF NOT EXISTS idx_runs_started ON runs(started_at)")
+
+
 MIGRATIONS = [(1, _m1_legacy_columns), (2, _m2_agent_history), (3, _m3_agent_tokens), (4, _m4_device_checks), (5, _m5_ansible_runs),
               (6, _m6_shared), (7, _m7_org_uids), (8, _m8_faster_history), (9, _m9_api_tester), (10, _m10_assistant), (11, _m11_device_software),
-              (12, _m12_assistant_searches), (13, _m13_backup_secrets), (14, _m14_unifi_seen)]
+              (12, _m12_assistant_searches), (13, _m13_backup_secrets), (14, _m14_unifi_seen), (15, _m15_result_items), (16, _m16_runs_started)]
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 
 
@@ -1254,7 +1274,7 @@ def bad_pair(key, warn, fail):
 
 def normalize_checkopts(raw):
     """A device's own check settings, cleaned: {'checks': [keys that run] (only when it picks its own list),
-    'thresholds': {key: {'warn', 'fail'}} (only the ones it overrides), 'interfaces': [names] (only those are checked; missing = all)}. Empty when it has none: it then follows the global settings."""
+    'thresholds': {key: {'warn', 'fail'}} (only the ones it overrides), 'interfaces': [names] (only those are checked; missing = all), 'wan': {name: Mbps or None}}. Empty when it has none: it then follows the global settings."""
     if isinstance(raw, str):
         try:
             raw = json.loads(raw) if raw.strip() else {}
@@ -1269,6 +1289,17 @@ def normalize_checkopts(raw):
         names = [n for n in dict.fromkeys(str(x).strip() for x in raw["interfaces"]) if n]
         if names:
             out["interfaces"] = names
+    if isinstance(raw.get("wan"), dict):                                 # WAN interfaces: {name: circuit speed in Mbps, or None for the port speed}
+        wan = {}
+        for n, v in raw["wan"].items():
+            if str(n).strip():
+                try:
+                    v = float(v)
+                except (TypeError, ValueError):
+                    v = None
+                wan[str(n).strip()] = v if v and v > 0 else None
+        if wan:
+            out["wan"] = wan
     th = {}
     for key, pair in (raw.get("thresholds") or {}).items() if isinstance(raw.get("thresholds"), dict) else ():
         if key in DEFAULT_THRESHOLDS and isinstance(pair, dict):
@@ -1455,10 +1486,14 @@ def _save_run_here(results):
         cur = c.execute("INSERT INTO runs(started_at, ok, warn, fail, error) VALUES(?,?,?,?,?)",
                         (now, n("OK"), n("WARN"), n("FAIL"), n("ERROR")))
         rid = cur.lastrowid
-        c.executemany(
-            "INSERT INTO results(run_id, device, check_name, status, value, message, numeric) "
-            "VALUES(?,?,?,?,?,?,?)",
-            [(rid, r.device, r.check, r.status, r.value, r.message, r.numeric) for r in results])
+        for r in results:
+            its = getattr(r, "items", None)
+            rrid = c.execute("INSERT INTO results(run_id, device, check_name, status, value, message, numeric, itemized) VALUES(?,?,?,?,?,?,?,?)",
+                             (rid, r.device, r.check, r.status, r.value, r.message, r.numeric, its is not None)).lastrowid
+            if its:
+                c.executemany("INSERT INTO result_items(result_id, pos, name, numeric, status, text, data) VALUES(?,?,?,?,?,?,?)",
+                              [(rrid, i, it.get("name"), it.get("numeric"), it.get("status"), it.get("text", ""),
+                                json.dumps(it.get("data") or {}, default=str)) for i, it in enumerate(its)])
         from core import unifikids
         unifikids.note(c, results, now)
         cutoff = (datetime.now() - timedelta(days=int(get_setting("retention_days")))
@@ -1594,15 +1629,55 @@ def device_all_checks():
         return out
     return _per_device(here)
 
-def check_rows(device, check, limit=200):
-    """A check's stored rows, oldest first: [{'t', 'value', 'status', 'numeric'}]. `device` can be a key from the Global view."""
+def _ts(t):
+    """A time as runs.started_at stores it; strings pass through, None stays None."""
+    return t.strftime("%Y-%m-%d %H:%M:%S") if isinstance(t, datetime) else t
+
+def check_rows(device, check, limit=200, start=None, end=None):
+    """A check's stored rows, oldest first: [{'t', 'value', 'status', 'message', 'numeric'}]. With `start` there is no limit (the
+    range is the limit). `device` can be a key from the Global view."""
     device, org = split_key(device)
+    start, end = _ts(start), _ts(end)
     with within(org if (org is not None or not everything()) else GLOBAL):
         with connect() as c:
-            rows = c.execute("SELECT runs.started_at AS t, results.value AS value, results.status AS status, results.numeric AS numeric "
+            rows = c.execute("SELECT runs.started_at AS t, results.value AS value, results.status AS status, results.message AS message, results.numeric AS numeric "
                              "FROM results JOIN runs ON runs.id = results.run_id WHERE results.device=? AND results.check_name=? "
-                             "ORDER BY results.run_id DESC LIMIT ?", (device, check, limit)).fetchall()
+                             "AND (? IS NULL OR runs.started_at >= ?) AND (? IS NULL OR runs.started_at <= ?) "
+                             "ORDER BY results.run_id DESC LIMIT ?", (device, check, start, start, end, end, -1 if start else limit)).fetchall()
     return [dict(r) for r in reversed(rows)]
+
+def _items_here(device, check, start, end, newest=False):
+    """One query: results (left-joined to their items), grouped here. items is None for a row stored without a list."""
+    where = ("results.device=? AND results.check_name=? AND (? IS NULL OR runs.started_at >= ?) AND (? IS NULL OR runs.started_at <= ?)")
+    args = (device, check, start, start, end, end)
+    pick = f"AND results.id = (SELECT results.id FROM results JOIN runs ON runs.id = results.run_id WHERE {where} ORDER BY results.run_id DESC LIMIT 1)" if newest else ""
+    with connect() as c:
+        rows = c.execute("SELECT results.id AS rid, runs.started_at AS t, results.itemized AS itemized, i.name, i.numeric, i.status, i.text, i.data "
+                         "FROM results JOIN runs ON runs.id = results.run_id LEFT JOIN result_items i ON i.result_id = results.id "
+                         f"WHERE {where} {pick} ORDER BY results.run_id, i.pos", args + (args if newest else ())).fetchall()
+    out, last = [], None
+    for r in rows:
+        if r["rid"] != last:
+            out.append({"t": r["t"], "items": [] if r["itemized"] else None}); last = r["rid"]
+        if r["name"] is not None or r["data"] is not None:
+            out[-1]["items"].append({"name": r["name"], "numeric": r["numeric"], "status": r["status"], "text": r["text"] or "",
+                                     "data": json.loads(r["data"] or "{}")})
+    return out
+
+def items_of(device, check, start=None, end=None):
+    """[{'t', 'items'}] for a check, oldest first, between start and end (times as stored; None: no limit). items is the list the
+    row was stored with (maybe empty), or None when the row was stored without one. `device` can be a key from the Global view."""
+    device, org = split_key(device)
+    with within(org if (org is not None or not everything()) else GLOBAL):
+        return _items_here(device, check, start, end)
+
+def latest_items(device, check):
+    """(time, items) of the check's newest stored row: items is [] when that row reported an empty list and None when it was stored
+    without one (an agent that does not report it); (None, None) when the check has no row."""
+    device, org = split_key(device)
+    with within(org if (org is not None or not everything()) else GLOBAL):
+        rows = _items_here(device, check, None, None, newest=True)
+    return (rows[0]["t"], rows[0]["items"]) if rows else (None, None)
 
 AGENT_COLUMNS = {"cpu": "cpu", "memory": "memory", "disks": "disk", "uptime": "uptime_h"}     # check name -> agent_metrics column
 
@@ -1631,31 +1706,118 @@ def problems(days=7):
     return out
 
 
-def series(device, check, limit=200):
+def series(device, check, limit=200, start=None, end=None):
     """(time, value) points for one check, oldest first. A Windows agent reports far more often than checks run, so its
-    own reports are added in and the chart has a point per report. `device` can be a key from the Global view."""
+    own reports are added in and the chart has a point per report. With `start` there is no limit.
+    `device` can be a key from the Global view."""
     device, org = split_key(device)
+    args = (device, check, -1 if start else limit, _ts(start), _ts(end))
     if org is not None or not everything():
         with within(org):
-            return _series_here(device, check, limit)
+            return _series_here(*args)
     with within(GLOBAL):                               # a plain name in the Global view is Global's own device
-        return _series_here(device, check, limit)
+        return _series_here(*args)
 
-def _series_here(device, check, limit):
+def _series_here(device, check, limit, start=None, end=None):
     with connect() as c:
         rows = c.execute(
             "SELECT runs.started_at AS t, results.numeric AS v FROM results "
             "JOIN runs ON runs.id = results.run_id "
             "WHERE results.device=? AND results.check_name=? AND results.numeric IS NOT NULL "
-            "ORDER BY results.run_id DESC LIMIT ?", (device, check, limit)).fetchall()
+            "AND (? IS NULL OR runs.started_at >= ?) AND (? IS NULL OR runs.started_at <= ?) "
+            "ORDER BY results.run_id DESC LIMIT ?", (device, check, start, start, end, end, limit)).fetchall()
         pts = [(r["t"], r["v"]) for r in reversed(rows)]
         col = AGENT_COLUMNS.get(check)
         if col:
             extra = c.execute(f"SELECT at AS t, {col} AS v FROM agent_metrics WHERE device=? AND {col} IS NOT NULL "
-                              "ORDER BY id DESC LIMIT ?", (device, limit)).fetchall()
+                              "AND (? IS NULL OR at >= ?) AND (? IS NULL OR at <= ?) ORDER BY id DESC LIMIT ?",
+                              (device, start, start, end, end, limit)).fetchall()
             if extra:
-                pts = sorted(set(pts) | {(r["t"], r["v"]) for r in extra})[-limit:]
+                pts = sorted(set(pts) | {(r["t"], r["v"]) for r in extra})
+                pts = pts[-limit:] if limit >= 0 else pts
     return pts
+
+
+def _across_files(sql, args, key="device", limit=None):
+    """Rows of one query run on every file of the view (Shared devices only where that applies), devices keyed with dkey; with a
+    limit, only the first that many kept from each file (in the query's order)."""
+    out = []
+    for org, only in _each_file():
+        with within(org):
+            with connect() as c:
+                part = list(islice((r for r in map(dict, c.execute(sql, args)) if only is None or _base(r[key]) in only), limit))
+        for r in part:
+            r[key] = dkey(r[key], org)
+            out.append(r)
+    return out
+
+_ROW = "runs.started_at AS t, results.device AS device, results.check_name AS check_name, results.status AS status, results.value AS value, results.message AS message, results.numeric AS numeric"
+
+HISTORY_CAP = 50_000          # the most rows History's table reads (the newest), so a long range cannot freeze the window
+
+def results_between(start, end, limit=None):
+    """Every stored row from `start` to `end` (datetimes), newest first, or only the newest `limit`: [{'t', 'device', 'check_name',
+    'status', 'value', 'message', 'numeric'}], devices keyed with dkey, read from every file of the view as problems() does."""
+    out = _across_files(f"SELECT {_ROW} FROM results JOIN runs ON runs.id = results.run_id "
+                        "WHERE runs.started_at >= ? AND runs.started_at <= ? ORDER BY runs.started_at DESC", (_ts(start), _ts(end)), limit=limit)
+    out.sort(key=lambda r: r["t"], reverse=True)
+    return out[:limit]
+
+_LATEST_OF = ("WITH RECURSIVE ck(n) AS (VALUES {vals}), "
+              "dv(name) AS (SELECT MIN(device) FROM results UNION ALL SELECT (SELECT MIN(device) FROM results WHERE device > dv.name) FROM dv WHERE name IS NOT NULL) "
+              "SELECT {cols} FROM dv d JOIN ck "
+              "JOIN results ON results.device = d.name AND results.check_name = ck.n "
+              "AND results.run_id = (SELECT MAX(run_id) FROM results WHERE device = d.name AND check_name = ck.n) "
+              "JOIN runs ON runs.id = results.run_id")
+_LATEST = _LATEST_OF.format(vals="{vals}", cols=f"{_ROW}, results.run_id AS rid")
+
+def latest_per_device(checks):
+    """Each device's newest row among `checks`: [{'device', 'check_name', 'status', 'value', 'message', 'numeric', 't'}].
+    Seeks each (device, check)'s last run in idx_results_latest, so history length does not matter."""
+    rows = _across_files(_LATEST.format(vals=",".join(["(?)"] * len(checks))), tuple(checks))
+    best = {}
+    for r in rows:
+        if r["device"] not in best or r["rid"] > best[r["device"]]["rid"]:
+            best[r["device"]] = r
+    return [{k: v for k, v in r.items() if k != "rid"} for r in best.values()]
+
+def average_per_device(checks, days):
+    """{device: mean of the numbers} over the last `days` days for rows of `checks` that have a number, averaged in SQLite."""
+    ph = ",".join("?" * len(checks))
+    cutoff = _ts(datetime.now() - timedelta(days=days))
+    rows = _across_files(f"SELECT results.device AS device, AVG(results.numeric) AS avg FROM results JOIN runs ON runs.id = results.run_id "
+                         f"WHERE results.check_name IN ({ph}) AND results.numeric IS NOT NULL AND runs.started_at >= ? "
+                         "GROUP BY results.device", (*checks, cutoff))
+    return {r["device"]: r["avg"] for r in rows}
+
+def average_items_per_device(checks, days):
+    """{(device, item name): mean of the item's numbers} over the last `days` days for rows of `checks` (a drive's temperature, a
+    dataset's percent used), averaged in SQLite."""
+    ph = ",".join("?" * len(checks))
+    cutoff = _ts(datetime.now() - timedelta(days=days))
+    rows = _across_files(f"SELECT results.device AS device, i.name AS name, AVG(i.numeric) AS avg FROM result_items i "
+                         "JOIN results ON results.id = i.result_id JOIN runs ON runs.id = results.run_id "
+                         f"WHERE results.check_name IN ({ph}) AND i.numeric IS NOT NULL AND runs.started_at >= ? "
+                         "GROUP BY results.device, i.name", (*checks, cutoff))
+    return {(r["device"], r["name"]): r["avg"] for r in rows}
+
+def latest_items_per_device(checks):
+    """{(device, check): (time, items)} of every device's newest row of each of `checks`, items as latest_items gives them ([] for an
+    empty list, None for a row stored without one): one query per file, however many devices."""
+    if not checks:
+        return {}
+    cols = ("results.id AS rid, runs.started_at AS t, results.device AS device, results.check_name AS check_name, results.itemized AS itemized, "
+            "i.name AS item, i.numeric AS numeric, i.status AS status, i.text AS text, i.data AS data")
+    sql = _LATEST_OF.format(vals=",".join(["(?)"] * len(checks)), cols=cols) + " LEFT JOIN result_items i ON i.result_id = results.id ORDER BY results.id, i.pos"
+    out = {}
+    for r in _across_files(sql, tuple(checks)):
+        key = (r["device"], r["check_name"])
+        if key not in out:
+            out[key] = (r["t"], [] if r["itemized"] else None)
+        if r["item"] is not None or r["data"] is not None:
+            out[key][1].append({"name": r["item"], "numeric": r["numeric"], "status": r["status"], "text": r["text"] or "",
+                                "data": json.loads(r["data"] or "{}")})
+    return out
 
 
 # ---------- dashboard data ----------

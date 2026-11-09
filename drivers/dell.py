@@ -99,7 +99,7 @@ class DellDriver(CliRows, SshDriver):
         text = self.cmd(c, "show environment")
         if not re.search(r"\b(?:fan|psu|power supply|power)\b", text, re.I):
             return []
-        kind, problems, seen = "", [], 0
+        kind, problems, seen, comps = "", [], 0, []
         for line in text.splitlines():
             low = line.lower()
             if re.search(r"\bfan", low):
@@ -111,6 +111,9 @@ class DellDriver(CliRows, SshDriver):
                 continue
             seen += 1
             word = m.group(1)
+            if word not in ("absent", "not present"):
+                comps.append(self.item(f"{kind} {' '.join(line.split()[:2])}", text=word,
+                                       status=FAIL if word.startswith("fail") else WARN if word == "down" else OK))
             if word.startswith("fail"):
                 problems.append((FAIL, f"{kind} {' '.join(line.split()[:2])}: failed"))
             elif word == "down":
@@ -118,4 +121,4 @@ class DellDriver(CliRows, SshDriver):
         if not seen:
             return []
         worst = FAIL if any(s == FAIL for s, _ in problems) else WARN if problems else OK
-        return self.result("environment", worst, "ok" if not problems else f"{len(problems)} not ok", "; ".join(m for _, m in problems[:4]), numeric=float(len(problems)))
+        return self.result("environment", worst, "ok" if not problems else f"{len(problems)} not ok", "; ".join(m for _, m in problems[:4]), numeric=float(len(problems)), items=comps)

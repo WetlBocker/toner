@@ -245,7 +245,9 @@ def run_tls(chk, dev, timeout=8):
         c2["fail"] = 7
     status = _threshold_status(c2, days)
     msg = f"{info['subject']}, expires {info['not_after']:%Y-%m-%d}" + (" (EXPIRED)" if days < 0 else "")
-    return Result(dev["name"], chk["name"], status, f"{days} days", msg, numeric=float(days))
+    return Result(dev["name"], chk["name"], status, f"{days} days", msg, numeric=float(days),
+                  items=[{"name": info["subject"], "numeric": float(days), "status": None, "text": "",
+                          "data": {"expires": f"{info['not_after']:%Y-%m-%d}", "where": f"port {port}"}}])
 
 
 def sweep_ports(text):

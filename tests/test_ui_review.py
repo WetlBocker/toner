@@ -123,10 +123,10 @@ check("the device list never scrolls sideways", cf.devs.horizontalScrollBarPolic
 check("the right-hand panes say what to do while empty", cf.vers_hint.isVisibleTo(cf) and cf.text.placeholderText() != "")
 from ui.history import HistoryTab
 hs = HistoryTab(); hs.resize(1100, 600); hs.show(); app.processEvents()
-check("History selects the latest run itself, so the lower table is not blank", hs.runs.currentRow() == 0 and hs.detail.rowCount() > 0 and not hs.detail_hint.isVisibleTo(hs))
+check("History's table shows the last 8 hours itself, so it is not blank", hs.detail.model().rowCount() > 0)
 with db.connect() as c: c.execute("DELETE FROM runs")
 hs.refresh()
-check("and says so when there are no runs", hs.runs_hint.isVisibleTo(hs) and hs.detail_hint.isVisibleTo(hs))
+check("and is empty when there are no runs", hs.detail.model().rowCount() == 0)
 from ui.tools import ToolsTab
 tt = ToolsTab()
 check("Tools has room for its longest name, and a tooltip for each", tt.tabs.list.width() >= 220 and tt.tabs.list.item(1).toolTip() != "")
