@@ -24,6 +24,9 @@ from ui import chartspec, webchart
 webchart.prepare_application()
 app = QApplication([])
 
+# The waits end as soon as their condition holds; the cap is long because a CI runner without a GPU renders in software.
+SLOW = 60000
+
 def pump(cond, ms=8000):
     t0 = time.time()
     while time.time() - t0 < ms / 1000:
@@ -42,14 +45,14 @@ else:
     v = webchart.ChartView()
     v.resize(640, 400); v.show()
     v.draw(lambda p: chartspec.donut(p, {"OK": 3, "FAIL": 1}, title="t"))
-    check("the page loads", pump(lambda: v._loaded, 15000))
+    check("the page loads", pump(lambda: v._loaded, SLOW))
     out = os.path.join(SP, "chart.png"); got = []
     QTimer.singleShot(1200, lambda: v.to_png(out, got.append))
-    check("the chart is drawn and exports as a picture", pump(lambda: bool(got), 15000) and got[0] is True and os.path.getsize(out) > 2000)
+    check("the chart is drawn and exports as a picture", pump(lambda: bool(got), SLOW) and got[0] is True and os.path.getsize(out) > 2000)
     seen = []
     v.clicked.connect(seen.append)
     v._view.page().runJavaScript('toner.emitClick({name: "FAIL", value: 1})')
-    check("a click on the page comes back to Python as a dict", pump(lambda: bool(seen)) and seen[0].get("name") == "FAIL", seen)
+    check("a click on the page comes back to Python as a dict", pump(lambda: bool(seen), SLOW) and seen[0].get("name") == "FAIL", seen)
     v.restyle()
     check("restyling keeps the chart", pump(lambda: v._builder is not None) and v._loaded)
 
