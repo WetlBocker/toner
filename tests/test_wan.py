@@ -61,6 +61,10 @@ r = run({"wan1": 300}, 312.5, name="c")[1]
 check("250 Mbps on that circuit is 83% and WARN", r.status == WARN and round(r.numeric) == 83, r)
 check("a WAN name the device no longer has is skipped, and with none left there is no row", run({"gone": None}, 375, name="d")[1] == [])
 check("a device with no WAN chosen has no row", run({}, 375, name="e")[1] == [])
+first, r = run({"wan1": None}, 375, name="f", speed=0)
+check("no speed known: 'baseline set' on the first run only, then no row (not 'baseline set' forever)",
+      first.value == "baseline set" and r == [], (first, r))
+check("a second run under 5 s after the first: no row", run({"wan1": None}, 375, name="g", seconds=2)[1] == [])
 try:
     Driver({"name": "x", "vendor": "x", "host": "x"}, TH, {}).interface_counters(); check("a driver without counters says so", False)
 except NotImplementedError:

@@ -10,6 +10,23 @@ from ui.widgets import StatusDelegate
 SORT = Qt.ItemDataRole.UserRole + 1
 
 
+class _Cell(QStandardItem):
+    """Numbers sort as numbers, before any text, and a blank cell ends up last whichever way the column is sorted."""
+
+    def __lt__(self, other):
+        a, b = self.data(SORT), other.data(SORT)
+        blank_a, blank_b = a in ("", None), b in ("", None)
+        if blank_a or blank_b:
+            if blank_a == blank_b:
+                return False
+            desc = self.model().parent().horizontalHeader().sortIndicatorOrder() == Qt.SortOrder.DescendingOrder
+            return blank_b != desc                     # a descending sort asks the other way round
+        num_a, num_b = isinstance(a, (int, float)), isinstance(b, (int, float))
+        if num_a or num_b:
+            return a < b if num_a and num_b else num_a
+        return str(a) < str(b)
+
+
 class DetailList(QTableView):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -36,7 +53,7 @@ class DetailList(QTableView):
             cells = []
             for key, _label in columns:
                 v = r.get(key)
-                it = QStandardItem()
+                it = _Cell()
                 it.setData("" if v is None else v, Qt.ItemDataRole.DisplayRole)
                 it.setData(r.get("_" + key, "" if v is None else v), SORT)
                 cells.append(it)

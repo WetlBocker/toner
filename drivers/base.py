@@ -173,8 +173,9 @@ class Driver:
             items.append(self.item(name, numeric=pct, status=grade(pct, t["warn"], t["fail"]), data={"in_bps": din * 8 / elapsed, "out_bps": dout * 8 / elapsed, "available_bps": avail}))
             if worst is None or pct > worst[0]:
                 worst = (pct, name, bps)
-        if worst is None:
-            return self.result("wan usage", OK, "baseline set", "rates are reported from the next run")
+        if worst is None:                                    # nothing to rate: say so only on the very first run, else no row
+            first = not any(k.startswith("wan:") for k in self._baseline)
+            return self.result("wan usage", OK, "baseline set", "rates are reported from the next run") if first else []
         from core import snmp
         t = self.th["wan_usage"]
         return self.result("wan usage", grade(worst[0], t["warn"], t["fail"]), f"{worst[0]:.0f}%",

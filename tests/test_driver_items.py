@@ -108,8 +108,9 @@ check("Arista environment: the row is as before", (e.status, e.value, e.numeric)
 check("Arista environment: an item for every state read, the OK ones too", [(i["status"], i["text"]) for i in e.items] == [("OK", "coolingOk"), ("OK", "ok"), ("FAIL", "failed"), ("OK", "ok")]
       and all(i["name"] for i in e.items), e.items)
 f = r["flash"]
-check("flash: the row is as before, one item with used and total", (f.status, f.value, f.numeric) == ("OK", "75%", 75.0)
-      and [(i["name"], i["numeric"], i["data"]) for i in f.items] == [("flash:", 75.0, {"used": 3000000000, "total": 4000000000})], f)
+check("flash: the row is as before, one item with used and total, named after the filesystem without its colon",
+      (f.status, f.value, f.message, f.numeric) == ("OK", "75%", "1000 MB free (flash:)", 75.0)
+      and [(i["name"], i["numeric"], i["data"]) for i in f.items] == [("flash", 75.0, {"used": 3000000000, "total": 4000000000})], f)
 def cli_rows(vendor, table):
     class Conn:
         def __enter__(self): return self

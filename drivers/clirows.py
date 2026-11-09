@@ -46,5 +46,5 @@ class CliRows:
                 total = int(re.search(r"(\d+)\s+bytes total", self._out(c, command)).group(1))
                 t = self.th["disk"]
                 return self.result("flash", grade(pct, t["warn"], t["fail"]), f"{pct:.0f}%", f"{free / 1e6:.0f} MB free ({command.split()[-1]})", numeric=float(pct),
-                                   items=[self.item(command.split()[-1], numeric=float(pct), data={"used": total - free, "total": total})])
+                                   items=[self.item(command.split()[-1].rstrip(":"), numeric=float(pct), data={"used": total - free, "total": total})])
         return []
