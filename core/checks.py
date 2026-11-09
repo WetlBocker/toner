@@ -101,6 +101,10 @@ CATALOG = {
               ("channel util", "Channel utilization")],
     "all": [("support", "Support, warranty and licence dates kept in a device's custom fields")],
 }
+# every network device can have WAN interfaces: Cisco reads their traffic from `show interface`, the others by SNMP once it is set up
+# (Fortinet and the SNMP device list it above, where their run reads it)
+for _vendor in ("arista", "cisco", "dell", "extreme", "hpe", "juniper", "mikrotik", "paloalto", "sonicwall", "sophos"):
+    CATALOG[_vendor] = CATALOG[_vendor] + [("wan usage", "WAN usage")]
 
 
 def key(vendor, check):

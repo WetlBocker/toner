@@ -22,7 +22,7 @@ class SophosDriver(SnmpDriver):
     def check_list(self):
         return [("cpu", self.cpu), ("memory", self.memory), ("storage", self.storage), ("uptime", self.uptime),
                 ("interfaces", self.interfaces), ("interface errors", self.errors), ("bandwidth", self.bandwidth),
-                ("version", self.version), ("disk", self.disk), ("services", self.services), ("ha", self.ha), ("licenses", self.licenses)]
+                ("wan usage", self.wan_usage), ("version", self.version), ("disk", self.disk), ("services", self.services), ("ha", self.ha), ("licenses", self.licenses)]
 
     def version(self):
         got = self.c.try_get(FW_VERSION, DEVICE_TYPE, DEVICE_NAME)

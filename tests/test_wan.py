@@ -30,7 +30,10 @@ check("the limits are 80 and 95 and can be set per device", TH["wan_usage"] == {
       and db.normalize_checkopts({"thresholds": {"wan_usage": {"warn": 70, "fail": 90}}})["thresholds"] == {"wan_usage": {"warn": 70.0, "fail": 90.0}})
 check("the WAN choice is kept, cleaned",
       db.normalize_checkopts({"wan": {"wan1": 300, "port2": None, "": 5}}) == {"wan": {"wan1": 300.0, "port2": None}})
-check("only SNMP and Fortinet offer it", ifaces.wan_capable("snmp") and ifaces.wan_capable("fortinet") and not ifaces.wan_capable("windows"))
+NETWORK = ("arista", "cisco", "dell", "extreme", "fortinet", "hpe", "juniper", "mikrotik", "paloalto", "snmp", "sonicwall", "sophos")
+check("every network device offers it", all(ifaces.wan_capable(v) for v in NETWORK), [v for v in NETWORK if not ifaces.wan_capable(v)])
+check("...servers, managers and hosts do not", not any(ifaces.wan_capable(v) for v in ("windows", "ciscoise", "ciscofmc", "ciscosdwan", "vmware", "esxi",
+                                                                                         "truenas", "proxmox", "cloud")))
 
 class Fake(Driver):
     counters = {}
@@ -152,6 +155,97 @@ w2 = DeviceChecks(); w2.set_vendor("fortinet"); w2.load(w.values())
 check("the WAN choice is saved without it, and loads back", w.values() == {"wan": {"wan1": 300.0}} and not w.pick_ifs.isChecked() and w2._wan == {"wan1": 300.0}, w.values())
 w.set_vendor("windows")
 check("a device that cannot read traffic drops it", w.values() == {})
+
+print("== every network device")
+NOSNMP = {"name": "pa-nosnmp", "vendor": "paloalto", "host": "10.0.0.9", "checkopts": {"wan": {"ethernet1/1": None}}}
+r = DRIVERS["paloalto"](NOSNMP, TH, {**db.runtime_options()}).wan_usage()
+check("WAN chosen but no SNMP set up: an N/A row that says how", r.status == "N/A" and r.value == "no traffic counters"
+      and r.message == "Set up SNMP on this device's SNMP tab so Toner can read WAN traffic.", r)
+check("...and no WAN chosen: no row at all", DRIVERS["paloalto"]({**NOSNMP, "checkopts": {}}, TH, {**db.runtime_options()}).wan_usage() == [])
+PA = {"name": "pa-snmp", "vendor": "paloalto", "host": "10.0.0.1", "snmp": '{"version": "2c"}', "checkopts": {"wan": {"Gi0/1": None}}}
+walks.clear()
+pa = DRIVERS["paloalto"](PA, TH, {**db.runtime_options()})
+check("Palo Alto with SNMP set up reads the standard interface counters", pa.interface_counters() == {"Gi0/1": (5, 7, 1e9)}, pa.interface_counters())
+check("...walked once however often it is asked", walks.count(N["ifHCInOctets"]) == 1, walks)
+
+from core import runner as R
+R.reachability = lambda dev, opts: []
+R.resolve_host = lambda host: None
+real_pa_run = DRIVERS["paloalto"].run
+DRIVERS["paloalto"].run = lambda self: []
+try:
+    rows = {x.check: x for x in R.run_one({**PA, "name": "pa-run"}, TH)}
+    check("the runner adds WAN usage after a Palo Alto run (its first run sets the baseline)", rows.get("wan usage") is not None
+          and rows["wan usage"].value == "baseline set", list(rows))
+    rows = {x.check: x for x in R.run_one({**NOSNMP, "name": "pa-run2"}, TH)}
+    check("...and the N/A row when SNMP is not set up", rows.get("wan usage") is not None and rows["wan usage"].status == "N/A", list(rows))
+    rows = {x.check: x for x in R.run_one({**PA, "name": "pa-run3", "checkopts": {}}, TH)}
+    check("...and nothing when no WAN interface is chosen", "wan usage" not in rows, list(rows))
+finally:
+    DRIVERS["paloalto"].run = real_pa_run
+check("FortiGate, SNMP devices and Cisco make the row in their own run, so the runner leaves them alone",
+      DRIVERS["fortinet"].wan_in_run and DRIVERS["snmp"].wan_in_run and DRIVERS["sophos"].wan_in_run and DRIVERS["cisco"].wan_in_run
+      and not DRIVERS["paloalto"].wan_in_run)
+
+print("== Cisco: show interface")
+from drivers import clichecks
+IOS = """GigabitEthernet0/0 is up, line protocol is up
+  Hardware is iGbE, address is 5254.0012.3456 (bia 5254.0012.3456)
+  MTU 1500 bytes, BW 1000000 Kbit/sec, DLY 10 usec,
+  5 minute input rate 2000 bits/sec, 3 packets/sec
+     123456 packets input, 98765432 bytes, 0 no buffer
+     0 input errors, 0 CRC, 0 frame, 0 overrun, 0 ignored
+     65432 packets output, 12345678 bytes, 0 underruns
+GigabitEthernet0/1 is administratively down, line protocol is down
+  MTU 1500 bytes, BW 100000 Kbit/sec, DLY 10 usec,
+     0 packets input, 0 bytes, 0 no buffer
+     0 packets output, 0 bytes, 0 underruns
+Loopback0 is up, line protocol is up
+  MTU 1514 bytes, BW 8000000 Kbit/sec, DLY 5000 usec,
+"""
+ASA = """Interface GigabitEthernet0/0 "outside", is up, line protocol is up
+  Hardware is net_vmxnet3, BW 1000 Mbps, DLY 10 usec
+	Full-Duplex(Full-duplex), 1000 Mbps(1000 Mbps)
+	2000 packets input, 300000 bytes, 0 no buffer
+	0 input errors, 0 CRC, 0 frame, 0 overrun, 0 ignored, 0 abort
+	1500 packets output, 200000 bytes, 0 underruns
+  Traffic Statistics for "outside":
+	2000 packets input, 999 bytes
+	1500 packets output, 888 bytes
+Interface Management0/0 "", is administratively down, line protocol is down
+  Hardware is net_vmxnet3, BW 1000 Mbps, DLY 10 usec
+"""
+check("IOS: bytes in and out and the BW of each interface with counters", clichecks.interface_bytes(IOS)
+      == {"GigabitEthernet0/0": (98765432, 12345678, 1e9), "GigabitEthernet0/1": (0, 0, 1e8)}, clichecks.interface_bytes(IOS))
+check("ASA: the interface's own counters, not the Traffic Statistics repeat; BW in Mbps", clichecks.interface_bytes(ASA)
+      == {"GigabitEthernet0/0": (300000, 200000, 1e9)}, clichecks.interface_bytes(ASA))
+check("nothing readable: nothing", clichecks.interface_bytes("") == {} and clichecks.interface_bytes("% Invalid input") == {})
+class Conn:
+    def __init__(self, text): self.text, self.sent = text, []
+    def send_command(self, cmd, **k): self.sent.append(cmd); return self.text
+cs = DRIVERS["cisco"]({"name": "asa", "vendor": "cisco", "host": "h", "platform": "cisco_asa", "checkopts": {"wan": {"GigabitEthernet0/0": None}}},
+                       TH, {**db.runtime_options()})
+cs.plat, conn = "cisco_asa", Conn(ASA)
+first = cs._wan_on(conn)
+check("an ASA's run reads `show interface` on its own connection", conn.sent == ["show interface"] and first.value == "baseline set", (conn.sent, first))
+cs.plat, conn = "cisco_ios", Conn(IOS)
+cs._live = conn
+check("IOS asks `show interfaces`", cs.interface_counters()["GigabitEthernet0/0"][2] == 1e9 and conn.sent == ["show interfaces"], conn.sent)
+cs.plat, conn = "cisco_nxos", Conn(IOS)
+cs._live = conn
+try:
+    cs.interface_counters(); check("NX-OS goes to SNMP (none set up here: says so)", False)
+except B.NoCounters:
+    check("NX-OS goes to SNMP (none set up here: says so)", conn.sent == [], conn.sent)
+cs._live = None
+
+print("== the hint")
+from ui import interfacepicker as IP
+check("with port speeds read, the bandwidth starts at them", IP.WAN_HINT in InterfacePicker(LIST, [], wan={}).findChild(IP.QLabel).text())
+nospeed = InterfacePicker([("ethernet1/1", "Up"), ("ethernet1/2", "Down")], [], wan={})
+check("with none, type each circuit speed; traffic comes by SNMP once set up", nospeed.wan_hint() ==
+      "Tick the interfaces that connect to the internet and type each one's circuit speed in Mbps. Toner reads their traffic by SNMP "
+      "once it is set up on the SNMP tab." and nospeed.wan_hint() in nospeed.findChild(IP.QLabel).text())
 
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

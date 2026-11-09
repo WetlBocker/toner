@@ -5,6 +5,8 @@ from PySide6.QtWidgets import (QAbstractItemView, QDialog, QDialogButtonBox, QHB
 
 NAME = Qt.ItemDataRole.UserRole
 WAN_HINT = "Tick the interfaces that connect to the internet. Available bandwidth starts at the port speed; type your circuit speed in Mbps if it is lower."
+WAN_HINT_TYPED = ("Tick the interfaces that connect to the internet and type each one's circuit speed in Mbps. "      # no port speeds read: no traffic source yet
+                  "Toner reads their traffic by SNMP once it is set up on the SNMP tab.")
 
 
 def speed_text(bps):
@@ -91,7 +93,7 @@ class InterfacePicker(QDialog):
         bar.addStretch()
         lay = QVBoxLayout(self)
         intro = QLabel(hint or " ".join(([ "Tick the interfaces to check. The others are left alone: they are not counted as down, and their errors are not read."]
-                                         if choose_checked else []) + ([WAN_HINT] if self.has_wan else [])))
+                                         if choose_checked else []) + ([self.wan_hint()] if self.has_wan else [])))
         intro.setWordWrap(True)
         lay.addWidget(intro)
         lay.addWidget(self.search)
@@ -102,6 +104,10 @@ class InterfacePicker(QDialog):
         self.search.textChanged.connect(self._filter)
         self.table.itemChanged.connect(lambda it: self._summary() if it.column() == 0 else None)
         self._filter()
+
+    def wan_hint(self):
+        """The WAN hint: with port speeds read, the bandwidth starts at them; with none, the device has no traffic source yet."""
+        return WAN_HINT if any(speed for _n, _s, speed in self.rows) else WAN_HINT_TYPED
 
     def _filter(self, *_):
         words = self.search.text().lower().split()

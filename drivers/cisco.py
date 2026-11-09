@@ -7,6 +7,8 @@ from . import clichecks
 from core import quiet, display
 
 class CiscoDriver(CliRows, Driver):
+    wan_in_run = True                    # wan usage reads `show interface` on the run's own connection
+
     def run(self):
         d = self.dev
         self.plat = d.get("platform") or "cisco_ios"
@@ -25,7 +27,8 @@ class CiscoDriver(CliRows, Driver):
             for name, fn in (("cpu", self.cpu), ("memory", self.memory), ("uptime", self.uptime),
                              ("interfaces", self.interfaces), ("bgp", self.bgp), ("ospf", self.ospf), ("eigrp", self.eigrp),
                              ("environment", self.environment), ("ntp", self.ntp), ("unsaved config", self.unsaved), ("flash", self.flash),
-                             ("stack", self.stack), ("hsrp", self.hsrp), ("port-channels", self.port_channels), ("failover", self.failover)):
+                             ("stack", self.stack), ("hsrp", self.hsrp), ("port-channels", self.port_channels), ("failover", self.failover),
+                             ("wan usage", self._wan_on)):
                 if self.enabled(name):
                     self.safe(out, name, lambda fn=fn: fn(c))
             custom_ssh = [x for x in getattr(self, "custom", []) if x["kind"] == "ssh"]
@@ -193,6 +196,35 @@ class CiscoDriver(CliRows, Driver):
                 raise self.unreadable("the interfaces", "show interface")
             return ifs
         return c.send_command("show interfaces", use_textfsm=True)
+
+    def _wan_on(self, c):
+        self._live = c
+        try:
+            return self.wan_usage()
+        finally:
+            self._live = None
+
+    def interface_counters(self):
+        """IOS, IOS-XE and ASA: the byte counters and bandwidth `show interface(s)` prints. NX-OS, or output that names none: by SNMP
+        once it is set up (Driver.interface_counters)."""
+        c = getattr(self, "_live", None)
+        if c is None:                                                # asked outside a run (the Choose interfaces list): our own connection
+            self.plat = self.dev.get("platform") or self.DEFAULT_PLATFORM
+            with self.connect() as conn:
+                self._live = Recorder(conn, self.transcript)
+                try:
+                    try:
+                        self._live.enable()
+                    except Exception:
+                        quiet.ignored()
+                    return self.interface_counters()
+                finally:
+                    self._live = None
+        if "nxos" not in self.plat:
+            found = clichecks.interface_bytes(c.send_command("show interface" if "asa" in self.plat else "show interfaces"))
+            if found:
+                return found
+        return super().interface_counters()
 
     def if_states(self, c):
         ifs = self._interfaces(c)

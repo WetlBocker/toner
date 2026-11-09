@@ -240,6 +240,31 @@ def asa_interfaces(text):
     return rows
 
 
+_BW = {"kbit/sec": 1e3, "kbit": 1e3, "mbps": 1e6, "gbps": 1e9}
+
+
+def interface_bytes(text):
+    """`show interfaces` (IOS, IOS-XE) / `show interface` (ASA): {name: (bytes in, bytes out, bandwidth in bps)} from each interface's
+    'N packets input, M bytes' and 'N packets output, M bytes' lines and its 'BW 1000000 Kbit/sec' (ASA: 'BW 1000 Mbps'). The ASA
+    prints the counters again under 'Traffic Statistics'; the first ones are the interface's own. Interfaces without counters are left out."""
+    out, cur = {}, None
+    for line in (text or "").splitlines():
+        m = re.match(r'^(?:Interface\s+)?(\S+?)(?:\s+"[^"]*")?,?\s+is\s+.+?,\s+line\s+protocol\s+is\s+\S+', line)
+        if m:
+            cur = {"name": m.group(1), "in": None, "out": None, "bw": 0.0}
+            out[cur["name"]] = cur
+            continue
+        if cur is None:
+            continue
+        bw = re.search(r"\bBW\s+(\d+)\s+(Kbit/sec|Kbit|Mbps|Gbps)", line, re.I)
+        if bw and not cur["bw"]:
+            cur["bw"] = int(bw.group(1)) * _BW[bw.group(2).lower()]
+        io = re.search(r"\d+\s+packets\s+(input|output),\s+(\d+)\s+bytes", line)
+        if io and cur["in" if io.group(1) == "input" else "out"] is None:
+            cur["in" if io.group(1) == "input" else "out"] = int(io.group(2))
+    return {n: (c["in"], c["out"], c["bw"]) for n, c in out.items() if c["in"] is not None and c["out"] is not None}
+
+
 def bgp_running(text):
     """`show ip bgp summary` (IOS, NX-OS) / `show bgp summary` (ASA): BGP is configured when it names its router identifier."""
     return bool(re.search(r"BGP router identifier", text or "", re.I))

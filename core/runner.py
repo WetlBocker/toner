@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 
-from core import checks, custom, db, nettools, profiles, reach, support, vendors, winmon
+from core import checks, custom, db, ifaces, nettools, profiles, reach, support, vendors, winmon
 from core.nettools import resolve_host
 from drivers import DRIVERS
 from drivers.base import AuthRejected, Driver, Result, ERROR, FAIL, NA, WARN
@@ -128,6 +128,8 @@ def run_one(dev, thresholds, opts=None, on_check=None):
             drv.custom = custom.for_device(dev, opts.get("custom"))        # user-defined checks that apply here
             res = drv.run()
             keep_software(dev, drv)
+            if not getattr(drv, "wan_in_run", True) and ifaces.wan_capable(dev["vendor"]) and drv.enabled("wan usage"):
+                drv.safe(res, "wan usage", drv.wan_usage)                  # by SNMP once it is set up (Driver.interface_counters)
             if dev["vendor"] in vendors.SNMP_EXTRAS and profiles.snmp_configured(dev):
                 res += snmp_extras(dev, thresholds, opts, res, on_check)     # CPU, memory, storage, uptime, interfaces by SNMP, beside the API
             res += custom.run_network(dev, drv.custom)                       # web, port, certificate, ping, SNMP

@@ -42,7 +42,16 @@ def grade_low(value, warn, fail):
     """Lower value = worse (e.g. uptime). A limit of 0 switches that level off."""
     return FAIL if fail > 0 and value < fail else WARN if warn > 0 and value < warn else OK
 
+NO_COUNTERS = ("no traffic counters", "Set up SNMP on this device's SNMP tab so Toner can read WAN traffic.")
+
+
+class NoCounters(NotImplementedError):
+    """The device has no source of interface byte counters: Toner reads none itself, and SNMP is not set up for it."""
+
+
 class Driver:
+    wan_in_run = False                   # True where the driver's own run makes the 'wan usage' row; else the runner adds it after the run
+
     def __init__(self, dev: dict, thresholds: dict, opts: dict = None):
         self.dev = dev
         self.name = dev["name"]
@@ -147,8 +156,14 @@ class Driver:
         raise NotImplementedError("this kind of device has no list of interfaces")
 
     def interface_counters(self):
-        """{name: (in_octets, out_octets, speed_bps)} for every interface that has byte counters. Drivers that can read them implement it."""
-        raise NotImplementedError("this kind of device has no interface counters")
+        """{name: (in_octets, out_octets, speed_bps)} for every interface that has byte counters. Drivers that read them themselves
+        implement it; any other device answers by SNMP (the standard interface counters) once SNMP is set up on its SNMP tab."""
+        if not profiles.snmp_configured(self.dev):
+            raise NoCounters("this device reads no traffic counters itself, and SNMP is not set up for it")
+        if not hasattr(self, "_snmp_counters"):                      # read once per run (or per Choose interfaces list)
+            from drivers.snmpdev import SnmpDriver
+            self._snmp_counters = SnmpDriver(self.dev, self.th, self.opts).interface_counters()
+        return self._snmp_counters
 
     def wan_usage(self):
         """The 'wan usage' row: the busier direction of each interface marked WAN, as a percent of its available bandwidth
@@ -156,7 +171,10 @@ class Driver:
         wan = db.normalize_checkopts(self.dev.get("checkopts")).get("wan")
         if not wan:
             return []
-        counters = self.interface_counters()
+        try:
+            counters = self.interface_counters()
+        except NoCounters:
+            return self.result("wan usage", NA, *NO_COUNTERS)          # WAN chosen, nothing to read it with: say how, never a problem
         mine = {n.lower(): v for n, v in wan.items()}
         found = [(n, counters[n], mine[n.lower()]) for n in counters if n.lower() in mine]
         if not found:

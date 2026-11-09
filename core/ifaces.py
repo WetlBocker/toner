@@ -11,7 +11,8 @@ def available(vendor):
 
 
 def wan_capable(vendor):
-    """True for the kinds of device where Toner can read interface traffic, so interfaces can be marked as WAN."""
+    """True for the network devices, where interfaces can be marked as WAN: their traffic is read by the device's own API or CLI, or by
+    SNMP once it is set up (drivers.base.Driver.interface_counters)."""
     from core import checks
     return any(k == "wan usage" for k, _label in checks.CATALOG.get(vendor, []))
 

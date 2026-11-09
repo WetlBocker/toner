@@ -7,6 +7,8 @@ from . import apichecks
 from .base import AuthRejected, Driver, OK, WARN, FAIL, grade, grade_low
 
 class FortinetDriver(Driver):
+    wan_in_run = True                    # its run reads wan usage from the interface list it already has
+
     def _get(self, path, whole=False):
         d = self.dev
         port = d.get("port") or 443

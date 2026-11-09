@@ -30,6 +30,8 @@ class SnmpDriver(SnmpExtras, Driver):
                     self.safe(out, key, fn)
         return out
 
+    wan_in_run = True                    # its own check list reads wan usage, on the run's open client
+
     def check_list(self):
         """[(key, method)] in the order they run; a vendor's own SNMP driver (ESXi, Sophos) gives its own list."""
         return [("cpu", self.cpu), ("memory", self.memory), ("storage", self.storage),
