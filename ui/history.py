@@ -19,7 +19,7 @@ from drivers.base import Result
 from ui import theme
 from ui.detaillist import DetailList
 from ui.toast import toast
-from ui.widgets import FlowLayout, GroupPicker, StatusDelegate, flow, remember_sizes
+from ui.widgets import EmptyHint, FlowLayout, GroupPicker, StatusDelegate, flow, remember_sizes
 from ui.finder import FilterButton, SearchBox, device_sections, listed_devices, shown_devices, wants_archived
 from ui import chartspec
 from ui.timerange import TimeRange
@@ -541,6 +541,7 @@ class HistoryTab(QWidget):
         super().__init__()
         self.range = TimeRange()                                            # one range for the table, the exports and Over time
         self._read = None                                                   # (archived too?, the range's rows, their cells) from the last read
+        self._stale = False                                                 # a re-read was asked for while the page was hidden
         self.range.changed.connect(self._range_changed)
         self.model, self.proxy = RowsModel(), RowsProxy()
         self.proxy.setSourceModel(self.model)
@@ -579,7 +580,13 @@ class HistoryTab(QWidget):
         low = QWidget()
         lowl = QVBoxLayout(low)
         lowl.setContentsMargins(0, 0, 0, 0)
+        self.capped = QLabel()
+        self.capped.setProperty("muted", True)
+        self.capped.setWordWrap(True)
+        self.capped.hide()
+        lowl.addWidget(self.capped)
         lowl.addWidget(self.detail, 1)
+        self.empty = EmptyHint(self.detail, "No runs yet", "Press Run checks (Results tab) to start the history", wrap=True)
         lowl.addLayout(bar)
 
         over_time = QWidget()
@@ -678,6 +685,11 @@ class HistoryTab(QWidget):
         self.fill_checks(self.dev.currentData())
         self.show_rows(reread=reload_groups)                                # a search or funnel change only filters what was read
 
+    def showEvent(self, e):
+        super().showEvent(e)
+        if self._stale:
+            self.show_rows()
+
     def _range_changed(self):
         self.show_rows()
         self.draw()
@@ -686,10 +698,19 @@ class HistoryTab(QWidget):
         """The checks table: every stored row in the time range, newest first, for the devices the search box and the funnel leave.
         The range is read again only when asked (a refresh, a new range) or when the funnel turns archived organizations on or off."""
         archived = wants_archived(self.funnel)
+        if reread and self._read is not None and not self.isVisible():
+            self._stale = True                                  # read once when the page is shown again (showEvent)
+            return
         if reread or self._read is None or self._read[0] != archived:
             with db.including_archived(archived):
-                rows = db.results_between(*self.range.span())
+                rows = db.results_between(*self.range.span(), limit=db.HISTORY_CAP + 1)
+                none_at_all = not rows and db.last_run() is None
+            self.capped.setText(f"Showing the newest {db.HISTORY_CAP:,} results. Narrow the time range to see older ones.")
+            self.capped.setVisible(len(rows) > db.HISTORY_CAP)
+            self.empty.setVisible(none_at_all)
+            rows = rows[:db.HISTORY_CAP]
             self._read = (archived, rows, RowsModel.cells_of(rows))
+            self._stale = False
         names = self._group_names()
         _a, rows, cells = self._read
         keep = [i for i, r in enumerate(rows) if names is None or self._base(r["device"]) in names]

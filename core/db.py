@@ -7,6 +7,7 @@ from core.sqldb import sqlite3
 import threading
 import time
 from datetime import datetime, timedelta
+from itertools import islice
 from pathlib import Path
 
 import keyring
@@ -1737,28 +1738,30 @@ def _series_here(device, check, limit, start=None, end=None):
     return pts
 
 
-def _across_files(sql, args, key="device"):
-    """Rows of one query run on every file of the view (Shared devices only where that applies), devices keyed with dkey."""
+def _across_files(sql, args, key="device", limit=None):
+    """Rows of one query run on every file of the view (Shared devices only where that applies), devices keyed with dkey; with a
+    limit, only the first that many kept from each file (in the query's order)."""
     out = []
     for org, only in _each_file():
         with within(org):
             with connect() as c:
-                part = [dict(r) for r in c.execute(sql, args)]
+                part = list(islice((r for r in map(dict, c.execute(sql, args)) if only is None or _base(r[key]) in only), limit))
         for r in part:
-            if only is None or _base(r[key]) in only:
-                r[key] = dkey(r[key], org)
-                out.append(r)
+            r[key] = dkey(r[key], org)
+            out.append(r)
     return out
 
 _ROW = "runs.started_at AS t, results.device AS device, results.check_name AS check_name, results.status AS status, results.value AS value, results.message AS message, results.numeric AS numeric"
 
-def results_between(start, end):
-    """Every stored row from `start` to `end` (datetimes), newest first: [{'t', 'device', 'check_name', 'status', 'value', 'message',
-    'numeric'}], devices keyed with dkey, read from every file of the view as problems() does."""
+HISTORY_CAP = 50_000          # the most rows History's table reads (the newest), so a long range cannot freeze the window
+
+def results_between(start, end, limit=None):
+    """Every stored row from `start` to `end` (datetimes), newest first, or only the newest `limit`: [{'t', 'device', 'check_name',
+    'status', 'value', 'message', 'numeric'}], devices keyed with dkey, read from every file of the view as problems() does."""
     out = _across_files(f"SELECT {_ROW} FROM results JOIN runs ON runs.id = results.run_id "
-                        "WHERE runs.started_at >= ? AND runs.started_at <= ?", (_ts(start), _ts(end)))
+                        "WHERE runs.started_at >= ? AND runs.started_at <= ? ORDER BY runs.started_at DESC", (_ts(start), _ts(end)), limit=limit)
     out.sort(key=lambda r: r["t"], reverse=True)
-    return out
+    return out[:limit]
 
 _LATEST_OF = ("WITH RECURSIVE ck(n) AS (VALUES {vals}), "
               "dv(name) AS (SELECT MIN(device) FROM results UNION ALL SELECT (SELECT MIN(device) FROM results WHERE device > dv.name) FROM dv WHERE name IS NOT NULL) "

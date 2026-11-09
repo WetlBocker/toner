@@ -68,6 +68,11 @@ tr.hours.setValue(20); tr.set_hours(6); spin(400)
 check("a set_hours() right after an edit fires once, not twice", fired == [1] and tr.describe() == "Last 6 hours", fired)
 
 print("== History")
+import ui.history as H
+w0 = H.HistoryTab(); w0.show(); app.processEvents()
+check("with no results at all the table says how to start the history", w0.empty.isVisible()
+      and (w0.empty.head.text(), w0.empty.sub.text()) == ("No runs yet", "Press Run checks (Results tab) to start the history"))
+w0.hide()
 for i in range(3):
     db.save_device(dict(name=f"sw{i}", vendor="cisco", host=f"10.0.0.{i}", port=0, platform="", username="u", site="default", verify_ssl=0,
                         ha_expected=0, enabled=1, location="Chicago" if i == 0 else "Denver", details="", folder_id=None))
@@ -80,8 +85,11 @@ db.save_run([Result(f"sw{i}", "cpu", "OK", f"{20 + i}%", numeric=20.0 + i) for i
 time.sleep(1.05)
 db.save_run([Result(f"sw{i}", "cpu", "FAIL" if i == 1 else "OK", f"{30 + i}%", "high" if i == 1 else "", numeric=30.0 + i) for i in range(3)])
 
-import ui.history as H
 w = H.HistoryTab(); w.resize(1100, 600); w.show(); app.processEvents()
+check("with results the hint is gone", not w.empty.isVisible() and not w.capped.isVisible())
+w.range.set_dates(date(2020, 1, 1), date(2020, 1, 2)); app.processEvents()
+check("a range with nothing in it is simply empty, no hint", w.detail.model().rowCount() == 0 and not w.empty.isVisible())
+w.range.set_hours(8); app.processEvents()
 check("the runs list is gone", not hasattr(w, "runs") and not hasattr(w, "show_run") and not hasattr(w, "run_ids"))
 check("the page has a time range, the last 8 hours", isinstance(w.range, TimeRange) and w.range.describe() == "Last 8 hours")
 
@@ -134,7 +142,7 @@ check("the export buttons no longer speak of a run", all("run" not in b.toolTip(
 
 reads = []
 real_between = db.results_between
-db.results_between = lambda *a: (reads.append(a), real_between(*a))[1]
+db.results_between = lambda *a, **k: (reads.append(a), real_between(*a, **k))[1]
 for typed in ("s", "sw", "sw1"):
     w.find.setText(typed); app.processEvents()
 check("typing a search filters what was read, without reading the range again", reads == [] and {r[1] for r in table()} == {"sw1"}, (len(reads), table()))
@@ -165,6 +173,36 @@ w.find.setText(""); app.processEvents()                     # the search emptied
 typed = time.perf_counter() - t0
 check("and changing the search over them is quick", w.detail.model().rowCount() >= 10000 and typed < 0.3, (w.detail.model().rowCount(), round(typed, 2)))
 print(f"   ({typed:.2f} s)")
+
+
+print("== The newest rows only")
+everything = db.results_between(*w.range.span())
+check("results_between(limit=n) is the newest n of the range", db.results_between(*w.range.span(), limit=50) == everything[:50]
+      and len(everything) > 50)
+check("the shipped cap is 50,000 rows", db.HISTORY_CAP == 50_000)
+check("under the cap the line is hidden", not w.capped.isVisible() and w.detail.model().rowCount() == len(everything))
+db.HISTORY_CAP = len(everything) - 1
+row_key = lambda r: (r["t"], r["device"], r["check_name"])
+w.show_rows(); app.processEvents()
+check("over the cap the table holds the newest rows only", w.detail.model().rowCount() == db.HISTORY_CAP
+      and sorted(map(row_key, w.model.rows)) == sorted(map(row_key, everything[:db.HISTORY_CAP])), w.detail.model().rowCount())
+check("...and says so above the checks table", w.capped.isVisible() and w.capped.text() ==
+      f"Showing the newest {db.HISTORY_CAP:,} results. Narrow the time range to see older ones.", w.capped.text())
+db.HISTORY_CAP = 50_000
+w.show_rows(); app.processEvents()
+check("...and the line goes when the range fits again", not w.capped.isVisible())
+
+print("== Hidden")
+reads = []
+db.results_between = lambda *a, **k: (reads.append(a), real_between(*a, **k))[1]
+w.hide(); app.processEvents()
+w.refresh(); w.refresh(); app.processEvents()
+check("a refresh while the page is hidden does not read the range", reads == [], len(reads))
+w.show(); app.processEvents()
+check("showing the page reads it once", len(reads) == 1, len(reads))
+w.hide(); w.show(); app.processEvents()
+check("...and only when something asked for it", len(reads) == 1, len(reads))
+db.results_between = real_between
 
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)
