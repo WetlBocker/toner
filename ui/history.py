@@ -173,6 +173,8 @@ class TrendChart(QFrame):
         self.plot = pg.PlotWidget(axisItems={"bottom": self.axis})
         self.plot.setMenuEnabled(False)                         # pyqtgraph's own menu and "A" button are not part of Toner
         self.plot.hideButtons()
+        # its size hint (the scene, up to 2/3 of the screen) made a panel's chart taller than the panel, so it scrolled inside it
+        self.plot.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
         self.plot.setMouseEnabled(x=True, y=False)              # zoom in time only; the scale stays put
         self.vb = self.plot.getViewBox()
         self.vb.setMouseMode(pg.ViewBox.RectMode)               # drag across a stretch of time to zoom in on it
@@ -767,7 +769,8 @@ class HistoryTab(QWidget):
             with db.within(db.split_key(key)[1]):
                 cache[key] = db.thresholds_for(dev) if dev else db.get_thresholds()
         base = check.split(" (")[0]
-        return cache[key].get(base) or (cache[key].get("disk") if base in DISK_CHECKS else None) or {}
+        # a limit is keyed with underscores: "wan usage" -> "wan_usage"
+        return cache[key].get(base.replace(" ", "_")) or (cache[key].get("disk") if base in DISK_CHECKS else None) or {}
 
     def _across_gauges(self, lay, shown, stored, rows, mine):
         """A gauge per device, worst first; datasets and TrueNAS drive temperatures a gauge per item, labelled 'device / item' (the

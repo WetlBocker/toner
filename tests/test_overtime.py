@@ -161,6 +161,9 @@ check("interface errors: a line per interface, the picker starting with those th
       [c for c, _p in ie.lines.series] == ["Gi2"], ie.picker.selected())
 ie.picker.set_selected(["Gi1", "Gi2"]); ie.picker._toggled()
 check("ticking another interface draws it too", [c for c, _p in ie.lines.series] == ["Gi1", "Gi2"])
+QApplication.processEvents()
+inner = [s.verticalScrollBar().maximum() for s in (by["cpu"].stack, by["reachability"].stack, ie.lines)]
+check("a line chart fits its panel: nothing to scroll inside it, so its time axis shows", inner == [0, 0, 0], inner)
 
 print("== every table sorts by a click on its header")
 for p in cp.panels:
@@ -209,6 +212,16 @@ for p in cp.panels:
 rp = cp.panels[0]
 check("only FAIL rows: red marks, not the empty text", rp.text is None and len(rp.stack.charts[0].marks) == 1
       and rp.stack.charts[0].plot.isVisibleTo(rp.stack.charts[0]), rp.text and rp.text.text())
+
+print("== 30 days of squares")
+cp.show_checks("w1", "windows", ["disk health"], END - timedelta(days=30), END, th)
+for p in cp.panels:
+    p.drawn or p.draw()
+hm = cp.panels[0]
+check("30 days: a row per date, each tall enough to be labelled", len(hm.grid.rows) == 31 and hm.chart.minimumHeight() >= 16 * 31, hm.chart.minimumHeight())
+cp.show_checks("w1", "windows", ["disk health"], START, END, th)
+cp.panels[0].drawn or cp.panels[0].draw()
+check("...and a day or two keeps its usual height", cp.panels[0].chart.minimumHeight() == 240, cp.panels[0].chart.minimumHeight())
 
 print("== nothing ticked")
 cp.show_checks("w1", "windows", [], START, END, th)

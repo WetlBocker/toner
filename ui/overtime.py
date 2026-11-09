@@ -265,7 +265,7 @@ class CheckPanels(QScrollArea):
         if not panel.rows:
             return panel.note(EMPTY)
         cells = [(x, y, s) for (x, y), s in worst.items()]
-        panel.chart = ChartView(min_height=240)
+        panel.chart = ChartView(min_height=max(240, 60 + 16 * len(grid.rows)))     # 30 days: every date row tall enough to be labelled
         panel.chart.setAccessibleName(display.check_name(check))
         panel.chart.draw(lambda p: chartspec.status_heatmap(p, grid.cols, grid.rows, cells))
         panel.chart.clicked.connect(lambda hit: self._square(panel, hit))

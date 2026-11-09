@@ -231,11 +231,12 @@ def ring(p, segments, center_text, title=""):
         opt["legend"]["show"] = False
         opt["tooltip"] = {"show": False}
         opt["series"][0]["silent"] = True
-    opt["series"][0]["radius"] = ["58%", "82%"]
-    opt["series"][0]["center"] = ["50%", "56%"]
-    opt["graphic"] = [{"type": "text", "left": "center", "top": "50%", "style": {"text": str(center_text), "fill": p["text"], "fontSize": 22,
-                                                                              "fontWeight": "bold", "fontFamily": _font(p)["fontFamily"],
-                                                                              "textAlign": "center"}}]
+    # with a title the legend sits lower (see _base): a smaller, lower ring keeps clear of it
+    opt["series"][0]["radius"] = ["50%", "72%"] if title else ["58%", "82%"]
+    opt["series"][0]["center"] = ["50%", "60%"] if title else ["50%", "56%"]
+    opt["graphic"] = [{"type": "text", "left": "center", "top": "55%" if title else "50%",            # in the ring's middle
+                       "style": {"text": str(center_text), "fill": p["text"], "fontSize": 22, "fontWeight": "bold", "fontFamily": _font(p)["fontFamily"],
+                                 "textAlign": "center"}}]
     return opt
 
 
@@ -261,7 +262,8 @@ def gauge(p, value, warn=None, fail=None, title="", unit="%", maximum=100, lower
     stops = sorted(stops, key=lambda s: s[0])
     opt = _base(p, "", animate=True)
     opt["grid"] = {"show": False}
-    opt["series"] = [{"type": "gauge", "startAngle": 200, "endAngle": -20, "min": 0, "max": mx, "radius": "100%", "center": ["50%", "62%"],
+    high = "54%" if "\n" in (title or "") else "62%"          # a second line under the name (used and total) is not cut off at the bottom
+    opt["series"] = [{"type": "gauge", "startAngle": 200, "endAngle": -20, "min": 0, "max": mx, "radius": "100%", "center": ["50%", high],
                       "progress": {"show": False},
                       "axisLine": {"lineStyle": {"width": 14, "color": stops}},
                       "pointer": {"width": 4, "length": "55%", "offsetCenter": [0, 0], "itemStyle": {"color": p["text"]}},

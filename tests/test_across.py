@@ -80,6 +80,7 @@ save(db.GLOBAL, [
     Result("sw1", "firmware", "OK", "17.3.1"),
     Result("sw1", "link", "FAIL", "down", "uplink lost"), Result("w1", "link", "OK", "connected"),
     Result("w1", "reachability", "OK", "5 ms", numeric=5.0),
+    Result("sw1", "wan usage", "WARN", "85%", numeric=85.0, items=[item("Gi1", 85.0, "WARN")]),
     Result("sw2", "interfaces", "FAIL", "3/4 up", "down: Gi9", numeric=3.0), Result("sw2", "environment", "OK", "3 ok", numeric=0.0),    # stored before items
 ], timedelta(hours=1))
 save(acme, [Result("b", "cpu", "OK", "60%", numeric=60.0),
@@ -158,6 +159,9 @@ check("...7-day averages of each dataset, under the latest names and sizes, with
 pick("reachability")
 check("a measurement keeps its own unit", w.compare_gauges[0].view.opt["series"][0]["detail"]["formatter"] == "{value} ms",
       w.compare_gauges[0].view.opt["series"][0]["detail"])
+pick("wan usage")
+check("wan usage: its gauge carries the WAN usage marks (80% and 95%)", w.compare_gauges[0].view.opt["series"][0]["axisLine"]["lineStyle"]["color"][:2]
+      == [[0.8, chartspec.status_color(P, "OK")], [0.95, chartspec.status_color(P, "WARN")]], w.compare_gauges[0].view.opt["series"][0]["axisLine"])
 pick("disks")
 check("disks: Windows disks as gauges, never the TrueNAS drives", sorted(n for n, _v in gauges()) == ["w1", "w2"], gauges())
 rows = w.compare_table.rows if w.compare_table else []
