@@ -146,7 +146,7 @@ class ResultsTab(QWidget):
         self.summary.setMinimumWidth(80)
         self.header.add(self.chips)
         folds = []
-        for text, fn in (("Expand all", lambda: self.table.expandAll()), ("Collapse all", lambda: self.table.collapseAll())):
+        for text, fn in (("Expand all", self.expand_all), ("Collapse all", lambda: self.table.collapseAll())):
             b = QPushButton(text)
             b.clicked.connect(lambda _=False, fn=fn: fn())
             folds.append(b)
@@ -225,6 +225,9 @@ class ResultsTab(QWidget):
         item = self.table.currentItem()
         if item is not None:
             self.open_device.emit(self.device_row(item).data(0, ROLE))
+
+    def expand_all(self):
+        self.table.expandAll()
 
     def link_for(self, r):
         """The page a row's check opens, or '' (the Scanning tab's advisory rows have one)."""
@@ -591,7 +594,7 @@ class ResultsTab(QWidget):
             if name not in getattr(self, "_done_devices", set()):
                 self._done_devices = getattr(self, "_done_devices", set()) | {name}
                 self.device_done.emit(name)
-        done = len({device_of(r.device) for r in self.results} & set(self.last_ran))
+        done = len(getattr(self, "_done_devices", ()))                       # the devices with a row so far (not a pass over every row per batch)
         self.progress.emit(min(done, len(self.last_ran) - 1), len(self.last_ran))     # the end is announced by done()
 
     REDRAW = 0.3                     # while a run goes, the list is drawn again at most this often (seconds)
@@ -611,9 +614,9 @@ class ResultsTab(QWidget):
             self._redraw_timer.start(int(wait * 1000) + 1)
 
     def _redraw(self):
-        self._drawn_at = time.monotonic()
         if self._active:                 # (after the run, done() has drawn it)
             self.repopulate()
+        self._drawn_at = time.monotonic()                 # when it ended: a slow redraw (thousands of rows) must not be followed by another at once
 
     def done(self):
         self._active = False

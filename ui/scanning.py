@@ -1,20 +1,23 @@
 """The Scanning section: known vulnerabilities of each device's software version (core/advisories), laid out like Results, with
 one row per device and the checks underneath, a Scan button for the devices shown, and Export (CSV, HTML, PDF) of what is shown."""
 import os
+import re
 from datetime import datetime
 
 from PySide6.QtCore import QThread, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QMenu, QPushButton, QWidget
+from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QMenu, QPushButton, QTreeWidgetItem, QWidget
 
 from core import advisories, db, reports
 from ui import chartspec
-from ui.results import ResultsTab
+from drivers.base import SEVERITY
+from ui.results import ROLE, ResultsTab
 from ui.toast import toast
 from ui.vulntab import band_slices
 from ui.webchart import ChartView
 
 REPORT_TITLE = "Toner Vulnerability Report"
+FIXED_BUILD = re.compile(r" Fixed in build (\S+?)\.\s*$")
 
 
 class ScanWorker(QThread):
@@ -67,6 +70,7 @@ class ScanningTab(ResultsTab):
         lay.insertWidget(lay.indexOf(self.table), self.charts)
         self.charts.setVisible(self.charts_btn.isChecked())
         self.draw_charts()
+        self.table.itemExpanded.connect(self._open_group)
 
     _vendors = {}                                   # device key -> vendor, read once per repopulate (a lookup per row loads every device)
 
@@ -78,8 +82,59 @@ class ScanningTab(ResultsTab):
             devs = db.list_devices()
         self._vendors = {d["key"]: d.get("vendor") or "" for d in devs}
         self._vendors.update({d["name"]: d.get("vendor") or "" for d in devs if d["name"] not in self._vendors})
+        self._lazy = {}
         super().repopulate()
         self.draw_charts()
+
+    # ---------- a Windows device's CVEs, one line per fixed build (thousands of rows would make the list unusable); a line's CVEs are built when it is opened
+    _lazy = {}                                      # group key -> its rows
+    _expanding_all = False
+
+    def _add_checks(self, parent, rows, key):
+        if self._vendors.get(key) != "windows":
+            return super()._add_checks(parent, rows, key)
+        fixed, groups, rest = {advisories.SOFTWARE, advisories.ADVISORIES, advisories.KEV}, {}, []
+        for r in rows:
+            if r.check not in fixed and (advisories.cvss_of(r.value) is not None or advisories.is_unscored(r.value)):
+                m = FIXED_BUILD.search(r.message)
+                groups.setdefault(m.group(1) if m else None, []).append(r)
+            else:
+                rest.append(r)
+        super()._add_checks(parent, rest, key)
+        for build in sorted(groups, key=lambda b: b is None):               # the CVEs with no fix go last
+            cves = groups[build]
+            if len(cves) == 1:
+                parent.addChild(self._check_row(cves[0]))
+                continue
+            text = f"{len(cves)} CVEs, " + (f"fixed in build {build}" if build else "no fix stated")
+            node = QTreeWidgetItem(["", text, max(cves, key=lambda r: SEVERITY.get(r.status, 0)).status, "", "", ""])
+            gkey = f"{key}\x00{text}"
+            node.setData(0, ROLE, gkey)
+            node.setData(1, ROLE, "device")                                  # not a check: the right-click menu looks for no raw output
+            node.setChildIndicatorPolicy(QTreeWidgetItem.ChildIndicatorPolicy.ShowIndicator)
+            self._lazy[gkey] = cves
+            parent.addChild(node)
+            node.setExpanded(gkey in self.expanded)
+
+    def _open_group(self, item):
+        cves = self._lazy.get(item.data(0, ROLE))
+        if cves is not None and not item.childCount() and not self._expanding_all:
+            item.addChildren([self._check_row(r) for r in cves])
+            self._fit()
+
+    def expand_all(self):
+        """Opens every device, but not the CVE lines: they would build every row."""
+        self._expanding_all = True
+        try:
+            self.table.expandAll()
+        finally:
+            self._expanding_all = False
+        for i in range(self.table.topLevelItemCount()):
+            top = self.table.topLevelItem(i)
+            for j in range(top.childCount()):
+                kid = top.child(j)
+                if kid.data(0, ROLE) in self._lazy and not kid.childCount():
+                    kid.setExpanded(False)
 
     # ---------- the charts
     def _toggle_charts(self, on):
