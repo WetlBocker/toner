@@ -48,6 +48,7 @@ type Report struct {
 	HyperV     *HyperV            `json:"hyperv,omitempty"`
 	Backup     *Backup            `json:"backup,omitempty"`
 	Tasks      *[]TaskFailure     `json:"task_failures,omitempty"`
+	Hardening  *Hardening         `json:"hardening,omitempty"`
 
 	Now   string `json:"now"` // when collection finished, RFC 3339 UTC (the clock check compares it with Toner's)
 	Agent Agent  `json:"agent"`
@@ -126,6 +127,15 @@ type Defender struct {
 	Realtime bool   `json:"realtime"`
 	SigDays  int    `json:"sig_days"`
 	Mode     string `json:"mode"`
+}
+
+// Hardening is the Windows settings snapshot (core/winsettings.py). A Reg name left out could not be read; a nil value was
+// read and is not set. Policy and Audit are left out when their tool failed.
+type Hardening struct {
+	V      int               `json:"v"`
+	Reg    map[string]*int64 `json:"reg"`
+	Policy map[string]int64  `json:"policy,omitempty"`
+	Audit  map[string]string `json:"audit,omitempty"`
 }
 
 type FirewallProfile struct {

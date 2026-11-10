@@ -760,9 +760,17 @@ def _m16_runs_started(c):
     c.execute("CREATE INDEX IF NOT EXISTS idx_runs_started ON runs(started_at)")
 
 
+def _m17_device_settings(c):
+    """The Windows settings a device's last report held (core/winsettings.py), one row per device, gone with the device."""
+    c.executescript("""
+    CREATE TABLE IF NOT EXISTS device_settings (
+        device_id INTEGER PRIMARY KEY REFERENCES devices(id) ON DELETE CASCADE, read_at TEXT NOT NULL, body TEXT NOT NULL);
+    """)
+
+
 MIGRATIONS = [(1, _m1_legacy_columns), (2, _m2_agent_history), (3, _m3_agent_tokens), (4, _m4_device_checks), (5, _m5_ansible_runs),
               (6, _m6_shared), (7, _m7_org_uids), (8, _m8_faster_history), (9, _m9_api_tester), (10, _m10_assistant), (11, _m11_device_software),
-              (12, _m12_assistant_searches), (13, _m13_backup_secrets), (14, _m14_unifi_seen), (15, _m15_result_items), (16, _m16_runs_started)]
+              (12, _m12_assistant_searches), (13, _m13_backup_secrets), (14, _m14_unifi_seen), (15, _m15_result_items), (16, _m16_runs_started), (17, _m17_device_settings)]
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 
 
@@ -1034,14 +1042,44 @@ def software_of(dev):
 
 
 def copy_software(src_dev, dst_dev):
-    """A device moved or copied to another organization keeps what was last read from it."""
-    sw = software_of(src_dev)
-    if not (sw["version"] and dst_dev.get("id")):
+    """A device moved or copied to another organization keeps what was last read from it: its software and its Windows settings."""
+    if not dst_dev.get("id"):
         return
-    with within(dst_dev.get("org")):
+    sw = software_of(src_dev)
+    if sw["version"]:
+        with within(dst_dev.get("org")):
+            with connect() as c:
+                c.execute("UPDATE devices SET sw_version=?, sw_image=?, sw_mode=?, sw_read_at=? WHERE id=?",
+                          (sw["version"], sw["image"], sw["mode"], sw["read_at"], dst_dev["id"]))
+    read_at, snap = device_settings(src_dev)
+    if snap:
+        with within(dst_dev.get("org")):
+            with connect() as c:
+                c.execute("INSERT OR REPLACE INTO device_settings(device_id, read_at, body) VALUES(?,?,?)",
+                          (dst_dev["id"], read_at, json.dumps(snap)))
+
+
+# ---------- the Windows settings a device's report held ----------
+def set_device_settings(dev, snapshot, when=None):
+    """Keep the snapshot (already through winsettings.clean) read from a Windows device, replacing the last one."""
+    if not (snapshot and dev.get("id")):
+        return
+    now = (when or datetime.now()).strftime("%Y-%m-%d %H:%M:%S")
+    with within(dev.get("org")):
         with connect() as c:
-            c.execute("UPDATE devices SET sw_version=?, sw_image=?, sw_mode=?, sw_read_at=? WHERE id=?",
-                      (sw["version"], sw["image"], sw["mode"], sw["read_at"], dst_dev["id"]))
+            if c.execute("SELECT 1 FROM devices WHERE id=?", (dev["id"],)).fetchone():
+                c.execute("INSERT OR REPLACE INTO device_settings(device_id, read_at, body) VALUES(?,?,?)",
+                          (dev["id"], now, json.dumps(snapshot)))
+
+
+def device_settings(dev):
+    """(read_at, snapshot) of the device's last Windows settings, or (None, None)."""
+    if not dev.get("id"):
+        return None, None
+    with within(dev.get("org")):
+        with connect() as c:
+            row = c.execute("SELECT read_at, body FROM device_settings WHERE device_id=?", (dev["id"],)).fetchone()
+    return (row["read_at"], json.loads(row["body"])) if row else (None, None)
 
 
 # ---------- folders ----------

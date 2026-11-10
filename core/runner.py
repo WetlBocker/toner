@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 
-from core import checks, custom, db, ifaces, nettools, profiles, reach, support, vendors, winmon
+from core import checks, custom, db, ifaces, nettools, profiles, reach, support, vendors, winmon, winsettings
 from core.nettools import resolve_host
 from drivers import DRIVERS
 from drivers.base import AuthRejected, Driver, Result, ERROR, FAIL, NA, WARN
@@ -62,8 +62,16 @@ def stored_copy_note(dev):
 
 def keep_software(dev, drv):
     """The software version the driver read during its run goes on the device record (db.set_software), so the Inventory and the
-    Assistant know it without the Firmware Transfer wizard. Never raises: a failure here must not spoil the results."""
-    sw = (getattr(drv, "facts", None) or {}).get("software")
+    Assistant know it without the Firmware Transfer wizard; a Windows computer's settings snapshot is kept the same way
+    (db.set_device_settings). Never raises: a failure here must not spoil the results."""
+    facts = getattr(drv, "facts", None) or {}
+    try:
+        snap = winsettings.clean(facts.get("windows_settings"))
+        if snap:
+            db.set_device_settings(dev, snap)
+    except Exception:
+        quiet.ignored()
+    sw = facts.get("software")
     if not sw:
         return
     try:

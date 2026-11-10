@@ -76,6 +76,7 @@ func collectPlatform(ctx context.Context, r *report.Report, opts Options) {
 	part("hyperv", func() error { return winHyperV(r) })
 	part("backup", func() error { return winBackup(ctx, r) })
 	part("tasks", func() error { return winTasks(r) })
+	part("hardening", func() error { return winHardening(ctx, r) })
 	part("updates", func() error { return winPendingUpdates(r) }) // last: the slowest part, so it cannot hold up the others
 }
 

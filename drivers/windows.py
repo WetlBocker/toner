@@ -36,6 +36,8 @@ class WindowsDriver(Driver):
         silent = self._silent(out, age, how)
         if silent == FAIL:
             return out                                   # old numbers would only mislead
+        if isinstance(report.get("hardening"), dict):    # the settings snapshot; runner.keep_software cleans and keeps it
+            self.facts["windows_settings"] = {**report["hardening"], **{k: report[k] for k in ("firewall", "defender", "joined", "build") if k in report}}
         if self.enabled("reachability") and not out:
             out.append(self.result("reachability", OK, report.get("computer", "answering"), winmon.summary(report)))
         for key, fn in (("cpu", self.cpu), ("memory", self.memory), ("disks", self.disks), ("uptime", self.uptime),

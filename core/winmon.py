@@ -14,7 +14,54 @@ import subprocess
 import tempfile
 from datetime import datetime, timezone
 
+from core import winsettings
+
 # ---------------------------------------------------------------- the collector (Windows PowerShell 5.1 and later)
+def _hardening_ps():
+    """The settings snapshot part of the collector (core/winsettings.py): its lists come from winsettings, so the script cannot
+    drift from them. A registry value that is set keeps its value, one in a readable hive that is not set is null, and one that
+    cannot be read is left out; each of the three sources is read alone and left out when it fails."""
+    reg = ",\n".join(f"    @('{n}', '{p}', '{v}')" for n, p, v in winsettings.REG)
+    policy = ", ".join(f"'{k}'" for k in winsettings.POLICY)
+    audit = ", ".join(f"'{g}'" for g in sorted(winsettings.AUDIT))
+    return r"""try {
+    $h = [ordered]@{ v = 1 }
+    $rv = [ordered]@{}
+    foreach ($r in @(
+__REG__
+    )) {
+        try {
+            $k = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($r[1])
+            if ($k) { $x = $k.GetValue($r[2], $null); $k.Close(); $rv[$r[0]] = $(if ($null -eq $x) { $null } else { [int64]$x }) } else { $rv[$r[0]] = $null }
+        } catch {}
+    }
+    $h.reg = $rv
+    $tmp = Join-Path ([IO.Path]::GetTempPath()) ('toner_sp_' + [guid]::NewGuid().ToString('N') + '.inf')
+    try {
+        & secedit.exe /export /mergedpolicy /cfg $tmp /areas SECURITYPOLICY | Out-Null
+        if ($LASTEXITCODE -eq 0 -and (Test-Path $tmp)) {
+            $want = @(__POLICY__)
+            $pv = [ordered]@{}
+            foreach ($line in @(Get-Content -LiteralPath $tmp)) {
+                if ($line -match '^\s*(\w+)\s*=\s*(-?\d+)\s*$' -and $want -contains $matches[1]) { $pv[$matches[1]] = [int64]$matches[2] }
+            }
+            $h.policy = $pv
+        }
+    } catch {} finally { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+    try {
+        $want = @(__AUDIT__)
+        $av = [ordered]@{}
+        $rows = @(& auditpol.exe /get /category:* /r | ConvertFrom-Csv -Header 'machine', 'target', 'name', 'guid', 'setting', 'exclusion' | Select-Object -Skip 1)
+        if ($LASTEXITCODE -eq 0) {
+            foreach ($row in $rows) { $g = ([string]$row.guid).ToUpper(); if ($want -contains $g) { $av[$g] = [string]$row.setting } }
+            if ($av.Count) { $h.audit = $av }
+        }
+    } catch {}
+    $o.hardening = $h
+} catch {}
+""".replace("__REG__", reg).replace("__POLICY__", policy).replace("__AUDIT__", audit)
+
+
 COLLECTOR = r"""
 $ErrorActionPreference = 'SilentlyContinue'
 $ProgressPreference = 'SilentlyContinue'
@@ -140,9 +187,10 @@ try {
             [ordered]@{ name = [string]$_.TaskName; result = ('0x{0:X}' -f [uint32]$i.LastTaskResult) } } })
     $o.task_failures = $bad
 } catch {}
+#HARDENING#
 $o.now = (Get-Date).ToUniversalTime().ToString('o')
 $o | ConvertTo-Json -Depth 6 -Compress
-"""
+""".replace("#HARDENING#", _hardening_ps())
 
 # Automatic services that legitimately stop on their own are not reported: ones that start on a trigger, ones that
 # are still starting after boot, per-user services, and a few well-known updaters.
