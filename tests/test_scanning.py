@@ -51,7 +51,10 @@ NVD_UN = {"resultsPerPage": 1, "totalResults": 1, "vulnerabilities": [{"cve": {"
 NVD_CISCO = {"resultsPerPage": 1, "totalResults": 1, "vulnerabilities": [{"cve": {"id": "CVE-2023-20198", "descriptions": [
     {"lang": "en", "value": "Cisco IOS XE Web UI privilege escalation. More."}], "metrics": {"cvssMetricV31": [{"cvssData": {"baseScore": 10.0}}]}}}]}
 NVD_BY = {"cpe:2.3:o:cisco:ios_xe:17.9.4a:*": NVD_CISCO, "cpe:2.3:o:fortinet:fortios:7.2.5:*": NVD, "cpe:2.3:o:paloaltonetworks:pan-os:11.1.4:*": NVD_PA, "cpe:2.3:o:fortinet:fortios:7.2.6:*": NVD_UN,
-          "cpe:2.3:o:fortinet:fortios:8.0.0:*": NVD, "cpe:2.3:o:juniper:junos:22.4:r3-s2": NVD,
+          "cpe:2.3:o:fortinet:fortios:8.0.0:*": NVD,
+          "cpe:2.3:o:fortinet:fortios:7.9.9:*": {**NVD, "totalResults": 2},
+          "cpe:2.3:o:fortinet:fortios:7.9.8:*": {"resultsPerPage": 1, "totalResults": 1, "vulnerabilities": [{"cve": {"id": "CVE-2024-3333", "descriptions": [{"lang": "en", "value": "No base score. More."}],
+                                                                                                          "metrics": {"cvssMetricV31": [{"cvssData": {}}]}}}]}, "cpe:2.3:o:juniper:junos:22.4:r3-s2": NVD,
           "cpe:2.3:o:microsoft:windows_server_2022:10.0.20348.5760:*": {"resultsPerPage": 1, "totalResults": 1, "vulnerabilities": [{"cve": {"id": "CVE-2025-9999", "descriptions": [
               {"lang": "en", "value": "Windows kernel elevation of privilege. More."}], "metrics": {"cvssMetricV31": [{"cvssData": {"baseScore": 7.8}}]},
               "configurations": [{"nodes": [{"cpeMatch": [{"vulnerable": True, "criteria": "cpe:2.3:o:microsoft:windows_server_2022:*:*:*:*:*:*:*:*", "versionEndExcluding": "10.0.20348.5761"}]}]}]}}]}}
@@ -84,6 +87,8 @@ class Sources(_hs.BaseHTTPRequestHandler):
             self.server.nvd_keys.append(self.headers.get("apiKey"))
             if self.server.nvd_down:
                 return self._send(500, {})
+            if self.server.nvd_404 == "all" or (self.server.nvd_404 == "later" and q.get("startIndex", ["0"])[0] != "0"):
+                return self._send(404, {})
             return self._send(200, NVD_BY.get(q.get("virtualMatchString", [""])[0], {"resultsPerPage": 0, "totalResults": 0, "vulnerabilities": []}))
         if u.path == "/kev":
             return self._send(200, {"vulnerabilities": [{"cveID": "CVE-2023-20198", "vulnerabilityName": "Cisco IOS XE Web UI Privilege Escalation Vulnerability"}, {"cveID": "CVE-2021-44228"},
@@ -97,7 +102,7 @@ class Sources(_hs.BaseHTTPRequestHandler):
         if u.path == "/rss":
             if self.server.rss_down:
                 return self._send(500, {})
-            data = FEED.format(base=base, extra=self.server.rss_extra and "<item><link>%s/feed/csaf_bad_fg-ir-26-999.json</link></item><item><link>https://evil.example/csaf_x_fg-ir-26-998.json</link></item>" % base).encode(); self.send_response(200); self.send_header("Content-Type", "application/rss+xml")
+            data = FEED.format(base=base, extra=self.server.rss_extra and "<item><link>%s/feed/csaf_bad_fg-ir-26-999.json</link></item><item><link>%s/feed/csaf_after_fg-ir-26-997.json</link></item><item><link>https://evil.example/csaf_x_fg-ir-26-998.json</link></item>" % (base, base)).encode(); self.send_response(200); self.send_header("Content-Type", "application/rss+xml")
             self.send_header("Content-Length", str(len(data))); self.end_headers(); return self.wfile.write(data)
         if u.path.startswith("/feed/csaf_"):
             if "bad" in u.path:
@@ -106,7 +111,7 @@ class Sources(_hs.BaseHTTPRequestHandler):
                 self.send_response(200); self.send_header("Content-Length", "4"); self.end_headers(); return self.wfile.write(b"[[[[")
             return self._send(200, FORTI_DOC)
         self._send(404, {})
-web = _hs.ThreadingHTTPServer(("127.0.0.1", 0), Sources); web.nvd_keys = []; web.nvd_down = False; web.rss_down = False; web.rss_extra = ''; threading.Thread(target=web.serve_forever, daemon=True).start()
+web = _hs.ThreadingHTTPServer(("127.0.0.1", 0), Sources); web.nvd_keys = []; web.nvd_down = False; web.nvd_404 = ""; web.rss_down = False; web.rss_extra = ''; threading.Thread(target=web.serve_forever, daemon=True).start()
 base = f"http://127.0.0.1:{web.server_address[1]}"
 A.TOKEN_URL, A.PSIRT_URL, A.NVD_URL, A.KEV_URL, A.EPSS_URL = base + "/token", base + "/psirt/{os}?version={version}", base + "/nvd", base + "/kev", base + "/epss"
 A.PAN_CSAF = base + "/csaf/{cve}"; A.FORTI_RSS = base + "/rss"; A.FEED_DELAY = 0; A.FEED_HOST = "127.0.0.1"; A.FEED_SCHEMES = ("http",)
@@ -277,7 +282,13 @@ A.forget_cache(); web.rss_extra = "429"; n = sum(h[0] == "/rss" for h in hits)
 rows = A.scan(db.find_device("ff-fw")); by = {r.check: r for r in rows}
 check("a failing CSAF file (429) is skipped and one off the allowed host is not requested; the rest still count", "FG-IR-26-182" in by and any(h[0].startswith("/feed/csaf_bad") for h in hits), [r.check for r in rows])
 A.scan(db.find_device("ff-fw"))
-check("...and a partial read is not cached: the next scan asks the feed again", sum(h[0] == "/rss" for h in hits) == n + 2)
+check("...and the first 429 ends the fetching: the files after it are not asked for", sum(h[0].startswith("/feed/csaf_after") for h in hits) == 0)
+check("...a partial read is kept in memory for the hour: the next scan does not fetch the feed again", sum(h[0] == "/rss" for h in hits) == n + 1)
+A.forget_cache(); n = sum(h[0] == "/rss" for h in hits); A.scan(db.find_device("ff-fw"))
+check("...and forget_cache lets it be fetched again", sum(h[0] == "/rss" for h in hits) == n + 1)
+web.rss_extra = "junk"; A.forget_cache(); n = sum(h[0].startswith("/feed/csaf_after") for h in hits); A.scan(db.find_device("ff-fw"))
+check("without a 429 the files after a bad one are still read", sum(h[0].startswith("/feed/csaf_after") for h in hits) == n + 1)
+web.rss_extra = "429"
 web.rss_extra = "junk"; A.forget_cache()
 check("a malformed CSAF body is skipped too", "FG-IR-26-182" in {r.check for r in A.scan(db.find_device("ff-fw"))})
 web.rss_extra = ""; A.forget_cache()
@@ -297,6 +308,21 @@ rows = A.scan(db.find_device("no-fw"))
 check("NVD erroring and the feed erroring: ERROR naming NVD", rows[0].status == "ERROR" and "NVD" in rows[0].message and "HTTP 500" in rows[0].message, rows[0].message)
 web.nvd_down = web.rss_down = False; A.forget_cache()
 db.delete_device(no["id"])
+
+print("== NVD's 404, and a metric with no score")
+web.nvd_404 = "all"; A.forget_cache()
+check("a 404 on the first page is NVD's nothing for a router", A.nvd_cve("fortinet:fortios", "9.9.9", "*", "fortinet") == [])
+try: A.nvd_cve("microsoft:windows_server_2022", "10.0.20348.5761", "*", "windows", build=True); check("a 404 for a Windows build is a failed lookup, not a clean one", False)
+except A.LookupError_ as e: check("a 404 for a Windows build is a failed lookup, not a clean one", "HTTP 404" in str(e), str(e))
+wd = dev("ws-404", "windows", "Microsoft Windows Server 2022 Standard (build 20348.5761)"); A.forget_cache()
+r0 = A.scan(db.find_device("ws-404"))[0]
+check("...so its version row is an ERROR, never OK", r0.status == "ERROR" and "404" in r0.message, (r0.status, r0.message)); db.delete_device(wd["id"])
+web.nvd_404 = "later"; A.forget_cache()
+try: A.nvd_cve("fortinet:fortios", "7.9.9", "*", "fortinet"); check("a 404 on a later page fails the lookup, keeping no half answer", False)
+except A.LookupError_ as e: check("a 404 on a later page fails the lookup, keeping no half answer", "HTTP 404" in str(e), str(e))
+web.nvd_404 = ""; A.forget_cache()
+got = A.nvd_cve("fortinet:fortios", "7.9.8", "*", "fortinet")
+check("a metric with no baseScore is unscored (None), not 0.0 and OK", got[0]["cvss"] is None and A.status_of(got[0], {}) == "WARN", got)
 with db.connect() as c:                                     # the later checks count the scans and devices of the first six
     c.execute("DELETE FROM scan_results WHERE scan_id=?", (sid_un,)); c.execute("DELETE FROM scans WHERE id=?", (sid_un,))
 check("the NVD key is sent when there is one", web.nvd_keys and web.nvd_keys[-1] is None and (A.set_secret("nvd_key", "nvd-k"), A.forget_cache(), A.scan(db.find_device("edge-fw"))) and web.nvd_keys[-1] == "nvd-k", web.nvd_keys)
@@ -435,6 +461,30 @@ check("Test asks Cisco with the saved account and reports", got == ["Cisco PSIRT
 pg.cisco_id.setText(""); A.set_secret("psirt_id", ""); pg.test()
 check("without an account, Test says what to enter", pg.result.text() == "Enter the Cisco PSIRT client ID and secret first.")
 A.set_secret("psirt_id", "cid-1")
+
+print("== the report and the list do not read unknown as clean")
+R = S.reports
+na_sw = Result("w1", A.SOFTWARE, "N/A", "Microsoft Windows 10 Pro (build 19041.1000)", A.COULD_NOT_CONFIRM)
+hard_na = [Result("w1", "Hardening: SMBv1 on", "N/A", "", "x"), Result("w1", "Hardening: UAC off", "N/A", "", "x")]
+check("the front page does not say 'all OK' for a device whose version is N/A: it gives the version row's message", R._problems([na_sw] + hard_na) == A.COULD_NOT_CONFIRM
+      and R._problems([Result("w1", A.SOFTWARE, "OK", "v", "m")]) == "all OK" and R._problems([na_sw, Result("w1", "x", "FAIL", "", "m")]) == "1 FAIL")
+check("...and the device's line counts only OK rules as kept", R._scan_line([na_sw] + hard_na) == "Version Microsoft Windows 10 Pro (build 19041.1000) · hardening: 0 of 2 rules kept"
+      and R._scan_line([Result("w", A.SOFTWARE, "OK", "1", "m"), Result("w", "Hardening: a", "OK", "", ""), Result("w", "Hardening: b", "OK", "", "")]).endswith("hardening: all 2 rules kept")
+      and R._scan_line([Result("w", "Hardening: a", "OK", "", ""), Result("w", "Hardening: b", "N/A", "", "")]).endswith("hardening: 1 of 2 rules kept"), R._scan_line([na_sw] + hard_na))
+page = R.to_html([na_sw] + hard_na, kind=R.SCAN)
+check("the Devices list of the HTML report shows that message", f'w1</a> &nbsp; {A.COULD_NOT_CONFIRM}' in page and "all OK" not in page, page[page.index("<h2>Devices"):][:200])
+fg_rows = [Result("fg", A.SOFTWARE, "WARN", "7.6.5", "FortiOS 7.6.5, 1 advisory"), Result("fg", "FG-IR-26-182", "WARN", "CVSS 7.5", "Title. Fixed in 7.6.9.")]
+check("a FortiGate advisory (FG-IR-) is counted, not 'no known advisories'", R._scan_line(fg_rows) == "Version 7.6.5 · 1 advisory (1 WARN)"
+      and "no known advisories" in R._scan_line([Result("fg", A.SOFTWARE, "OK", "7.6.5", "m")]) and display.check_name("FG-IR-26-182") == "FG-IR-26-182")
+seen = []
+from PySide6.QtWidgets import QApplication as _QA
+_set, _restore = _QA.setOverrideCursor, _QA.restoreOverrideCursor
+_QA.setOverrideCursor = staticmethod(lambda c: seen.append("wait")); _QA.restoreOverrideCursor = staticmethod(lambda: seen.append("restore"))
+try:
+    R.save_pdf([na_sw], os.path.join(SP, "wait.pdf"), kind=R.SCAN)
+finally:
+    _QA.setOverrideCursor, _QA.restoreOverrideCursor = _set, _restore
+check("exporting a PDF shows the wait cursor and restores it", seen == ["wait", "restore"], seen)
 
 print("== the Assistant's tool, the README, the version")
 from core.assistant import tools as T

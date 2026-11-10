@@ -50,11 +50,10 @@ def smb1(o, plat, masked):
     start, server = _reg(o, "Smb1ClientStart"), _reg(o, "Smb1Server")
     if start is UNREAD:
         return _na()
-    if start is None:                                            # mrxsmb10 is gone: the feature was removed
-        return None
-    if start != 4:
+    if start is not None and start != 4:
         return "SMBv1 is on: remove the FS-SMB1 feature, or set LanmanServer\\Parameters\\SMB1 to 0 and mrxsmb10\\Start to 4"
-    return _out(server is None or (server is not UNREAD and server != 0), server is UNREAD,
+    gone = start is None                                         # mrxsmb10 is gone: the feature was removed, so an unset server value is not on; one set to on still is
+    return _out((server is None and not gone) or (server is not None and server is not UNREAD and server != 0), server is UNREAD,
                 "SMBv1 is on: remove the FS-SMB1 feature, or set LanmanServer\\Parameters\\SMB1 to 0 and mrxsmb10\\Start to 4")
 
 
@@ -201,8 +200,11 @@ def defender(o, plat, masked):
         return None
     if "mode" not in d:
         return _na()
-    if str(d["mode"]).lower() != "normal":                                    # another antivirus has Defender passive
+    mode = str(d["mode"]).strip().lower()
+    if "passive" in mode:                                                     # another antivirus has Defender passive
         return None
+    if mode != "normal":                                                      # empty or unknown: not a pass
+        return _na()
     return "Real-time protection off: turn on Microsoft Defender real-time protection"
 
 

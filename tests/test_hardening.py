@@ -1028,5 +1028,24 @@ check("the README says so", "**Configuration hardening:**" in readme and "FortiG
 from core.version import VERSION
 check("version 1.14.1", VERSION == "1.14.1")
 
+print("== final review fixes")
+jn_s = by(BAD_JN.replace("community public", "community s3cr3t"), "", vendor="juniper")
+check("Junos: a community that is not public or private is never printed (findings are shared), only <masked>", "s3cr3t" not in jn_s["jn snmp community"][1] and "s3cr3t" not in jn_s["jn snmp clients"][1]
+      and jn_s["jn snmp community"][1].startswith("community <masked>: authorization read-write:") and jn_s["jn snmp clients"][1].endswith("set snmp community <masked> clients"), jn_s)
+mk_s = mt2(BAD_MT.replace("name=private", "name=s3cr3t"))
+check("RouterOS: a read-write community's name is masked unless public or private", "s3cr3t" not in mk_s["mt snmp public"][1] and "community <masked>: write-access=yes" in mk_s["mt snmp public"][1]
+      and "community private: name is public or private and write-access=yes" in mk["mt snmp public"][1], mk_s["mt snmp public"])
+check("Windows Defender: an empty or unknown mode with real-time off is N/A, not a pass; passive still passes", W(defender={"realtime": False, "mode": ""})["win defender"] == UNREAD
+      and W(defender={"realtime": False, "mode": "Something New"})["win defender"] == UNREAD and W(defender={"realtime": False, "mode": "Passive Mode"})["win defender"][0] == "OK"
+      and W(defender={"realtime": False, "mode": "Normal"})["win defender"][0] == "FAIL")
+check("Windows SMBv1: the client driver gone but the server still on is a finding; both gone is a pass; the server unread is N/A",
+      W(reg={"Smb1ClientStart": None, "Smb1Server": 1})["win smb1"][0] == "FAIL" and W(reg={"Smb1ClientStart": None, "Smb1Server": None})["win smb1"][0] == "OK"
+      and W(reg={"Smb1ClientStart": None, "Smb1Server": 0})["win smb1"][0] == "OK" and W(reg={"Smb1ClientStart": None, "Smb1Server": "gone"})["win smb1"] == UNREAD
+      and W(reg={"Smb1ClientStart": 4})["win smb1"][0] == "OK")
+REMOTE1 = "add name=remote1 remote=10.0.0.5 target=remote"
+check("RouterOS logging: the built-in remote action given an address counts; with no address, or none at all, it does not",
+      mt2(GOOD_MT.replace(REMOTE1, "set 3 remote=10.0.0.5"))["mt syslog"][0] == "OK" and mt2(GOOD_MT.replace(REMOTE1, "set 3 remote=0.0.0.0"))["mt syslog"][0] == "WARN"
+      and mt2(GOOD_MT.replace(REMOTE1, "set 0 memory-lines=500"))["mt syslog"][0] == "WARN" and mt2(GOOD_MT)["mt syslog"][0] == "OK")
+
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

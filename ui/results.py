@@ -323,7 +323,7 @@ class ResultsTab(QWidget):
         if mode == 0:
             return True, rows
         if mode == 4:                                           # healthy devices: nothing worse than OK, every check listed
-            return bool(rows) and not any(is_problem(r.status) for r in rows), rows
+            return bool(rows) and not any(is_problem(r.status) for r in rows) and not reports.unconfirmed(rows), rows
         want = {1: ("WARN", "FAIL", "ERROR"), 2: ("WARN",), 3: ("FAIL", "ERROR")}[mode]
         shown = [r for r in rows if r.status in want]
         return bool(shown), shown
@@ -428,6 +428,8 @@ class ResultsTab(QWidget):
                 for r in rows:
                     counts[r.status] = counts.get(r.status, 0) + 1
                 top.setText(1, f"{len(rows)} check{'s' if len(rows) != 1 else ''}")
+                if status == "OK" and reports.unconfirmed(rows):      # a version Toner could not look up is not a clean one
+                    status = "N/A"
                 top.setText(2, status)
                 if bad:                                   # say what is wrong, so a collapsed row is readable without opening it
                     first = bad[0]
@@ -438,7 +440,8 @@ class ResultsTab(QWidget):
                         top.setText(4, top.text(4) + f"   (+{len(bad) - 1} more)")
                     top.setToolTip(4, ", ".join(f"{counts[s]} {s}" for s in ("ERROR", "FAIL", "WARN") if s in counts))
                 else:
-                    top.setText(4, "all OK")
+                    unsure = reports.unconfirmed(rows)
+                    top.setText(4, unsure.message if unsure else "all OK")
             else:
                 top.setText(2, "Running..." if self._active else "No results")
             self.table.addTopLevelItem(top)

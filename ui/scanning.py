@@ -17,7 +17,7 @@ from ui.vulntab import band_slices
 from ui.webchart import ChartView
 
 REPORT_TITLE = "Toner Vulnerability Report"
-FIXED_BUILD = re.compile(r" Fixed in build (\S+?)\.\s*$")
+FIXED_BUILD = re.compile(r"(?:^| )Fixed in build (\S+?)[.,](?:\s|$)")
 
 
 class ScanWorker(QThread):
@@ -91,6 +91,10 @@ class ScanningTab(ResultsTab):
     _expanding_all = False
 
     def _add_checks(self, parent, rows, key):
+        unsure = reports.unconfirmed(rows)
+        if unsure:                                          # "could not confirm" and "could not read" stay in view, not folded under "do not apply"
+            parent.addChild(self._check_row(unsure))
+            rows = [r for r in rows if r is not unsure]
         if self._vendors.get(key) != "windows":
             return super()._add_checks(parent, rows, key)
         fixed, groups, rest = {advisories.SOFTWARE, advisories.ADVISORIES, advisories.KEV}, {}, []

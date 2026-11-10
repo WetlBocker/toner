@@ -1,8 +1,11 @@
 """Known vulnerabilities for the software a device runs (the Scanning section). The version the health checks read is looked up
 at Cisco PSIRT openVuln (Cisco platforms, with the account's client id and secret from Settings > Scanning) or at NIST's NVD
-(Fortinet, Juniper, Palo Alto, MikroTik, Arista, HPE), every CVE found is checked against CISA's known-exploited list and
-FIRST's EPSS scores, and the answer becomes one row per check, like a health run. Lookups are cached for a day in the Global
-file: many organizations run the same handful of versions, and Cisco rate-limits."""
+(Fortinet, Juniper, Palo Alto, MikroTik, Arista, HPE) and, for a Windows computer's exact build, at NVD's microsoft: products.
+A FortiGate whose version NVD has nothing for is also looked up in Fortinet's advisory feed (core/fortifeed: CSAF files, one
+a second; a partial read is kept in memory for an hour, not in the day cache). Every CVE found is checked against CISA's
+known-exploited list and FIRST's EPSS scores, and the answer becomes one row per check, like a health run, followed by the
+hardening rules (core/hardening). Lookups are cached for a day in the Global file: many organizations run the same handful of
+versions, and Cisco rate-limits. An NVD answer of nothing is "could not confirm" (N/A), except for a Windows build, where it is clean."""
 import json
 import re
 import threading
@@ -182,6 +185,7 @@ def _cached(key, fetch):
 
 
 def forget_cache():
+    _partial.clear()
     with db.within(db.GLOBAL):
         with db.connect() as c:
             c.execute("DELETE FROM advisory_cache")
@@ -282,6 +286,8 @@ def fixed_from(cve, product, version):
 
 
 _feed_lock = threading.Lock()
+PARTIAL_SECONDS = 3600
+_partial = {}                                               # 'fortifeed' -> (when, digests): a partial read, kept in memory for an hour so each FortiGate does not refetch 50 files
 
 class _Partial(Exception):
     """Some CSAF files failed: carries what was read, which is used for this scan but not cached."""
@@ -290,12 +296,14 @@ class _Partial(Exception):
 
 
 def _csaf(url):
-    """The JSON of one CSAF file, or None: only FEED_SCHEMES and FEED_HOST, no redirects, at most FEED_MAX bytes."""
+    """The JSON of one CSAF file, or None (429 when rate limited): only FEED_SCHEMES and FEED_HOST, no redirects, at most FEED_MAX bytes."""
     u = urlparse(url)
     if u.scheme not in FEED_SCHEMES or u.hostname != FEED_HOST:
         return None
     r = _get(url, FEED_HOST, allow_redirects=False, stream=True)
     try:
+        if r.status_code == 429:
+            return 429
         if r.status_code != 200:
             return None
         body = b""
@@ -324,14 +332,20 @@ def fortinet_feed(version):
             raise LookupError_(f"Fortinet: the feed could not be read ({e})") from None
         if not urls:
             raise LookupError_("Fortinet: the feed lists no advisories")
-        out, failed = [], False
+        out, failed, failed_429 = [], False, False
         for i, url in enumerate(urls):
+            if failed_429:
+                failed = True
+                break
             if i:
                 time.sleep(FEED_DELAY)                          # at most one file a second
             try:
                 doc = _csaf(url)
             except LookupError_:
                 doc = None
+            if doc == 429:                                  # rate limited: the rest would be refused too
+                failed_429, failed = True, True
+                continue
             d = fortifeed.digest(doc, url) if isinstance(doc, dict) else None
             if d:
                 out.append(d)
@@ -341,10 +355,15 @@ def fortinet_feed(version):
             raise _Partial(out)
         return out
     with _feed_lock:
-        try:
-            digests = _cached("fortifeed", fetch)
-        except _Partial as p:
-            digests = p.got
+        held = _partial.get("fortifeed")
+        if held and time.monotonic() - held[0] < PARTIAL_SECONDS:
+            digests = held[1]
+        else:
+            try:
+                digests = _cached("fortifeed", fetch)
+            except _Partial as p:
+                digests = p.got
+                _partial["fortifeed"] = (time.monotonic(), digests)
     return [m for m in (fortifeed.match(d, version) for d in digests) if m]
 
 
@@ -364,7 +383,7 @@ def nvd_cve(product, ver, upd, vendor="", key=None, build=False):
         while True:
             r = _get(NVD_URL, "services.nvd.nist.gov", params={"virtualMatchString": f"cpe:2.3:o:{product}:{ver}:{upd}", "startIndex": start},
                      headers={"apiKey": key} if key else {})
-            if r.status_code == 404:
+            if r.status_code == 404 and start == 0 and not build:     # a 404 elsewhere is not 'nothing': Windows answers by exact build, and a later page must not drop the rows read
                 return []
             if r.status_code == 403:
                 raise LookupError_("NVD: rate limit reached, try again in a minute (an API key under Settings > Scanning raises it)")
@@ -377,7 +396,8 @@ def nvd_cve(product, ver, upd, vendor="", key=None, build=False):
                 score = None
                 for k in ("cvssMetricV40", "cvssMetricV31", "cvssMetricV30", "cvssMetricV2"):
                     if metrics.get(k):
-                        score = float(metrics[k][0].get("cvssData", {}).get("baseScore") or 0)
+                        base = metrics[k][0].get("cvssData", {}).get("baseScore")
+                        score = float(base) if base is not None else None
                         break
                 fixed = fixed_from(cve, product, ver if upd == "*" else ver + upd)
                 desc = next((d["value"] for d in cve.get("descriptions") or [] if d.get("lang") == "en"), "").split(". ")[0]

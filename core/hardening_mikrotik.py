@@ -125,7 +125,8 @@ def snmp_public(doc, plat, masked):
         problems = (["name is public or private"] if c.get("name", "").lower() in ("public", "private") else []) \
             + (["write-access=yes"] if c.get("write-access") == "yes" else [])
         if problems:
-            bad.append(f"community {c.get('name')}: {' and '.join(problems)}")
+            from core.hardening import community_name          # core.hardening imports this module, so not at the top
+            bad.append(f"community {community_name(c.get('name'))}: {' and '.join(problems)}")
     return f"{'; '.join(bad)}: rename the community and set write-access=no under /snmp community" if bad else None
 
 
@@ -142,7 +143,10 @@ def snmp_v2c(doc, plat, masked):
 
 
 def syslog(doc, plat, masked):
-    ok = any(p == "/system logging action" and verb == "add" and _kv(a).get("target") == "remote" for p, verb, a in doc)
+    def remote(verb, a):                                   # an added remote action, or RouterOS's built-in `remote` action given an address
+        kv = _kv(a)
+        return (verb == "add" and kv.get("target") == "remote") or (verb == "set" and kv.get("remote", "0.0.0.0") not in ("0.0.0.0", "::", "0.0.0.0:514"))
+    ok = any(p == "/system logging action" and remote(verb, a) for p, verb, a in doc)
     return None if ok else "no remote logging action: add target=remote under /system logging action and use it in /system logging"
 
 

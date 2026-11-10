@@ -1,7 +1,9 @@
 """Configuration hardening rules for the Scanning section: a device's newest configuration backup, read offline against a rule
 list, one row per rule with what was found. Cisco (IOS, IOS XE, NX-OS, ASA) lives here; FortiGate and Palo Alto in
-hardening_fortinet.py and hardening_paloalto.py. Stored backups mask passwords and communities, so the rules that need
-the secret itself say so instead of guessing."""
+hardening_fortinet.py and hardening_paloalto.py; Juniper, MikroTik, Arista and HPE in hardening_juniper.py, hardening_mikrotik.py,
+hardening_arista.py and hardening_hpe.py. Windows rules read the settings snapshot a Windows agent reports (hardening_windows.py),
+not a backup. Stored backups mask passwords and communities, so the rules that need the secret itself say so instead of guessing,
+and a finding never prints a community name other than public or private (community_name)."""
 import json
 import re
 
@@ -61,6 +63,11 @@ def _q(line):
     """A config line as a finding quotes it: masked as a stored backup is, since the rules may read the unmasked text and a
     finding goes to results everyone can see (Ruling 17)."""
     return backup.mask_secrets(line.strip())
+
+
+def community_name(name):
+    """An SNMP community's name as a finding may show it: only the well-known public and private, else <masked>."""
+    return name if (name or "").lower() in ("public", "private") else "<masked>"
 
 
 def _of(bad, every, what, first):

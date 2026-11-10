@@ -102,7 +102,8 @@ def snmp_community(doc, plat, masked):
         problems = (["name is public or private"] if n.lower() in ("public", "private") else []) \
             + (["authorization read-write"] if _has(doc, "snmp", "community", n, "authorization", "read-write") else [])
         if problems:
-            bad.append(f"community {n}: {' and '.join(problems)}: rename it and set authorization read-only under snmp community")
+            from core.hardening import community_name          # core.hardening imports this module, so not at the top
+            bad.append(f"community {community_name(n)}: {' and '.join(problems)}: rename it and set authorization read-only under snmp community")
     if not bad and any("<masked>" in n for n in _kids(doc, "snmp", "community")):
         from core.hardening import MASKED          # core.hardening imports this module, so not at the top
         return ("na", f"whether it is public or private cannot be told, {MASKED}")
@@ -110,9 +111,10 @@ def snmp_community(doc, plat, masked):
 
 
 def snmp_clients(doc, plat, masked):
+    from core.hardening import community_name
     every = _kids(doc, "snmp", "community")
     bad = [n for n in every if not (_has(doc, "snmp", "community", n, "clients") or _has(doc, "snmp", "community", n, "client-list-name"))]
-    return f"{len(bad)} of {len(every)} communities without clients: set snmp community {bad[0]} clients" if bad else None
+    return f"{len(bad)} of {len(every)} communities without clients: set snmp community {community_name(bad[0])} clients" if bad else None
 
 
 def snmp_v2c(doc, plat, masked):

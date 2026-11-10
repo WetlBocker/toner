@@ -20,7 +20,7 @@ COLS = ["Device", "Check", "Status", "Value", "Message"]
 WIDTHS = (14, 24, 8, 12, 42)         # per cent of the page: the message carries the finding, so it gets the most
 SCAN = "scan"                        # kind: the Scanning tab's vulnerability report (landscape, a line per device, every device listed)
 SOFTWARE, KEV, HARDENING = "Software version", "Known exploited (CISA)", "Hardening: "       # as core/advisories and core/hardening name them
-ADVISORY = re.compile(r"^(cisco-sa-|CVE-\d)")
+ADVISORY = re.compile(r"^(cisco-sa-|CVE-\d|FG-IR-)")
 
 def apply_colors(preset="Default", custom=None):
     """Select a preset, then lay any individually chosen colours over it."""
@@ -66,10 +66,15 @@ def _table(rows):
 def _anchor(device):
     return "dev-" + re.sub(r"[^\w-]+", "-", device)
 
+def unconfirmed(rows):
+    """The version row of a device whose version could not be looked up (N/A), else None: such a device is not known to be clean."""
+    return next((r for r in rows if r.check == SOFTWARE and r.status == "N/A"), None)
+
 def _problems(rows):
-    """'2 FAIL, 1 WARN', or 'all OK'."""
+    """'2 FAIL, 1 WARN'; else the version row's message when the version is unconfirmed, else 'all OK'."""
     n = {s: sum(r.status == s for r in rows) for s in ("ERROR", "FAIL", "WARN")}
-    return ", ".join(f"{v} {s}" for s, v in n.items() if v) or "all OK"
+    unsure = unconfirmed(rows)
+    return ", ".join(f"{v} {s}" for s, v in n.items() if v) or (unsure.message if unsure else "all OK")
 
 def _scan_line(rows):
     """One line under a device's heading in the vulnerability report: version, advisories, CISA, hardening."""
@@ -84,8 +89,9 @@ def _scan_line(rows):
     if any(r.check == KEV and r.status == "FAIL" for r in rows):
         parts.append("on CISA's known exploited list")
     if hard:
-        flagged = sum(r.status in ("FAIL", "WARN") for r in hard)
-        parts.append(f"hardening: {flagged} of {len(hard)} rules flagged" if flagged else f"hardening: all {len(hard)} rules kept")
+        flagged, kept = sum(r.status in ("FAIL", "WARN") for r in hard), sum(r.status == "OK" for r in hard)
+        parts.append(f"hardening: {flagged} of {len(hard)} rules flagged" if flagged else
+                     f"hardening: all {len(hard)} rules kept" if kept == len(hard) else f"hardening: {kept} of {len(hard)} rules kept")
     return " · ".join(parts)
 
 def to_html(results, when=None, scope="", title=None, kind=None):
@@ -127,7 +133,9 @@ def save_html(results, path, scope="", when=None, title=None, kind=None):
 
 def save_pdf(results, path, scope="", when=None, title=None, kind=None):
     """Render the HTML report to PDF with Qt (no extra dependencies): A4, landscape for the vulnerability report, 9-point type."""
-    from PySide6.QtCore import QMarginsF
+    from PySide6.QtCore import QMarginsF, Qt
+    from PySide6.QtGui import QCursor
+    from PySide6.QtWidgets import QApplication
     from PySide6.QtGui import QFont, QPageLayout, QPageSize, QPdfWriter, QTextDocument
     w = QPdfWriter(path)
     w.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
@@ -135,5 +143,9 @@ def save_pdf(results, path, scope="", when=None, title=None, kind=None):
     w.setPageMargins(QMarginsF(12, 12, 12, 12), QPageLayout.Unit.Millimeter)
     doc = QTextDocument()
     doc.setDefaultFont(QFont("Segoe UI", 9))
-    doc.setHtml(to_html(results, when=when, scope=scope, title=title, kind=kind))
-    doc.print_(w)
+    QApplication.setOverrideCursor(QCursor(Qt.CursorShape.WaitCursor))       # a long report takes a while
+    try:
+        doc.setHtml(to_html(results, when=when, scope=scope, title=title, kind=kind))
+        doc.print_(w)
+    finally:
+        QApplication.restoreOverrideCursor()
