@@ -36,5 +36,11 @@ RSS = b"""<?xml version="1.0"?><rss version="2.0" xmlns:atom="http://www.w3.org/
 <item><title>b</title><link>https://www.fortiguard.com/psirt/FG-IR-26-181</link><link>https://filestore.fortinet.com/csaf_b_fg-ir-26-181.json</link></item></channel></rss>"""
 check("only the csaf_ links, in order", F.csaf_urls(RSS) == ["https://filestore.fortinet.com/csaf_a_fg-ir-26-182.json", "https://filestore.fortinet.com/csaf_b_fg-ir-26-181.json"], F.csaf_urls(RSS))
 
+bad_doc = lambda **kw: F.digest({**DOC, "vulnerabilities": [{**DOC["vulnerabilities"][0], **kw}]}, U)
+check("a non-dict vulnerability is no digest", F.digest({**DOC, "vulnerabilities": ["x"]}, U) is None and F.digest({**DOC, "vulnerabilities": 5}, U) is None)
+check("odd scores, statuses and remediations are no digest", bad_doc(scores=["x"]) is None and bad_doc(scores=[{"cvss_v3": {"baseScore": "high"}}]) is None
+      and bad_doc(product_status=["x"]) is None and bad_doc(remediations=[5]) is None and F.digest([], U) is None)
+check("an unreadable range is not a match, and does not raise", F.match(bad_doc(product_status={"known_affected": ["FortiOS >=7.6.|<=7.6.8", "FortiOS <=7..8"]}), "7.6.5") is None)
+
 print(f"\n{ok} passed, {bad} failed")
 _sys.exit(1 if bad else 0)

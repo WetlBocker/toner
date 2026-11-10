@@ -34,6 +34,7 @@ PAN_CSAF = "https://security.paloaltonetworks.com/csaf/{cve}"          # Palo Al
 CISCO_ADVISORY = "https://sec.cloudapps.cisco.com/security/center/content/CiscoSecurityAdvisory/{id}"
 PAN_ADVISORY = "https://security.paloaltonetworks.com/{cve}"
 FORTI_RSS = "https://www.fortiguard.com/rss/ir.xml"
+FEED_HOST, FEED_SCHEMES, FEED_MAX = "filestore.fortinet.com", ("https",), 2_000_000      # where CSAF files may come from (tests point these at a fake server), and their size cap
 FEED_DELAY = 1                                                           # seconds between Fortinet's CSAF files; tests set 0
 NVD_PAGE = "https://nvd.nist.gov/vuln/detail/{cve}"
 TITLE_MAX = 120                                                          # a NIST description's first sentence, cut to this
@@ -275,9 +276,37 @@ def fixed_from(cve, product, version):
 
 _feed_lock = threading.Lock()
 
+class _Partial(Exception):
+    """Some CSAF files failed: carries what was read, which is used for this scan but not cached."""
+    def __init__(self, got):
+        self.got = got
+
+
+def _csaf(url):
+    """The JSON of one CSAF file, or None: only FEED_SCHEMES and FEED_HOST, no redirects, at most FEED_MAX bytes."""
+    u = urlparse(url)
+    if u.scheme not in FEED_SCHEMES or u.hostname != FEED_HOST:
+        return None
+    r = _get(url, FEED_HOST, allow_redirects=False, stream=True)
+    try:
+        if r.status_code != 200:
+            return None
+        body = b""
+        for chunk in r.iter_content(65536):
+            body += chunk
+            if len(body) > FEED_MAX:
+                return None
+        return json.loads(body)
+    except (requests.RequestException, ValueError):
+        return None
+    finally:
+        r.close()
+
+
 def fortinet_feed(version):
     """The advisories of Fortinet's feed (its newest 50) that list this FortiOS version. The digests are cached a day; the lock makes
-    four scan threads fetch once. A CSAF file that cannot be read is skipped; LookupError_ when the RSS itself cannot."""
+    four scan threads fetch once. A CSAF file that cannot be read is skipped, and then the digests are not cached (a rate limit would
+    hide advisories for a day); LookupError_ when the RSS itself cannot be read."""
     def fetch():
         r = _get(FORTI_RSS, "www.fortiguard.com")
         if r.status_code != 200:
@@ -286,20 +315,29 @@ def fortinet_feed(version):
             urls = fortifeed.csaf_urls(r.content)
         except ValueError as e:
             raise LookupError_(f"Fortinet: the feed could not be read ({e})") from None
-        out = []
+        if not urls:
+            raise LookupError_("Fortinet: the feed lists no advisories")
+        out, failed = [], False
         for i, url in enumerate(urls):
             if i:
                 time.sleep(FEED_DELAY)                          # at most one file a second
             try:
-                f = _get(url, urlparse(url).hostname or "")
-                d = fortifeed.digest(f.json(), url) if f.status_code == 200 else None
-            except (LookupError_, ValueError):
-                continue
+                doc = _csaf(url)
+            except LookupError_:
+                doc = None
+            d = fortifeed.digest(doc, url) if isinstance(doc, dict) else None
             if d:
                 out.append(d)
+            elif not (isinstance(doc, dict) and not doc.get("vulnerabilities")):      # a readable file without vulnerabilities is no failure
+                failed = True
+        if failed:
+            raise _Partial(out)
         return out
     with _feed_lock:
-        digests = _cached("fortifeed", fetch)
+        try:
+            digests = _cached("fortifeed", fetch)
+        except _Partial as p:
+            digests = p.got
     return [m for m in (fortifeed.match(d, version) for d in digests) if m]
 
 

@@ -27,8 +27,8 @@ def _forms(statuses):
         if not m:
             continue
         t = m.group(1).strip()
-        for pat, make in ((r"^(\d+\.\d+) all versions$", lambda g: ["branch", g[0]]), (r"^>=(\d[\d.]*)\|<=(\d[\d.]*)$", lambda g: ["range", g[0], g[1]]),
-                          (r"^<=(\d[\d.]*)$", lambda g: ["range", None, g[0]]), (r"^(\d+\.\d+\.\d+)$", lambda g: ["exact", g[0]])):
+        for pat, make in ((r"^(\d+\.\d+) all versions$", lambda g: ["branch", g[0]]), (r"^>=(\d+(?:\.\d+)*)\|<=(\d+(?:\.\d+)*)$", lambda g: ["range", g[0], g[1]]),
+                          (r"^<=(\d+(?:\.\d+)*)$", lambda g: ["range", None, g[0]]), (r"^(\d+\.\d+\.\d+)$", lambda g: ["exact", g[0]])):
             f = re.match(pat, t)
             if f:
                 out.append(make(f.groups()))
@@ -38,6 +38,13 @@ def _forms(statuses):
 
 def digest(doc: dict, url: str):
     """{id, title, cves, cvss, affected, remediation} from a CSAF document, or None when it has no vulnerabilities or its url no id."""
+    try:
+        return _digest(doc, url)
+    except (AttributeError, TypeError, KeyError, ValueError):       # a document of an unexpected shape is no digest
+        return None
+
+
+def _digest(doc, url):
     vulns = doc.get("vulnerabilities") or []
     m = _ID.search(url)
     if not vulns or not m:

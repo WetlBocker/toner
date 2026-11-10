@@ -54,7 +54,7 @@ NVD_BY = {"cpe:2.3:o:cisco:ios_xe:17.9.4a:*": NVD_CISCO, "cpe:2.3:o:fortinet:for
           "cpe:2.3:o:fortinet:fortios:8.0.0:*": NVD, "cpe:2.3:o:juniper:junos:22.4:r3-s2": NVD}
 CSAF = {"CVE-2025-0108": {"document": {"notes": [{"category": "summary", "title": "PAN-OS: Authentication Bypass in the Management Web Interface.", "text": "..."}]}}}
 FEED = ('<?xml version="1.0"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><item><title>x</title><link>https://www.fortiguard.com/psirt/FG-IR-26-182</link>'
-        '<link>{base}/feed/csaf_double-free-in-signal-handler_fg-ir-26-182.json</link><link>{base}/feed/cvrf_x.xml</link></item></channel></rss>')
+        '<link>{base}/feed/csaf_double-free-in-signal-handler_fg-ir-26-182.json</link><link>{base}/feed/cvrf_x.xml</link></item>{extra}</channel></rss>')
 FORTI_DOC = {"document": {"title": "Double free in signal handler"}, "vulnerabilities": [{"cve": "CVE-2026-106175",
              "product_status": {"known_affected": ["FortiOS >=7.6.0|<=7.6.8"]}, "scores": [{"cvss_v3": {"baseScore": 2.1}}],
              "remediations": [{"details": "FortiOS 7.6: Upgrade to upcoming  7.6.9 or above", "category": "vendor_fix"}]}]}
@@ -94,15 +94,19 @@ class Sources(_hs.BaseHTTPRequestHandler):
         if u.path == "/rss":
             if self.server.rss_down:
                 return self._send(500, {})
-            data = FEED.format(base=base).encode(); self.send_response(200); self.send_header("Content-Type", "application/rss+xml")
+            data = FEED.format(base=base, extra=self.server.rss_extra and "<item><link>%s/feed/csaf_bad_fg-ir-26-999.json</link></item><item><link>https://evil.example/csaf_x_fg-ir-26-998.json</link></item>" % base).encode(); self.send_response(200); self.send_header("Content-Type", "application/rss+xml")
             self.send_header("Content-Length", str(len(data))); self.end_headers(); return self.wfile.write(data)
         if u.path.startswith("/feed/csaf_"):
+            if "bad" in u.path:
+                if self.server.rss_extra == "429":
+                    return self._send(429, {})
+                self.send_response(200); self.send_header("Content-Length", "4"); self.end_headers(); return self.wfile.write(b"[[[[")
             return self._send(200, FORTI_DOC)
         self._send(404, {})
-web = _hs.ThreadingHTTPServer(("127.0.0.1", 0), Sources); web.nvd_keys = []; web.nvd_down = False; web.rss_down = False; threading.Thread(target=web.serve_forever, daemon=True).start()
+web = _hs.ThreadingHTTPServer(("127.0.0.1", 0), Sources); web.nvd_keys = []; web.nvd_down = False; web.rss_down = False; web.rss_extra = ''; threading.Thread(target=web.serve_forever, daemon=True).start()
 base = f"http://127.0.0.1:{web.server_address[1]}"
 A.TOKEN_URL, A.PSIRT_URL, A.NVD_URL, A.KEV_URL, A.EPSS_URL = base + "/token", base + "/psirt/{os}?version={version}", base + "/nvd", base + "/kev", base + "/epss"
-A.PAN_CSAF = base + "/csaf/{cve}"; A.FORTI_RSS = base + "/rss"; A.FEED_DELAY = 0
+A.PAN_CSAF = base + "/csaf/{cve}"; A.FORTI_RSS = base + "/rss"; A.FEED_DELAY = 0; A.FEED_HOST = "127.0.0.1"; A.FEED_SCHEMES = ("http",)
 
 # ---------------------------------------------------------------- devices: Global's and one organization's
 def dev(name, vendor, version="", platform="", org=None, folder=None):
@@ -244,6 +248,14 @@ check("NVD zero, the feed matches: its advisory, OK at 2.1, with the fix and whe
 check("an advisory id opens FortiGuard's page", A.advisory_url("FG-IR-26-182", "fortinet") == "https://fortiguard.fortinet.com/psirt/FG-IR-26-182")
 n = sum(h[0] == "/rss" for h in hits); A.scan(db.find_device("ff-fw"))
 check("the feed is cached for a day", sum(h[0] == "/rss" for h in hits) == n)
+A.forget_cache(); web.rss_extra = "429"; n = sum(h[0] == "/rss" for h in hits)
+rows = A.scan(db.find_device("ff-fw")); by = {r.check: r for r in rows}
+check("a failing CSAF file (429) is skipped and one off the allowed host is not requested; the rest still count", "FG-IR-26-182" in by and any(h[0].startswith("/feed/csaf_bad") for h in hits), [r.check for r in rows])
+A.scan(db.find_device("ff-fw"))
+check("...and a partial read is not cached: the next scan asks the feed again", sum(h[0] == "/rss" for h in hits) == n + 2)
+web.rss_extra = "junk"; A.forget_cache()
+check("a malformed CSAF body is skipped too", "FG-IR-26-182" in {r.check for r in A.scan(db.find_device("ff-fw"))})
+web.rss_extra = ""; A.forget_cache()
 db.delete_device(ff["id"])
 nv = dev("nv-fw", "fortinet", "8.0.0"); A.forget_cache(); n = sum(h[0] == "/rss" for h in hits)
 rows = A.scan(db.find_device("nv-fw"))
