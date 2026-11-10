@@ -47,7 +47,8 @@ NVD_PA = {"resultsPerPage": 3, "totalResults": 3, "vulnerabilities": [
              "metrics": {"cvssMetricV31": [{"cvssData": {"baseScore": 10.0}}]}}},
     {"cve": {"id": "CVE-2025-0111", "descriptions": [{"lang": "en", "value": "An authenticated file read vulnerability in the Palo Alto Networks PAN-OS software enables an authenticated attacker with network access to the management web interface to read files on the PAN-OS filesystem that are readable by the nobody user. This is a long one."}],
              "metrics": {"cvssMetricV31": [{"cvssData": {"baseScore": 7.1}}]}}}]}
-NVD_BY = {"cpe:2.3:o:fortinet:fortios:7.2.5:*": NVD, "cpe:2.3:o:paloaltonetworks:pan-os:11.1.4:*": NVD_PA}
+NVD_UN = {"resultsPerPage": 1, "totalResults": 1, "vulnerabilities": [{"cve": {"id": "CVE-2024-2222", "descriptions": [{"lang": "en", "value": "Not scored yet. More."}]}}]}
+NVD_BY = {"cpe:2.3:o:fortinet:fortios:7.2.5:*": NVD, "cpe:2.3:o:paloaltonetworks:pan-os:11.1.4:*": NVD_PA, "cpe:2.3:o:fortinet:fortios:7.2.6:*": NVD_UN}
 CSAF = {"CVE-2025-0108": {"document": {"notes": [{"category": "summary", "title": "PAN-OS: Authentication Bypass in the Management Web Interface.", "text": "..."}]}}}
 class Sources(_hs.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
@@ -113,6 +114,19 @@ check("CPE parts: FortiOS loses its v, Junos splits at R and drops the build", A
 check("statuses: KEV or 9+ fails, 7 to 8.9 warns, below is OK", A.status_of({"cvss": 4.3, "cves": ["CVE-2023-20198"]}, {"CVE-2023-20198"}) == "FAIL"
       and A.status_of({"cvss": 9.0, "cves": []}, set()) == "FAIL" and A.status_of({"cvss": 8.6, "cves": ["x"]}, set()) == "WARN" and A.status_of({"cvss": 6.9, "cves": []}, set()) == "OK")
 
+P = "paloaltonetworks:pan-os"
+rec = lambda *m: {"configurations": [{"nodes": [{"cpeMatch": [{"vulnerable": True, **x} for x in m]}]}]}
+star = f"cpe:2.3:o:{P}:*:*:*:*:*:*:*:*:*"
+check("the range the version falls in gives the fix", A.fixed_from(rec({"criteria": star, "versionStartIncluding": "11.1.0", "versionEndExcluding": "11.1.6"},
+      {"criteria": star, "versionStartIncluding": "10.2.0", "versionEndExcluding": "10.2.9"}), P, "11.1.4") == ["11.1.6"])
+check("a range ending at a version still listed as vulnerable names no fix", A.fixed_from(rec({"criteria": star, "versionStartIncluding": "11.1.0", "versionEndExcluding": "11.1.6"},
+      {"criteria": f"cpe:2.3:o:{P}:11.1.6:h1:*:*:*:*:*:*"}), P, "11.1.4") == [])
+check("versionEndIncluding is not a fix", A.fixed_from(rec({"criteria": star, "versionEndIncluding": "11.1.6"}), P, "11.1.4") == [])
+check("a version that cannot be compared names no fix (Junos)", A.fixed_from(rec({"criteria": "cpe:2.3:o:juniper:junos:*:*:*:*:*:*:*:*", "versionEndExcluding": "22.4"}), "juniper:junos", "22.4R3-S2.1") == [])
+check("a PAN-OS hotfix counts in the comparison", A.fixed_from(rec({"criteria": star, "versionEndExcluding": "11.1.4-h3"}), P, "11.1.4-h1") == ["11.1.4-h3"])
+check("no score: WARN, or FAIL when exploited", A.status_of({"cvss": None, "cves": ["CVE-1"]}, {}) == "WARN" and A.status_of({"cvss": None, "cves": ["CVE-1"]}, {"CVE-1": "x"}) == "FAIL")
+check("an unscored value is recognised and has no CVSS number", A.UNSCORED == "CVSS not given" and A.is_unscored("CVSS not given, EPSS 3%") and not A.is_unscored("CVSS 7.5") and A.cvss_of("CVSS not given") is None)
+
 print("== one device's rows")
 rows = A.scan(db.find_device("c9300"))
 by = {r.check: r for r in rows}
@@ -167,6 +181,20 @@ check("a rejected sign-in: one ERROR row with Cisco's words and the app type to 
 A.set_secret("psirt_secret", ""); A._token.clear()
 check("no account: one ERROR row saying so", A.scan(db.find_device("c9300"))[0].message.endswith(f"Cisco PSIRT: no client id and secret. {A.CHECK_SETTINGS}"))
 A.set_secret("psirt_secret", "sec-1")
+un = dev("un-fw", "fortinet", "7.2.6")
+rows = A.scan(db.find_device("un-fw")); by = {r.check: r for r in rows}
+check("an NVD record with no metrics: value is 'CVSS not given', WARN, not low", by["CVE-2024-2222"].value == A.UNSCORED and by["CVE-2024-2222"].status == "WARN" and by[A.SOFTWARE].status == "WARN", [(r.check, r.status, r.value) for r in rows])
+sid_un = db.save_scan(rows)
+from ui.vulntab import VulnTab
+from ui import chartspec
+vt = VulnTab(); vt.show_device(db.find_device("un-fw"))
+check("the device's Vulnerabilities tab lists it, with a 'CVSS not given' slice", [r["id"] for r in vt.rows] == ["CVE-2024-2222"] and vt.rows[0]["cvss"] is None
+      and [d["name"] for d in vt.chart._builder(chartspec.palette())["series"][0]["data"]] == ["Low", "Medium", "High", "Critical", "CVSS not given"])
+vt._slice({"kind": "series", "name": "CVSS not given"})
+check("...and selecting the slice lists the CVE", [r["id"] for r in vt.detail.rows] == ["CVE-2024-2222"])
+db.delete_device(un["id"])
+with db.connect() as c:                                     # the later checks count the scans and devices of the first six
+    c.execute("DELETE FROM scan_results WHERE scan_id=?", (sid_un,)); c.execute("DELETE FROM scans WHERE id=?", (sid_un,))
 check("the NVD key is sent when there is one", web.nvd_keys and web.nvd_keys[-1] is None and (A.set_secret("nvd_key", "nvd-k"), A.forget_cache(), A.scan(db.find_device("edge-fw"))) and web.nvd_keys[-1] == "nvd-k", web.nvd_keys)
 check("Test says what Cisco and NVD answered", A.test("cid-1", "sec-1", "nvd-k") == "Cisco PSIRT answered: 3 advisories for IOS XE 17.9.4a. NVD answered: 1 CVE for FortiOS 7.2.5."
       and A.test("cid-1", "bad", "") == f"Cisco PSIRT: sign-in rejected (invalid_client). {A.APP_TYPE}", A.test("cid-1", "sec-1", "nvd-k"))

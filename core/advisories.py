@@ -62,6 +62,13 @@ SOFTWARE, ADVISORIES, KEV = "Software version", "Advisories", "Known exploited (
 SEVERITY_BANDS = (("Low", 0, 4), ("Medium", 4, 7), ("High", 7, 9), ("Critical", 9, 10.01))     # CVSS: from <= score < to
 
 
+UNSCORED = "CVSS not given"
+
+
+def is_unscored(value):
+    return (value or "").startswith(UNSCORED)
+
+
 def cvss_of(value):
     """The CVSS score an advisory row's value states ('CVSS 7.5, EPSS 12%' -> 7.5), or None (fixed rows, hardening rules)."""
     m = re.search(r"CVSS\s+(\d+(?:\.\d+)?)", value or "")
@@ -215,9 +222,9 @@ def psirt(os_, version, cid=None, secret=None):
         out = []
         for a in r.json().get("advisories") or []:
             try:
-                score = float(a.get("cvssBaseScore") or 0)
-            except ValueError:
-                score = 0.0
+                score = float(a.get("cvssBaseScore"))
+            except (TypeError, ValueError):
+                score = None
             fixed = [f for f in (a.get("firstFixed") or []) if f and f != "NA"]
             out.append({"id": a.get("advisoryId") or "", "title": a.get("advisoryTitle") or "", "cves": [c for c in (a.get("cves") or []) if c.startswith("CVE-")],
                         "cvss": score, "sir": a.get("sir") or "", "fixed": fixed, "url": a.get("publicationUrl") or ""})
@@ -225,10 +232,46 @@ def psirt(os_, version, cid=None, secret=None):
     return _cached(f"psirt:{os_}:{version}", fetch)
 
 
+def _vtuple(v):
+    """'11.1.4-h3' -> (11, 1, 4, 3), '11.1.4' -> (11, 1, 4, 0); None when it is not that shape (Junos '22.4R3-S2.1')."""
+    m = re.match(r"^v?(\d+(?:\.\d+)*)(?:-h(\d+))?$", v or "")
+    return tuple(int(x) for x in m.group(1).split(".")) + (int(m.group(2) or 0),) if m else None
+
+
+def fixed_from(cve, product, version):
+    """The versions an NVD record says fix `version`: the versionEndExcluding of each range of the product that holds it, unless that
+    very version is still listed as vulnerable. [] when the version cannot be compared. shortcut: one hotfix number, no letters."""
+    have = _vtuple(version)
+    if not have:
+        return []
+    ranges, listed = [], set()
+    for conf in cve.get("configurations") or []:
+        for node in conf.get("nodes") or []:
+            for m in node.get("cpeMatch") or []:
+                parts = (m.get("criteria") or "").split(":")
+                if not m.get("vulnerable") or len(parts) < 6 or f"{parts[3]}:{parts[4]}" != product:
+                    continue
+                if parts[5] != "*":
+                    listed.add(parts[5])
+                elif m.get("versionEndExcluding"):
+                    ranges.append(m)
+    out = set()
+    for m in ranges:
+        end, lo, lo_x = _vtuple(m["versionEndExcluding"]), _vtuple(m.get("versionStartIncluding")), _vtuple(m.get("versionStartExcluding"))
+        if end and have < end and not (lo and have < lo) and not (lo_x and have <= lo_x) and m["versionEndExcluding"] not in listed:
+            out.add(m["versionEndExcluding"])
+    return sorted(out, key=_vtuple)
+
+
 def nvd(vendor, version, key=None):
     """[{id, title, cves, cvss, fixed, url}] from NIST's NVD for one vendor's product and version: one entry per CVE."""
-    product = NVD_CPE[vendor]
     ver, upd = cpe_version(vendor, version)
+    return nvd_cve(NVD_CPE[vendor], ver, upd, vendor, key)
+
+
+def nvd_cve(product, ver, upd, vendor="", key=None, build=False):
+    """The fetch behind nvd(): `product` is the CPE vendor:product, `ver` and `upd` its version parts; build=True writes the fixes as
+    'build X' (Windows). cvss is None for a CVE NVD has not scored."""
     key = key if key is not None else get_secret("nvd_key")
 
     def fetch():
@@ -246,15 +289,16 @@ def nvd(vendor, version, key=None):
             for item in body.get("vulnerabilities") or []:
                 cve = item.get("cve") or {}
                 metrics = cve.get("metrics") or {}
-                score = 0.0
+                score = None
                 for k in ("cvssMetricV40", "cvssMetricV31", "cvssMetricV30", "cvssMetricV2"):
                     if metrics.get(k):
                         score = float(metrics[k][0].get("cvssData", {}).get("baseScore") or 0)
                         break
+                fixed = fixed_from(cve, product, ver if upd == "*" else ver + upd)
                 desc = next((d["value"] for d in cve.get("descriptions") or [] if d.get("lang") == "en"), "").split(". ")[0]
                 summary = desc if len(desc) <= TITLE_MAX else desc[:TITLE_MAX - 1].rstrip() + "…"
                 out.append({"id": cve.get("id") or "", "title": pan_title(cve.get("id") or "") if vendor == "paloalto" else "", "summary": summary,
-                            "cves": [cve.get("id") or ""], "cvss": score, "sir": "", "fixed": [], "url": NVD_PAGE.format(cve=cve.get("id") or "")})
+                            "cves": [cve.get("id") or ""], "cvss": score, "sir": "", "fixed": [f"build {x}" for x in fixed] if build else fixed, "url": NVD_PAGE.format(cve=cve.get("id") or "")})
             start += body.get("resultsPerPage") or len(out) or 1
             if start >= (body.get("totalResults") or 0) or not body.get("vulnerabilities"):
                 return out
@@ -296,10 +340,10 @@ def _epss_fetch(batch):
 
 # ---------------------------------------------------------------- one device
 def status_of(a, exploited):
-    """FAIL when a CVE of the advisory is on CISA's list or CVSS is 9 or more, WARN from 7, OK below."""
-    if a["cvss"] >= 9 or any(c in exploited for c in a["cves"]):
+    """FAIL when a CVE of the advisory is on CISA's list or CVSS is 9 or more, WARN from 7, OK below. No score: FAIL if on the list, else WARN."""
+    if any(c in exploited for c in a["cves"]) or (a["cvss"] or 0) >= 9:
         return FAIL
-    return WARN if a["cvss"] >= 7 else OK
+    return WARN if a["cvss"] is None or a["cvss"] >= 7 else OK
 
 
 def lookup(dev, creds=None):
@@ -373,7 +417,7 @@ def versions(dev):
     except LookupError_ as e:
         return [row(SOFTWARE, ERROR, version, f"{version}: {e}")]
     scores = epss([c for a in found for c in a["cves"]])
-    found = sorted(found, key=lambda a: (-a["cvss"], a["id"]))
+    found = sorted(found, key=lambda a: (a["cvss"] is None, -(a["cvss"] or 0), a["id"]))
     statuses = [status_of(a, exploited) for a in found]
     worst = FAIL if FAIL in statuses else WARN if WARN in statuses else OK            # the version is as bad as its worst advisory
     bad = ", ".join(f"{statuses.count(s)} {s}" for s in (FAIL, WARN) if s in statuses)
@@ -383,7 +427,7 @@ def versions(dev):
         rows.append(row(ADVISORIES, OK, "", NONE_FOUND))
     for a, status in zip(found, statuses):
         best = max((scores.get(c, 0) for c in a["cves"]), default=0)
-        value = f"CVSS {a['cvss']:g}" + (f", EPSS {best:.0%}" if best else "")
+        value = (UNSCORED if a["cvss"] is None else f"CVSS {a['cvss']:g}") + (f", EPSS {best:.0%}" if best else "")
         # the vendor's title (Cisco, Palo Alto), else CISA's name when exploited, else the first sentence NIST gives
         title = a.get("title") or next((exploited[c] for c in a["cves"] if exploited.get(c)), "") or a.get("summary", "")
         message = title + (f" Fixed in {', '.join(a['fixed'][:3])}." if a["fixed"] else "")

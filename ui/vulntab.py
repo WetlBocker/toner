@@ -15,10 +15,12 @@ NO_SCAN = "No scan yet. Scan this device on the Scanning page to see its advisor
 NONE = "No advisories for this version"
 COLUMNS = [("id", "Advisory"), ("title", "Title"), ("cvss", "CVSS"), ("exploited", "Exploited"), ("link", "Link")]
 CVE = r"CVE-\d{4}-\d+"
-BAND_STATUS = {"Low": "OK", "Medium": "OK", "High": "WARN", "Critical": "FAIL"}          # the colours the Scanning page has used
+BAND_STATUS = {"Low": "OK", "Medium": "OK", "High": "WARN", "Critical": "FAIL", advisories.UNSCORED: "N/A"}          # the colours the Scanning page has used
 
 
 def band_of(score):
+    if score is None:
+        return advisories.UNSCORED
     return next((name for name, lo, hi in advisories.SEVERITY_BANDS if lo <= score < hi), None)
 
 
@@ -27,7 +29,7 @@ def exploited(r, score, on_list):
     CVEs is on CISA's list (advisories.status_of); a row named by its CVE is looked up in the list itself."""
     if r["status"] != "FAIL":
         return "No"
-    if score < 9:
+    if (score or 0) < 9:
         return "Yes"
     if re.fullmatch(CVE, r["check_name"]):
         return "Yes" if r["check_name"] in on_list else "No"
@@ -35,8 +37,11 @@ def exploited(r, score, on_list):
 
 
 def band_slices(p, scores):
-    """The pie's slices [(severity, how many, colour)] for CVSS scores."""
-    return [(name, sum(lo <= s < hi for s in scores), chartspec.status_color(p, BAND_STATUS[name])) for name, lo, hi in advisories.SEVERITY_BANDS]
+    """The pie's slices [(severity, how many, colour)] for CVSS scores; None (not given) adds its own slice at the end."""
+    out = [(name, sum(s is not None and lo <= s < hi for s in scores), chartspec.status_color(p, BAND_STATUS[name])) for name, lo, hi in advisories.SEVERITY_BANDS]
+    if None in scores:
+        out.append((advisories.UNSCORED, scores.count(None), chartspec.status_color(p, BAND_STATUS[advisories.UNSCORED])))
+    return out
 
 
 class VulnTab(QWidget):
@@ -66,8 +71,9 @@ class VulnTab(QWidget):
         software = next((r for r in mine if r["check_name"] == advisories.SOFTWARE), None)
         self.rows = []
         for r in mine:
-            score = advisories.cvss_of(r["value"]) if r["check_name"] not in (advisories.SOFTWARE, advisories.ADVISORIES, advisories.KEV) else None
-            if score is not None:
+            advisory = r["check_name"] not in (advisories.SOFTWARE, advisories.ADVISORIES, advisories.KEV)
+            score = advisories.cvss_of(r["value"]) if advisory else None
+            if score is not None or (advisory and advisories.is_unscored(r["value"])):
                 self.rows.append({"id": r["check_name"], "title": (r["message"] or "").partition(" Fixed in ")[0].strip(), "cvss": score,
                                   "exploited": exploited(r, score, on_list), "link": advisories.advisory_url(r["check_name"], dev.get("vendor") or "")})
         # nothing looked up (no source, lookups off, no version, the source refused): the version row says why
@@ -85,7 +91,7 @@ class VulnTab(QWidget):
         name = hit.get("name") if hit.get("kind") == "series" else None
         if name not in BAND_STATUS:
             return
-        self.detail.show_rows(sorted((r for r in self.rows if band_of(r["cvss"]) == name), key=lambda r: -r["cvss"]), COLUMNS)
+        self.detail.show_rows(sorted((r for r in self.rows if band_of(r["cvss"]) == name), key=lambda r: -(r["cvss"] or 0)), COLUMNS)
         self.detail.show()
 
     def _open(self, index):

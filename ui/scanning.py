@@ -93,14 +93,14 @@ class ScanningTab(ResultsTab):
         self.cvss_chart.restyle()
 
     def _advisory_rows(self):
-        """The advisory rows among what is shown: a check that is neither a fixed row nor a hardening rule, with a CVSS score in its value."""
+        """The advisory rows among what is shown: a check that is neither a fixed row nor a hardening rule, with a CVSS score (or "CVSS not given") in its value."""
         fixed = {advisories.SOFTWARE, advisories.ADVISORIES, advisories.KEV}
         out = []
         for r in self.shown_rows():
             if r.check in fixed:
                 continue
             score = advisories.cvss_of(r.value)
-            if score is not None:
+            if score is not None or advisories.is_unscored(r.value):
                 out.append((r, score))
         return out
 
