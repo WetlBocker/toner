@@ -20,6 +20,8 @@ def parse(text):
         if l == "}":
             stack and stack.pop()
             continue
+        if l == "password <masked>":      # older stored backups: the masker ate the block's `{`
+            l = "password {"
         opens = l.endswith("{")
         l = l.rstrip("{;").strip()
         inactive = l.startswith("inactive:")

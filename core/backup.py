@@ -51,7 +51,7 @@ MASKS = [
                 r"snmp-server\s+community|snmp-server\s+user\s+\S+\s+\S+\s+v3\s+auth\s+\S+|"
                 r"(?:tacacs|radius)(?:-server)?\s+(?:host\s+\S+\s+)?key|ntp\s+authentication-key\s+\d+\s+\S+|"
                 r"(?:crypto\s+)?(?:isakmp|ikev2)\s+key|pre-shared-key|password|secret|key-string|"
-                r"authentication-key|encrypted-password|wpa-psk|auth-password|priv-password))\s+(?:\d\s+)?\S.*?(;?)\s*$"),
+                r"authentication-key|encrypted-password|wpa-psk|auth-password|priv-password))(?!.*\{\s*$)(?!\s+(?:minimum|maximum)\b)\s+(?:\d\s+)?\S.*?(;?)\s*$"),  # not a block opener, not a length setting
      r"\1 <masked>\2"),
     # Junos
     (re.compile(r'(?i)\b(encrypted-password|secret|authentication-key|pre-shared-key\s+(?:ascii-text|hexadecimal)|'

@@ -81,6 +81,9 @@ def lockout(lines, plat, masked):
 
 def password_length(lines, plat, masked):
     n = _first(lines, "management security", r"password minimum length (\d+)$")
+    if n is None and any(x == "password <masked>" for b in _block(lines, "management security") for x in b):   # older stored backups
+        from core import hardening
+        return ("na", f"the minimum length, {hardening.MASKED}")
     return f"password minimum length {n or 'not set'}: set password minimum length 15 under management security" if n is None or int(n) < 15 else None
 
 

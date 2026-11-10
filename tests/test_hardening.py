@@ -702,6 +702,19 @@ try:
 except ValueError:
     check("an IOS text is refused as EOS", True)
 
+print("== the masked backups a scan reads")
+check("a hardened Junos config through the masker: every rule still OK", all(v == ("OK", "not found") for v in by(backup.mask_secrets(GOOD_JN), "", vendor="juniper").values()), {k: v for k, v in by(backup.mask_secrets(GOOD_JN), "", vendor="juniper").items() if v[0] != "OK"})
+check("a hardened Arista config through the masker: every rule still OK", all(v == ("OK", "not found") for v in by(backup.mask_secrets(GOOD_AR), "", vendor="arista").values()), {k: v for k, v in by(backup.mask_secrets(GOOD_AR), "", vendor="arista").items() if v[0] != "OK"})
+check("the masker leaves a length setting and a block opener alone, and still masks a password",
+      backup.mask_secrets("   password minimum length 15") == "   password minimum length 15" and backup.mask_secrets("    password {") == "    password {"
+      and backup.mask_secrets("username a password 7 0822455D0A16") == "username a password <masked>" and backup.mask_secrets("password cisco") == "password <masked>")
+OLD_JN = GOOD_JN.replace("        password {\n            minimum-length 15;\n        }\n", "        password <masked>\n            minimum-length 15;\n        }\n")
+oj = by(OLD_JN, "", vendor="juniper")
+check("an old Junos backup that lost the password block's brace: later system rules still right", oj["jn idle timeout"][0] == "OK" and oj["jn ssh root"][0] == "OK" and oj["jn password length"][0] == "OK"
+      and oj["jn syslog"][0] == "OK" and oj["jn ntp auth"][0] == "OK", {k: v for k, v in oj.items() if v[0] != "OK"})
+check("an old Arista backup with the length line masked: N/A, not 'not set'", by(GOOD_AR.replace("password minimum length 15", "password <masked>"), "", vendor="arista")["ar password length"]
+      == ("N/A", "the minimum length, the stored backup masks it (Settings > Config backups)"))
+
 print("== the rows a scan adds")
 def dev(name, vendor, platform="", version=""):
     d = {"name": name, "vendor": vendor, "host": "10.0.0.9", "platform": platform, "enabled": 1}
