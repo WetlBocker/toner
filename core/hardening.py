@@ -9,6 +9,7 @@ from drivers.base import FAIL, NA, OK, WARN, Result
 
 IOS, XE, NXOS, ASA = "cisco_ios", "cisco_xe", "cisco_nxos", "cisco_asa"
 ALL = (IOS, XE, NXOS, ASA)
+HPE_PLATFORMS = ("aruba_aoscx", "aruba_osswitch")
 NO_BACKUP = "No configuration backup to read. Configs > Back up now reads one."
 NO_RULES = "No hardening rules for this vendor yet."
 UNREADABLE = "The backup could not be read as a {} configuration."
@@ -417,12 +418,14 @@ def _lines(text):
 
 
 def _groups():
-    from core import hardening_arista, hardening_fortinet, hardening_juniper, hardening_paloalto
+    from core import hardening_arista, hardening_fortinet, hardening_hpe, hardening_juniper, hardening_mikrotik, hardening_paloalto
     return [("cisco", "Cisco (IOS, IOS XE, NX-OS, ASA)", "Cisco", _lines, CISCO),
             ("fortinet", "FortiGate", "FortiOS", hardening_fortinet.parse, hardening_fortinet.RULES),
             ("paloalto", "Palo Alto", "PAN-OS", hardening_paloalto.parse, hardening_paloalto.RULES),
             ("juniper", "Juniper", "Junos", hardening_juniper.parse, hardening_juniper.RULES),
-            ("arista", "Arista", "EOS", hardening_arista.parse, hardening_arista.RULES)]
+            ("arista", "Arista", "EOS", hardening_arista.parse, hardening_arista.RULES),
+            ("hpe", "HPE Aruba", "AOS", hardening_hpe.parse, hardening_hpe.RULES),
+            ("mikrotik", "MikroTik", "RouterOS", hardening_mikrotik.parse, hardening_mikrotik.RULES)]
 
 
 GROUPS = _groups()                          # (vendor, heading, format name, parse(text) -> doc, rules)
@@ -443,7 +446,7 @@ def findings(text, platform, off=(), vendor="cisco"):
     _v, _h, _f, parse, rules = BY_VENDOR[vendor]
     doc = parse(text)
     masked = "<masked>" in text
-    plat = platform if platform in ALL else IOS
+    plat = platform if platform in ALL + HPE_PLATFORMS else IOS
     out = []
     for key, label, sev, test in rules:
         if key in off:

@@ -702,9 +702,177 @@ try:
 except ValueError:
     check("an IOS text is refused as EOS", True)
 
+print("== HPE Aruba")
+BAD_CX = """!Version ArubaOS-CX FL.10.10.1000
+hostname cx1
+snmp-server community public
+snmp-server community mon
+session-timeout 0
+aaa authentication minimum-password-length 8
+ntp server 10.0.0.1
+"""
+GOOD_CX = """!Version ArubaOS-CX FL.10.10.1000
+hostname cx1
+banner motd !
+Authorized use only
+!
+logging 10.0.0.5 vrf mgmt
+ntp server 10.0.0.1 vrf mgmt
+ntp authentication
+ntp authentication-key 1 md5 ciphertext AQBapaAbc123
+aaa authentication limit-login-attempts 3 lockout-time 300
+aaa authentication minimum-password-length 15
+aaa accounting all-mgmt default start-stop local
+session-timeout 10
+"""
+BAD_OS = """; J9774A Configuration Editor; Created on release #YA.16.10.0003
+hostname "os1"
+snmp-server community "public" operator
+snmp-server community "mon" manager
+password minimum-length 8
+sntp server priority 1 10.0.0.1 3
+"""
+GOOD_OS = """; J9774A Configuration Editor; Created on release #YA.16.10.0003
+hostname "os1"
+no telnet-server
+no web-management plaintext
+web-management ssl
+password minimum-length 15
+aaa authentication lockout-delay 60
+aaa accounting exec start-stop radius
+banner motd "Authorized use only"
+logging 10.0.0.5
+sntp server priority 1 10.0.0.1 3
+ip authorized-managers 10.0.0.0 255.255.255.0 access manager
+"""
+from core import hardening_hpe as HP
+CX, OSW = "aruba_aoscx", "aruba_osswitch"
+cx, osw = by(BAD_CX, CX, vendor="hpe"), by(BAD_OS, OSW, vendor="hpe")
+NOT_HERE = ("N/A", H.NOT_HERE)
+check("every HPE rule answers, in order, on both platforms", [k for k, *_ in H.findings(BAD_CX, CX, vendor="hpe")] == [k for k, *_ in HP.RULES] == [k for k, *_ in H.findings(BAD_OS, OSW, vendor="hpe")]
+      and len(HP.RULES) == 13 and all(k.startswith("hp ") for k, *_ in HP.RULES))
+check("AOS-CX: telnet and HTTP do not apply; the other one-platform rules do", cx["hp telnet"] == NOT_HERE and cx["hp http"] == NOT_HERE and cx["hp mgmt acl"] == NOT_HERE
+      and cx["hp lockout"] == ("WARN", "aaa authentication limit-login-attempts is not set: set aaa authentication limit-login-attempts")
+      and cx["hp timeout"] == ("WARN", "session-timeout 0: set session-timeout 10")
+      and cx["hp ntp auth"] == ("WARN", "ntp authentication and ntp authentication-key not set: set ntp authentication and ntp authentication-key"), cx)
+check("AOS-S: timeout and NTP auth do not apply; telnet, HTTP and the manager list do", osw["hp timeout"] == NOT_HERE and osw["hp ntp auth"] == NOT_HERE
+      and osw["hp telnet"] == ("FAIL", "no telnet-server is not set: set no telnet-server")
+      and osw["hp http"] == ("FAIL", "no web-management plaintext is not set: set web-management ssl and no web-management plaintext")
+      and osw["hp mgmt acl"] == ("WARN", "no ip authorized-manager: add ip authorized-manager lines")
+      and osw["hp lockout"] == ("WARN", "aaa authentication lockout-delay is not set: set aaa authentication lockout-delay"), osw)
+for p, r in ((CX, cx), (OSW, osw)):
+    check(f"{p}: SNMP, banner, logging, accounting", r["hp snmp community"] == ("FAIL", "snmp-server community <masked>: change it (snmp-server community)")
+          and r["hp snmp v2c"] == ("WARN", "2 communities: remove snmp-server community and use SNMPv3 (snmpv3 only on ArubaOS-Switch)")
+          and r["hp banner"] == ("WARN", "no banner motd or banner exec: set one") and r["hp logging"] == ("WARN", "no logging host: set logging {server}")
+          and r["hp accounting"] == ("WARN", "no aaa accounting: set aaa accounting") and r["hp ntp"] == ("OK", "not found"), r)
+check("password length names the platform's own setting", cx["hp password length"] == ("WARN", "aaa authentication minimum-password-length 8: set aaa authentication minimum-password-length 15")
+      and osw["hp password length"] == ("WARN", "password minimum-length 8: set password minimum-length 15")
+      and by(GOOD_OS.replace("password minimum-length 15\n", ""), OSW, vendor="hpe")["hp password length"] == ("WARN", "password minimum-length not set: set password minimum-length 15"))
+for g, p in ((GOOD_CX, CX), (GOOD_OS, OSW)):
+    r = by(g, p, vendor="hpe")
+    check(f"a hardened {p} config: every rule OK, but the N/A ones", all(v[0] in ("OK", "N/A") for v in r.values()) and sum(v[0] == "N/A" for v in r.values()) == (3 if p == CX else 2),
+          {k: v for k, v in r.items() if v[0] != "OK"})
+check("remote AAA: no local lockout can be set, so N/A", by(GOOD_CX.replace("aaa authentication limit-login-attempts 3 lockout-time 300", "aaa authentication login default group radius local"), CX, vendor="hpe")["hp lockout"][0] == "N/A")
+check("no platform given: it is read from the header", by(BAD_CX, "", vendor="hpe")["hp telnet"] == NOT_HERE and by(BAD_OS, "", vendor="hpe")["hp timeout"] == NOT_HERE)
+check("snmpv3 only ends the SNMP version finding; no web-management at all also passes HTTP", by(BAD_OS.replace("hostname", "snmpv3 only\nhostname"), OSW, vendor="hpe")["hp snmp v2c"][0] == "OK"
+      and by(GOOD_OS.replace("no web-management plaintext", "no web-management"), OSW, vendor="hpe")["hp http"][0] == "OK")
+check("a masked community name: N/A, whether it is public cannot be told", by(BAD_CX.replace("community public", "community <masked>"), CX, vendor="hpe")["hp snmp community"]
+      == ("N/A", "2 communities; whether one is public or private cannot be told, the stored backup masks it (Settings > Config backups)"))
+check("no NTP server: NTP fails, NTP auth has nothing to check", by(BAD_CX.replace("ntp server 10.0.0.1", ""), CX, vendor="hpe")["hp ntp"] == ("WARN", "no ntp server: set ntp server")
+      and by(BAD_CX.replace("ntp server 10.0.0.1", ""), CX, vendor="hpe")["hp ntp auth"][0] == "OK")
+try:
+    H.findings(BAD_IOS, CX, vendor="hpe"); check("an IOS text is refused as Aruba", False)
+except ValueError:
+    check("an IOS text is refused as Aruba", True)
+
+print("== MikroTik")
+BAD_MT = """# 2026-11-09 12:00:00 by RouterOS 7.14
+/ip service
+set www-ssl disabled=no
+/ip proxy
+set enabled=yes
+/ip socks
+set enabled=yes
+/snmp
+set enabled=yes
+/snmp community
+add name=private write-access=yes
+"""
+GOOD_MT = """# 2026-11-09 12:00:00 by RouterOS 7.14
+# model = RB4011iGS+
+/ip service
+set telnet disabled=yes
+set ftp disabled=yes
+set www disabled=yes
+set api disabled=yes
+set api-ssl disabled=yes
+set ssh address=10.0.0.0/8
+set winbox address=10.0.0.0/8
+/tool mac-server
+set allowed-interface-list=LAN
+/tool mac-server mac-winbox
+set allowed-interface-list=LAN
+/ip neighbor discovery-settings
+set discover-interface-list=LAN
+/tool bandwidth-server
+set enabled=no
+/ip ssh
+set strong-crypto=yes
+/ip firewall filter
+add action=accept chain=input connection-state=established,related
+add action=drop chain=input comment="drop all not from LAN" \\
+    in-interface-list=!LAN
+/snmp
+set enabled=yes
+/snmp community
+set [ find default=yes ] addresses=10.0.0.0/8 authentication-protocol=SHA1 name=mon7f3 security=authorized
+/system logging action
+add name=remote1 remote=10.0.0.5 target=remote
+/system logging
+add action=remote1 topics=info
+/system ntp client
+set enabled=yes
+"""
+from core import hardening_mikrotik as MT
+mk = by(BAD_MT, "mikrotik_routeros", vendor="mikrotik")
+check("every MikroTik rule answers, in order, and each finds something in a bare export", [k for k, *_ in H.findings(BAD_MT, "", vendor="mikrotik")] == [k for k, *_ in MT.RULES]
+      and len(MT.RULES) == 14 and all(k.startswith("mt ") for k, *_ in MT.RULES) and {v[0] for v in mk.values()} == {"FAIL", "WARN"}, mk)
+check("services on by default", mk["mt telnet http"] == ("FAIL", "telnet,ftp,www not disabled: /ip service disable telnet,ftp,www")
+      and mk["mt api"] == ("WARN", "api not disabled: /ip service disable api")
+      and mk["mt service address"] == ("WARN", "ssh, winbox, api-ssl, www-ssl without a source address: set address (available-from on RouterOS 7.25 and later) under /ip service"), mk)
+check("MAC server, neighbors, bandwidth, proxy, SSH, firewall", mk["mt mac server"] == ("WARN", "allowed-interface-list all: /tool mac-server set allowed-interface-list=none and /tool mac-server mac-winbox set allowed-interface-list=none")
+      and mk["mt neighbor"] == ("WARN", "discover-interface-list all: /ip neighbor discovery-settings set discover-interface-list=none")
+      and mk["mt bandwidth"] == ("WARN", "bandwidth-server is on: /tool bandwidth-server set enabled=no")
+      and mk["mt proxy"] == ("WARN", "proxy, socks on: set enabled=no under /ip proxy, /ip socks")
+      and mk["mt ssh"] == ("WARN", "strong-crypto is off: /ip ssh set strong-crypto=yes")
+      and mk["mt firewall"] == ("WARN", "no drop rule in chain=input: add one under /ip firewall filter"), mk)
+check("SNMP: the default community left as public, a private one with write access, both open", mk["mt snmp public"] == ("FAIL", "community public: name is public or private; community private: name is public or private and write-access=yes: rename the community and set write-access=no under /snmp community")
+      and mk["mt snmp addresses"] == ("WARN", "2 of 2 communities on 0.0.0.0/0: set addresses= under /snmp community")
+      and mk["mt snmp v2c"] == ("WARN", "2 communities without security=authorized or private: set security= and authentication-protocol= under /snmp community"), mk)
+check("logging and NTP", mk["mt syslog"] == ("WARN", "no remote logging action: add target=remote under /system logging action and use it in /system logging")
+      and mk["mt ntp"] == ("WARN", "NTP client not enabled: /system ntp client set enabled=yes"), mk)
+goodmt = by(GOOD_MT, "mikrotik_routeros", vendor="mikrotik")
+check("a hardened router (a wrapped drop rule, a renamed default community): every rule OK", all(v == ("OK", "not found") for v in goodmt.values()), {k: v for k, v in goodmt.items() if v[0] != "OK"})
+mt2 = lambda s: by(s, "mikrotik_routeros", vendor="mikrotik")
+check("SNMP off: its rules pass; one-line forms and [ find name= ] are read", mt2(GOOD_MT.replace("/snmp\nset enabled=yes", "/snmp\nset enabled=no").replace("name=mon7f3", "name=public"))["mt snmp public"][0] == "OK"
+      and mt2(GOOD_MT.replace("/ip service\nset telnet disabled=yes", "/ip service set [ find name=telnet ] disabled=no"))["mt telnet http"] == ("FAIL", "telnet not disabled: /ip service disable telnet")
+      and mt2(GOOD_MT.replace("set ssh address=10.0.0.0/8", "set ssh"))["mt service address"][0] == "WARN")
+check("www-ssl is off until enabled; a source limit written as available-from counts", mt2(GOOD_MT)["mt service address"][0] == "OK"
+      and mt2(GOOD_MT.replace("set ssh address=10.0.0.0/8", "set ssh available-from=10.0.0.0/8"))["mt service address"][0] == "OK"
+      and mt2(GOOD_MT + "/ip service\nset www-ssl disabled=no\n")["mt service address"] == ("WARN", "www-ssl without a source address: set address (available-from on RouterOS 7.25 and later) under /ip service"))
+check("a disabled drop rule does not count; neither does a drop in another chain", mt2(GOOD_MT.replace("add action=drop chain=input", "add action=drop chain=input disabled=yes"))["mt firewall"][0] == "WARN"
+      and mt2(GOOD_MT.replace("chain=input comment", "chain=forward comment"))["mt firewall"][0] == "WARN")
+try:
+    H.findings(BAD_IOS, "", vendor="mikrotik"); check("an IOS text is refused as RouterOS", False)
+except ValueError:
+    check("an IOS text is refused as RouterOS", True)
+
 print("== the masked backups a scan reads")
 check("a hardened Junos config through the masker: every rule still OK", all(v == ("OK", "not found") for v in by(backup.mask_secrets(GOOD_JN), "", vendor="juniper").values()), {k: v for k, v in by(backup.mask_secrets(GOOD_JN), "", vendor="juniper").items() if v[0] != "OK"})
 check("a hardened Arista config through the masker: every rule still OK", all(v == ("OK", "not found") for v in by(backup.mask_secrets(GOOD_AR), "", vendor="arista").values()), {k: v for k, v in by(backup.mask_secrets(GOOD_AR), "", vendor="arista").items() if v[0] != "OK"})
+for name, text, plat, vendor in (("HPE AOS-CX", GOOD_CX, CX, "hpe"), ("HPE AOS-S", GOOD_OS, OSW, "hpe"), ("MikroTik", GOOD_MT, "mikrotik_routeros", "mikrotik")):
+    now, was = by(backup.mask_secrets(text), plat, vendor=vendor), by(text, plat, vendor=vendor)
+    check(f"a hardened {name} config through the masker: every rule answers as it did before", now == was, {k: v for k, v in now.items() if v != was[k]})
 check("the masker leaves a length setting and a block opener alone, and still masks a password",
       backup.mask_secrets("   password minimum length 15") == "   password minimum length 15" and backup.mask_secrets("    password {") == "    password {"
       and backup.mask_secrets("username a password 7 0822455D0A16") == "username a password <masked>" and backup.mask_secrets("password cisco") == "password <masked>")
@@ -721,7 +889,7 @@ def dev(name, vendor, platform="", version=""):
     d["id"] = db.save_device(d)
     if version: db.set_software(d, {"version": version})
     return db.find_device(name)
-sw1, sw2, fw, pan, mt = dev("sw1", "cisco", "cisco_ios"), dev("sw2", "cisco", "cisco_xe"), dev("edge-fw", "fortinet"), dev("pan", "paloalto"), dev("mt", "mikrotik")
+sw1, sw2, fw, pan, mt = dev("sw1", "cisco", "cisco_ios"), dev("sw2", "cisco", "cisco_xe"), dev("edge-fw", "fortinet"), dev("pan", "paloalto"), dev("mt", "meraki")
 backup.store("sw1", BAD_IOS, mask=False)
 db.set_setting("scan_enabled", False)
 rows = A.scan(sw1)
@@ -755,7 +923,7 @@ print("== Settings > Scanning lists the rules under vendor headings")
 from ui.settings_pages.scanning import ScanningPage
 from PySide6.QtCore import Qt
 pg = ScanningPage(); pg.load()
-check("every rule, ticked, with its severity, under five headings", pg.rules.count() == len(H.RULES) + 5 and pg.rules.item(0).text() == "Cisco (IOS, IOS XE, NX-OS, ASA)"
+check("every rule, ticked, with its severity, under seven headings", pg.rules.count() == len(H.RULES) + 7 and pg.rules.item(0).text() == "Cisco (IOS, IOS XE, NX-OS, ASA)"
       and pg.rules.item(0).flags() == Qt.ItemFlag.NoItemFlags and pg.rules.item(1).text() == "Telnet allowed on VTY lines  (FAIL)"
       and pg.rules.item(len(H.CISCO) + 1).text() == "FortiGate" and all(it.checkState().name == "Checked" for it in pg._rule_items()) and len(pg._rule_items()) == len(H.RULES))
 pg.rules.item(2).setCheckState(Qt.CheckState.Unchecked); pg.save()

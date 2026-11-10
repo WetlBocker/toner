@@ -359,5 +359,7 @@ m = backup.mask_secrets
 check("a password ending in a brace is still masked", m("username a password P@ss{") == "username a password <masked>")
 check("enable password minimum / username x password minimum are secrets, masked", m("enable password minimum") == "enable password <masked>" and m("username x password minimum") == "username x password <masked>")
 check("only the length settings and a bare block opener are left alone", m("   password minimum length 15") == "   password minimum length 15" and m("    password {") == "    password {" and m("password maximum attempts 3") == "password maximum attempts 3")
+check("ArubaOS-Switch's password minimum-length N is left alone; a secret shaped like it is masked", m("password minimum-length 15") == "password minimum-length 15"
+      and m("password minimum-length") == "password <masked>" and m("username x password minimum-length 15") == "username x password <masked>")
 
 print(f"\n{ok} passed, {bad} failed"); sys.exit(1 if bad else 0)

@@ -47,8 +47,8 @@ VOLATILE = [re.compile(p, re.I) for p in (
 
 MASKS = [
     # Cisco / Arista / HPE / generic CLI: the word, an optional type digit, then the secret
-    # not a secret: a bare keyword opening a block (`password {`), and a bare `password minimum length N` / `password maximum <word> N`
-    (re.compile(r"(?im)^(?!\s*[\w-]+\s+\{\s*$)(?!\s*password\s+minimum\s+length\s+\d+\s*;?\s*$)(?!\s*password\s+maximum\s+\S+\s+\d+\s*$)"
+    # not a secret: a bare keyword opening a block (`password {`), and a bare `password minimum length N` / `password minimum-length N` / `password maximum <word> N`
+    (re.compile(r"(?im)^(?!\s*[\w-]+\s+\{\s*$)(?!\s*password\s+minimum\s+length\s+\d+\s*;?\s*$)(?!\s*password\s+maximum\s+\S+\s+\d+\s*$)(?!\s*password\s+minimum-length\s+\d+\s*$)"
                 r"(\s*(?:enable\s+(?:secret|password)|username\s+\S+\s+(?:\S+\s+){0,3}?(?:secret|password)|"
                 r"snmp-server\s+community|snmp-server\s+user\s+\S+\s+\S+\s+v3\s+auth\s+\S+|"
                 r"(?:tacacs|radius)(?:-server)?\s+(?:host\s+\S+\s+)?key|ntp\s+authentication-key\s+\d+\s+\S+|"
