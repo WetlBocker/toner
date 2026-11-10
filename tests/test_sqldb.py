@@ -157,6 +157,17 @@ b = sqldb.connect(bk); b.execute("PRAGMA key = 'correct horse battery'")
 check("export_copy: the backup stays in DELETE mode", b.execute("PRAGMA journal_mode").fetchone()[0] == "delete"); b.close()
 check("export_copy: no -wal beside the backup", not Path(str(bk) + "-wal").exists())
 
+# one encrypted file in 256 ends in 0x1A; a Windows text-mode open would strip that byte and leave a short, unreadable last page
+z = D / "ctrlz.db"; w = sqldb.sqlite3.connect(z); w.execute("CREATE TABLE t(a)"); w.commit(); w.close()
+real_open = sqldb.os.open
+def ending_in_ctrl_z(path, flags, *a):
+    with open(path, "r+b") as f: f.seek(-1, 2); f.write(b"\x1a")
+    return real_open(path, flags, *a)
+sqldb.os.open = ending_in_ctrl_z
+try: sqldb.encrypt_file(z, key)
+finally: sqldb.os.open = real_open
+check("encrypt_file: a last byte of 0x1A stays on disk", z.stat().st_size % 4096 == 0 and z.read_bytes()[-1] == 0x1A, z.stat().st_size)
+
 real = sqldb.sqlite3
 sqldb.sqlite3 = sqlite3                          # a build without SQLCipher: stdlib ignores PRAGMA key
 sqldb.set_key(key)

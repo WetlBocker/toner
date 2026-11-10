@@ -73,7 +73,7 @@ def encrypt_file(path, key):
         c.execute("PRAGMA enc.user_version = %d" % ver)   # sqlcipher_export does not copy it
         c.execute("PRAGMA enc.journal_mode = WAL")        # nor the WAL setting, which Toner's readers-while-writing rely on
         c.execute("DETACH DATABASE enc")
-        fd = os.open(tmp, os.O_RDWR)
+        fd = os.open(tmp, os.O_RDWR | getattr(os, "O_BINARY", 0))   # text mode on Windows would strip a last byte of 0x1A
         try:
             os.fsync(fd)
         finally:

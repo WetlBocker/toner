@@ -108,7 +108,7 @@ def run(progress=None):
         raise Busy("Toner's service is using the data. Stop it, then try again.")
     db.release()                                          # this process's kept connections would hold the files open
     keys = datakey.path()                                 # what's encrypted below is lost if the keys file isn't on disk
-    fd = os.open(keys, os.O_RDWR)
+    fd = os.open(keys, os.O_RDWR | getattr(os, "O_BINARY", 0))
     try:
         os.fsync(fd)
     finally:
