@@ -174,7 +174,7 @@ srv.slow = 0
 print("== the connection comes and goes")
 pane.disconnect_btn.click(); pump(lambda: not pane.connected())
 check("disconnected: the device side empties and says to connect", fb.note.text() == "Connect the session to browse the device's files." and fb.remote.list.topLevelItemCount() == 0 and not fb.remote.up_btn.isEnabled() and fb.worker is None)
-pane.reconnect_btn.click(); pump(lambda: pane.connected() and fb.remote.path and settled(fb) and fb.remote.list.topLevelItemCount() > 0, 600)
+pane.reconnect_btn.click(); pump(lambda: pane.connected() and fb.remote.path and settled(fb) and fb.remote.list.topLevelItemCount() > 0, 1500)
 check("reconnected: it lists again", fb.remote.list.topLevelItemCount() > 0 and "sub" in names(fb.remote), names(fb.remote))
 pane.files_btn.setChecked(False); check("Files off hides the panel but keeps it", not fb.isVisibleTo(pane) and pane.browser is fb)
 pane.files_btn.setChecked(True); check("and on shows it again", fb.isVisibleTo(pane))

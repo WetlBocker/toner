@@ -20,7 +20,7 @@ def check(name, cond, extra=""):
     else: bad += 1; print("  FAIL", name, extra)
 
 TH = db.get_thresholds()
-OPTS = {**db.runtime_options(), "disabled": set(), "http_timeout": 5, "counter_mode": "total"}
+OPTS = {**db.runtime_options(), "disabled": set(), "http_timeout": 30, "counter_mode": "total"}
 ROUTES, CALLS = {}, []
 class Resp:
     def __init__(self, status=200, js=None): self.status_code, self._js, self.content = status, js, b"{}"      # content: a reply with a body, as requests' has

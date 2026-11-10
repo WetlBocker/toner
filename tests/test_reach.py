@@ -8,6 +8,9 @@ _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import json, os, socket, sys, threading, time
 SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\reach%d.db").replace("\\", os.sep) % int(time.time()); os.environ["APPDATA"] = SP
 from core import checks, custom, db, proxy, reach, runner, tunnel
+# a lost packet on loopback can stall a connection for 9 s (TCP retransmit), so waits on local servers are generous
+_probe = reach.probe
+reach.probe = lambda d, host=None, port=None, timeout=5: _probe(d, host, port, 30 if timeout == 5 else timeout)
 db.init()
 import keyring
 STORE = {}

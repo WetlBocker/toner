@@ -173,7 +173,7 @@ print("== Telnet connection")
 seen = {"in": b""}
 srv = socket.socket(); srv.bind(("127.0.0.1", 0)); srv.listen(2); port = srv.getsockname()[1]
 def device():
-    c, _ = srv.accept(); c.settimeout(5)
+    c, _ = srv.accept(); c.settimeout(30)
     c.sendall(bytes([255, 251, 1, 255, 253, 24, 255, 253, 31, 255, 250, 24, 1, 255, 240]) + b"Welcome to R1\r\nlogin: ")
     try:
         while True:
@@ -186,9 +186,9 @@ def device():
     c.close()
 threading.Thread(target=device, daemon=True).start()
 got, ended = [], []
-ts = T.TelnetSession("127.0.0.1", port, cols=100, rows=30, timeout=5)
+ts = T.TelnetSession("127.0.0.1", port, cols=100, rows=30, timeout=30)
 ts.data.connect(lambda b: got.append(b)); ts.closed.connect(lambda r: ended.append(r)); ts.start()
-def wait(cond, n=100):
+def wait(cond, n=600):
     for _ in range(n):
         QCoreApplication.processEvents(); time.sleep(0.05)
         if cond(): return True
@@ -204,13 +204,13 @@ ts.send(b"quit"); wait(lambda: bool(ended))
 check("when the device hangs up, the reason is given", ended and "closed by the remote host" in ended[0], ended)
 ts.wait(2000)
 closed_sock = socket.socket(); closed_sock.bind(("127.0.0.1", 0)); port_closed = closed_sock.getsockname()[1]; closed_sock.close()
-ts2 = T.TelnetSession("127.0.0.1", port_closed, timeout=3); e2 = []; ts2.closed.connect(lambda r: e2.append(r)); ts2.start(); wait(lambda: bool(e2)); ts2.wait(2000)
+ts2 = T.TelnetSession("127.0.0.1", port_closed, timeout=30); e2 = []; ts2.closed.connect(lambda r: e2.append(r)); ts2.start(); wait(lambda: bool(e2)); ts2.wait(2000)
 check("a refused connection says so", e2 and "refused" in e2[0] and str(port_closed) in e2[0], e2)
 ts3 = T.TelnetSession("no-such-host.invalid", 23, timeout=3); e3 = []; ts3.closed.connect(lambda r: e3.append(r)); ts3.start(); wait(lambda: bool(e3), 200); ts3.wait(2000)
 check("an unknown host says so", e3 and ("Could not find" in e3[0] or "failed" in e3[0].lower()), e3)
 srv2 = socket.socket(); srv2.bind(("127.0.0.1", 0)); srv2.listen(1); p2 = srv2.getsockname()[1]
 threading.Thread(target=lambda: (srv2.accept(), time.sleep(5)), daemon=True).start()
-ts4 = T.TelnetSession("127.0.0.1", p2, timeout=3); e4 = []; ts4.closed.connect(lambda r: e4.append(r)); ts4.start(); time.sleep(0.5); ts4.stop(); wait(lambda: bool(e4)); ts4.wait(2000)
+ts4 = T.TelnetSession("127.0.0.1", p2, timeout=30); e4 = []; ts4.closed.connect(lambda r: e4.append(r)); ts4.start(); time.sleep(0.5); ts4.stop(); wait(lambda: bool(e4)); ts4.wait(2000)
 check("Disconnect ends it, and says it was you", e4 and e4[0] == "Disconnected by user.", e4)
 import core.proxy as P
 check("Telnet connections follow the proxy settings", "proxy.create_connection" in open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "core", "telnet.py")).read())

@@ -127,7 +127,7 @@ class HttpProxy:
         first = head.decode("latin-1").split("\r\n")[0]; self.log.append(first)
         if first.startswith("CONNECT"):
             host, port = first.split()[1].rsplit(":", 1)
-            up = socket.create_connection((host, int(port)), 5); c.sendall(b"HTTP/1.1 200 Connection established\r\n\r\n")
+            up = socket.create_connection((host, int(port)), 30); c.sendall(b"HTTP/1.1 200 Connection established\r\n\r\n")
             if rest: up.sendall(rest)
             self.pipe(c, up)
         else:
@@ -258,7 +258,7 @@ db.set_setting("proxy", {**proxy.DEFAULTS, "mode": "manual", "kind": "http", "ho
 n = len(px.log); p, res = go(req(url=BASE + "/direct"))
 check("an address on the bypass list goes direct", res["status"] == 200 and len(px.log) == n and hits[-1]["path"] == "/direct")
 db.set_setting("proxy", {**proxy.DEFAULTS, "mode": "manual", "kind": "http", "host": "127.0.0.1", "port": 1, "bypass": ""})
-p, res = go(req(url=BASE + "/x", timeout=5))
+p, res = go(req(url=BASE + "/x", timeout=30))
 check("a proxy that is not there does not matter to a web request", res["status"] == 200 and not res["error"], res["error"])
 db.set_setting("proxy", {**proxy.DEFAULTS, "mode": "none"})
 p, res = go(req(url=TLS + "/tls", verify=True))

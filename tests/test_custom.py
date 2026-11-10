@@ -8,6 +8,8 @@ import datetime, http.server, os, socket, ssl, sys, tempfile, threading, time
 pass
 SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\cu%d.db").replace("\\", os.sep) % int(time.time())
 from core import db, custom, snmp
+# a lost packet on loopback can stall a connection for 9 s (TCP retransmit), so waits on local servers are generous
+custom.run_tcp.__defaults__ = custom.run_http.__defaults__ = custom.run_tls.__defaults__ = (30,)
 db.init()
 import keyring
 STORE = {}

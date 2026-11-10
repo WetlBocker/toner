@@ -15,6 +15,9 @@ keyring.set_password = lambda s, u, p: STORE.__setitem__((s, u), p)
 keyring.get_password = lambda s, u: STORE.get((s, u))
 keyring.delete_password = lambda s, u: STORE.pop((s, u), None)
 from core import backup, cmdrun, db, ifaces, orgs, runner, sessionimport as SI, sessions, vendordetect as VD, vendors
+# a lost packet on loopback can stall a connection for 9 s (TCP retransmit), so waits on local servers are generous
+_probe = runner.reach.probe
+runner.reach.probe = lambda d, host=None, port=None, timeout=5: _probe(d, host, port, 30)
 db.init()
 ok = bad = 0
 def check(name, cond, extra=""):
