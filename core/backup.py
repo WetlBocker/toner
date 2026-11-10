@@ -47,11 +47,13 @@ VOLATILE = [re.compile(p, re.I) for p in (
 
 MASKS = [
     # Cisco / Arista / HPE / generic CLI: the word, an optional type digit, then the secret
-    (re.compile(r"(?im)^(\s*(?:enable\s+(?:secret|password)|username\s+\S+\s+(?:\S+\s+){0,3}?(?:secret|password)|"
+    # not a secret: a bare keyword opening a block (`password {`), and a bare `password minimum length N` / `password maximum <word> N`
+    (re.compile(r"(?im)^(?!\s*[\w-]+\s+\{\s*$)(?!\s*password\s+minimum\s+length\s+\d+\s*;?\s*$)(?!\s*password\s+maximum\s+\S+\s+\d+\s*$)"
+                r"(\s*(?:enable\s+(?:secret|password)|username\s+\S+\s+(?:\S+\s+){0,3}?(?:secret|password)|"
                 r"snmp-server\s+community|snmp-server\s+user\s+\S+\s+\S+\s+v3\s+auth\s+\S+|"
                 r"(?:tacacs|radius)(?:-server)?\s+(?:host\s+\S+\s+)?key|ntp\s+authentication-key\s+\d+\s+\S+|"
                 r"(?:crypto\s+)?(?:isakmp|ikev2)\s+key|pre-shared-key|password|secret|key-string|"
-                r"authentication-key|encrypted-password|wpa-psk|auth-password|priv-password))(?!.*\{\s*$)(?!\s+(?:minimum|maximum)\b)\s+(?:\d\s+)?\S.*?(;?)\s*$"),  # not a block opener, not a length setting
+                r"authentication-key|encrypted-password|wpa-psk|auth-password|priv-password))\s+(?:\d\s+)?\S.*?(;?)\s*$"),
      r"\1 <masked>\2"),
     # Junos
     (re.compile(r'(?i)\b(encrypted-password|secret|authentication-key|pre-shared-key\s+(?:ascii-text|hexadecimal)|'

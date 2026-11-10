@@ -355,4 +355,9 @@ check("...and the tripwire still fires past the broken file: tampered, not upgra
       roles.state() == "tampered" and db.get_setting("rules_key") == "" and not roles.holds("backups"), roles.state())
 session.sign_out()
 
+m = backup.mask_secrets
+check("a password ending in a brace is still masked", m("username a password P@ss{") == "username a password <masked>")
+check("enable password minimum / username x password minimum are secrets, masked", m("enable password minimum") == "enable password <masked>" and m("username x password minimum") == "username x password <masked>")
+check("only the length settings and a bare block opener are left alone", m("   password minimum length 15") == "   password minimum length 15" and m("    password {") == "    password {" and m("password maximum attempts 3") == "password maximum attempts 3")
+
 print(f"\n{ok} passed, {bad} failed"); sys.exit(1 if bad else 0)
