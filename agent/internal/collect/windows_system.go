@@ -44,6 +44,12 @@ func winSystem(r *report.Report) (int, error) {
 	o := oss[0]
 	r.OS = strings.TrimSpace(o.Caption)
 	r.Build = o.BuildNumber
+	if k, err := registry.OpenKey(registry.LOCAL_MACHINE, `SOFTWARE\Microsoft\Windows NT\CurrentVersion`, registry.QUERY_VALUE|registry.WOW64_64KEY); err == nil {
+		if ubr, _, err := k.GetIntegerValue("UBR"); err == nil { // the patch level: 20348 becomes 20348.5760
+			r.Build += fmt.Sprintf(".%d", ubr)
+		}
+		k.Close()
+	}
 	if !o.LastBootUpTime.IsZero() {
 		r.Boot = iso(o.LastBootUpTime)
 		up := time.Since(o.LastBootUpTime).Hours()

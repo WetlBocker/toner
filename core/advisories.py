@@ -30,6 +30,12 @@ CISCO_NAMES = {"ios": "IOS", "iosxe": "IOS XE", "nxos": "NX-OS", "asa": "ASA"}
 NVD_CPE = {"fortinet": "fortinet:fortios", "juniper": "juniper:junos", "paloalto": "paloaltonetworks:pan-os",
            "mikrotik": "mikrotik:routeros", "arista": "arista:eos", "hpe": "arubanetworks:arubaos"}
 OS_NAMES = {"fortinet": "FortiOS", "juniper": "Junos", "paloalto": "PAN-OS", "mikrotik": "RouterOS", "arista": "EOS", "hpe": "ArubaOS"}
+# (is a server, build number) -> NVD's name under microsoft:, each tried live
+WINDOWS_NVD = {**{(True, b): n for b, n in {"14393": "windows_server_2016", "17763": "windows_server_2019", "20348": "windows_server_2022",
+                                            "25398": "windows_server_2022_23h2", "26100": "windows_server_2025"}.items()},
+               **{(False, b): n for b, n in {"14393": "windows_10_1607", "17763": "windows_10_1809", "19044": "windows_10_21h2", "19045": "windows_10_22h2",
+                                             "22621": "windows_11_22h2", "22631": "windows_11_23h2", "26100": "windows_11_24h2", "26200": "windows_11_25h2"}.items()}}
+WINDOWS_BUILD = re.compile(r"\(build (\d+)(?:\.(\d+))?\)")
 PAN_CSAF = "https://security.paloaltonetworks.com/csaf/{cve}"          # Palo Alto's advisory per CVE, with its title (NIST has none)
 CISCO_ADVISORY = "https://sec.cloudapps.cisco.com/security/center/content/CiscoSecurityAdvisory/{id}"
 PAN_ADVISORY = "https://security.paloaltonetworks.com/{cve}"
@@ -88,6 +94,7 @@ NO_SOURCE = "No advisory source for this vendor yet."
 OFF = "Vulnerability lookups are off under Settings > Scanning."
 NONE_FOUND = "No known advisories for this version"
 COULD_NOT_CONFIRM = "NVD has no data for this version, so Toner could not confirm it is clean."
+NO_PATCH = "The full Windows build is not known yet. Run the health checks; an older agent needs updating."
 FROM_NVD = "from NVD (Cisco PSIRT was not available)"
 FROM_FEED = "from Fortinet's advisory feed (its 50 newest advisories)"
 NONE_KEV = "None of the advisories are on CISA's known exploited list"
@@ -432,6 +439,14 @@ def cisco_cpe(os_, version):
     return CISCO_NVD[os_], v.replace("(", r"\(").replace(")", r"\)")
 
 
+def windows_cpe(software):
+    """(NVD product, version) for a stored Windows software string such as 'Microsoft Windows Server 2022 Standard (build 20348.5760)', or
+    None when it has no patch level or its build is not in WINDOWS_NVD. A server is told from a client by its name: builds are shared."""
+    m = WINDOWS_BUILD.search(software or "")
+    name = m and m.group(2) and WINDOWS_NVD.get(("server" in software[:m.start()].lower(), m.group(1)))
+    return (f"microsoft:{name}", f"10.0.{m.group(1)}.{m.group(2)}") if name else None
+
+
 def lookup(dev, creds=None):
     """(what was looked up, [advisories], confirmed) for a device, by its vendor and version; raises LookupError_ when no source could be
     asked. confirmed is False when the answer is NVD's nothing, which is not proof the version is clean. Cisco asks PSIRT first and NVD
@@ -451,6 +466,9 @@ def lookup(dev, creds=None):
             except LookupError_:
                 raise e from None
             return f"{what} {FROM_NVD}", found, bool(found)
+    if vendor == "windows":                    # an exact patched build answers, so nothing found is a clean version
+        product, ver = windows_cpe(version)
+        return f"{product.split(':')[1].replace('_', ' ').title()} {ver}", nvd_cve(product, ver, "*", "windows", creds.get("nvd_key"), build=True), True
     ver, upd = cpe_version(vendor, version)
     what = f"{OS_NAMES[vendor]} {ver}" + (f" {upd}" if upd != "*" else "")
     try:
@@ -522,10 +540,18 @@ def versions(dev):
     vendor = dev.get("vendor") or ""
     if not enabled():
         return [row(SOFTWARE, NA, version, OFF)]
-    if vendor != "cisco" and vendor not in NVD_CPE:
+    if vendor != "cisco" and vendor != "windows" and vendor not in NVD_CPE:
         return [row(SOFTWARE, NA, version, NO_SOURCE)]
     if not version:
         return [row(SOFTWARE, NA, "", NO_VERSION)]
+    if vendor == "windows":                    # Linux and macOS agents report as windows too: their OS text has no 'windows'
+        if "windows" not in version.lower():
+            return [row(SOFTWARE, NA, version, NO_SOURCE)]
+        m = WINDOWS_BUILD.search(version)
+        if not m or not m.group(2):
+            return [row(SOFTWARE, NA, version, NO_PATCH)]
+        if not windows_cpe(version):
+            return [row(SOFTWARE, NA, version, COULD_NOT_CONFIRM)]
     try:
         what, found, confirmed = lookup(dev)
         exploited = kev() if found else {}

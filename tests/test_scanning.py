@@ -51,7 +51,10 @@ NVD_UN = {"resultsPerPage": 1, "totalResults": 1, "vulnerabilities": [{"cve": {"
 NVD_CISCO = {"resultsPerPage": 1, "totalResults": 1, "vulnerabilities": [{"cve": {"id": "CVE-2023-20198", "descriptions": [
     {"lang": "en", "value": "Cisco IOS XE Web UI privilege escalation. More."}], "metrics": {"cvssMetricV31": [{"cvssData": {"baseScore": 10.0}}]}}}]}
 NVD_BY = {"cpe:2.3:o:cisco:ios_xe:17.9.4a:*": NVD_CISCO, "cpe:2.3:o:fortinet:fortios:7.2.5:*": NVD, "cpe:2.3:o:paloaltonetworks:pan-os:11.1.4:*": NVD_PA, "cpe:2.3:o:fortinet:fortios:7.2.6:*": NVD_UN,
-          "cpe:2.3:o:fortinet:fortios:8.0.0:*": NVD, "cpe:2.3:o:juniper:junos:22.4:r3-s2": NVD}
+          "cpe:2.3:o:fortinet:fortios:8.0.0:*": NVD, "cpe:2.3:o:juniper:junos:22.4:r3-s2": NVD,
+          "cpe:2.3:o:microsoft:windows_server_2022:10.0.20348.5760:*": {"resultsPerPage": 1, "totalResults": 1, "vulnerabilities": [{"cve": {"id": "CVE-2025-9999", "descriptions": [
+              {"lang": "en", "value": "Windows kernel elevation of privilege. More."}], "metrics": {"cvssMetricV31": [{"cvssData": {"baseScore": 7.8}}]},
+              "configurations": [{"nodes": [{"cpeMatch": [{"vulnerable": True, "criteria": "cpe:2.3:o:microsoft:windows_server_2022:*:*:*:*:*:*:*:*", "versionEndExcluding": "10.0.20348.5761"}]}]}]}}]}}
 CSAF = {"CVE-2025-0108": {"document": {"notes": [{"category": "summary", "title": "PAN-OS: Authentication Bypass in the Management Web Interface.", "text": "..."}]}}}
 FEED = ('<?xml version="1.0"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><item><title>x</title><link>https://www.fortiguard.com/psirt/FG-IR-26-182</link>'
         '<link>{base}/feed/csaf_double-free-in-signal-handler_fg-ir-26-182.json</link><link>{base}/feed/cvrf_x.xml</link></item>{extra}</channel></rss>')
@@ -180,6 +183,28 @@ check("advisory ids open their pages: Cisco's, Palo Alto's own, NIST's for the r
       and A.advisory_url("CVE-2025-0108", "paloalto") == "https://security.paloaltonetworks.com/CVE-2025-0108" and A.advisory_url("CVE-2024-1111", "fortinet") == "https://nvd.nist.gov/vuln/detail/CVE-2024-1111"
       and A.advisory_url(A.SOFTWARE, "cisco") == "" and A.advisory_url("Hardening: No NTP server", "cisco") == "")
 db.delete_device(pa["id"])
+
+print("== Windows, by its patched build")
+S = "Microsoft Windows Server 2022 Standard (build 20348.5760)"
+check("Server 2022", A.windows_cpe(S) == ("microsoft:windows_server_2022", "10.0.20348.5760"))
+check("Server 2025 and Windows 11 share 26100; the name tells", A.windows_cpe("Microsoft Windows Server 2025 Datacenter (build 26100.2000)")[0] == "microsoft:windows_server_2025"
+      and A.windows_cpe("Microsoft Windows 11 Pro (build 26100.2000)")[0] == "microsoft:windows_11_24h2")
+check("no patch level: None", A.windows_cpe("Microsoft Windows Server 2022 Standard (build 20348)") is None)
+check("a build not in the table: None", A.windows_cpe("Microsoft Windows 10 Pro (build 19041.1000)") is None)
+check("the table is the 13 names tried live", len(A.WINDOWS_NVD) == 13)
+def wrows(name, text):
+    d = dev(name, "windows", text); rows = {r.check: r for r in A.scan(db.find_device(name))}; db.delete_device(d["id"]); return rows
+by = wrows("ws-old", S)
+check("5760 with a record: one advisory row naming the fixing build", by["CVE-2025-9999"].status == "WARN" and by["CVE-2025-9999"].message.endswith(" Fixed in build 10.0.20348.5761.")
+      and by[A.SOFTWARE].message.startswith("Windows Server 2022 10.0.20348.5760, read 20"), {k: (v.status, v.message) for k, v in by.items()})
+by = wrows("ws-new", "Microsoft Windows Server 2022 Standard (build 20348.5761)")
+check("5761 with zero: OK, none found (Windows is confirmed by its exact build)", by[A.SOFTWARE].status == "OK" and by[A.ADVISORIES].status == "OK" and by[A.ADVISORIES].message == A.NONE_FOUND, {k: (v.status, v.message) for k, v in by.items()})
+by = wrows("ws-nopatch", "Microsoft Windows Server 2022 Standard (build 20348)")
+check("no patch level: N/A, NO_PATCH", by[A.SOFTWARE].status == "N/A" and by[A.SOFTWARE].message == A.NO_PATCH and len(by) == 1 + len([k for k in by if k.startswith("Hardening")]), by)
+by = wrows("ws-unmapped", "Microsoft Windows 10 Pro (build 19041.1000)")
+check("a Windows name with an unmapped build: N/A, could not confirm", by[A.SOFTWARE].status == "N/A" and by[A.SOFTWARE].message == A.COULD_NOT_CONFIRM, by[A.SOFTWARE])
+by = wrows("lnx", "Ubuntu 22.04.3 LTS (build 6.5)")
+check("a Linux agent's OS text: N/A, no source", by[A.SOFTWARE].status == "N/A" and by[A.SOFTWARE].message == A.NO_SOURCE, by[A.SOFTWARE])
 from core import backup
 fg2 = dev("fg2", "fortinet"); pa2 = dev("pa2", "paloalto"); jn = dev("jn", "juniper")
 backup.store("fg2", "#config-version=FGVM64-8.0.0-FW-build0167-260420:opmode=0:vdom=0:user=api-admin\n#conf_file_ver=2\nconfig system global\n    set alias \"FortiG8\"\nend\n", mask=False)
