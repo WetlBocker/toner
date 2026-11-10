@@ -212,6 +212,26 @@ config system global
     set admintimeout 30
     set admin-telnet enable
     set strong-crypto disable
+    set admin-https-ssl-versions tlsv1-1 tlsv1-2
+end
+config system password-policy
+    set minimum-length 8
+end
+config log eventfilter
+    set event disable
+    set user disable
+end
+config user ldap
+    edit "corp"
+        set server "10.0.0.7"
+    next
+    edit "corp2"
+        set secure starttls
+    next
+end
+config system snmp user
+    edit "mon"
+    next
 end
 config system interface
     edit "wan1"
@@ -240,12 +260,21 @@ config system snmp community
             next
         end
     next
+    edit 2
+        set name "public"
+    next
 end
 config log syslogd setting
     set status enable
 end
 config system ntp
     set ntpsync disable
+    set type custom
+    config ntpserver
+        edit 1
+            set server "10.0.0.6"
+        next
+    end
 end
 config firewall policy
     edit 1
@@ -271,6 +300,30 @@ GOOD_FG = """#config-version=FGT60F-7.2.5-FW-build1517-230208:opmode=0:vdom=0:us
 config system global
     set ssl-static-key-ciphers disable
     set private-data-encryption enable
+    set admin-lockout-duration 900
+    set pre-login-banner enable
+    set admin-https-ssl-versions tlsv1-2 tlsv1-3
+end
+config log eventfilter
+    set event enable
+end
+config user ldap
+    edit "corp"
+        set secure ldaps
+    next
+end
+config system ntp
+    set type custom
+    config ntpserver
+        edit 1
+            set server "10.0.0.6"
+            set authentication enable
+        next
+        edit 2
+            set server "10.0.0.7"
+            set authentication enable
+        next
+    end
 end
 config system auto-install
     set auto-install-config disable
@@ -301,6 +354,11 @@ config log syslogd setting
 end
 config system password-policy
     set status enable
+    set minimum-length 15
+    set min-upper-case-letter 1
+    set min-lower-case-letter 1
+    set min-number 1
+    set min-non-alphanumeric 1
 end
 config firewall DoS-policy
     edit 1
@@ -320,7 +378,7 @@ end
 """
 fg = by(BAD_FG, "", vendor="fortinet")
 from core import hardening_fortinet as FG
-check("every FortiGate rule answers, in order; all 14 find something", [k for k, *_ in H.findings(BAD_FG, "", vendor="fortinet")] == [k for k, *_ in FG.RULES] and len(FG.RULES) == 14
+check("every FortiGate rule answers, in order; all 25 find something", [k for k, *_ in H.findings(BAD_FG, "", vendor="fortinet")] == [k for k, *_ in FG.RULES] and len(FG.RULES) == 25
       and all(v[0] in ("FAIL", "WARN") for v in fg.values()), {k: v for k, v in fg.items() if v[0] not in ("FAIL", "WARN")})
 check("admin access on the WAN interface: FAIL with the line", fg["fg wan admin"] == ("FAIL", "wan1: set allowaccess ping https ssh http"), fg["fg wan admin"])
 check("telnet or http: every interface and the global switch", fg["fg telnet http"] == ("FAIL", "wan1: set allowaccess ping https ssh http; internal: set allowaccess ping https ssh telnet; set admin-telnet enable"), fg["fg telnet http"])
@@ -328,11 +386,28 @@ check("the allow-all policy from wan1, not the one from inside", fg["fg policy a
 check("admins without trusted hosts, the default account, the timeout", fg["fg trusthost"] == ("WARN", "1 of 2 admins without trusted hosts: admin") and fg["fg default admin"] == ("WARN", 'account "admin" exists')
       and fg["fg idle timeout"] == ("WARN", "set admintimeout 30"), (fg["fg trusthost"], fg["fg idle timeout"]))
 check("weak TLS: both parts", fg["fg weak tls"] == ("WARN", "set strong-crypto disable; ssl-static-key-ciphers is not disabled (enable is the default)"), fg["fg weak tls"])
-check("snmp v2c counted (its name is masked), syslog udp, ntp off", fg["fg snmp v2c"] == ("WARN", "1 SNMP v1/v2c community enabled; 0 SNMPv3 users") and fg["fg syslog"] == ("WARN", "set mode udp (unencrypted)")
+check("snmp v2c counted (its name is masked), syslog udp, ntp off", fg["fg snmp v2c"] == ("WARN", "2 SNMP v1/v2c communities enabled; 1 SNMPv3 user") and fg["fg syslog"] == ("WARN", "set mode udp (unencrypted)")
       and fg["fg ntp"] == ("WARN", "set ntpsync disable"), (fg["fg snmp v2c"], fg["fg syslog"]))
 check("defaults read as the default: password policy, private data, auto-install, DoS", fg["fg password policy"] == ("WARN", "config system password-policy: status is not enable")
       and fg["fg private data"] == ("WARN", "set private-data-encryption enable is not set") and fg["fg auto install"] == ("WARN", "auto-install-config and auto-install-image not set to disable")
       and fg["fg dos"] == ("WARN", "no DoS policy"), fg["fg auto install"])
+M = lambda t: by(t, "", vendor="fortinet")
+check("lockout: default duration 60 is short", fg["fg lockout"] == ("WARN", "admin-lockout-threshold 3, admin-lockout-duration 60: set them to 3 and 900 under config system global"), fg["fg lockout"])
+check("lockout: threshold 5 with duration 900 is still the finding", M(GOOD_FG.replace("set admin-lockout-duration 900", "set admin-lockout-duration 900\n    set admin-lockout-threshold 5"))["fg lockout"] == ("WARN", "admin-lockout-threshold 5, admin-lockout-duration 900: set them to 3 and 900 under config system global"))
+check("password length 8 and the four character rules", fg["fg password length"] == ("WARN", "minimum-length 8: set minimum-length 15 under config system password-policy")
+      and fg["fg password complexity"] == ("WARN", "min-upper-case-letter, min-lower-case-letter, min-number, min-non-alphanumeric 0: set min-upper-case-letter, min-lower-case-letter, min-number and min-non-alphanumeric to 1 under config system password-policy"), (fg["fg password length"], fg["fg password complexity"]))
+check("one character rule off names only that one", M(GOOD_FG.replace("set min-number 1", "set min-number 0"))["fg password complexity"][1].startswith("min-number 0: set"))
+check("banner off by default", fg["fg banner"] == ("WARN", "pre-login-banner is not enabled: set pre-login-banner enable under config system global"), fg["fg banner"])
+check("snmp community public is a FAIL", fg["fg snmp public"] == ("FAIL", "community public: rename it under config system snmp community"), fg["fg snmp public"])
+check("a masked community name alone answers N/A", M(BAD_FG.replace('set name "public"', "set name <masked>"))["fg snmp public"] == ("N/A", "the community name, the stored backup masks it (Settings > Config backups)"), M(BAD_FG.replace('set name "public"', "set name <masked>"))["fg snmp public"])
+check("a disabled private community is not a finding", M(GOOD_FG.replace("config system auto-install", 'config system snmp community\n    edit 1\n        set name "private"\n        set status disable\n    next\nend\nconfig system auto-install'))["fg snmp public"][0] == "OK")
+check("snmp v3 user defaults to no auth", fg["fg snmp v3"] == ("WARN", "user mon: security-level no-auth-no-priv: set security-level auth-priv under config system snmp user"), fg["fg snmp v3"])
+check("NTP: one custom server, unauthenticated; and only one", fg["fg ntp auth"] == ("WARN", "1 of 1 NTP servers without authentication: set authentication enable under config ntpserver")
+      and fg["fg ntp servers"] == ("WARN", "one NTP server: add a second under config system ntp, config ntpserver"), (fg["fg ntp auth"], fg["fg ntp servers"]))
+check("FortiGuard NTP (not custom) passes both", M(BAD_FG.replace("set type custom", ""))["fg ntp auth"][0] == "OK" and M(BAD_FG.replace("set type custom", ""))["fg ntp servers"][0] == "OK")
+check("event log: the ones off", fg["fg event log"] == ("WARN", "event, user disable: set event, system and user enable under config log eventfilter"), fg["fg event log"])
+check("TLS 1.1 on the web UI", fg["fg tls version"] == ("WARN", "admin-https-ssl-versions tlsv1-1 tlsv1-2: set admin-https-ssl-versions tlsv1-2 tlsv1-3 under config system global"), fg["fg tls version"])
+check("LDAP: no secure setting is the finding, starttls is not", fg["fg ldap"] == ("WARN", "corp: set secure ldaps under config user ldap"), fg["fg ldap"])
 good = by(GOOD_FG, "", vendor="fortinet")
 check("a hardened FortiGate: every rule OK", all(v == ("OK", "not found") for v in good.values()), {k: v for k, v in good.items() if v[0] != "OK"})
 check("syslog over reliable with encryption off is the finding", by(GOOD_FG.replace("set mode reliable", "set mode reliable\n    set enc-algorithm disable"), "", vendor="fortinet")["fg syslog"] == ("WARN", "set enc-algorithm disable"))
@@ -344,16 +419,20 @@ except ValueError:
 print("== Palo Alto")
 BAD_PA = """<config version="10.1.0">
  <mgt-config><users><entry name="admin"><phash><masked></phash></entry></users>
-  <password-complexity><enabled>no</enabled></password-complexity></mgt-config>
+  <password-complexity><enabled>yes</enabled><minimum-length>8</minimum-length><minimum-uppercase-letters>1</minimum-uppercase-letters></password-complexity></mgt-config>
  <shared><ssl-tls-service-profile><entry name="mgmt"><protocol-settings><min-version>tls1-1</min-version></protocol-settings></entry></ssl-tls-service-profile>
-  <log-settings><system/></log-settings></shared>
+  <log-settings><system/><config/>
+   <snmptrap><entry name="t1"><version><v2c><server><entry name="s"><manager>10.0.0.8</manager></entry></server></v2c></version></entry></snmptrap></log-settings>
+  <server-profile><ldap><entry name="dir"><ssl>no</ssl></entry></ldap>
+   <syslog><entry name="siem"><server><entry name="s1"><server>10.0.0.9</server><transport>UDP</transport></entry></server></entry></syslog></server-profile></shared>
  <devices><entry name="localhost.localdomain">
   <deviceconfig>
-   <system><service><disable-telnet>no</disable-telnet><disable-http>yes</disable-http></service>
+   <system><ntp-servers><primary-ntp-server><ntp-server-address>10.0.0.6</ntp-server-address><authentication-type><none/></authentication-type></primary-ntp-server></ntp-servers>
+    <service><disable-telnet>no</disable-telnet><disable-http>yes</disable-http></service>
     <ssl-tls-service-profile>mgmt</ssl-tls-service-profile>
     <snmp-setting><access-setting><version><v2c><snmp-community-string><masked></snmp-community-string></v2c></version></access-setting></snmp-setting>
    </system>
-   <setting><management><idle-timeout>0</idle-timeout><admin-lockout><failed-attempts>0</failed-attempts></admin-lockout></management></setting>
+   <setting><management><idle-timeout>30</idle-timeout><admin-lockout><failed-attempts>0</failed-attempts></admin-lockout></management></setting>
   </deviceconfig>
   <network><profiles><interface-management-profile><entry name="allow-mgmt"><https>yes</https><http>yes</http></entry></interface-management-profile></profiles></network>
   <vsys><entry name="vsys1"><rulebase><security><rules>
@@ -364,14 +443,20 @@ BAD_PA = """<config version="10.1.0">
 </config>
 """
 GOOD_PA = """<config version="10.1.0">
- <mgt-config><users><entry name="netops"><phash><masked></phash></entry></users><password-complexity><enabled>yes</enabled></password-complexity></mgt-config>
+ <mgt-config><users><entry name="netops"><phash><masked></phash></entry></users><password-complexity><enabled>yes</enabled><minimum-length>15</minimum-length><minimum-uppercase-letters>1</minimum-uppercase-letters><minimum-lowercase-letters>1</minimum-lowercase-letters><minimum-numeric-letters>1</minimum-numeric-letters><minimum-special-characters>1</minimum-special-characters></password-complexity></mgt-config>
  <shared><ssl-tls-service-profile><entry name="mgmt"><protocol-settings><min-version>tls1-2</min-version></protocol-settings></entry></ssl-tls-service-profile>
-  <log-settings><system><match-list><entry name="all"><send-syslog><member>siem</member></send-syslog></entry></match-list></system></log-settings></shared>
+  <log-settings><system><match-list><entry name="all"><send-syslog><member>siem</member></send-syslog></entry></match-list></system>
+   <config><match-list><entry name="all"><send-syslog><member>siem</member></send-syslog></entry></match-list></config>
+   <snmptrap><entry name="t1"><version><v3><server><entry name="s"><manager>10.0.0.8</manager></entry></server></v3></version></entry></snmptrap></log-settings>
+  <server-profile><ldap><entry name="dir"><ssl>yes</ssl></entry></ldap>
+   <syslog><entry name="siem"><server><entry name="s1"><server>10.0.0.9</server><transport>SSL</transport></entry></server></entry></syslog></server-profile></shared>
  <devices><entry name="localhost.localdomain"><deviceconfig>
   <system><service><disable-telnet>yes</disable-telnet><disable-http>yes</disable-http></service>
    <permitted-ip><entry name="10.0.0.0/24"/></permitted-ip>
    <ssl-tls-service-profile>mgmt</ssl-tls-service-profile>
-   <ntp-servers><primary-ntp-server><ntp-server-address>10.0.0.6</ntp-server-address></primary-ntp-server></ntp-servers>
+   <login-banner>Authorised use only</login-banner>
+   <ntp-servers><primary-ntp-server><ntp-server-address>10.0.0.6</ntp-server-address><authentication-type><symmetric-key><key-id>1</key-id></symmetric-key></authentication-type></primary-ntp-server>
+    <secondary-ntp-server><ntp-server-address>10.0.0.7</ntp-server-address><authentication-type><autokey/></authentication-type></secondary-ntp-server></ntp-servers>
    <snmp-setting><access-setting><version><v3/></version></access-setting></snmp-setting></system>
   <setting><management><idle-timeout>10</idle-timeout><admin-lockout><failed-attempts>5</failed-attempts><lockout-time>30</lockout-time></admin-lockout></management></setting>
  </deviceconfig></entry></devices>
@@ -379,15 +464,31 @@ GOOD_PA = """<config version="10.1.0">
 """
 pa = by(BAD_PA, "", vendor="paloalto")
 from core import hardening_paloalto as PA
-check("every Palo Alto rule answers, in order; all 11 find something (the masked hashes do not break the XML)", [k for k, *_ in H.findings(BAD_PA, "", vendor="paloalto")] == [k for k, *_ in PA.RULES]
-      and len(PA.RULES) == 11 and all(v[0] in ("FAIL", "WARN") for v in pa.values()), {k: v for k, v in pa.items() if v[0] not in ("FAIL", "WARN")})
+check("every Palo Alto rule answers, in order; all find something but the three the older rules read from variants below (the masked hashes do not break the XML)", [k for k, *_ in H.findings(BAD_PA, "", vendor="paloalto")] == [k for k, *_ in PA.RULES]
+      and len(PA.RULES) == 21 and {k for k, v in pa.items() if v[0] == "OK"} == {"pa idle timeout", "pa password complexity", "pa ntp"}, {k: v for k, v in pa.items() if v[0] == "OK"})
 check("telnet on the MGT port and http in a profile", pa["pa telnet http"] == ("FAIL", "disable-telnet no; interface management profile allow-mgmt: http yes"), pa["pa telnet http"])
 check("the any-to-any allow rule, not the web one", pa["pa rule any"] == ("FAIL", "rule allow-all: any to any, allow"), pa["pa rule any"])
 check("no permitted IPs, on the MGT port and the profile", pa["pa permitted ip"] == ("WARN", "no permitted-ip on the management interface; interface management profile allow-mgmt allows https or ssh from anywhere"), pa["pa permitted ip"])
 check("admin, lockout, idle timeout, password complexity", pa["pa default admin"] == ("WARN", 'account "admin" exists') and pa["pa lockout"] == ("WARN", "admin-lockout failed-attempts is 0 or not set")
-      and pa["pa idle timeout"] == ("WARN", "idle-timeout 0 (never)") and pa["pa password complexity"] == ("WARN", "password-complexity is not enabled"))
+      and by(BAD_PA.replace("<idle-timeout>30", "<idle-timeout>0"), "", vendor="paloalto")["pa idle timeout"] == ("WARN", "idle-timeout 0 (never)")
+      and by(BAD_PA.replace("<enabled>yes", "<enabled>no"), "", vendor="paloalto")["pa password complexity"] == ("WARN", "password-complexity is not enabled"))
 check("TLS 1.1 profile, logs, ntp, snmp v2c", pa["pa tls"] == ("WARN", "profile mgmt: min-version tls1-1") and pa["pa log forwarding"] == ("WARN", "system logs: no syslog server profile and no Panorama server")
-      and pa["pa ntp"] == ("WARN", "no ntp-servers") and pa["pa snmp v2c"] == ("WARN", "snmp-setting version v2c"), (pa["pa tls"], pa["pa log forwarding"]))
+      and by(BAD_PA.replace("<ntp-servers>", "<x>").replace("</ntp-servers>", "</x>"), "", vendor="paloalto")["pa ntp"] == ("WARN", "no ntp-servers") and pa["pa snmp v2c"] == ("WARN", "snmp-setting version v2c"), (pa["pa tls"], pa["pa log forwarding"]))
+P = lambda t: by(t, "", vendor="paloalto")
+check("idle timeout 30; 0 is left to the older rule; absent reads as 60", pa["pa idle long"] == ("WARN", "idle-timeout 30: set Idle Timeout to 10 or fewer (Device > Setup > Management > Authentication Settings)")
+      and P(BAD_PA.replace("<idle-timeout>30", "<idle-timeout>0"))["pa idle long"][0] == "OK" and P(BAD_PA.replace("<idle-timeout>30</idle-timeout>", ""))["pa idle long"][1].startswith("idle-timeout 60:"), pa["pa idle long"])
+check("password length 8 and the character rules that are 0", pa["pa password length"] == ("WARN", "minimum-length 8: set Minimum Length to 15 (Device > Setup > Management > Minimum Password Complexity)")
+      and pa["pa password chars"] == ("WARN", "minimum-lowercase-letters, minimum-numeric-letters, minimum-special-characters 0: set Minimum Uppercase, Lowercase, Numeric and Special to 1 (Device > Setup > Management > Minimum Password Complexity)"), (pa["pa password length"], pa["pa password chars"]))
+check("password length is left to the complexity rule while complexity is off", P(BAD_PA.replace("<enabled>yes", "<enabled>no"))["pa password length"][0] == "OK")
+check("no login banner", pa["pa banner"] == ("WARN", "no login-banner: set Login Banner (Device > Setup > Management > General Settings)"), pa["pa banner"])
+check("NTP: primary with no authentication, no secondary", pa["pa ntp auth"] == ("WARN", "primary-ntp-server authentication-type none: set Symmetric Key or Autokey (Device > Setup > Services)")
+      and pa["pa ntp second"] == ("WARN", "no secondary-ntp-server: set Secondary NTP Server (Device > Setup > Services)"), (pa["pa ntp auth"], pa["pa ntp second"]))
+check("config logs: none forwarded; a Panorama server passes", pa["pa config log"] == ("WARN", "config logs: no syslog server profile: set one (Device > Log Settings > Configuration)")
+      and P(BAD_PA.replace("<system><ntp-servers>", "<system><panorama-server>10.0.0.2</panorama-server><ntp-servers>"))["pa config log"][0] == "OK")
+check("SNMP trap v2c, LDAP without SSL, syslog over UDP", pa["pa snmp trap"] == ("WARN", "trap profile t1: version v2c: set Version to V3 (Device > Server Profiles > SNMP Trap)")
+      and pa["pa ldap ssl"] == ("WARN", "LDAP profile dir: ssl no: tick Require SSL/TLS (Device > Server Profiles > LDAP)")
+      and pa["pa syslog udp"] == ("WARN", "syslog profile siem: transport UDP: set Transport to SSL (Device > Server Profiles > Syslog)"), (pa["pa snmp trap"], pa["pa ldap ssl"], pa["pa syslog udp"]))
+check("a syslog server with no transport reads as UDP", P(BAD_PA.replace("<transport>UDP</transport>", ""))["pa syslog udp"][0] == "WARN")
 goodpa = by(GOOD_PA, "", vendor="paloalto")
 check("a hardened PAN-OS: every rule OK", all(v == ("OK", "not found") for v in goodpa.values()), {k: v for k, v in goodpa.items() if v[0] != "OK"})
 check("no TLS profile at all is the finding", by(GOOD_PA.replace("<ssl-tls-service-profile>mgmt</ssl-tls-service-profile>", ""), "", vendor="paloalto")["pa tls"][1].startswith("no SSL/TLS service profile"))
