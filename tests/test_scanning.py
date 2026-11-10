@@ -53,6 +53,11 @@ NVD_CISCO = {"resultsPerPage": 1, "totalResults": 1, "vulnerabilities": [{"cve":
 NVD_BY = {"cpe:2.3:o:cisco:ios_xe:17.9.4a:*": NVD_CISCO, "cpe:2.3:o:fortinet:fortios:7.2.5:*": NVD, "cpe:2.3:o:paloaltonetworks:pan-os:11.1.4:*": NVD_PA, "cpe:2.3:o:fortinet:fortios:7.2.6:*": NVD_UN,
           "cpe:2.3:o:fortinet:fortios:8.0.0:*": NVD, "cpe:2.3:o:juniper:junos:22.4:r3-s2": NVD}
 CSAF = {"CVE-2025-0108": {"document": {"notes": [{"category": "summary", "title": "PAN-OS: Authentication Bypass in the Management Web Interface.", "text": "..."}]}}}
+FEED = ('<?xml version="1.0"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><item><title>x</title><link>https://www.fortiguard.com/psirt/FG-IR-26-182</link>'
+        '<link>{base}/feed/csaf_double-free-in-signal-handler_fg-ir-26-182.json</link><link>{base}/feed/cvrf_x.xml</link></item></channel></rss>')
+FORTI_DOC = {"document": {"title": "Double free in signal handler"}, "vulnerabilities": [{"cve": "CVE-2026-106175",
+             "product_status": {"known_affected": ["FortiOS >=7.6.0|<=7.6.8"]}, "scores": [{"cvss_v3": {"baseScore": 2.1}}],
+             "remediations": [{"details": "FortiOS 7.6: Upgrade to upcoming  7.6.9 or above", "category": "vendor_fix"}]}]}
 class Sources(_hs.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
     def _send(self, code, body):
@@ -86,11 +91,18 @@ class Sources(_hs.BaseHTTPRequestHandler):
         if u.path == "/epss":
             asked = q.get("cve", [""])[0].split(",")
             return self._send(200, {"data": [{"cve": c, "epss": "0.9432"} for c in asked if c == "CVE-2023-20198"] + [{"cve": c, "epss": "0.0071"} for c in asked if c == "CVE-2024-1111"]})
+        if u.path == "/rss":
+            if self.server.rss_down:
+                return self._send(500, {})
+            data = FEED.format(base=base).encode(); self.send_response(200); self.send_header("Content-Type", "application/rss+xml")
+            self.send_header("Content-Length", str(len(data))); self.end_headers(); return self.wfile.write(data)
+        if u.path.startswith("/feed/csaf_"):
+            return self._send(200, FORTI_DOC)
         self._send(404, {})
-web = _hs.ThreadingHTTPServer(("127.0.0.1", 0), Sources); web.nvd_keys = []; web.nvd_down = False; threading.Thread(target=web.serve_forever, daemon=True).start()
+web = _hs.ThreadingHTTPServer(("127.0.0.1", 0), Sources); web.nvd_keys = []; web.nvd_down = False; web.rss_down = False; threading.Thread(target=web.serve_forever, daemon=True).start()
 base = f"http://127.0.0.1:{web.server_address[1]}"
 A.TOKEN_URL, A.PSIRT_URL, A.NVD_URL, A.KEV_URL, A.EPSS_URL = base + "/token", base + "/psirt/{os}?version={version}", base + "/nvd", base + "/kev", base + "/epss"
-A.PAN_CSAF = base + "/csaf/{cve}"
+A.PAN_CSAF = base + "/csaf/{cve}"; A.FORTI_RSS = base + "/rss"; A.FEED_DELAY = 0
 
 # ---------------------------------------------------------------- devices: Global's and one organization's
 def dev(name, vendor, version="", platform="", org=None, folder=None):
@@ -223,6 +235,31 @@ check("the device's Vulnerabilities tab lists it, with a 'CVSS not given' slice"
 vt._slice({"kind": "series", "name": "CVSS not given"})
 check("...and selecting the slice lists the CVE", [r["id"] for r in vt.detail.rows] == ["CVE-2024-2222"])
 db.delete_device(un["id"])
+
+print("== Fortinet's feed when NVD has nothing")
+ff = dev("ff-fw", "fortinet", "7.6.5"); A.forget_cache()
+rows = A.scan(db.find_device("ff-fw")); by = {r.check: r for r in rows}
+check("NVD zero, the feed matches: its advisory, OK at 2.1, with the fix and where it came from", by["FG-IR-26-182"].status == "OK" and by["FG-IR-26-182"].value == "CVSS 2.1"
+      and by["FG-IR-26-182"].message == "Double free in signal handler Fixed in 7.6.9." and A.FROM_FEED in by[A.SOFTWARE].message and by[A.SOFTWARE].status == "OK", [(r.check, r.status, r.value, r.message) for r in rows])
+check("an advisory id opens FortiGuard's page", A.advisory_url("FG-IR-26-182", "fortinet") == "https://fortiguard.fortinet.com/psirt/FG-IR-26-182")
+n = sum(h[0] == "/rss" for h in hits); A.scan(db.find_device("ff-fw"))
+check("the feed is cached for a day", sum(h[0] == "/rss" for h in hits) == n)
+db.delete_device(ff["id"])
+nv = dev("nv-fw", "fortinet", "8.0.0"); A.forget_cache(); n = sum(h[0] == "/rss" for h in hits)
+rows = A.scan(db.find_device("nv-fw"))
+check("NVD with results: the feed is never fetched", sum(h[0] == "/rss" for h in hits) == n and A.FROM_FEED not in rows[0].message and rows[0].status != "N/A", rows[0].message)
+db.delete_device(nv["id"])
+no = dev("no-fw", "fortinet", "9.9.9"); A.forget_cache()
+rows = A.scan(db.find_device("no-fw"))
+check("NVD zero and the feed nothing: N/A, could not confirm", rows[0].status == "N/A" and rows[0].message == A.COULD_NOT_CONFIRM and len(rows) == 2, [(r.check, r.status, r.message) for r in rows])
+A.forget_cache(); web.rss_down = True
+rows = A.scan(db.find_device("no-fw"))
+check("NVD zero and the feed failing: N/A too", rows[0].status == "N/A" and rows[0].message == A.COULD_NOT_CONFIRM, rows[0].message)
+A.forget_cache(); web.nvd_down = True
+rows = A.scan(db.find_device("no-fw"))
+check("NVD erroring and the feed erroring: ERROR naming NVD", rows[0].status == "ERROR" and "NVD" in rows[0].message and "HTTP 500" in rows[0].message, rows[0].message)
+web.nvd_down = web.rss_down = False; A.forget_cache()
+db.delete_device(no["id"])
 with db.connect() as c:                                     # the later checks count the scans and devices of the first six
     c.execute("DELETE FROM scan_results WHERE scan_id=?", (sid_un,)); c.execute("DELETE FROM scans WHERE id=?", (sid_un,))
 check("the NVD key is sent when there is one", web.nvd_keys and web.nvd_keys[-1] is None and (A.set_secret("nvd_key", "nvd-k"), A.forget_cache(), A.scan(db.find_device("edge-fw"))) and web.nvd_keys[-1] == "nvd-k", web.nvd_keys)

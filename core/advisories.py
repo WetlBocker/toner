@@ -6,12 +6,14 @@ file: many organizations run the same handful of versions, and Cisco rate-limits
 import json
 import re
 import threading
+import time
+from urllib.parse import urlparse
 from datetime import datetime, timedelta
 
 import keyring
 import requests
 
-from core import db, proxy, quiet
+from core import db, fortifeed, proxy, quiet
 from drivers.base import ERROR, FAIL, NA, OK, WARN, Driver, Result
 
 TOKEN_URL = "https://id.cisco.com/oauth2/default/v1/token"
@@ -31,6 +33,8 @@ OS_NAMES = {"fortinet": "FortiOS", "juniper": "Junos", "paloalto": "PAN-OS", "mi
 PAN_CSAF = "https://security.paloaltonetworks.com/csaf/{cve}"          # Palo Alto's advisory per CVE, with its title (NIST has none)
 CISCO_ADVISORY = "https://sec.cloudapps.cisco.com/security/center/content/CiscoSecurityAdvisory/{id}"
 PAN_ADVISORY = "https://security.paloaltonetworks.com/{cve}"
+FORTI_RSS = "https://www.fortiguard.com/rss/ir.xml"
+FEED_DELAY = 1                                                           # seconds between Fortinet's CSAF files; tests set 0
 NVD_PAGE = "https://nvd.nist.gov/vuln/detail/{cve}"
 TITLE_MAX = 120                                                          # a NIST description's first sentence, cut to this
 
@@ -41,6 +45,8 @@ def advisory_url(check, vendor=""):
         return CISCO_ADVISORY.format(id=check)
     if re.match(r"^CVE-\d{4}-\d+$", check):
         return (PAN_ADVISORY if vendor == "paloalto" else NVD_PAGE).format(cve=check)
+    if re.match(r"^FG-IR-\d+-\d+$", check):
+        return fortifeed.PAGE.format(id=check)
     return ""
 
 
@@ -82,6 +88,7 @@ OFF = "Vulnerability lookups are off under Settings > Scanning."
 NONE_FOUND = "No known advisories for this version"
 COULD_NOT_CONFIRM = "NVD has no data for this version, so Toner could not confirm it is clean."
 FROM_NVD = "from NVD (Cisco PSIRT was not available)"
+FROM_FEED = "from Fortinet's advisory feed (its 50 newest advisories)"
 NONE_KEV = "None of the advisories are on CISA's known exploited list"
 CHECK_SETTINGS = "Check Settings > Scanning."
 APP_TYPE = "The app at apiconsole.cisco.com must be of type Service with the Client Credentials grant; check the id and secret under Settings > Scanning."
@@ -266,6 +273,36 @@ def fixed_from(cve, product, version):
     return sorted(out, key=_vtuple)
 
 
+_feed_lock = threading.Lock()
+
+def fortinet_feed(version):
+    """The advisories of Fortinet's feed (its newest 50) that list this FortiOS version. The digests are cached a day; the lock makes
+    four scan threads fetch once. A CSAF file that cannot be read is skipped; LookupError_ when the RSS itself cannot."""
+    def fetch():
+        r = _get(FORTI_RSS, "www.fortiguard.com")
+        if r.status_code != 200:
+            raise LookupError_(f"Fortinet: HTTP {r.status_code}")
+        try:
+            urls = fortifeed.csaf_urls(r.content)
+        except ValueError as e:
+            raise LookupError_(f"Fortinet: the feed could not be read ({e})") from None
+        out = []
+        for i, url in enumerate(urls):
+            if i:
+                time.sleep(FEED_DELAY)                          # at most one file a second
+            try:
+                f = _get(url, urlparse(url).hostname or "")
+                d = fortifeed.digest(f.json(), url) if f.status_code == 200 else None
+            except (LookupError_, ValueError):
+                continue
+            if d:
+                out.append(d)
+        return out
+    with _feed_lock:
+        digests = _cached("fortifeed", fetch)
+    return [m for m in (fortifeed.match(d, version) for d in digests) if m]
+
+
 def nvd(vendor, version, key=None):
     """[{id, title, cves, cvss, fixed, url}] from NIST's NVD for one vendor's product and version: one entry per CVE."""
     ver, upd = cpe_version(vendor, version)
@@ -378,8 +415,27 @@ def lookup(dev, creds=None):
             return f"{what} {FROM_NVD}", found, bool(found)
     ver, upd = cpe_version(vendor, version)
     what = f"{OS_NAMES[vendor]} {ver}" + (f" {upd}" if upd != "*" else "")
-    found = nvd(vendor, version, creds.get("nvd_key"))
-    return what, found, bool(found)
+    try:
+        found = nvd(vendor, version, creds.get("nvd_key"))
+    except LookupError_ as e:
+        if vendor != "fortinet":
+            raise
+        found, err = [], e
+    else:
+        err = None
+    if found or vendor != "fortinet":
+        return what, found, bool(found)
+    try:
+        feed = fortinet_feed(version)
+    except LookupError_:
+        feed = []
+        if err:
+            raise err from None
+    if feed:
+        return f"{what} {FROM_FEED}", feed, True
+    if err:
+        raise err
+    return what, [], False
 
 
 # where a stored configuration backup states the software version, for a device whose checks have not recorded one
