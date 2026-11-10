@@ -51,7 +51,7 @@ def measure(label, n_devices):
     check(f"{label}: save_scan under {SAVE_LIMIT} s", save < SAVE_LIMIT, f"{save:.2f} s")
     tab.deleteLater()
 
-# The 20-device case (100,000 rows) is left out until the list groups a Windows device's advisories: it did not finish in 15 minutes.
+# The 20-device case (100,000 rows) is left out until the list groups a Windows device's advisories: it took 159 s to fill, against a 2.0 s limit.
 measure("one device", 1)
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)
