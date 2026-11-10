@@ -417,10 +417,12 @@ def _lines(text):
 
 
 def _groups():
-    from core import hardening_fortinet, hardening_paloalto
+    from core import hardening_arista, hardening_fortinet, hardening_juniper, hardening_paloalto
     return [("cisco", "Cisco (IOS, IOS XE, NX-OS, ASA)", "Cisco", _lines, CISCO),
             ("fortinet", "FortiGate", "FortiOS", hardening_fortinet.parse, hardening_fortinet.RULES),
-            ("paloalto", "Palo Alto", "PAN-OS", hardening_paloalto.parse, hardening_paloalto.RULES)]
+            ("paloalto", "Palo Alto", "PAN-OS", hardening_paloalto.parse, hardening_paloalto.RULES),
+            ("juniper", "Juniper", "Junos", hardening_juniper.parse, hardening_juniper.RULES),
+            ("arista", "Arista", "EOS", hardening_arista.parse, hardening_arista.RULES)]
 
 
 GROUPS = _groups()                          # (vendor, heading, format name, parse(text) -> doc, rules)

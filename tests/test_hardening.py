@@ -494,6 +494,214 @@ check("a hardened PAN-OS: every rule OK", all(v == ("OK", "not found") for v in 
 check("no TLS profile at all is the finding", by(GOOD_PA.replace("<ssl-tls-service-profile>mgmt</ssl-tls-service-profile>", ""), "", vendor="paloalto")["pa tls"][1].startswith("no SSL/TLS service profile"))
 check("lockout time 0 is the finding once attempts are set", by(GOOD_PA.replace("<lockout-time>30</lockout-time>", "<lockout-time>0</lockout-time>"), "", vendor="paloalto")["pa lockout"] == ("WARN", "admin-lockout lockout-time is 0"))
 
+print("== Juniper")
+BAD_JN = """## Last commit: 2026-11-01 10:00:00 UTC by admin
+version 20.4R3;
+groups {
+    mgmt {
+        system {
+            services {
+                ftp;
+            }
+        }
+    }
+}
+apply-groups mgmt;
+system {
+    host-name srx1;
+    login {
+        class ops {
+            permissions all;
+        }
+    }
+    services {
+        telnet;
+        web-management {
+            http {
+                port 80;
+            }
+        }
+        ssh;
+    }
+    ntp {
+        server 10.0.0.1;
+    }
+}
+snmp {
+    community public {
+        authorization read-write;
+    }
+}
+interfaces {
+    lo0 {
+        unit 0 {
+            family inet {
+                address 10.255.0.1/32;
+            }
+        }
+    }
+}
+"""
+GOOD_JN = """version 20.4R3;
+system {
+    login {
+        message "Authorized use only";
+        retry-options {
+            lockout-period 15;
+        }
+        password {
+            minimum-length 15;
+        }
+        class ops {
+            idle-timeout 10;
+        }
+    }
+    services {
+        inactive: telnet;
+        ssh {
+            root-login deny;
+        }
+    }
+    syslog {
+        host 10.0.0.5 {
+            any notice;
+        }
+    }
+    ntp {
+        authentication-key 1 type md5 value "<masked>";
+        trusted-key 1;
+        server 10.0.0.1 key 1;
+    }
+}
+snmp {
+    v3 {
+        usm {
+            local-engine {
+                user mon {
+                    authentication-sha;
+                }
+            }
+        }
+    }
+}
+interfaces {
+    lo0 {
+        unit 0 {
+            family inet {
+                filter {
+                    input PROTECT-RE;
+                }
+            }
+        }
+    }
+}
+"""
+from core import hardening_juniper as JN
+jn = by(BAD_JN, "", vendor="juniper")
+check("every Junos rule answers, in order; all find something but the NTP server", [k for k, *_ in H.findings(BAD_JN, "", vendor="juniper")] == [k for k, *_ in JN.RULES]
+      and len(JN.RULES) == 14 and {k for k, v in jn.items() if v[0] == "OK"} == {"jn ntp"}, {k: v for k, v in jn.items() if v[0] == "OK"})
+check("telnet and web-management http, each named", jn["jn telnet http"] == ("FAIL", "telnet: delete system services telnet; web-management http: delete system services web-management http"), jn["jn telnet http"])
+check("a service set only by an applied group is found", jn["jn services"] == ("WARN", "ftp: delete system services ftp"), jn["jn services"])
+check("without the apply-groups line the group's setting does not count", by(BAD_JN.replace("apply-groups mgmt;", ""), "", vendor="juniper")["jn services"][0] == "OK")
+check("ssh root, lockout, password length (default 6) and banner", jn["jn ssh root"] == ("WARN", "root-login deny is not set: set system services ssh root-login deny")
+      and jn["jn lockout"] == ("WARN", "retry-options lockout-period is not set: set system login retry-options lockout-period 15")
+      and jn["jn password length"] == ("WARN", "minimum-length 6: set system login password minimum-length 15")
+      and jn["jn banner"] == ("WARN", "no login message: set system login message"), jn)
+check("idle timeout: a class with none, and one over 10", jn["jn idle timeout"] == ("WARN", "class ops: idle-timeout not set: set system login class ops idle-timeout 10")
+      and by(BAD_JN.replace("permissions all;", "idle-timeout 30;"), "", vendor="juniper")["jn idle timeout"] == ("WARN", "class ops: idle-timeout 30: set system login class ops idle-timeout 10"))
+check("SNMP: a public read-write community, no clients, version 2c", jn["jn snmp community"] == ("FAIL", "community public: name is public or private and authorization read-write: rename it and set authorization read-only under snmp community")
+      and jn["jn snmp clients"] == ("WARN", "1 of 1 communities without clients: set snmp community public clients")
+      and jn["jn snmp v2c"] == ("WARN", "1 community (version 1 or 2c); 0 SNMPv3 users: move to snmp v3"), jn)
+check("syslog, NTP auth and lo0 filter", jn["jn syslog"] == ("WARN", "no syslog host: set system syslog host") and jn["jn ntp auth"] == ("WARN", "authentication-key and trusted-key not set: set system ntp authentication-key and trusted-key")
+      and jn["jn lo0 filter"] == ("WARN", "lo0 unit 0: no family inet filter input: set interfaces lo0 unit 0 family inet filter input"), jn)
+check("no NTP server: the rule fails and NTP auth has nothing to check", by(BAD_JN.replace("server 10.0.0.1;", ""), "", vendor="juniper")["jn ntp"] == ("WARN", "no ntp server: set system ntp server")
+      and by(BAD_JN.replace("server 10.0.0.1;", ""), "", vendor="juniper")["jn ntp auth"][0] == "OK")
+goodjn = by(GOOD_JN, "", vendor="juniper")
+check("a hardened Junos device: every rule OK (an inactive: telnet does not count)", all(v == ("OK", "not found") for v in goodjn.values()), {k: v for k, v in goodjn.items() if v[0] != "OK"})
+check("a masked community name alone answers N/A; an unmasked read-write one still fails", by(BAD_JN.replace("community public", 'community "<masked>"').replace("read-write", "read-only"), "", vendor="juniper")["jn snmp community"]
+      == ("N/A", "whether it is public or private cannot be told, the stored backup masks it (Settings > Config backups)")
+      and by(BAD_JN.replace("community public", 'community "<masked>"'), "", vendor="juniper")["jn snmp community"][0] == "FAIL")
+check("a community with clients passes the clients rule; an applied group's settings count as set", by(BAD_JN.replace("authorization read-write;", "clients {\n 10.0.0.0/8;\n }"), "", vendor="juniper")["jn snmp clients"][0] == "OK"
+      and by(GOOD_JN.replace("message \"Authorized use only\";", "").replace("version 20.4R3;", "version 20.4R3;\ngroups {\n b {\n system {\n login {\n message x;\n }\n }\n }\n}\napply-groups b;"), "", vendor="juniper")["jn banner"][0] == "OK")
+try:
+    H.findings("garbage", "", vendor="juniper"); check("garbage is refused as Junos", False)
+except ValueError:
+    check("garbage is refused as Junos", True)
+
+print("== Arista")
+BAD_AR = """! Command: show running-config
+! device: sw1 (DCS-7050SX3-48YC8, EOS-4.28.3M)
+hostname sw1
+snmp-server community public rw
+snmp-server community mon ro
+snmp-server user u1 g1 v3
+management telnet
+   no shutdown
+management api http-commands
+   protocol http
+   no shutdown
+management ssh
+   idle-timeout 30
+ntp server 10.0.0.1
+end
+"""
+GOOD_AR = """! device: sw1 (DCS-7050SX3-48YC8, EOS-4.28.3M)
+hostname sw1
+snmp-server user mon g1 v3
+banner login
+Authorized use only
+EOF
+logging host 10.0.0.5
+ntp authenticate
+ntp trusted-key 1
+ntp server 10.0.0.1 key 1
+aaa authentication policy lockout failure 3 window 1 duration 900
+aaa accounting commands all default start-stop logging
+management telnet
+   shutdown
+management api http-commands
+   protocol https
+   no shutdown
+management console
+   idle-timeout 10
+management ssh
+   idle-timeout 10
+   vrf MGMT
+      ip access-group SSH-IN in
+management security
+   password minimum length 15
+"""
+from core import hardening_arista as AR
+ar = by(BAD_AR, "", vendor="arista")
+check("every Arista rule answers, in order; all find something but the NTP server", [k for k, *_ in H.findings(BAD_AR, "", vendor="arista")] == [k for k, *_ in AR.RULES]
+      and len(AR.RULES) == 14 and {k for k, v in ar.items() if v[0] == "OK"} == {"ar ntp"}, {k: v for k, v in ar.items() if v[0] == "OK"})
+check("telnet and plain-HTTP eAPI", ar["ar telnet"] == ("FAIL", "management telnet is on: set shutdown under management telnet")
+      and ar["ar http api"] == ("FAIL", "eAPI over HTTP: remove protocol http under management api http-commands"), ar)
+check("a public read-write community is quoted masked, as Cisco's rule does", ar["ar snmp community"] == ("FAIL", "snmp-server community <masked>: change the community and use ro (snmp-server community)"), ar["ar snmp community"])
+check("SNMP version 2c and no access list", ar["ar snmp v2c"] == ("WARN", "2 communities (version 1 or 2c); 1 SNMPv3 user: remove snmp-server community and use snmp-server user v3")
+      and ar["ar snmp acl"] == ("WARN", "2 of 2 without an access list: add one to snmp-server community"), ar)
+check("SSH access list, idle timeouts, lockout, password length", ar["ar ssh acl"] == ("WARN", "no ip access-group under management ssh: add one")
+      and ar["ar idle timeout"] == ("WARN", "management console: idle-timeout not set: set idle-timeout 10; management ssh: idle-timeout 30: set idle-timeout 10")
+      and ar["ar lockout"] == ("WARN", "aaa authentication policy lockout is not set: set aaa authentication policy lockout failure 3 duration 900")
+      and ar["ar password length"] == ("WARN", "password minimum length not set: set password minimum length 15 under management security"), ar)
+check("banner, logging, NTP auth and accounting", ar["ar banner"] == ("WARN", "no banner login or banner motd: set one") and ar["ar logging"] == ("WARN", "no logging host: set logging host")
+      and ar["ar ntp auth"] == ("WARN", "ntp authenticate is not set: set ntp authenticate servers and ntp trusted-key")
+      and ar["ar accounting"] == ("WARN", "no aaa accounting: set aaa accounting commands all default start-stop logging"), ar)
+check("no NTP server: the rule fails and NTP auth has nothing to check", by(BAD_AR.replace("ntp server 10.0.0.1", ""), "", vendor="arista")["ar ntp"] == ("WARN", "no ntp server: set ntp server")
+      and by(BAD_AR.replace("ntp server 10.0.0.1", ""), "", vendor="arista")["ar ntp auth"][0] == "OK")
+goodar = by(GOOD_AR, "", vendor="arista")
+check("a hardened Arista switch: every rule OK (shutdown telnet and HTTPS eAPI are fine)", all(v == ("OK", "not found") for v in goodar.values()), {k: v for k, v in goodar.items() if v[0] != "OK"})
+mar = by(BAD_AR.replace("community public rw", "community <masked>").replace("community mon ro", "community <masked>"), "", vendor="arista")
+check("masked communities answer N/A, with Cisco's wording", mar["ar snmp community"] == ("N/A", "2 communities; whether one is public, private or read-write cannot be told, the stored backup masks it (Settings > Config backups)")
+      and mar["ar snmp acl"] == ("N/A", "2 communities; whether each has an access list cannot be told, the stored backup masks it (Settings > Config backups)"), mar)
+check("a community with an access list passes the ACL rule", by(GOOD_AR.replace("snmp-server user mon g1 v3", "snmp-server community mon ro MGMT"), "", vendor="arista")["ar snmp acl"][0] == "OK")
+check("idle timeout 0 (never) is the finding; eAPI HTTPS alone and a shut telnet are not", by(GOOD_AR.replace("idle-timeout 10\nmanagement ssh", "idle-timeout 0\nmanagement ssh"), "", vendor="arista")["ar idle timeout"]
+      == ("WARN", "management console: idle-timeout 0: set idle-timeout 10"))
+try:
+    H.findings(BAD_IOS, "", vendor="arista"); check("an IOS text is refused as EOS", False)
+except ValueError:
+    check("an IOS text is refused as EOS", True)
+
 print("== the rows a scan adds")
 def dev(name, vendor, platform="", version=""):
     d = {"name": name, "vendor": vendor, "host": "10.0.0.9", "platform": platform, "enabled": 1}
@@ -515,6 +723,11 @@ check("a vendor without rules: one N/A row saying so", [(r.check, r.status, r.me
 backup.store("edge-fw", BAD_FG, mask=True)
 fg_rows = A.scan(fw)[1:]
 check("a FortiGate backup: one row per FortiGate rule", len(fg_rows) == len(FG.RULES) and fg_rows[0].check == "Hardening: Admin access on a WAN interface" and fg_rows[0].status == "FAIL", [(r.check, r.status) for r in fg_rows[:2]])
+jn1, ar1 = dev("jn1", "juniper"), dev("ar1", "arista")
+backup.store("jn1", BAD_JN, mask=True); backup.store("ar1", BAD_AR, mask=True)
+jn_rows, ar_rows = A.scan(jn1)[1:], A.scan(ar1)[1:]
+check("a Junos backup: one row per Junos rule, named 'Hardening: <rule>'", len(jn_rows) == len(JN.RULES) and jn_rows[0].check == "Hardening: Telnet or HTTP management on" and jn_rows[0].status == "FAIL", [(r.check, r.status) for r in jn_rows[:2]])
+check("an Arista backup: one row per Arista rule", len(ar_rows) == len(AR.RULES) and ar_rows[0].check == "Hardening: Telnet on" and ar_rows[0].status == "FAIL", [(r.check, r.status) for r in ar_rows[:2]])
 backup.store("pan", BAD_IOS, mask=True)
 check("a backup that is not the vendor's format: one N/A row saying so", [(r.check, r.status, r.message) for r in A.scan(pan)[1:]] == [("Hardening", "N/A", "The backup could not be read as a PAN-OS configuration.")])
 db.set_setting("hardening_off", [k for k, *_ in H.RULES])
@@ -529,7 +742,7 @@ print("== Settings > Scanning lists the rules under vendor headings")
 from ui.settings_pages.scanning import ScanningPage
 from PySide6.QtCore import Qt
 pg = ScanningPage(); pg.load()
-check("every rule, ticked, with its severity, under three headings", pg.rules.count() == len(H.RULES) + 3 and pg.rules.item(0).text() == "Cisco (IOS, IOS XE, NX-OS, ASA)"
+check("every rule, ticked, with its severity, under five headings", pg.rules.count() == len(H.RULES) + 5 and pg.rules.item(0).text() == "Cisco (IOS, IOS XE, NX-OS, ASA)"
       and pg.rules.item(0).flags() == Qt.ItemFlag.NoItemFlags and pg.rules.item(1).text() == "Telnet allowed on VTY lines  (FAIL)"
       and pg.rules.item(len(H.CISCO) + 1).text() == "FortiGate" and all(it.checkState().name == "Checked" for it in pg._rule_items()) and len(pg._rule_items()) == len(H.RULES))
 pg.rules.item(2).setCheckState(Qt.CheckState.Unchecked); pg.save()
