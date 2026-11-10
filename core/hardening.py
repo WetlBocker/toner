@@ -2,6 +2,7 @@
 list, one row per rule with what was found. Cisco (IOS, IOS XE, NX-OS, ASA) lives here; FortiGate and Palo Alto in
 hardening_fortinet.py and hardening_paloalto.py. Stored backups mask passwords and communities, so the rules that need
 the secret itself say so instead of guessing."""
+import json
 import re
 
 from core import backup, db
@@ -16,6 +17,8 @@ UNREADABLE = "The backup could not be read as a {} configuration."
 MASKED = "the stored backup masks it (Settings > Config backups)"
 NOT_HERE = "Does not apply to this platform."
 NOT_SWITCH = "Not a switch configuration."
+NO_SETTINGS = "No Windows settings read yet. Run the health checks; an older agent needs updating."
+UNREAD_SETTING = "Toner could not read this setting on this computer."
 
 
 def _blocks(lines, start):
@@ -418,14 +421,15 @@ def _lines(text):
 
 
 def _groups():
-    from core import hardening_arista, hardening_fortinet, hardening_hpe, hardening_juniper, hardening_mikrotik, hardening_paloalto
+    from core import hardening_arista, hardening_fortinet, hardening_hpe, hardening_juniper, hardening_mikrotik, hardening_paloalto, hardening_windows
     return [("cisco", "Cisco (IOS, IOS XE, NX-OS, ASA)", "Cisco", _lines, CISCO),
             ("fortinet", "FortiGate", "FortiOS", hardening_fortinet.parse, hardening_fortinet.RULES),
             ("paloalto", "Palo Alto", "PAN-OS", hardening_paloalto.parse, hardening_paloalto.RULES),
             ("juniper", "Juniper", "Junos", hardening_juniper.parse, hardening_juniper.RULES),
             ("arista", "Arista", "EOS", hardening_arista.parse, hardening_arista.RULES),
             ("hpe", "HPE Aruba", "AOS", hardening_hpe.parse, hardening_hpe.RULES),
-            ("mikrotik", "MikroTik", "RouterOS", hardening_mikrotik.parse, hardening_mikrotik.RULES)]
+            ("mikrotik", "MikroTik", "RouterOS", hardening_mikrotik.parse, hardening_mikrotik.RULES),
+            ("windows", "Windows", "Windows settings", hardening_windows.parse, hardening_windows.RULES)]
 
 
 GROUPS = _groups()                          # (vendor, heading, format name, parse(text) -> doc, rules)
@@ -471,14 +475,22 @@ def scan(dev):
     off = rules_off()
     if all(key in off for key, *_ in group[4]):
         return []
-    latest = backup.latest(dev.get("key") or name)
-    if not latest:
-        return [row(PREFIX.rstrip(": "), NA, NO_BACKUP)]
-    text = backup.get_text(latest["id"], latest.get("org"), unmasked=True)     # the password rules, for whoever may see them
-    taken = (latest.get("taken_at") or "")[:16]
+    if group[0] == "windows":                  # the settings an agent reported stand in for a backup
+        if "windows" not in (db.software_of(dev)["version"] or "windows").lower():      # Linux and macOS agents report as windows too
+            return [row(PREFIX.rstrip(": "), NA, NO_RULES)]
+        taken, snap = db.device_settings(dev)
+        if not snap:
+            return [row(PREFIX.rstrip(": "), NA, NO_SETTINGS)]
+        text, taken, noun = json.dumps(snap), (taken or "")[:16], "read"
+    else:
+        latest = backup.latest(dev.get("key") or name)
+        if not latest:
+            return [row(PREFIX.rstrip(": "), NA, NO_BACKUP)]
+        text = backup.get_text(latest["id"], latest.get("org"), unmasked=True)     # the password rules, for whoever may see them
+        taken, noun = (latest.get("taken_at") or "")[:16], "backup of"
     try:
         found = findings(text, dev.get("platform") or "", off, group[0])
     except ValueError:
         return [row(PREFIX.rstrip(": "), NA, UNREADABLE.format(group[2]))]
-    return [row(PREFIX + LABELS[key], status, f"{message} (backup of {taken})" if status in (WARN, FAIL) and taken else message)
+    return [row(PREFIX + LABELS[key], status, f"{message} ({noun} {taken})" if status in (WARN, FAIL) and taken else message)
             for key, status, message in found]

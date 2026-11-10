@@ -919,11 +919,103 @@ db.set_setting("hardening_off", []); db.set_setting("scan_enabled", True)
 from core import display
 check("exports keep a rule row's name as worded", display.check_name("Hardening: No NTP server") == "Hardening: No NTP server")
 
+print("== Windows")
+import copy, json
+from core import hardening_windows as WIN
+GU = lambda h: "{0CCE" + h + "-69AE-11D9-BED3-505054503030}"
+GOOD_WIN = {"v": 1, "build": "20348.5760", "dc": False, "joined": True,
+    "reg": {"Smb1Server": 0, "Smb1ClientStart": 4, "SmbServerSigning": 1, "SmbClientSigning": 1, "LlmnrMulticast": 0, "LmCompatibilityLevel": 5, "RunAsPPL": 1,
+            "WDigestLogonCredential": 0, "CredGuardPolicy": 1, "CredGuardLsa": None, "RdpNlaPolicy": 1, "RdpNlaTcp": 1, "RdpDenyConnections": 0, "EnableLUA": 1,
+            "Tls10Server": 0, "Tls11Server": 0},
+    "policy": {"MinimumPasswordLength": 14, "PasswordComplexity": 1, "PasswordHistorySize": 24, "ClearTextPassword": 0, "LockoutBadCount": 3,
+               "LockoutDuration": 15, "ResetLockoutCount": 15, "EnableGuestAccount": 0},
+    "audit": {GU(h): "Success and Failure" for h in ("923F", "9215", "9217", "9235", "922F", "9228", "9212")} | {GU(h): "Success" for h in ("9216", "921B", "9237", "922B", "9210", "9211")},
+    "firewall": [{"name": "Domain", "on": True}, {"name": "Private", "on": True}, {"name": "Public", "on": True}],
+    "defender": {"enabled": True, "realtime": True, "mode": "Normal"}}
+def W(**edits):
+    """The Windows rule answers for GOOD_WIN with edits: a dict edits a part ("gone" deletes a key), anything else replaces it."""
+    o = copy.deepcopy(GOOD_WIN)
+    for k, v in edits.items():
+        if isinstance(v, dict) and isinstance(o.get(k), dict):
+            for kk, vv in v.items():
+                (o[k].pop(kk, None) if vv == "gone" else o[k].__setitem__(kk, vv))
+        elif v == "gone": o.pop(k, None)
+        else: o[k] = v
+    return {k: (st, m) for k, st, m in H.findings(json.dumps(o), "", vendor="windows")}
+UNREAD = ("N/A", H.UNREAD_SETTING)
+good = W()
+check("a hardened Windows snapshot: every rule OK", len(good) == len(WIN.RULES) == 18 and all(v == ("OK", "not found") for v in good.values()), {k: v for k, v in good.items() if v[0] != "OK"})
+check("keys start win and the groups list Windows last", all(k.startswith("win ") for k, *_ in WIN.RULES) and H.GROUPS[-1][:3] == ("windows", "Windows", "Windows settings"))
+check("approved constants", H.NO_SETTINGS == "No Windows settings read yet. Run the health checks; an older agent needs updating." and H.UNREAD_SETTING == "Toner could not read this setting on this computer.")
+check("SMBv1: Start 3 fails with the approved message, mrxsmb10 absent (null) passes, Start unread is N/A", W(reg={"Smb1ClientStart": 3})["win smb1"] == ("FAIL", "SMBv1 is on: remove the FS-SMB1 feature, or set LanmanServer\\Parameters\\SMB1 to 0 and mrxsmb10\\Start to 4")
+      and W(reg={"Smb1ClientStart": None})["win smb1"][0] == "OK" and W(reg={"Smb1ClientStart": "gone"})["win smb1"] == UNREAD)
+check("SMBv1: Start 4 with SMB1 set 1 fails; SMB1 null is on; SMB1 unread is N/A", W(reg={"Smb1Server": 1})["win smb1"][0] == "FAIL" and W(reg={"Smb1Server": None})["win smb1"][0] == "FAIL"
+      and W(reg={"Smb1Server": "gone"})["win smb1"] == UNREAD)
+check("SMB signing: server off named, client on", W(reg={"SmbServerSigning": 0})["win smb signing"] == ("WARN", "RequireSecuritySignature is off on server: set Microsoft network server: Digitally sign communications (always) to Enabled"), W(reg={"SmbServerSigning": 0})["win smb signing"])
+check("SMB signing: absent is off below build 26100 and on from 26100; no build is N/A; unread is N/A", W(reg={"SmbClientSigning": None})["win smb signing"][0] == "WARN"
+      and W(reg={"SmbClientSigning": None}, build="26100.1")["win smb signing"][0] == "OK" and W(reg={"SmbClientSigning": None}, build="gone")["win smb signing"] == UNREAD
+      and W(reg={"SmbClientSigning": None}, build="x")["win smb signing"] == UNREAD and W(reg={"SmbClientSigning": "gone"})["win smb signing"] == UNREAD
+      and W(reg={"SmbClientSigning": "gone", "SmbServerSigning": 0})["win smb signing"][0] == "WARN")
+check("LLMNR: absent is on, unread N/A", W(reg={"LlmnrMulticast": None})["win llmnr"] == ("WARN", "EnableMulticast is not 0: set Turn off multicast name resolution to Enabled (DNS Client policy)")
+      and W(reg={"LlmnrMulticast": "gone"})["win llmnr"] == UNREAD)
+check("NTLM: absent reads 3", W(reg={"LmCompatibilityLevel": None})["win ntlm"][1].startswith("LmCompatibilityLevel 3:") and W(reg={"LmCompatibilityLevel": 5})["win ntlm"][0] == "OK"
+      and W(reg={"LmCompatibilityLevel": "gone"})["win ntlm"] == UNREAD and W(reg={"LmCompatibilityLevel": 2})["win ntlm"][0] == "FAIL")
+check("LSA protection: 2 passes, absent and 0 do not", W(reg={"RunAsPPL": 2})["win lsa protection"][0] == "OK" and W(reg={"RunAsPPL": 0})["win lsa protection"] == ("WARN", "RunAsPPL is 0: set it to 1 under Lsa")
+      and W(reg={"RunAsPPL": None})["win lsa protection"][0] == "WARN" and W(reg={"RunAsPPL": "gone"})["win lsa protection"] == UNREAD)
+check("WDigest: 1 fails, absent passes", W(reg={"WDigestLogonCredential": 1})["win wdigest"] == ("FAIL", "UseLogonCredential is 1: set it to 0 (SecurityProviders\\WDigest)") and W(reg={"WDigestLogonCredential": None})["win wdigest"][0] == "OK"
+      and W(reg={"WDigestLogonCredential": "gone"})["win wdigest"] == UNREAD)
+check("Credential Guard: off fails, the Lsa value passes, N/A on a DC or when not joined or facts missing", W(reg={"CredGuardPolicy": None})["win credential guard"] == ("WARN", "LsaCfgFlags is not set: turn on Credential Guard Configuration (Device Guard policy)")
+      and W(reg={"CredGuardPolicy": None, "CredGuardLsa": 2})["win credential guard"][0] == "OK" and W(reg={"CredGuardPolicy": 0})["win credential guard"][1].startswith("LsaCfgFlags is 0:")
+      and W(reg={"CredGuardPolicy": None}, dc=True)["win credential guard"] == ("N/A", H.NOT_HERE) and W(reg={"CredGuardPolicy": None}, joined=False)["win credential guard"] == ("N/A", H.NOT_HERE)
+      and W(dc="gone")["win credential guard"] == UNREAD and W(joined="gone")["win credential guard"] == UNREAD and W(reg={"CredGuardPolicy": "gone"})["win credential guard"] == UNREAD)
+check("Firewall: profiles that are off, none listed is N/A", W(firewall=[{"name": "Domain", "on": True}, {"name": "Public", "on": False}])["win firewall"] == ("FAIL", "Public off: turn on Windows Defender Firewall for those profiles")
+      and W(firewall="gone")["win firewall"] == UNREAD and W(firewall=[])["win firewall"] == UNREAD)
+check("RDP NLA: policy off fails, passes when RDP is off, falls back to RDP-Tcp", W(reg={"RdpNlaPolicy": 0})["win rdp nla"][0] == "WARN" and W(reg={"RdpNlaPolicy": 0, "RdpDenyConnections": 1})["win rdp nla"][0] == "OK"
+      and W(reg={"RdpNlaPolicy": None, "RdpNlaTcp": 0})["win rdp nla"][0] == "WARN" and W(reg={"RdpNlaPolicy": None, "RdpNlaTcp": 1})["win rdp nla"][0] == "OK"
+      and W(reg={"RdpNlaPolicy": 0, "RdpDenyConnections": "gone"})["win rdp nla"] == UNREAD and W(reg={"RdpNlaPolicy": "gone"})["win rdp nla"] == UNREAD)
+check("UAC: 0 fails, absent passes", W(reg={"EnableLUA": 0})["win uac"][0] == "FAIL" and W(reg={"EnableLUA": None})["win uac"][0] == "OK" and W(reg={"EnableLUA": "gone"})["win uac"] == UNREAD)
+check("guest and reversible encryption", W(policy={"EnableGuestAccount": 1})["win guest"] == ("FAIL", "Guest is enabled: set Accounts: Guest account status to Disabled")
+      and W(policy={"ClearTextPassword": 1})["win reversible"][0] == "FAIL" and W(policy={"EnableGuestAccount": "gone"})["win guest"] == UNREAD and W(policy={"ClearTextPassword": "gone"})["win reversible"] == UNREAD)
+check("password policy: each weak value named; unread alone is N/A", W(policy={"MinimumPasswordLength": 8, "PasswordComplexity": 0, "PasswordHistorySize": 5})["win password"]
+      == ("WARN", "MinimumPasswordLength 8, PasswordComplexity 0, PasswordHistorySize 5: set Account Policies > Password Policy to length 14, complexity on and history 24")
+      and W(policy={"PasswordHistorySize": "gone"})["win password"] == UNREAD and W(policy={"PasswordHistorySize": "gone", "MinimumPasswordLength": 8})["win password"][0] == "WARN")
+check("lockout: 0 attempts, 4 attempts, short duration and reset; -1 duration is fine", W(policy={"LockoutBadCount": 0})["win lockout"][1].startswith("LockoutBadCount 0:") and W(policy={"LockoutBadCount": 4})["win lockout"][0] == "WARN"
+      and W(policy={"LockoutDuration": 10, "ResetLockoutCount": 5})["win lockout"][1].startswith("LockoutDuration 10, ResetLockoutCount 5:") and W(policy={"LockoutDuration": -1})["win lockout"][0] == "OK"
+      and W(policy={"LockoutBadCount": "gone"})["win lockout"] == UNREAD)
+check("logon auditing: Logon on Success only; a missing GUID is N/A", W(audit={GU("9215"): "Success"})["win audit logon"] == ("WARN", "Logon: set Advanced Audit Policy for Logon/Logoff and Account Logon to the needed Success or Failure")
+      and W(audit={GU("9215"): "No Auditing", GU("9216"): "Failure"})["win audit logon"][1].startswith("Logon, Logoff:") and W(audit={GU("9215"): "gone"})["win audit logon"] == UNREAD
+      and W(audit={GU("9215"): "gone", GU("9216"): "No Auditing"})["win audit logon"][0] == "WARN")
+check("change auditing: Process Creation off; Success and Failure also satisfies a Success need", W(audit={GU("922B"): "No Auditing"})["win audit changes"][1].startswith("Process Creation:")
+      and W(audit={GU("922B"): "Success and Failure"})["win audit changes"][0] == "OK")
+check("audit text on another language is N/A, not a finding", W(audit={GU("9215"): "Erfolg und Fehler"})["win audit logon"] == UNREAD and W(audit={GU("9215"): "Erfolg und Fehler", GU("9216"): "Success"})["win audit logon"] == UNREAD)
+check("Defender: off fails, passive mode passes, unread is N/A", W(defender={"realtime": False})["win defender"] == ("FAIL", "Real-time protection off: turn on Microsoft Defender real-time protection")
+      and W(defender={"realtime": False, "mode": "Passive Mode"})["win defender"][0] == "OK" and W(defender="gone")["win defender"] == UNREAD
+      and W(defender={"realtime": "gone"})["win defender"] == UNREAD)
+check("TLS: an SCHANNEL value of 0xFFFFFFFF counts as on, and so does a negative one; absent follows the build", W(reg={"Tls10Server": 4294967295})["win tls"] == ("WARN", "TLS 1.0 on: set Enabled to 0 under SCHANNEL\\Protocols\\TLS 1.0\\Server")
+      and W(reg={"Tls10Server": -1, "Tls11Server": 1})["win tls"][1].startswith("TLS 1.0, TLS 1.1 on:") and W(reg={"Tls10Server": None})["win tls"][0] == "WARN"
+      and W(reg={"Tls10Server": None, "Tls11Server": None}, build="26100.1")["win tls"][0] == "OK" and W(reg={"Tls10Server": None}, build="gone")["win tls"] == UNREAD
+      and W(reg={"Tls10Server": "gone"})["win tls"] == UNREAD)
+check("an empty snapshot answers N/A for every rule, never OK", all(st == "N/A" for _k, st, _m in H.findings(json.dumps({"v": 1}), "", vendor="windows")))
+try:
+    H.findings("hostname sw1", "", vendor="windows"); check("text that is not JSON is refused", False)
+except ValueError:
+    check("text that is not JSON is refused", True)
+wd, wl = dev("win1", "windows", version="Windows Server 2022 Datacenter 10.0.20348 (20348.5760)"), dev("lin1", "windows", version="Ubuntu 24.04")
+check("no snapshot yet: one N/A row saying so", [(r.check, r.status, r.message) for r in A.scan(wd)[1:]] == [("Hardening", "N/A", H.NO_SETTINGS)])
+check("a Linux agent device gets no rules", [(r.check, r.status, r.message) for r in A.scan(wl)[1:]] == [("Hardening", "N/A", H.NO_RULES)])
+db.set_device_settings(wd, {**GOOD_WIN, "reg": {**GOOD_WIN["reg"], "EnableLUA": 0}}, when=__import__("datetime").datetime(2026, 11, 9, 10, 5, 59))
+wrows = {r.check: r for r in A.scan(wd)[1:]}
+check("a snapshot: one row per Windows rule, a finding ends (read date time)", len(wrows) == len(WIN.RULES) and wrows["Hardening: UAC off"].status == "FAIL"
+      and wrows["Hardening: UAC off"].message == "EnableLUA is 0: set User Account Control: Run all administrators in Admin Approval Mode to Enabled (read 2026-11-09 10:05)"
+      and wrows["Hardening: SMBv1 on"].message == "not found", [(r.check, r.message) for r in wrows.values()][:2])
+db.set_setting("hardening_off", ["win uac"])
+check("a rule switched off has no row", "Hardening: UAC off" not in {r.check for r in A.scan(wd)}); db.set_setting("hardening_off", [])
+
 print("== Settings > Scanning lists the rules under vendor headings")
 from ui.settings_pages.scanning import ScanningPage
 from PySide6.QtCore import Qt
 pg = ScanningPage(); pg.load()
-check("every rule, ticked, with its severity, under seven headings", pg.rules.count() == len(H.RULES) + 7 and pg.rules.item(0).text() == "Cisco (IOS, IOS XE, NX-OS, ASA)"
+check("every rule, ticked, with its severity, under eight headings", pg.rules.count() == len(H.RULES) + 8 and pg.rules.item(0).text() == "Cisco (IOS, IOS XE, NX-OS, ASA)"
       and pg.rules.item(0).flags() == Qt.ItemFlag.NoItemFlags and pg.rules.item(1).text() == "Telnet allowed on VTY lines  (FAIL)"
       and pg.rules.item(len(H.CISCO) + 1).text() == "FortiGate" and all(it.checkState().name == "Checked" for it in pg._rule_items()) and len(pg._rule_items()) == len(H.RULES))
 pg.rules.item(2).setCheckState(Qt.CheckState.Unchecked); pg.save()

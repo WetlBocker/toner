@@ -219,7 +219,7 @@ check("PAN-OS without a detail-version: the version attribute", A.version_from_b
 check("a backup with no version line, or none at all: nothing", A.version_from_backup({"name": "c9300", "vendor": "cisco"}) == ("", "") and A.version_from_backup(db.find_device("mt")) == ("", ""))
 for d in (fg2, pa2, jn):
     db.delete_device(d["id"])                             # the later counts are of the six devices above
-check("no version yet: one N/A row saying to run the checks", [(r.check, r.status, r.message) for r in A.scan(db.find_device("mt"))] == [(A.SOFTWARE, "N/A", A.NO_VERSION), ("Hardening", "N/A", "No hardening rules for this vendor yet.")])
+check("no version yet: one N/A row saying to run the checks", [(r.check, r.status, r.message) for r in A.scan(db.find_device("mt"))] == [(A.SOFTWARE, "N/A", A.NO_VERSION), ("Hardening", "N/A", "No configuration backup to read. Configs > Back up now reads one.")])
 check("a vendor with no source: one N/A row saying so", [(r.check, r.status, r.message) for r in A.scan(db.find_device("pc"))] == [(A.SOFTWARE, "N/A", A.NO_SOURCE), ("Hardening", "N/A", "No hardening rules for this vendor yet.")])
 n = len(hits); A.scan(db.find_device("c9300")); A.scan(db.find_device("edge-fw"))
 check("a second scan of the same versions asks the sources nothing (a day's cache in the Global file)", len(hits) == n, hits[n:])
