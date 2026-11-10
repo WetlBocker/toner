@@ -35,6 +35,7 @@ __REG__
             if ($k) { $x = $k.GetValue($r[2], $null); $k.Close(); $rv[$r[0]] = $(if ($null -eq $x) { $null } else { [int64]$x }) } else { $rv[$r[0]] = $null }
         } catch {}
     }
+    if ($cs) { $h.dc = ([int]$cs.DomainRole -ge 4) }
     $h.reg = $rv
     $tmp = Join-Path ([IO.Path]::GetTempPath()) ('toner_sp_' + [guid]::NewGuid().ToString('N') + '.inf')
     try {

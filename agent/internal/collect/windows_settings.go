@@ -62,8 +62,12 @@ var hardeningAudit = map[string]bool{
 	"{0CCE9212-69AE-11D9-BED3-505054503030}": true,
 }
 
-func winHardening(ctx context.Context, r *report.Report) error {
+func winHardening(ctx context.Context, r *report.Report, domainRole int) error {
 	h := &report.Hardening{V: 1, Reg: readHardeningReg()}
+	if domainRole >= 0 {
+		dc := domainRole >= 4 // a domain controller, as the script reads DomainRole
+		h.DC = &dc
+	}
 	var errs []string
 	if p, err := readHardeningPolicy(ctx); err != nil {
 		errs = append(errs, "secedit: "+err.Error())

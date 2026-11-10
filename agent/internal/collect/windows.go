@@ -49,8 +49,14 @@ func collectPlatform(ctx context.Context, r *report.Report, opts Options) {
 		note(r, name, fn())
 	}
 
-	domainRole := 0
-	part("system", func() error { var err error; domainRole, err = winSystem(r); return err })
+	domainRole := -1 // -1: not known (WMI failed)
+	part("system", func() error {
+		d, err := winSystem(r)
+		if err == nil {
+			domainRole = d
+		}
+		return err
+	})
 	part("cpu", func() error { return winCPU(ctx, r) })
 	part("disks", func() error { return winDisks(r) })
 	part("reboot", func() error { return winReboot(r) })
@@ -76,7 +82,7 @@ func collectPlatform(ctx context.Context, r *report.Report, opts Options) {
 	part("hyperv", func() error { return winHyperV(r) })
 	part("backup", func() error { return winBackup(ctx, r) })
 	part("tasks", func() error { return winTasks(r) })
-	part("hardening", func() error { return winHardening(ctx, r) })
+	part("hardening", func() error { return winHardening(ctx, r, domainRole) })
 	part("updates", func() error { return winPendingUpdates(r) }) // last: the slowest part, so it cannot hold up the others
 }
 

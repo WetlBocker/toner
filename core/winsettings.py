@@ -68,6 +68,8 @@ def clean(raw):
     for guid, setting in audit.items():
         if isinstance(guid, str) and guid.upper() in AUDIT and isinstance(setting, str) and len(setting) <= 64:
             out["audit"][guid.upper()] = setting
+    if isinstance(raw.get("dc"), bool):          # a domain controller; left out when the role could not be read
+        out["dc"] = raw["dc"]
     fw = raw.get("firewall")
     if isinstance(fw, list):
         out["firewall"] = [{"name": p["name"][:40], "on": p["on"]} for p in fw

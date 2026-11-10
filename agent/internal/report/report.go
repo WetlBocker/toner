@@ -133,6 +133,7 @@ type Defender struct {
 // read and is not set. Policy and Audit are left out when their tool failed.
 type Hardening struct {
 	V      int               `json:"v"`
+	DC     *bool             `json:"dc,omitempty"` // a domain controller; left out when the role could not be read
 	Reg    map[string]*int64 `json:"reg"`
 	Policy map[string]int64  `json:"policy,omitempty"`
 	Audit  map[string]string `json:"audit,omitempty"`

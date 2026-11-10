@@ -25,6 +25,7 @@ def check(name, cond, extra=""):
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GO_FILE = os.path.join(ROOT, "agent", "internal", "collect", "windows_settings.go")
+ps = winmon.COLLECTOR
 R, R2 = W.REG[0][0], W.REG[1][0]
 G = sorted(W.AUDIT)[0]
 
@@ -43,6 +44,9 @@ check("firewall and defender ride along when well formed", W.clean({"v": 1, "fir
       "joined": True, "build": "20348.2527"})
       == {"v": 1, "reg": {}, "policy": {}, "audit": {}, "firewall": [{"name": "Domain", "on": True}], "defender": {"realtime": True, "mode": "Normal"},
           "joined": True, "build": "20348.2527"})
+check("dc is kept only as a bool", W.clean({"v": 1, "dc": True})["dc"] is True and W.clean({"v": 1, "dc": False})["dc"] is False
+      and "dc" not in W.clean({"v": 1, "dc": 1}) and "dc" not in W.clean({"v": 1}))
+check("both collectors send dc", "$h.dc" in ps and "DomainRole" in ps and 'json:"dc,omitempty"' in open(os.path.join(ROOT, "agent", "internal", "report", "report.go"), encoding="utf-8").read())
 check("the lists have the rule list's counts", len(W.POLICY) == 8 and len(W.AUDIT) == 13 and "NewAdministratorName" not in W.POLICY
       and len({n for n, _p, _v in W.REG}) == len(W.REG))
 
@@ -50,7 +54,6 @@ print("== the two collectors name the same things")
 go = open(GO_FILE, encoding="utf-8").read() if os.path.exists(GO_FILE) else ""
 check("the Go list is the Python list", bool(go) and all(f'"{n}"' in go and v in go for n, _p, v in W.REG) and all(f'"{k}"' in go for k in W.POLICY))
 check("the Go list has the paths and the audit GUIDs", bool(go) and all(p.replace("\\", "\\\\") in go or p in go for _n, p, _v in W.REG) and all(g.lower() in go.lower() for g in W.AUDIT))
-ps = winmon.COLLECTOR
 check("the PowerShell script reads every name, path and policy key and audit GUID", all(n in ps and p in ps for n, p, _v in W.REG)
       and all(k in ps for k in W.POLICY) and all(g in ps.upper() for g in W.AUDIT) and "/mergedpolicy" in ps)
 check("the Go agent uses the merged policy too", "/mergedpolicy" in go and "SECURITYPOLICY" in go)
