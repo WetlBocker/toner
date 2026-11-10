@@ -48,7 +48,10 @@ NVD_PA = {"resultsPerPage": 3, "totalResults": 3, "vulnerabilities": [
     {"cve": {"id": "CVE-2025-0111", "descriptions": [{"lang": "en", "value": "An authenticated file read vulnerability in the Palo Alto Networks PAN-OS software enables an authenticated attacker with network access to the management web interface to read files on the PAN-OS filesystem that are readable by the nobody user. This is a long one."}],
              "metrics": {"cvssMetricV31": [{"cvssData": {"baseScore": 7.1}}]}}}]}
 NVD_UN = {"resultsPerPage": 1, "totalResults": 1, "vulnerabilities": [{"cve": {"id": "CVE-2024-2222", "descriptions": [{"lang": "en", "value": "Not scored yet. More."}]}}]}
-NVD_BY = {"cpe:2.3:o:fortinet:fortios:7.2.5:*": NVD, "cpe:2.3:o:paloaltonetworks:pan-os:11.1.4:*": NVD_PA, "cpe:2.3:o:fortinet:fortios:7.2.6:*": NVD_UN}
+NVD_CISCO = {"resultsPerPage": 1, "totalResults": 1, "vulnerabilities": [{"cve": {"id": "CVE-2023-20198", "descriptions": [
+    {"lang": "en", "value": "Cisco IOS XE Web UI privilege escalation. More."}], "metrics": {"cvssMetricV31": [{"cvssData": {"baseScore": 10.0}}]}}}]}
+NVD_BY = {"cpe:2.3:o:cisco:ios_xe:17.9.4a:*": NVD_CISCO, "cpe:2.3:o:fortinet:fortios:7.2.5:*": NVD, "cpe:2.3:o:paloaltonetworks:pan-os:11.1.4:*": NVD_PA, "cpe:2.3:o:fortinet:fortios:7.2.6:*": NVD_UN,
+          "cpe:2.3:o:fortinet:fortios:8.0.0:*": NVD, "cpe:2.3:o:juniper:junos:22.4:r3-s2": NVD}
 CSAF = {"CVE-2025-0108": {"document": {"notes": [{"category": "summary", "title": "PAN-OS: Authentication Bypass in the Management Web Interface.", "text": "..."}]}}}
 class Sources(_hs.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
@@ -71,6 +74,8 @@ class Sources(_hs.BaseHTTPRequestHandler):
             return self._send(200, PSIRT) if (os_, version) == ("iosxe", "17.9.4a") else self._send(406, {"errorCode": "NOT_FOUND", "errorMessage": "No data found"})
         if u.path == "/nvd":
             self.server.nvd_keys.append(self.headers.get("apiKey"))
+            if self.server.nvd_down:
+                return self._send(500, {})
             return self._send(200, NVD_BY.get(q.get("virtualMatchString", [""])[0], {"resultsPerPage": 0, "totalResults": 0, "vulnerabilities": []}))
         if u.path == "/kev":
             return self._send(200, {"vulnerabilities": [{"cveID": "CVE-2023-20198", "vulnerabilityName": "Cisco IOS XE Web UI Privilege Escalation Vulnerability"}, {"cveID": "CVE-2021-44228"},
@@ -82,7 +87,7 @@ class Sources(_hs.BaseHTTPRequestHandler):
             asked = q.get("cve", [""])[0].split(",")
             return self._send(200, {"data": [{"cve": c, "epss": "0.9432"} for c in asked if c == "CVE-2023-20198"] + [{"cve": c, "epss": "0.0071"} for c in asked if c == "CVE-2024-1111"]})
         self._send(404, {})
-web = _hs.ThreadingHTTPServer(("127.0.0.1", 0), Sources); web.nvd_keys = []; threading.Thread(target=web.serve_forever, daemon=True).start()
+web = _hs.ThreadingHTTPServer(("127.0.0.1", 0), Sources); web.nvd_keys = []; web.nvd_down = False; threading.Thread(target=web.serve_forever, daemon=True).start()
 base = f"http://127.0.0.1:{web.server_address[1]}"
 A.TOKEN_URL, A.PSIRT_URL, A.NVD_URL, A.KEV_URL, A.EPSS_URL = base + "/token", base + "/psirt/{os}?version={version}", base + "/nvd", base + "/kev", base + "/epss"
 A.PAN_CSAF = base + "/csaf/{cve}"
@@ -138,7 +143,9 @@ check("one row per advisory, worst first, with CVSS and EPSS and the fix", [r.ch
       and rows[2].status == "WARN" and rows[2].value == "CVSS 8.6" and rows[3].status == "OK" and rows[3].message == "Cisco IOS XE Information Disclosure", [(r.check, r.status, r.value, r.message) for r in rows])
 check("the CISA row fails, naming the exploited CVE", by[A.KEV].status == "FAIL" and by[A.KEV].message == "CVE-2023-20198 on CISA's known exploited list", by[A.KEV])
 check("no 'advisories' row when some were found", A.ADVISORIES not in by and len(rows) == 6)
+n_nvd = len(web.nvd_keys)
 rows = A.scan(db.find_device("old-rtr")); by = {r.check: r for r in rows}
+check("PSIRT's 404 is its answer: NVD is not asked", len(web.nvd_keys) == n_nvd and by[A.ADVISORIES].message == A.NONE_FOUND, web.nvd_keys)
 check("a version with nothing published: software OK (platform assumed), 'No known advisories', CISA OK", by[A.SOFTWARE].message.startswith("IOS 15.2(4)M7 (platform assumed from the version), read 20")
       and by[A.ADVISORIES].status == "OK" and by[A.ADVISORIES].message == A.NONE_FOUND and by[A.KEV].status == "OK" and by[A.KEV].message == A.NONE_KEV, [(r.check, r.status, r.message) for r in rows])
 rows = A.scan(db.find_device("edge-fw")); by = {r.check: r for r in rows}
@@ -175,12 +182,35 @@ check("no version yet: one N/A row saying to run the checks", [(r.check, r.statu
 check("a vendor with no source: one N/A row saying so", [(r.check, r.status, r.message) for r in A.scan(db.find_device("pc"))] == [(A.SOFTWARE, "N/A", A.NO_SOURCE), ("Hardening", "N/A", "No hardening rules for this vendor yet.")])
 n = len(hits); A.scan(db.find_device("c9300")); A.scan(db.find_device("edge-fw"))
 check("a second scan of the same versions asks the sources nothing (a day's cache in the Global file)", len(hits) == n, hits[n:])
-A.forget_cache(); A.set_secret("psirt_secret", "wrong")
+A.forget_cache(); A.set_secret("psirt_secret", "wrong"); web.nvd_down = True
 rows = A.scan(db.find_device("c9300"))
 check("a rejected sign-in: one ERROR row with Cisco's words and the app type to register", len(rows) == 2 and rows[0].status == "ERROR" and rows[0].message == f"17.09.04a: Cisco PSIRT: sign-in rejected (invalid_client). {A.APP_TYPE}", rows)
 A.set_secret("psirt_secret", ""); A._token.clear()
 check("no account: one ERROR row saying so", A.scan(db.find_device("c9300"))[0].message.endswith(f"Cisco PSIRT: no client id and secret. {A.CHECK_SETTINGS}"))
 A.set_secret("psirt_secret", "sec-1")
+check("Cisco's source order: its three NVD products, ASA dotted, parentheses escaped, lowercase", A.cisco_cpe("asa", "9.12(4)67") == ("cisco:adaptive_security_appliance_software", "9.12.4.67")
+      and A.cisco_cpe("ios", "15.2(4)E10") == ("cisco:ios", r"15.2\(4\)e10") and A.cisco_cpe("iosxe", "17.9.4a") == ("cisco:ios_xe", "17.9.4a") and A.cisco_cpe("nxos", "9.3(8)") == ("cisco:nx-os", r"9.3\(8\)"))
+web.nvd_down = False
+A.forget_cache(); A.set_secret("psirt_secret", "")
+rows = A.scan(db.find_device("c9300")); by = {r.check: r for r in rows}
+check("no PSIRT account, NVD has a record: its rows, and the version row says where they came from", "CVE-2023-20198" in by and by[A.SOFTWARE].status == "FAIL" and A.FROM_NVD in by[A.SOFTWARE].message, [(r.check, r.message) for r in rows])
+A.forget_cache(); A.set_secret("psirt_secret", "wrong"); A._token.clear()
+rows = A.scan(db.find_device("c9300")); by = {r.check: r for r in rows}
+check("PSIRT refusing the sign-in (HTTP 401): the same", "CVE-2023-20198" in by and A.FROM_NVD in by[A.SOFTWARE].message, [(r.check, r.message) for r in rows])
+A.forget_cache(); A.set_secret("psirt_secret", "")
+rows = A.scan(db.find_device("old-rtr")); by = {r.check: r for r in rows}
+check("PSIRT unavailable and NVD knows nothing: N/A saying it could not confirm, and no 'advisories' row", len(rows) == 2 and by[A.SOFTWARE].status == "N/A" and by[A.SOFTWARE].message == A.COULD_NOT_CONFIRM and A.ADVISORIES not in by, [(r.check, r.status, r.message) for r in rows])
+A.set_secret("psirt_secret", "sec-1"); A._token.clear()
+nc = dev("nc-fw", "fortinet", "9.9.9")
+rows = A.scan(db.find_device("nc-fw")); by = {r.check: r for r in rows}
+check("NVD knows nothing: the version row is N/A with the wording, and no 'advisories' row", by[A.SOFTWARE].status == "N/A" and by[A.SOFTWARE].message == A.COULD_NOT_CONFIRM and A.ADVISORIES not in by, [(r.check, r.status, r.message) for r in rows])
+sid_nc = db.save_scan(rows)
+from ui.vulntab import VulnTab as _VT
+v0 = _VT(); v0.show_device(db.find_device("nc-fw"))
+check("its Vulnerabilities tab says so, with no chart", v0.empty.text() == A.COULD_NOT_CONFIRM and not v0.empty.isHidden() and v0.chart.isHidden(), v0.empty.text())
+db.delete_device(nc["id"])
+with db.connect() as c:
+    c.execute("DELETE FROM scan_results WHERE scan_id=?", (sid_nc,)); c.execute("DELETE FROM scans WHERE id=?", (sid_nc,))
 un = dev("un-fw", "fortinet", "7.2.6")
 rows = A.scan(db.find_device("un-fw")); by = {r.check: r for r in rows}
 check("an NVD record with no metrics: value is 'CVSS not given', WARN, not low", by["CVE-2024-2222"].value == A.UNSCORED and by["CVE-2024-2222"].status == "WARN" and by[A.SOFTWARE].status == "WARN", [(r.check, r.status, r.value) for r in rows])

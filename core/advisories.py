@@ -23,6 +23,7 @@ TIMEOUT = 30
 CACHE_HOURS = 24
 
 CISCO_OS = {"cisco_ios": "ios", "cisco_xe": "iosxe", "cisco_nxos": "nxos", "cisco_asa": "asa"}
+CISCO_NVD = {"ios": "cisco:ios", "iosxe": "cisco:ios_xe", "nxos": "cisco:nx-os"}
 CISCO_NAMES = {"ios": "IOS", "iosxe": "IOS XE", "nxos": "NX-OS", "asa": "ASA"}
 NVD_CPE = {"fortinet": "fortinet:fortios", "juniper": "juniper:junos", "paloalto": "paloaltonetworks:pan-os",
            "mikrotik": "mikrotik:routeros", "arista": "arista:eos", "hpe": "arubanetworks:arubaos"}
@@ -79,6 +80,8 @@ NO_VERSION = "No version on record. Run the health checks first; they read it."
 NO_SOURCE = "No advisory source for this vendor yet."
 OFF = "Vulnerability lookups are off under Settings > Scanning."
 NONE_FOUND = "No known advisories for this version"
+COULD_NOT_CONFIRM = "NVD has no data for this version, so Toner could not confirm it is clean."
+FROM_NVD = "from NVD (Cisco PSIRT was not available)"
 NONE_KEV = "None of the advisories are on CISA's known exploited list"
 CHECK_SETTINGS = "Check Settings > Scanning."
 APP_TYPE = "The app at apiconsole.cisco.com must be of type Service with the Client Credentials grant; check the id and secret under Settings > Scanning."
@@ -346,19 +349,37 @@ def status_of(a, exploited):
     return WARN if a["cvss"] is None or a["cvss"] >= 7 else OK
 
 
+def cisco_cpe(os_, version):
+    """(NVD product, version) for a Cisco OS and version: parentheses are escaped for IOS and NX-OS, ASA's become dots, all lowercase."""
+    v = cisco_version(version).lower()
+    if os_ == "asa":
+        return "cisco:adaptive_security_appliance_software", v.replace("(", ".").replace(")", ".").strip(".")
+    return CISCO_NVD[os_], v.replace("(", r"\(").replace(")", r"\)")
+
+
 def lookup(dev, creds=None):
-    """(what was looked up, [advisories]) for a device, by its vendor and version; raises LookupError_ when a source refused.
-    `creds` overrides the stored account: {'psirt_id', 'psirt_secret', 'nvd_key'} (the Settings page's Test)."""
+    """(what was looked up, [advisories], confirmed) for a device, by its vendor and version; raises LookupError_ when no source could be
+    asked. confirmed is False when the answer is NVD's nothing, which is not proof the version is clean. Cisco asks PSIRT first and NVD
+    when PSIRT cannot answer. `creds` overrides the stored account: {'psirt_id', 'psirt_secret', 'nvd_key'} (the Settings page's Test)."""
     creds = creds or {}
     vendor, version = dev.get("vendor") or "", db.software_of(dev)["version"]
     if vendor == "cisco":
         os_, guessed = cisco_os(dev)
         v = cisco_version(version)
         what = f"{CISCO_NAMES[os_]} {v}" + (" (platform assumed from the version)" if guessed else "")
-        return what, psirt(os_, v, creds.get("psirt_id"), creds.get("psirt_secret"))
+        try:
+            return what, psirt(os_, v, creds.get("psirt_id"), creds.get("psirt_secret")), True
+        except LookupError_ as e:
+            try:
+                product, ver = cisco_cpe(os_, v)
+                found = nvd_cve(product, ver, "*", "cisco", creds.get("nvd_key"))
+            except LookupError_:
+                raise e from None
+            return f"{what} {FROM_NVD}", found, bool(found)
     ver, upd = cpe_version(vendor, version)
     what = f"{OS_NAMES[vendor]} {ver}" + (f" {upd}" if upd != "*" else "")
-    return what, nvd(vendor, version, creds.get("nvd_key"))
+    found = nvd(vendor, version, creds.get("nvd_key"))
+    return what, found, bool(found)
 
 
 # where a stored configuration backup states the software version, for a device whose checks have not recorded one
@@ -412,10 +433,12 @@ def versions(dev):
     if not version:
         return [row(SOFTWARE, NA, "", NO_VERSION)]
     try:
-        what, found = lookup(dev)
+        what, found, confirmed = lookup(dev)
         exploited = kev() if found else {}
     except LookupError_ as e:
         return [row(SOFTWARE, ERROR, version, f"{version}: {e}")]
+    if not found and not confirmed:
+        return [row(SOFTWARE, NA, version, COULD_NOT_CONFIRM)]
     scores = epss([c for a in found for c in a["cves"]])
     found = sorted(found, key=lambda a: (a["cvss"] is None, -(a["cvss"] or 0), a["id"]))
     statuses = [status_of(a, exploited) for a in found]
