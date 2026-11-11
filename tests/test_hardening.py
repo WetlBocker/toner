@@ -872,7 +872,10 @@ check("a hardened Junos config through the masker: every rule still OK", all(v =
 check("a hardened Arista config through the masker: every rule still OK", all(v == ("OK", "not found") for v in by(backup.mask_secrets(GOOD_AR), "", vendor="arista").values()), {k: v for k, v in by(backup.mask_secrets(GOOD_AR), "", vendor="arista").items() if v[0] != "OK"})
 for name, text, plat, vendor in (("HPE AOS-CX", GOOD_CX, CX, "hpe"), ("HPE AOS-S", GOOD_OS, OSW, "hpe"), ("MikroTik", GOOD_MT, "mikrotik_routeros", "mikrotik")):
     now, was = by(backup.mask_secrets(text), plat, vendor=vendor), by(text, plat, vendor=vendor)
-    check(f"a hardened {name} config through the masker: every rule answers as it did before", now == was, {k: v for k, v in now.items() if v != was[k]})
+    named = {"mt snmp public"} if vendor == "mikrotik" else set()          # the community's name is masked: whether it is public cannot be told
+    check(f"a hardened {name} config through the masker: every rule answers as it did before, but the community name's",
+          {k: v for k, v in now.items() if k not in named} == {k: v for k, v in was.items() if k not in named}
+          and all(now[k][0] == "N/A" and "cannot be told" in now[k][1] for k in named), {k: v for k, v in now.items() if v != was[k]})
 check("the masker leaves a length setting and a block opener alone, and still masks a password",
       backup.mask_secrets("   password minimum length 15") == "   password minimum length 15" and backup.mask_secrets("    password {") == "    password {"
       and backup.mask_secrets("username a password 7 0822455D0A16") == "username a password <masked>" and backup.mask_secrets("password cisco") == "password <masked>")

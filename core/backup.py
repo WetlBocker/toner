@@ -57,17 +57,53 @@ MASKS = [
      r"\1 <masked>\2"),
     # Junos
     (re.compile(r'(?i)\b(encrypted-password|secret|authentication-key|pre-shared-key\s+(?:ascii-text|hexadecimal)|'
-                r'community)\s+"[^"]*"'), r'\1 "<masked>"'),
+                r'community-name|community)\s+"[^"]*"'), r'\1 "<masked>"'),
+    (re.compile(r'(?im)^(\s*set\s+snmp\s+community)\s+(?:"[^"]*"|\S+)'), r'\1 "<masked>"'),
     # FortiOS
     (re.compile(r"(?im)^(\s*set\s+(?:password|passwd|psksecret|secret|key|community-name|auth-pwd|priv-pwd|"
                 r"private-key|passphrase))\s+.*$"), r"\1 <masked>"),
     # PAN-OS XML
-    (re.compile(r"<(phash|password|key|secret|community-name|passphrase|private-key)>[^<]*</\1>"),
+    (re.compile(r"<(phash|password|key|secret|community-name|snmp-community-string|community|authpwd|privpwd|passphrase|private-key)>[^<]*</\1>"),
      r"<\1><masked></\1>"),
     # RouterOS
-    (re.compile(r"(?i)\b(password|secret|passphrase|private-key|wpa-pre-shared-key|wpa2-pre-shared-key)=(\"[^\"]*\"|\S+)"),
+    (re.compile(r"(?i)\b(password|secret|passphrase|private-key|wpa-pre-shared-key|wpa2-pre-shared-key|trap-community)=(\"[^\"]*\"|\S+)"),
      r"\1=<masked>"),
 ]
+
+# SNMP community names that are a plain name only inside their section: masked there, not elsewhere (a Junos BGP community, a
+# FortiOS `set name` of a firewall address)
+_JUNOS_COMMUNITY = re.compile(r'^(\s*community)\s+(?:"[^"]*"|[^\s{;]+)(\s*[{;].*)$')
+_FORTI_NAME = re.compile(r"^(\s*set\s+name)\s+.*$")
+_ROS_NAME = re.compile(r"(?i)\bname=(\"[^\"]*\"|\S+)")
+
+
+def _mask_snmp_names(text):
+    out, junos, forti, ros = [], None, None, False
+    for line in text.split("\n"):
+        s = line.strip()
+        if junos is None and re.match(r"^snmp\s*\{$", s):
+            junos = 0                                       # depth inside the Junos `snmp {` block
+        elif junos is not None:
+            if junos == 0 and s.startswith("community"):
+                line = _JUNOS_COMMUNITY.sub(r'\1 "<masked>"\2', line)
+            junos += s.count("{") - s.count("}")
+            if junos < 0:
+                junos = None
+        if forti is None and s == "config system snmp community":
+            forti = 0                                       # nested `config` blocks inside FortiOS's community list
+        elif forti is not None:
+            if s.startswith("config "):
+                forti += 1
+            elif s == "end":
+                forti = None if forti == 0 else forti - 1
+            else:
+                line = _FORTI_NAME.sub(r"\1 <masked>", line)
+        if s.startswith("/"):
+            ros = s.startswith("/snmp community")             # a RouterOS export's section header (or a one-line command)
+        if ros:
+            line = _ROS_NAME.sub("name=<masked>", line)
+        out.append(line)
+    return "\n".join(out)
 
 
 class BackupError(Exception):
@@ -123,7 +159,7 @@ def mask_secrets(text):
     """`text` with its passwords, keys and SNMP communities masked (clean's last step)."""
     for rx, repl in MASKS:
         text = rx.sub(repl, text)
-    return text
+    return _mask_snmp_names(text)
 
 
 def sha(text):

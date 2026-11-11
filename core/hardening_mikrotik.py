@@ -127,6 +127,9 @@ def snmp_public(doc, plat, masked):
         if problems:
             from core.hardening import community_name          # core.hardening imports this module, so not at the top
             bad.append(f"community {community_name(c.get('name'))}: {' and '.join(problems)}")
+    if not bad and any(c.get("name") == "<masked>" for c in _snmp(doc)):
+        from core.hardening import MASKED          # core.hardening imports this module, so not at the top
+        return ("na", f"whether it is public or private cannot be told, {MASKED}")
     return f"{'; '.join(bad)}: rename the community and set write-access=no under /snmp community" if bad else None
 
 

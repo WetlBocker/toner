@@ -362,4 +362,28 @@ check("only the length settings and a bare block opener are left alone", m("   p
 check("ArubaOS-Switch's password minimum-length N is left alone; a secret shaped like it is masked", m("password minimum-length 15") == "password minimum-length 15"
       and m("password minimum-length") == "password <masked>" and m("username x password minimum-length 15") == "username x password <masked>")
 
+print("== SNMP community names in every vendor's format, and their look-alikes left alone")
+junos = m("snmp {\n    community Mon7f3 {\n        authorization read-only;\n    }\n    community public;\n    trap-group traps {\n        version v2;\n    }\n}\n"
+          "policy-options {\n    community CUSTOMERS members 65000:100;\n}\nset snmp community \"Mon 7f3\" authorization read-only\n"
+          "set snmp v3 snmp-community idx1 community-name \"$9$abc\"")
+check("Junos: unquoted communities in snmp, the set form and v3's community-name", 'community "<masked>" {' in junos and 'community "<masked>";' in junos
+      and 'set snmp community "<masked>" authorization read-only' in junos and 'community-name "<masked>"' in junos
+      and not any(s in junos for s in ("Mon7f3", "Mon 7f3", "public", "$9$abc")), junos)
+check("...a BGP community and a trap group keep their names", "community CUSTOMERS members 65000:100;" in junos and "trap-group traps {" in junos, junos)
+forti = m('config system snmp community\n    edit 1\n        set name "Mon7f3"\n        config hosts\n            edit 1\n                set ip 10.0.0.5 255.255.255.255\n'
+          '            next\n        end\n    next\n    edit 2\n        set name "public"\n    next\nend\nconfig firewall address\n    edit "web"\n        set name "web-server"\n    next\nend')
+check("FortiOS: each community's set name, past a nested config block", forti.count("set name <masked>") == 2 and "Mon7f3" not in forti and '"public"' not in forti, forti)
+check("...a set name outside the community list is left alone", 'set name "web-server"' in forti and "set ip 10.0.0.5" in forti, forti)
+pan = m("<snmp-setting><access-setting><version><v2c><snmp-community-string>Mon7f3</snmp-community-string></v2c></version></access-setting></snmp-setting>\n"
+        "<snmptrap><entry name=\"t\"><version><v2c><server><entry name=\"s\"><manager>10.0.0.5</manager><community>trapC0mm</community></entry></server></v2c></version></entry></snmptrap>\n"
+        "<v3><users><entry name=\"u\"><authpwd>-AQ==abc</authpwd><privpwd>-AQ==def</privpwd></entry></users></v3>")
+check("PAN-OS: the v2c community, a trap server's community and v3's passwords", not any(s in pan for s in ("Mon7f3", "trapC0mm", "-AQ==")) and pan.count("<masked>") == 4
+      and "<manager>10.0.0.5</manager>" in pan, pan)
+ros = m("/snmp\nset enabled=yes trap-community=trapC0mm\n/snmp community\nset [ find default=yes ] name=Mon7f3\nadd addresses=10.0.0.0/8 \\\n    name=\"second one\" write-access=no\n"
+        "/interface ethernet\nset [ find default-name=ether1 ] name=wan\n/snmp community add name=inline")
+check("RouterOS: names under /snmp community (a continued line too), the one-line form and trap-community", ros.count("name=<masked>") == 3 and "trap-community=<masked>" in ros
+      and not any(s in ros for s in ("Mon7f3", "second one", "trapC0mm", "=inline")), ros)
+check("...an interface's name is left alone", "set [ find default-name=ether1 ] name=wan" in ros and "addresses=10.0.0.0/8" in ros, ros)
+check("masking twice changes nothing more", all(m(t) == t for t in (junos, forti, pan, ros)))
+
 print(f"\n{ok} passed, {bad} failed"); sys.exit(1 if bad else 0)
