@@ -21,6 +21,7 @@ from drivers.base import Result
 from PySide6.QtCore import QCoreApplication, Qt
 from PySide6.QtWidgets import QApplication
 app = QApplication([])
+from ui.widgets import layout_at, widget_at       # not lay.itemAt(i).widget(): see ui/widgets.py _let_go
 import app as A
 A.apply_look(app)
 from ui import chartspec
@@ -81,8 +82,8 @@ print("== Facts")
 def facts(form):
     out = []
     for i in range(form.rowCount()):
-        lab, val = form.itemAt(i, form.ItemRole.LabelRole), form.itemAt(i, form.ItemRole.FieldRole)
-        out.append((lab.widget().text().replace("<span style='color:gray'>", "").replace("</span>", ""), val.widget()))
+        lab, val = widget_at(form, i, form.ItemRole.LabelRole), widget_at(form, i, form.ItemRole.FieldRole)
+        out.append((lab.text().replace("<span style='color:gray'>", "").replace("</span>", ""), val))
     return out
 f = facts(V.info)
 keys = [k for k, _w in f]

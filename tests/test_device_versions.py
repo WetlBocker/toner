@@ -24,6 +24,7 @@ from drivers.base import Driver
 from PySide6.QtWidgets import QApplication, QFormLayout
 db.init()
 app = QApplication([])
+from ui.widgets import layout_at, widget_at       # not lay.itemAt(i).widget(): see ui/widgets.py _let_go
 import app as A
 A.apply_look(app)
 import ui.inventory as I
@@ -260,9 +261,9 @@ check("...and comes back", not inv.table.isColumnHidden(inv.VERSION))
 def page_rows(view):
     out = {}
     for i in range(view.info.rowCount()):
-        lab, field = view.info.itemAt(i, QFormLayout.ItemRole.LabelRole), view.info.itemAt(i, QFormLayout.ItemRole.FieldRole)
+        lab, field = widget_at(view.info, i, QFormLayout.ItemRole.LabelRole), widget_at(view.info, i, QFormLayout.ItemRole.FieldRole)
         if lab and field:
-            out[lab.widget().text().replace("<span style='color:gray'>", "").replace("</span>", "")] = field.widget().text()
+            out[lab.text().replace("<span style='color:gray'>", "").replace("</span>", "")] = field.text()
     return out
 view = DV.DeviceView(db.get_device(sw1["id"]))
 rows_shown = page_rows(view)

@@ -12,6 +12,7 @@ db.init()
 from drivers.base import Result
 from PySide6.QtWidgets import QApplication
 app = QApplication([])
+from ui.widgets import layout_at, widget_at       # not lay.itemAt(i).widget(): see ui/widgets.py _let_go
 import app as A
 A.apply_look(app)
 ok = bad = 0
@@ -100,7 +101,7 @@ ch.vb.setXRange(1, 3, padding=0)                                          # what
 check("dragging zooms in on a stretch of time", abs(ch.vb.viewRange()[0][0] - 1) < 0.01 and abs(ch.vb.viewRange()[0][1] - 3) < 0.01, ch.vb.viewRange()[0])
 ch._clicked(types.SimpleNamespace(double=lambda: True))
 check("double-clicking shows the whole stretch again", ch.vb.viewRange()[0][0] < 0 and ch.vb.viewRange()[0][1] > n - 1.5, ch.vb.viewRange()[0])
-names = [ch.legend_lay.itemAt(i).widget() for i in range(ch.legend_lay.count())]
+names = [widget_at(ch.legend_lay, i) for i in range(ch.legend_lay.count())]
 check("each check has a name above the chart", [b.text() for b in names] == ["CPU", "Memory"], [b.text() for b in names])
 names[1].click()
 check("clicking a name hides that check, and the readout leaves it out", not ch.curves["memory"].isVisible()

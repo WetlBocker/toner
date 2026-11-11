@@ -20,6 +20,7 @@ def check(name, cond, extra=""):
 from PySide6.QtWidgets import QApplication, QLineEdit, QMessageBox
 from PySide6.QtCore import Qt
 app = QApplication([])
+from ui.widgets import layout_at, widget_at       # not lay.itemAt(i).widget(): see ui/widgets.py _let_go
 import app as A
 A.apply_look(app)
 import ui.settings as ST
@@ -48,8 +49,8 @@ check("a tick box is named by its own words, and says on or off", any("system tr
 check("the audit log's filter box is not a setting", SD.snapshot(page("Audit log")) == {} and ST.signature(page("Audit log")) == ())
 check("the read-only boxes (the agent key, the certificate) are not settings", "Sign-up key" not in SD.snapshot(page("Agents")) and "Certificate" not in SD.snapshot(page("Agents")))
 from ui.settings_base import Page
-pw = Page(); pw.form.addRow("Secret", QLineEdit()); pw.form.itemAt(0, ST.QFormLayout.ItemRole.FieldRole).widget().setEchoMode(QLineEdit.EchoMode.Password)
-check("a password is never shown, only whether there is one", SD.snapshot(pw) == {"Secret": "(empty)"} and (pw.form.itemAt(0, ST.QFormLayout.ItemRole.FieldRole).widget().setText("hunter2") or SD.snapshot(pw) == {"Secret": "(set)"}))
+pw = Page(); pw.form.addRow("Secret", QLineEdit()); widget_at(pw.form, 0, ST.QFormLayout.ItemRole.FieldRole).setEchoMode(QLineEdit.EchoMode.Password)
+check("a password is never shown, only whether there is one", SD.snapshot(pw) == {"Secret": "(empty)"} and (widget_at(pw.form, 0, ST.QFormLayout.ItemRole.FieldRole).setText("hunter2") or SD.snapshot(pw) == {"Secret": "(set)"}))
 check("the checks page lists every check, on or off", SD.snapshot(page("Checks")).get("Cisco: CPU") == "on")
 check("the difference between two readings is old and new, with additions and removals said", SD.changes({"a": "1", "b": "2"}, {"a": "1", "b": "3", "c": "4"}) == [("b", "2", "3"), ("c", "(not set)", "4")]
       and SD.changes({"a": "1"}, {}) == [("a", "1", "(removed)")])

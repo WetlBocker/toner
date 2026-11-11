@@ -23,6 +23,7 @@ from drivers.base import Result
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QMessageBox
 app = QApplication([])
+from ui.widgets import layout_at, widget_at       # not lay.itemAt(i).widget(): see ui/widgets.py _let_go
 import app as A
 A.apply_look(app)
 QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes)
@@ -84,7 +85,7 @@ check("and widening it again brings the names back", not nav._icons_only() and n
 print("== History and Configs")
 w.go("History"); app.processEvents(); app.processEvents()
 hy = w.history
-check("History's header sits at the top of the page", hy.layout().itemAt(0).widget().geometry().top() < 40, hy.layout().itemAt(0).widget().geometry())
+check("History's header sits at the top of the page", widget_at(hy.layout(), 0).geometry().top() < 40, widget_at(hy.layout(), 0).geometry())
 w.go("Configs"); app.processEvents(); app.processEvents()
 cf = w.configs
 fm = cf.devs.fontMetrics()

@@ -3,6 +3,9 @@ from PySide6.QtGui import QColor, QFont, QIcon, QIconEngine, QPainter, QPalette,
 from PySide6.QtWidgets import (QAbstractButton, QAbstractSpinBox, QApplication, QCheckBox, QComboBox, QHBoxLayout, QHeaderView, QLabel, QLayout, QLineEdit,
                                QAbstractItemView, QFormLayout, QMenu, QPushButton, QSizePolicy, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QToolButton,
                                QVBoxLayout, QWidget, QWidgetAction)
+import types
+
+from shiboken6 import Shiboken
 from core import db, perms, quiet, reports
 from ui import status as st, theme
 
@@ -718,20 +721,43 @@ class KeyboardAccess(QObject):
         b.setProperty("tipName", True)
 
 
+def _item(lay, i, role):
+    return lay.itemAt(i) if role is None else lay.itemAt(i, role)
+
+
+def _let_go(lay, item):
+    """PySide keeps the wrapper itemAt returns for as long as the layout lives, and is not told when C++ deletes the item (removeRow,
+    a widget deleted): a new object at that address would come back as the dead item, or crash. A nested layout is a QObject (PySide
+    hears when it goes), and a layout written in Python (FlowLayout) keeps its items in a list of its own: both are left alone."""
+    if item is not None and not isinstance(item, QObject) and not isinstance(type(lay).itemAt, types.FunctionType):
+        Shiboken.invalidate(item)
+
+
+def widget_at(lay, i, role=None):
+    """The widget a layout holds at i (on a QFormLayout: row i, role), or None. Use this, not lay.itemAt(i).widget() (see _let_go)."""
+    item = _item(lay, i, role)
+    w = item.widget() if item is not None else None
+    _let_go(lay, item)
+    return w
+
+
+def layout_at(lay, i, role=None):
+    """The layout a layout holds at i (on a QFormLayout: row i, role), or None. Use this, not lay.itemAt(i).layout() (see _let_go)."""
+    item = _item(lay, i, role)
+    child = item.layout() if item is not None else None
+    _let_go(lay, item)
+    return child
+
+
 def form_label(w):
     """The text of the label a form shows beside `w`, without its colon (or "")."""
     p = w.parentWidget()
-    stack = [p.layout()] if p is not None and p.layout() is not None else []
-    while stack:
-        lay = stack.pop()
+    top = p.layout() if p is not None else None
+    for lay in [top] + top.findChildren(QFormLayout) if top is not None else []:   # nested layouts are the top one's children
         if isinstance(lay, QFormLayout):
             lab = lay.labelForField(w)
             if isinstance(lab, QLabel) and lab.text():
                 return lab.text().replace("&", "").rstrip(": ").strip()
-        for i in range(lay.count()):
-            child = lay.itemAt(i).layout()
-            if child is not None:
-                stack.append(child)
     return ""
 
 

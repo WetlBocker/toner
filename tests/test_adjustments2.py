@@ -26,6 +26,7 @@ from drivers.base import Result
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QLineEdit, QMessageBox, QStyleOptionViewItem
 app = QApplication([])
+from ui.widgets import layout_at, widget_at       # not lay.itemAt(i).widget(): see ui/widgets.py _let_go
 QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes)
 for i, (n, v) in enumerate((("PaloVM", "paloalto"), ("core-sw1", "cisco"), ("edge-fw", "fortinet"))):
     db.save_device(dict(name=n, vendor=v, host=f"10.0.0.{i + 1}", port=0, platform="cisco_ios" if v == "cisco" else "", username="u", site="",
@@ -258,7 +259,7 @@ check("with no folder chosen, the built-in marks are back (unless Documents\\Ven
 w.go("Inventory"); app.processEvents()
 pane = w.inventory.pane
 pane.set_device(devs[0]); app.processEvents()
-labels = [pane.summary.info.itemAt(i).widget().text() for i in range(pane.summary.info.count()) if pane.summary.info.itemAt(i).widget()]
+labels = [x.text() for x in (widget_at(pane.summary.info, i) for i in range(pane.summary.info.count())) if x]
 check("the pane shows the mark, the chip and 'checked ...' on one line, and no Status row to wrap", not pane.mark.pixmap().isNull() and pane.chip.text() == "OK"
       and pane.checked.text().startswith("checked ") and not any("Status" in t for t in labels), (pane.checked.text(), labels))
 pane.set_device(next(d for d in devs if d["name"] == "edge-fw")); app.processEvents()
@@ -266,7 +267,7 @@ check("a device never checked says so", pane.checked.text() == "no results yet" 
 from ui.device_view import DeviceView
 dv = DeviceView(devs[0], w); dv.show(); app.processEvents()
 check("the device window shows the mark beside the name and keeps its Status row", not dv.mark.pixmap().isNull() and dv.mark.toolTip() == "Palo Alto"
-      and any("Status" in (dv.info.itemAt(i).widget().text() if dv.info.itemAt(i).widget() else "") for i in range(dv.info.count())))
+      and any("Status" in x.text() for x in (widget_at(dv.info, i) for i in range(dv.info.count())) if x))
 dv.close()
 
 print("== the topology's Save as...")

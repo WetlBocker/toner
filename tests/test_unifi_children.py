@@ -100,6 +100,7 @@ check("rows_for gives that device's latest rows only", {r["check_name"] for r in
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox
 from PySide6.QtCore import Qt
 app = QApplication([])
+from ui.widgets import layout_at, widget_at       # not lay.itemAt(i).widget(): see ui/widgets.py _let_go
 import app as A
 A.apply_look(app)
 import ui.inventory as I
@@ -135,7 +136,7 @@ check("no Edit, Run checks or Back up on a device's page (it is a view)", all(ch
 check("its title is the device's name", child.title.text() == "AP Lobby")
 def info_rows(view):
     f = view.summary.info
-    return {f.itemAt(i, f.ItemRole.LabelRole).widget().text(): f.itemAt(i, f.ItemRole.FieldRole).widget().text() for i in range(f.rowCount())}
+    return {widget_at(f, i, f.ItemRole.LabelRole).text(): widget_at(f, i, f.ItemRole.FieldRole).text() for i in range(f.rowCount())}
 lobby = next(k for k in unifikids.children(gw) if k["key"] == "d1")
 status_row = next((v for k, v in info_rows(child).items() if "Status" in k), "")
 check("its Status row says when it was last seen, as Toner shows times", status_row == f"OK  ({display.read_on(lobby['last_seen'])})", status_row)

@@ -19,6 +19,7 @@ def check(name, cond, extra=""):
 from core import iplookup
 from PySide6.QtWidgets import QApplication
 app = QApplication([])
+from ui.widgets import layout_at, widget_at       # not lay.itemAt(i).widget(): see ui/widgets.py _let_go
 
 HINT = "Use {ip} where the address goes, and {key} for the key"
 class Reply(io.BytesIO):
@@ -222,8 +223,8 @@ check("fields() copes with any depth", isinstance(iplookup.fields(d), list))
 print("== the settings page")
 from ui.settings_pages.general import ConnectionsPage
 cp = ConnectionsPage(); cp.load()
-check("the page has API URL and API key, and the approved hint", "API URL" in [cp.form.itemAt(i, cp.form.ItemRole.LabelRole).widget().text() for i in range(cp.form.rowCount()) if cp.form.itemAt(i, cp.form.ItemRole.LabelRole) and cp.form.itemAt(i, cp.form.ItemRole.LabelRole).widget()]
-      and "API key" in [cp.form.itemAt(i, cp.form.ItemRole.LabelRole).widget().text() for i in range(cp.form.rowCount()) if cp.form.itemAt(i, cp.form.ItemRole.LabelRole) and cp.form.itemAt(i, cp.form.ItemRole.LabelRole).widget()]
+check("the page has API URL and API key, and the approved hint", "API URL" in [x.text() for x in (widget_at(cp.form, i, cp.form.ItemRole.LabelRole) for i in range(cp.form.rowCount())) if x]
+      and "API key" in [x.text() for x in (widget_at(cp.form, i, cp.form.ItemRole.LabelRole) for i in range(cp.form.rowCount())) if x]
       and any(HINT in w.text() for w in cp.findChildren(__import__("PySide6.QtWidgets", fromlist=["QLabel"]).QLabel)))
 check("it shows the saved URL", cp.api_url.text() == "https://geo.example.com/v1/{ip}?token={key}")
 

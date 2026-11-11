@@ -436,6 +436,7 @@ print("== Settings > Security")
 extvault.CONNECTORS["bitwarden"] = FakeManager
 from PySide6.QtWidgets import QApplication, QMessageBox
 app = QApplication.instance() or QApplication([])
+from ui.widgets import layout_at, widget_at       # not lay.itemAt(i).widget(): see ui/widgets.py _let_go
 import app as A
 A.apply_look(app)
 import ui.settings as ST
@@ -447,7 +448,7 @@ check("Store passwords in lists each choice with its icon", [v.kind.itemText(i) 
 check("Toner's vault needs nothing filled in", v.chosen() == "toner" and not v.stack.isVisibleTo(sec) and not v.table.isVisibleTo(sec))
 v.kind.setCurrentIndex(v.kind.findData("bitwarden")); app.processEvents()
 f = v.fields["bitwarden"]
-labels = [lab.text() for i in range(f.form.rowCount()) for lab in [f.form.labelForField(f.form.itemAt(i, f.form.ItemRole.FieldRole).widget())] if lab and lab.text()]
+labels = [lab.text() for i in range(f.form.rowCount()) for lab in [f.form.labelForField(widget_at(f.form, i, f.form.ItemRole.FieldRole))] if lab and lab.text()]
 check("Bitwarden asks for its region, API key, master password, organization and CLI", labels == ["Region", "Client ID", "Client secret", "Master password", "Organization", "Bitwarden CLI"], labels)
 check("the table: an organization per row, its collection named after it", v.table.horizontalHeaderItem(1).text() == "Collection" and v.table.item(1, 1).text() == "Acme" and v.table.item(0, 1).text() == "Global"
       and v.where.text() == "<b>Where each organization's passwords go</b>")
@@ -502,7 +503,7 @@ for kind, word in (("onepassword", "Vault"), ("keeper", "Shared folder")):
     v.kind.setCurrentIndex(v.kind.findData(kind)); app.processEvents()
     check(f"{extvault.LABELS[kind]} calls it {word}", v.table.horizontalHeaderItem(1).text() == word)
 vw = v.fields["vaultwarden"]
-check("Vaultwarden asks for the server address instead of a region", vw.form.labelForField(vw.form.itemAt(0, vw.form.ItemRole.FieldRole).widget()).text() == "Server address")
+check("Vaultwarden asks for the server address instead of a region", vw.form.labelForField(widget_at(vw.form, 0, vw.form.ItemRole.FieldRole)).text() == "Server address")
 v.kind.setCurrentIndex(v.kind.findData("bitwarden")); app.processEvents()
 f.boxes["client_id"].setText("user.typed"); f.secret_boxes["master_password"].setText("typed-secret")
 S.check_dirty(True)

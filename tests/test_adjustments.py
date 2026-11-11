@@ -26,6 +26,7 @@ from drivers.base import Result
 from PySide6.QtCore import QPoint, QPointF, Qt
 from PySide6.QtWidgets import QApplication, QGraphicsScene, QMenu, QMessageBox, QTableWidget, QWidget
 app = QApplication([])
+from ui.widgets import layout_at, widget_at       # not lay.itemAt(i).widget(): see ui/widgets.py _let_go
 QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes)
 for i, (n, v) in enumerate((("core-sw1", "cisco"), ("edge-fw", "fortinet"), ("dist-sw2", "cisco"), ("WITSDC01", "windows"))):
     db.save_device(dict(name=n, vendor=v, host=f"10.0.0.{i + 1}", port=0, platform="cisco_ios" if v == "cisco" else ("winrm" if v == "windows" else ""),
@@ -341,7 +342,7 @@ rows = [{"device": "sw1", "local_port": "GigabitEthernet1/0/1", "remote_name": "
 _n, glinks = topology.build_graph(rows)
 check("build_graph carries each end's channel", len(glinks) == 1 and {glinks[0]["a_channel"], glinks[0]["b_channel"]} == {"Po1", "Po7"}, glinks)
 tp = w.tools.topology
-check("the legend shows on an empty map, and says Port-Channel instead of Merged links", tp.l2.legend_lay.count() >= 6 and any("Port-Channel" in tp.l2.legend_lay.itemAt(i).widget().text() for i in range(tp.l2.legend_lay.count())))
+check("the legend shows on an empty map, and says Port-Channel instead of Merged links", tp.l2.legend_lay.count() >= 6 and any("Port-Channel" in widget_at(tp.l2.legend_lay, i).text() for i in range(tp.l2.legend_lay.count())))
 check("the zoom buttons carry icons (their glyphs were cut off)", all(not x.icon().isNull() and x.text() == "" for x in (tp.l2.zoom_in, tp.l2.zoom_out, tp.l2.fit_btn)))
 check("the rail says what the tick does", tp.merge.text() == "Bundle Port-Channels")
 w.go("Tools"); w.tools.tabs.setCurrentWidget(tp); app.processEvents()

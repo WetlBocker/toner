@@ -7,6 +7,7 @@ import re
 from PySide6.QtWidgets import (QAbstractItemView, QAbstractButton, QAbstractSpinBox, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout,
                                QLabel, QLineEdit, QPlainTextEdit, QPushButton, QTextEdit, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 from PySide6.QtCore import Qt
+from ui.widgets import layout_at, widget_at
 
 
 def _clean(text):
@@ -100,15 +101,17 @@ def snapshot(page):
             continue
         done.add(id(form))
         for r in range(form.rowCount()):
-            lab = form.itemAt(r, QFormLayout.ItemRole.LabelRole)
-            fld = form.itemAt(r, QFormLayout.ItemRole.FieldRole) or form.itemAt(r, QFormLayout.ItemRole.SpanningRole)
-            text = _clean(lab.widget().text()) if lab is not None and isinstance(lab.widget(), QLabel) else ""
-            if fld is None:
+            lab = widget_at(form, r, QFormLayout.ItemRole.LabelRole)
+            fw, fl = widget_at(form, r, QFormLayout.ItemRole.FieldRole), layout_at(form, r, QFormLayout.ItemRole.FieldRole)
+            if fw is None and fl is None:
+                fw, fl = widget_at(form, r, QFormLayout.ItemRole.SpanningRole), layout_at(form, r, QFormLayout.ItemRole.SpanningRole)
+            text = _clean(lab.text()) if isinstance(lab, QLabel) else ""
+            if fw is None and fl is None:
                 continue
-            if fld.widget() is not None:
-                widgets = _inputs(fld.widget())
+            if fw is not None:
+                widgets = _inputs(fw)
             else:
-                widgets = [c for c in (fld.layout().itemAt(i).widget() for i in range(fld.layout().count())) if c is not None and _is_input(c)] if fld.layout() else []
+                widgets = [c for c in (widget_at(fl, i) for i in range(fl.count())) if c is not None and _is_input(c)]
             if not text and widgets:
                 text = (_clean(widgets[0].text()) if isinstance(widgets[0], QAbstractButton) else "") or _clean(getattr(widgets[0], "placeholderText", lambda: "")()) \
                     or _clean(widgets[0].toolTip()) or "Setting"

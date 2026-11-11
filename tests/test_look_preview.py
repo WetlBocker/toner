@@ -22,6 +22,7 @@ from PySide6.QtCore import QPoint
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QApplication, QColorDialog, QMainWindow, QMenu, QMessageBox, QPushButton, QWidget
 app = QApplication([])
+from ui.widgets import layout_at, widget_at       # not lay.itemAt(i).widget(): see ui/widgets.py _let_go
 import app as A
 A.apply_look(app)
 from ui import theme, themes
@@ -45,8 +46,7 @@ page = next(p for p in S.pages if p.title == "Appearance")
 shown, reset = [], []
 S.look_preview.connect(lambda look: shown.append(look))
 S.look_reset.connect(lambda: reset.append(1))
-labels = [page.form.itemAt(i, page.form.ItemRole.LabelRole).widget().text() for i in range(page.form.rowCount())
-          if page.form.itemAt(i, page.form.ItemRole.LabelRole) and page.form.itemAt(i, page.form.ItemRole.LabelRole).widget()]
+labels = [x.text() for x in (widget_at(page.form, i, page.form.ItemRole.LabelRole) for i in range(page.form.rowCount())) if x]
 check("the page has Theme, Look, Motion, Panels and Contrast, and no accent row of its own", all(x in labels for x in ("Theme", "Look", "Motion", "Panels", "Contrast")) and "Accent colour" not in labels, labels)
 check("every theme has a card", set(page.grid.cards) == set(themes.NAMES) and len(themes.NAMES) == 30, len(page.grid.cards))
 check("the saved theme's card is the chosen one", page.grid.current() == "System")

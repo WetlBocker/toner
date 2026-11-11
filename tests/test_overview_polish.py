@@ -22,6 +22,7 @@ def check(name, cond, extra=""):
 from drivers.base import Result
 from PySide6.QtWidgets import QApplication, QMessageBox, QScrollArea
 app = QApplication([])
+from ui.widgets import layout_at, widget_at       # not lay.itemAt(i).widget(): see ui/widgets.py _let_go
 QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes)
 for k, v in dict(theme="Aurora", look="Soft", panels="Raised").items():
     db.set_setting(k, v)
@@ -163,7 +164,7 @@ w.go("Inventory"); app.processEvents()
 inv = w.inventory
 rows = inv.table.topLevelItemCount()
 check("the list ends under its last device (its height is its rows, not the page)", 0 < inv.table.maximumHeight() < 400 and inv.table.height() == inv.table.maximumHeight(), (inv.table.maximumHeight(), inv.table.height(), rows))
-check("the details pane hugs its content too", inv.pane.layout().count() == 2 and inv.pane.layout().itemAt(1).spacerItem() is not None)
+check("the details pane hugs its content too", inv.pane.layout().count() == 2 and widget_at(inv.pane.layout(), 1) is None and layout_at(inv.pane.layout(), 1) is None)
 
 print("== the Assistant button keeps off the title row")
 check("its topmost spot is under the header", A.HEADER_CLEAR == 72)
