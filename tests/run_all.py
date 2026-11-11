@@ -7,8 +7,11 @@
 import glob
 import os
 import re
+import shutil
+import stat
 import subprocess
 import sys
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -33,11 +36,23 @@ if args:
     files = [f for f in files if any(a in os.path.basename(f) for a in args)]
 
 
+def remove(path):
+    def writable(fn, p, _):                               # a test may leave a read-only file; one a stray process holds stays
+        try:
+            os.chmod(p, stat.S_IWRITE)
+            fn(p)
+        except OSError:
+            pass
+    shutil.rmtree(path, onexc=writable)
+
+
 def run(f):
     name = os.path.basename(f)
     started = time.time()
+    tmp = tempfile.mkdtemp(prefix="netcheck_run_")      # the file's own temp folder: whatever it (or what it starts) makes there
     try:
-        r = subprocess.run([sys.executable, "-u", f], capture_output=True, text=True, timeout=LIMITS.get(name, 420), env=env, encoding="utf-8", errors="replace")
+        r = subprocess.run([sys.executable, "-u", f], capture_output=True, text=True, timeout=LIMITS.get(name, 420), encoding="utf-8",
+                           errors="replace", env=dict(env, TEMP=tmp, TMP=tmp, TMPDIR=tmp))
         m = re.findall(r"(\d+) passed, (\d+) failed", r.stdout)
         p, b = (int(m[-1][0]), int(m[-1][1])) if m else (0, 1)
         note = "" if m and r.returncode == 0 and not b else "  <-- " + (r.stdout.strip().splitlines() or r.stderr.strip().splitlines() or ["no output"])[-1][:100]
@@ -52,6 +67,10 @@ def run(f):
                     note += "\n        " + line.rstrip()
     except subprocess.TimeoutExpired:
         p, b, note = 0, 1, "  <-- timed out"
+    if b:
+        note += f"\n        its temp folder is kept: {tmp}"
+    else:
+        remove(tmp)
     return name, p, b, note, time.time() - started
 
 
