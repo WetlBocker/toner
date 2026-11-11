@@ -43,13 +43,13 @@ def run(f):
         note = "" if m and r.returncode == 0 and not b else "  <-- " + (r.stdout.strip().splitlines() or r.stderr.strip().splitlines() or ["no output"])[-1][:100]
         if note:                                              # say which checks failed (a CI log shows nothing else)
             err = r.stderr.strip().splitlines()
-            crash = next((i for i, l in enumerate(err) if l.startswith("Fatal Python error")), None)
-            tail = err[-4:]
-            if crash is not None:                             # Python's stack only (3.14 adds the C stack after it)
-                end = next((i for i in range(crash + 1, len(err)) if "C stack" in err[i] or err[i].startswith("Extension modules")), len(err))
-                tail = [l for l in err[crash:end] if l.strip()][:16]
-            for line in [l for l in r.stdout.splitlines() if l.lstrip().startswith("FAIL")][:6] + tail:
+            crash = next((i for i, l in enumerate(err) if l.startswith(("Fatal Python error", "Windows fatal exception"))), None)
+            for line in [l for l in r.stdout.splitlines() if l.lstrip().startswith("FAIL")][:6] + (err[-4:] if m and crash is None else []):
                 note += "\n        " + line.strip()[:200]
+            if crash is not None or not m:                    # it crashed or died before its summary: all of it, every thread and the C stack
+                note += f"\n        exit code {r.returncode}"
+                for line in err[crash or 0:]:
+                    note += "\n        " + line.rstrip()
     except subprocess.TimeoutExpired:
         p, b, note = 0, 1, "  <-- timed out"
     return name, p, b, note, time.time() - started
