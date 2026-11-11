@@ -5,7 +5,10 @@ becomes the masked text and the text it held goes to `secret`, encrypted to the 
 text. Only the NULL ones are looked at, through a partial index, so a copy already done costs one lookup per file at each sign-in.
 Runs right after sign-in, once core/roles.py has a backups key. One transaction per database, so a run that stops halfway leaves
 each file moved or as it was, and running again carries on.
+
+When the masker learns to hide more (MASKER goes up), the versions already looked at are masked again, once per file (_remask).
 """
+import json
 import zlib
 
 from core import backup, db, envelope, quiet, roles, sqldb
@@ -35,6 +38,23 @@ def _unchecked(c):
         raise
 
 
+MASKER = 1                     # 1: SNMP community names for Junos, FortiOS, PAN-OS and RouterOS. Bump when backup.mask_secrets hides more.
+_DONE = "backups_masked_with"  # the file's settings row: the MASKER its looked-at versions were masked with
+
+
+def _stale(c):
+    """True when the file has versions looked at with an older masker."""
+    try:
+        row = c.execute("SELECT value FROM settings WHERE key=?", (_DONE,)).fetchone()
+        if row and int(json.loads(row[0])) >= MASKER:
+            return False
+        return c.execute("SELECT 1 FROM config_backups WHERE secret IS NOT NULL LIMIT 1").fetchone() is not None
+    except sqldb.sqlite3.OperationalError as e:
+        if "no such" in str(e):                         # a file from before secrets, or without the tables: nothing looked at yet
+            return False
+        raise
+
+
 def locked(e):
     """True for SQLite's "database is locked" or "busy": another Toner has the file open. Any other error is not a lock."""
     return isinstance(e, sqldb.sqlite3.OperationalError) and any(w in str(e).lower() for w in ("locked", "busy"))
@@ -48,7 +68,7 @@ def pending():
         try:
             c = _open(p)
             try:
-                if _unchecked(c):
+                if _unchecked(c) or _stale(c):
                     out.append(p)
             finally:
                 c.close()
@@ -88,7 +108,9 @@ def _split(path, pub):
     c = _open(path)
     try:
         db._m13_backup_secrets(c)                        # a file the window hasn't brought up to date yet (db.init runs after this)
-        moved, clean, whole = [], [], True
+        stale = _stale(c)
+        remasked, whole = _remask(c, pub) if stale else ([], True)      # before the NULL ones below get their secret
+        moved, clean = [], []
         for r in c.execute("SELECT id, sha, body FROM config_backups WHERE secret IS NULL").fetchall():
             try:
                 text = zlib.decompress(r["body"]).decode("utf-8", "replace")
@@ -103,10 +125,31 @@ def _split(path, pub):
         with c:                                          # (secret IS NULL: an id deleted and used again meanwhile is another version)
             c.executemany("UPDATE config_backups SET secret='' WHERE id=? AND secret IS NULL", clean)
             c.executemany("UPDATE config_backups SET secret=?, body=?, size=? WHERE id=? AND secret IS NULL", moved)
+            c.executemany("UPDATE config_backups SET secret=?, body=?, size=? WHERE id=? AND secret IS NOT NULL", remasked)
             _mask_findings(c)
+            if whole:                                    # every version is masked as mask_secrets masks now
+                c.execute("INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)", (_DONE, json.dumps(MASKER)))
         return whole
     finally:
         c.close()
+
+
+def _remask(c, pub):
+    """Versions looked at with an older masker, masked again: [(secret, body, size, id)] for those whose body now masks more, and
+    False when one was skipped. A version with a secret keeps it (it holds the whole text); one without gets its body as it was
+    stored, encrypted, first: an upgrade never throws stored text away (as _split doesn't). The sha stays: the secret is bound to it."""
+    out, whole = [], True
+    for r in c.execute("SELECT id, sha, body, secret FROM config_backups WHERE secret IS NOT NULL").fetchall():
+        try:
+            text = zlib.decompress(r["body"]).decode("utf-8", "replace")
+            masked = backup.mask_secrets(text)
+            if masked != text:
+                secret = r["secret"] or envelope.wrap(pub, backup._pack(text), backup.aad(r["sha"]))
+                out.append((secret, backup._pack(masked), len(masked), r["id"]))
+        except Exception:
+            quiet.ignored()                              # a damaged version: masked again next time
+            whole = False
+    return out, whole
 
 
 def _mask_findings(c):

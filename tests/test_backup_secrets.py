@@ -297,6 +297,32 @@ r = [r for r in rows(DBS[2]) if r["id"] == rid]
 check("the id used again keeps its own version, not the old text", hooked == [rid] and r and r[0]["secret"] == ""
       and "description reused" in body(r[0]) and SECRET not in body(r[0]), (hooked, r))
 
+# ---------------------------------------------------------------- versions looked at by an older masker are masked again, once
+FG_OLD = 'config system snmp community\n    edit 1\n        set name "Mon7f3"\n    next\nend\n'
+session.sign_out()
+session.sign_in("Admin1", PW)                       # a role that may see unmasked text
+pub = roles.backups_public()
+c = sqldb.connect(DBS[0])
+with c:
+    ins = "INSERT INTO config_backups(device, taken_at, sha, size, lines, body, added, removed, secret) VALUES(?,?,?,?,?,?,?,?,?)"
+    plain_id = c.execute(ins, ("fg-old", "2026-01-01 00:00:00", "a" * 64, len(FG_OLD), 5, backup._pack(FG_OLD), 0, 0, "")).lastrowid
+    kept_secret = envelope.wrap(pub, backup._pack(FG_OLD + "    set passwd hunter2\n"), backup.aad("b" * 64))
+    kept_id = c.execute(ins, ("fg-old2", "2026-01-01 00:00:00", "b" * 64, len(FG_OLD), 5, backup._pack(FG_OLD), 0, 0, kept_secret)).lastrowid
+    c.execute("DELETE FROM settings WHERE key=?", (backupsplit._DONE,))          # as an older Toner left the file
+c.close()
+check("a file looked at by an older masker is pending again", DBS[0] in backupsplit.pending(), backupsplit.pending())
+backupsplit.run()
+by_id = {r["id"]: r for r in rows(DBS[0])}
+plain, kept = by_id[plain_id], by_id[kept_id]
+check("its community name is masked in the body, and its sha stays", "Mon7f3" not in body(plain) and "set name <masked>" in body(plain)
+      and plain["sha"] == "a" * 64, body(plain))
+check("...the body as it was is kept, encrypted (an upgrade throws nothing away)", plain["secret"] and backup.get_text(plain_id, unmasked=True) == FG_OLD
+      and "Mon7f3" not in backup.get_text(plain_id))
+check("a version with its own secret keeps that secret, its body masked", kept["secret"] == kept_secret and "Mon7f3" not in body(kept)
+      and "hunter2" in backup.get_text(kept_id, unmasked=True))
+check("the file is marked done: nothing pending, and another run changes nothing",
+      backupsplit.pending() == [] and (backupsplit.run(), rows(DBS[0]))[1] == list(by_id.values()))
+
 # ---------------------------------------------------------------- the secret is encrypted on disk
 everything = [r for p in DBS for r in rows(p)]
 secrets = [r["secret"] if isinstance(r["secret"], bytes) else r["secret"].encode() for r in everything if r["secret"]]
