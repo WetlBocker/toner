@@ -7,7 +7,7 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from core import advisories, db
-from ui import chartspec
+from ui import chartspec, themes
 from ui.detaillist import DetailList
 from ui.webchart import ChartView
 
@@ -38,7 +38,9 @@ def exploited(r, score, on_list):
 
 def band_slices(p, scores):
     """The pie's slices [(severity, how many, colour)] for CVSS scores; None (not given) adds its own slice at the end."""
-    out = [(name, sum(s is not None and lo <= s < hi for s in scores), chartspec.status_color(p, BAND_STATUS[name])) for name, lo, hi in advisories.SEVERITY_BANDS]
+    colour = lambda name: (themes.mix(chartspec.status_color(p, "OK"), chartspec.status_color(p, "WARN"), 0.5) if name == "Medium"   # its own, between Low and High
+                           else chartspec.status_color(p, BAND_STATUS[name]))
+    out = [(name, sum(s is not None and lo <= s < hi for s in scores), colour(name)) for name, lo, hi in advisories.SEVERITY_BANDS]
     if None in scores:
         out.append((advisories.UNSCORED, scores.count(None), chartspec.status_color(p, BAND_STATUS[advisories.UNSCORED])))
     return out
@@ -84,7 +86,7 @@ class VulnTab(QWidget):
         self.detail.hide()
         if self.rows:
             scores = [r["cvss"] for r in self.rows]
-            self.chart.draw(lambda p: chartspec.pie(p, band_slices(p, scores)))
+            self.chart.draw(lambda p: chartspec.pie(p, band_slices(p, scores), counts=True))
 
     def _slice(self, hit):
         """A severity was selected: its advisories, highest score first."""

@@ -112,8 +112,10 @@ def donut(p, counts, title="", center_text=None, order=STATUSES):
     return opt
 
 
-def pie(p, slices, title=""):
-    """Slices as a doughnut: slices is [(name, value, colour)]. Every name stays in the legend, even at zero."""
+def pie(p, slices, title="", counts=False):
+    """Slices as a doughnut: slices is [(name, value, colour)]. Every name stays in the legend, even at zero. counts=True (the
+    vulnerability rings): each slice shows its count (white, or near-black on a light colour; a slice too thin for it shows none)
+    and the middle the total."""
     if not any(v for _n, v, _c in slices):
         return empty("")
     opt = _base(p, title, legend=True)
@@ -122,6 +124,17 @@ def pie(p, slices, title=""):
                       "itemStyle": {"borderColor": p["surface"], "borderWidth": 2, "borderRadius": 4},
                       "label": {"show": False}, "emphasis": {"scale": True, "scaleSize": 4, "label": {"show": False}},
                       "data": [{"name": n, "value": v, "itemStyle": {"color": c}} for n, v, c in slices]}]
+    if counts:
+        from ui.themes import contrast
+        s = opt["series"][0]
+        s.update(minShowLabelAngle=14, labelLine={"show": False}, emphasis={"scale": True, "scaleSize": 4},
+                 label={"show": True, "position": "inside", "formatter": "{c}", **_font(p, 12), "fontWeight": "bold"})
+        for d in s["data"]:
+            c = d["itemStyle"]["color"]
+            d["label"] = {"color": "#ffffff" if contrast("#ffffff", c) >= contrast("#111111", c) else "#111111"}
+        opt["title"] = [opt["title"], {"text": str(sum(v for _n, v, _c in slices)), "subtext": "total", "left": "50%", "top": "58%", "itemGap": 0,
+                                       "textAlign": "center", "textVerticalAlign": "middle", "textStyle": {**_font(p, 22), "fontWeight": "bold"},
+                                       "subtextStyle": _font(p, 11, p["muted"])}]
     return opt
 
 

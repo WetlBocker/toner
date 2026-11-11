@@ -356,8 +356,10 @@ check("it opens on the latest stored scan", tab.stored and tab.summary.text().st
 tab.charts_btn.setChecked(True); tab.resize(1280, 700); app.processEvents(); tab.draw_charts()
 import ui.chartspec as cs_mod
 pal = cs_mod.palette(); opt = tab.cvss_chart._builder(pal); ser = opt["series"][0]
-check("CVSS scores is a doughnut with the four severities and the bars' colours", ser["type"] == "pie" and [d["name"] for d in ser["data"]] == ["Low", "Medium", "High", "Critical"]
-      and [d["itemStyle"]["color"] for d in ser["data"]] == [cs_mod.status_color(pal, s) for s in ("OK", "OK", "WARN", "FAIL")], opt)
+from ui import themes as _themes
+check("CVSS scores is a doughnut with the four severities in the status colours, Medium its own between Low and High", ser["type"] == "pie" and [d["name"] for d in ser["data"]] == ["Low", "Medium", "High", "Critical"]
+      and [d["itemStyle"]["color"] for d in ser["data"]] == [cs_mod.status_color(pal, "OK"), _themes.mix(cs_mod.status_color(pal, "OK"), cs_mod.status_color(pal, "WARN"), 0.5),
+                                                       cs_mod.status_color(pal, "WARN"), cs_mod.status_color(pal, "FAIL")], opt)
 a, b = tab.vendor_chart.geometry(), tab.cvss_chart.geometry()
 check("at 1280 px the two cards are the same height and do not overlap", a.height() == b.height() and a.right() < b.left() and a.top() == b.top(), (a, b))
 tab.run_devices(["c9300", "edge-fw"])

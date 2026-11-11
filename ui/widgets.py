@@ -35,6 +35,10 @@ class FlowLayout(QLayout):
     def addItem(self, item):
         self._items.append(item)
 
+    def insertWidget(self, i, w):
+        self.addWidget(w)                            # adopts it into the layout's widget
+        self._items.insert(i, self._items.pop())
+
     def addStretch(self, *_):                      # accepted so it can stand in for a QHBoxLayout; the row just ends there
         pass
 

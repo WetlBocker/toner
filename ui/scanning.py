@@ -8,8 +8,9 @@ from PySide6.QtCore import QThread, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QMenu, QPushButton, QTreeWidgetItem, QWidget
 
-from core import advisories, db, reports
-from ui import chartspec
+from core import advisories, db, reports, scope
+from ui import chartspec, cvecheck
+from ui.finder import listed_devices, shown_devices
 from drivers.base import SEVERITY
 from ui.results import ROLE, ResultsTab
 from ui.toast import toast
@@ -46,6 +47,11 @@ class ScanningTab(ResultsTab):
                                               ("PDF report", "PDF (*.pdf)", reports.save_pdf, True)):
             menu.addAction(text, lambda _=False, t=text, p=pattern, f=fn, o=open_after: self.export(t, p, f, o))
         self.export_btn.setMenu(menu)
+        self.cve_btn = QPushButton(cvecheck.TITLE)
+        self.cve_btn.setToolTip("Checks whether the devices shown are affected by the CVEs you enter")
+        self.cve_btn.clicked.connect(self.check_cves)
+        self.bar.insertWidget(self.bar.indexOf(self.run_btn) + 1, self.cve_btn)       # next to Scan
+        self.cve_dialog = None
         self.bar.addWidget(self.export_btn)
         self.table.itemDoubleClicked.connect(lambda item, _col: self.open_link(item))
         # Two charts over the list, from the rows shown: advisories by vendor (how bad), and the CVSS scores (how many at each level).
@@ -71,6 +77,15 @@ class ScanningTab(ResultsTab):
         self.charts.setVisible(self.charts_btn.isChecked())
         self.draw_charts()
         self.table.itemExpanded.connect(self._open_group)
+
+    def check_cves(self):
+        """The Check CVEs dialog, for the devices shown; kept, so a check still running carries on while it is closed."""
+        if self.cve_dialog is None:
+            self.cve_dialog = cvecheck.CveCheckDialog(
+                lambda: scope.keep(shown_devices(listed_devices(self.funnel, enabled_only=True), self.find, self.funnel)), self)
+        self.cve_dialog.show()
+        self.cve_dialog.raise_()
+        self.cve_dialog.activateWindow()
 
     _vendors = {}                                   # device key -> vendor, read once per repopulate (a lookup per row loads every device)
 
@@ -183,7 +198,7 @@ class ScanningTab(ResultsTab):
         series = [(st, [by_vendor[v][st] for v in vendors_]) for st in ("FAIL", "WARN", "OK")]
         self.vendor_chart.draw(lambda p: chartspec.grouped_bars(p, vendors_, series, title="Advisories by vendor", stacked=True))
         scores = [sc for _r, sc in rows]
-        self.cvss_chart.draw(lambda p: chartspec.pie(p, band_slices(p, scores), title="CVSS scores"))
+        self.cvss_chart.draw(lambda p: chartspec.pie(p, band_slices(p, scores), title="CVSS scores", counts=True))
 
     def _vendor_clicked(self, hit):
         """A vendor's bar: the search box narrows the list to that vendor (its name is in every device's search text)."""

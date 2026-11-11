@@ -385,29 +385,37 @@ def nvd_cve(product, ver, upd, vendor="", key=None, build=False):
                      headers={"apiKey": key} if key else {})
             if r.status_code == 404 and start == 0 and not build:     # a 404 elsewhere is not 'nothing': Windows answers by exact build, and a later page must not drop the rows read
                 return []
-            if r.status_code == 403:
-                raise LookupError_("NVD: rate limit reached, try again in a minute (an API key under Settings > Scanning raises it)")
-            if r.status_code != 200:
-                raise LookupError_(f"NVD: HTTP {r.status_code}")
+            _nvd_status(r)
             body = r.json()
-            for item in body.get("vulnerabilities") or []:
-                cve = item.get("cve") or {}
-                metrics = cve.get("metrics") or {}
-                score = None
-                for k in ("cvssMetricV40", "cvssMetricV31", "cvssMetricV30", "cvssMetricV2"):
-                    if metrics.get(k):
-                        base = metrics[k][0].get("cvssData", {}).get("baseScore")
-                        score = float(base) if base is not None else None
-                        break
-                fixed = fixed_from(cve, product, ver if upd == "*" else ver + upd)
-                desc = next((d["value"] for d in cve.get("descriptions") or [] if d.get("lang") == "en"), "").split(". ")[0]
-                summary = desc if len(desc) <= TITLE_MAX else desc[:TITLE_MAX - 1].rstrip() + "…"
-                out.append({"id": cve.get("id") or "", "title": pan_title(cve.get("id") or "") if vendor == "paloalto" else "", "summary": summary,
-                            "cves": [cve.get("id") or ""], "cvss": score, "sir": "", "fixed": [f"build {x}" for x in fixed] if build else fixed, "url": NVD_PAGE.format(cve=cve.get("id") or "")})
+            out += [_nvd_entry(item.get("cve") or {}, product, ver, upd, vendor, build) for item in body.get("vulnerabilities") or []]
             start += body.get("resultsPerPage") or len(out) or 1
             if start >= (body.get("totalResults") or 0) or not body.get("vulnerabilities"):
                 return out
     return _cached(f"nvd:{product}:{ver}:{upd}", fetch)
+
+
+def _nvd_status(r):
+    """Raise for an NVD answer that is not a page of results."""
+    if r.status_code == 403:
+        raise LookupError_("NVD: rate limit reached, try again in a minute (an API key under Settings > Scanning raises it)")
+    if r.status_code != 200:
+        raise LookupError_(f"NVD: HTTP {r.status_code}")
+
+
+def _nvd_entry(cve, product, ver, upd, vendor="", build=False):
+    """One advisory dict (see nvd()) from an NVD CVE record, its fixes worked out for `product` at `ver` `upd`."""
+    metrics = cve.get("metrics") or {}
+    score = None
+    for k in ("cvssMetricV40", "cvssMetricV31", "cvssMetricV30", "cvssMetricV2"):
+        if metrics.get(k):
+            base = metrics[k][0].get("cvssData", {}).get("baseScore")
+            score = float(base) if base is not None else None
+            break
+    fixed = fixed_from(cve, product, ver if upd == "*" else ver + upd)
+    desc = next((d["value"] for d in cve.get("descriptions") or [] if d.get("lang") == "en"), "").split(". ")[0]
+    summary = desc if len(desc) <= TITLE_MAX else desc[:TITLE_MAX - 1].rstrip() + "…"
+    return {"id": cve.get("id") or "", "title": pan_title(cve.get("id") or "") if vendor == "paloalto" else "", "summary": summary,
+            "cves": [cve.get("id") or ""], "cvss": score, "sir": "", "fixed": [f"build {x}" for x in fixed] if build else fixed, "url": NVD_PAGE.format(cve=cve.get("id") or "")}
 
 
 def kev():
@@ -545,11 +553,9 @@ def scan(dev):
     return versions(dev) + hardening.scan(dev)
 
 
-def versions(dev):
-    """The version rows of one device: its software version (and whether it could be looked up), one row per advisory found,
-    an 'advisories' row when none was, and the CISA known-exploited row."""
-    name, org = dev["name"], dev.get("org")
-    row = lambda check, status, value="", message="": Result(name, check, status, value, message, org=org)
+def _prepared(dev):
+    """(dev, version, where it was read, None) for a device that can be looked up, or (dev, version, where, why not) when it cannot.
+    A device whose checks have not read a version takes the one its newest configuration backup states (dev then carries it)."""
     version, read_at = db.software_of(dev)["version"], db.software_of(dev)["read_at"]
     source = f", read {read_at[:10]}" if read_at else ""
     if not version:                                    # the checks have not read one: the newest backup may state it
@@ -559,19 +565,30 @@ def versions(dev):
             source = f", from the configuration backup of {taken[:10]}"
     vendor = dev.get("vendor") or ""
     if not enabled():
-        return [row(SOFTWARE, NA, version, OFF)]
+        return dev, version, source, OFF
     if vendor != "cisco" and vendor != "windows" and vendor not in NVD_CPE:
-        return [row(SOFTWARE, NA, version, NO_SOURCE)]
+        return dev, version, source, NO_SOURCE
     if not version:
-        return [row(SOFTWARE, NA, "", NO_VERSION)]
+        return dev, "", source, NO_VERSION
     if vendor == "windows":                    # Linux and macOS agents report as windows too: their OS text has no 'windows'
         if "windows" not in version.lower():
-            return [row(SOFTWARE, NA, version, NO_SOURCE)]
+            return dev, version, source, NO_SOURCE
         m = WINDOWS_BUILD.search(version)
         if not m or not m.group(2):
-            return [row(SOFTWARE, NA, version, NO_PATCH)]
+            return dev, version, source, NO_PATCH
         if not windows_cpe(version):
-            return [row(SOFTWARE, NA, version, COULD_NOT_CONFIRM)]
+            return dev, version, source, COULD_NOT_CONFIRM
+    return dev, version, source, None
+
+
+def versions(dev):
+    """The version rows of one device: its software version (and whether it could be looked up), one row per advisory found,
+    an 'advisories' row when none was, and the CISA known-exploited row."""
+    name, org = dev["name"], dev.get("org")
+    row = lambda check, status, value="", message="": Result(name, check, status, value, message, org=org)
+    dev, version, source, why = _prepared(dev)
+    if why:
+        return [row(SOFTWARE, NA, version, why)]
     try:
         what, found, confirmed = lookup(dev)
         exploited = kev() if found else {}
@@ -618,6 +635,154 @@ def _safe_scan(dev):
     except Exception as e:                                   # one device's surprise never ends the scan
         quiet.ignored()
         return [Result(dev["name"], SOFTWARE, ERROR, db.software_of(dev)["version"], f"Scan failed: {e}", org=dev.get("org"))]
+
+
+# ---------------------------------------------------------------- Check CVEs: are the devices shown affected by these CVEs?
+CVE_ID = re.compile(r"\bCVE-\d{4}-\d{4,}\b", re.I)
+AFFECTED = "Affected: {what}. {score}, {fix}."
+OUTSIDE = "Not affected: {what} is outside the affected versions."
+NOT_LISTED = "Not affected: {cve} does not list {product}."
+NOT_ANALYSED = "Cannot tell: NVD has not analysed {cve} yet."
+NO_RECORD = "NVD has no record of {cve}."
+
+
+def cve_ids(text):
+    """Each CVE ID in `text` once, upper-cased, in the order given."""
+    return list(dict.fromkeys(m.upper() for m in CVE_ID.findall(text or "")))
+
+
+def nvd_record(cve, key=None):
+    """What NVD says of one CVE: None when it has no record, {'parts': None} when it has not analysed it, else {'parts': {vendor:product:
+    CPE part}} for the products its configurations name. Not cached: a check is asked for now, and NVD analyses CVEs every day."""
+    key = key if key is not None else get_secret("nvd_key")
+    r = _get(NVD_URL, "services.nvd.nist.gov", params={"cveId": cve}, headers={"apiKey": key} if key else {})
+    _nvd_status(r)
+    items = r.json().get("vulnerabilities") or []
+    if not items:
+        return None
+    parts = {}
+    for cfg in (items[0].get("cve") or {}).get("configurations") or []:
+        for node in cfg.get("nodes") or []:
+            for m in node.get("cpeMatch") or []:
+                f = (m.get("criteria") or "").split(":")
+                if len(f) > 4:
+                    parts.setdefault(f"{f[3]}:{f[4]}", f[2])
+    return {"parts": parts or None}
+
+
+def nvd_affects(cve, part, product, ver, upd, vendor="", key=None, build=False):
+    """The advisory dict when NVD lists `cve` for this exact product and version, else None."""
+    key = key if key is not None else get_secret("nvd_key")
+    r = _get(NVD_URL, "services.nvd.nist.gov", params={"cveId": cve, "virtualMatchString": f"cpe:2.3:{part}:{product}:{ver}:{upd}"},
+             headers={"apiKey": key} if key else {})
+    _nvd_status(r)
+    items = r.json().get("vulnerabilities") or []
+    return _nvd_entry(items[0].get("cve") or {}, product, ver, upd, vendor, build) if items else None
+
+
+def _affected(what, a, exploited):
+    fix = f"fixed in {', '.join(a['fixed'][:3])}" if a["fixed"] else "no fix stated"
+    status = status_of(a, exploited)
+    details = AFFECTED.format(what=what, score=UNSCORED if a["cvss"] is None else f"CVSS {a['cvss']:g}", fix=fix)
+    return (WARN if status == OK else status), details, a.get("url") or ""        # affected is never a green OK, however low the score
+
+
+def check_cve(dev, version, cve, record, exploited):
+    """(status, details, link) for whether `cve` affects this prepared device (see _prepared). `record(cve)` is nvd_record, asked once
+    per CVE by the caller; `exploited()` is CISA's list. Cisco asks PSIRT first, Fortinet the feed when NVD cannot tell, as Scan does."""
+    vendor, page = dev.get("vendor") or "", NVD_PAGE.format(cve=cve)
+    if vendor == "cisco":
+        os_, _guessed = cisco_os(dev)
+        v = cisco_version(version)
+        what, name = f"{CISCO_NAMES[os_]} {v}", CISCO_NAMES[os_]
+        product, ver = cisco_cpe(os_, v)
+        upd, build = "*", False
+        try:
+            hit = next((a for a in psirt(os_, v) if cve in a["cves"]), None)
+        except LookupError_:
+            hit = False                                  # PSIRT cannot answer: NVD below
+        if hit:
+            return _affected(what, hit, exploited())
+        if hit is None:                                  # PSIRT answered for this version without it
+            try:
+                rec = record(cve)
+            except LookupError_:
+                rec = None
+            listed = rec and rec["parts"]
+            return OK, (NOT_LISTED.format(cve=cve, product=name) if listed and product not in listed else OUTSIDE.format(what=what)), page
+    elif vendor == "windows":
+        product, ver = windows_cpe(version)
+        upd, build = "*", True
+        name = product.split(":")[1].replace("_", " ").title()
+        what = f"{name} {ver}"
+    else:
+        product, (ver, upd), build = NVD_CPE[vendor], cpe_version(vendor, version), False
+        name = OS_NAMES[vendor]
+        what = f"{name} {ver}" + (f" {upd}" if upd != "*" else "")
+    rec = record(cve)
+    if rec and rec["parts"]:
+        if product not in rec["parts"]:
+            return OK, NOT_LISTED.format(cve=cve, product=name), page
+        hit = nvd_affects(cve, rec["parts"][product], product, ver, upd, vendor, build=build)
+        return _affected(what, hit, exploited()) if hit else (OK, OUTSIDE.format(what=what), page)
+    if vendor == "fortinet":                             # NVD cannot tell yet: Fortinet's own feed may
+        try:
+            hit = next((a for a in fortinet_feed(version) if cve in a["cves"]), None)
+        except LookupError_:
+            hit = None
+        if hit:
+            return _affected(what, hit, exploited())
+    return NA, (NOT_ANALYSED if rec else NO_RECORD).format(cve=cve), page
+
+
+def check_all(devices, cves, on_rows=None):
+    """Check CVEs: [{device, cve, status, details, link}] for every device and CVE, one device at a time (NVD rate-limits);
+    on_rows(rows) per device as it finishes. NVD is asked about each CVE once, whatever the number of devices."""
+    records, kev_list = {}, []
+
+    def record(cve):
+        if cve not in records:
+            try:
+                records[cve] = nvd_record(cve)
+            except LookupError_ as e:
+                records[cve] = e
+        if isinstance(records[cve], LookupError_):
+            raise records[cve]
+        return records[cve]
+
+    def exploited():
+        if not kev_list:
+            try:
+                kev_list.append(kev())
+            except Exception:                            # the list is a bonus: without it, a score alone decides
+                quiet.ignored()
+                kev_list.append({})
+        return kev_list[0]
+
+    out = []
+    for dev in devices:
+        rows = []
+        try:
+            prepared, version, _source, why = _prepared(dev)
+        except Exception as e:                           # one device's surprise never ends the check
+            quiet.ignored()
+            prepared, version, why = dev, "", f"Scan failed: {e}"
+        for cve in cves:
+            if why:
+                status, details, link = NA, why, ""
+            else:
+                try:
+                    status, details, link = check_cve(prepared, version, cve, record, exploited)
+                except LookupError_ as e:
+                    status, details, link = ERROR, f"{version}: {e}", NVD_PAGE.format(cve=cve)
+                except Exception as e:
+                    quiet.ignored()
+                    status, details, link = ERROR, f"Scan failed: {e}", NVD_PAGE.format(cve=cve)
+            rows.append({"device": dev["name"], "cve": cve, "status": status, "details": details, "link": link})
+        out += rows
+        if on_rows:
+            on_rows(rows)
+    return out
 
 
 def test(cid, secret, nvd_key=""):
