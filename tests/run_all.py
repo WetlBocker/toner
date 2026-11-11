@@ -22,6 +22,7 @@ if sys.platform != "win32":                       # never the desktop's own keyr
     env.setdefault("PYTHON_KEYRING_BACKEND", "keyring.backends.null.Keyring")
 env.pop("SP", None)                               # each file makes its own throw-away folder
 env["PYTHONFAULTHANDLER"] = "1"                   # a file that crashes says where (Python's stack at the crash, on stderr)
+env["PYTHONPATH"] = os.pathsep.join(filter(None, [os.path.join(here, "stack_on_timeout"), env.get("PYTHONPATH")]))  # one that hangs too
 LIMITS = {"test_render_themes.py": 900}           # draws every theme: on a slow build machine it takes twice its usual 3 to 4 minutes
 
 args = sys.argv[1:]
@@ -50,9 +51,10 @@ def run(f):
     name = os.path.basename(f)
     started = time.time()
     tmp = tempfile.mkdtemp(prefix="netcheck_run_")      # the file's own temp folder: whatever it (or what it starts) makes there
+    limit = LIMITS.get(name, 420)
     try:
-        r = subprocess.run([sys.executable, "-u", f], capture_output=True, text=True, timeout=LIMITS.get(name, 420), encoding="utf-8",
-                           errors="replace", env=dict(env, TEMP=tmp, TMP=tmp, TMPDIR=tmp))
+        r = subprocess.run([sys.executable, "-u", f], capture_output=True, text=True, timeout=limit, encoding="utf-8", errors="replace",
+                           env=dict(env, TEMP=tmp, TMP=tmp, TMPDIR=tmp, TONER_STACK_AFTER=str(limit - 10)))
         m = re.findall(r"(\d+) passed, (\d+) failed", r.stdout)
         p, b = (int(m[-1][0]), int(m[-1][1])) if m else (0, 1)
         note = "" if m and r.returncode == 0 and not b else "  <-- " + (r.stdout.strip().splitlines() or r.stderr.strip().splitlines() or ["no output"])[-1][:100]
@@ -65,8 +67,11 @@ def run(f):
                 note += f"\n        exit code {r.returncode}"
                 for line in err[crash or 0:]:
                     note += "\n        " + line.rstrip()
-    except subprocess.TimeoutExpired:
-        p, b, note = 0, 1, "  <-- timed out"
+    except subprocess.TimeoutExpired as e:
+        err = e.stderr.decode("utf-8", "replace") if isinstance(e.stderr, bytes) else e.stderr or ""
+        err = err.splitlines()
+        at = next((i for i, l in enumerate(err) if l.startswith("Timeout (")), len(err))   # the stack sitecustomize wrote
+        p, b, note = 0, 1, "  <-- timed out" + "".join("\n        " + l.rstrip() for l in err[at:])
     if b:
         note += f"\n        its temp folder is kept: {tmp}"
     else:
