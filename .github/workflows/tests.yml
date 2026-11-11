@@ -22,11 +22,41 @@ jobs:
           $bad = $out | Where-Object { $_ -match 'undefined name|redefinition of unused|syntax' }
           if ($bad) { $bad; exit 1 }
           exit 0                                  # pyflakes exits 1 for harmless unused imports; only the patterns above fail the build
+      # As on Linux: Windows Error Reporting saves a dump when python.exe crashes, and cdb (the Windows SDK's debugger) prints its C++ stacks.
+      - name: Crash dumps on, and proof that cdb can read one (a deliberate crash)
+        shell: pwsh
+        run: |
+          $key = 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\python.exe'
+          New-Item -Path $key -Force | Out-Null
+          New-ItemProperty -Path $key -Name DumpFolder -Value 'C:\cores' -PropertyType ExpandString -Force | Out-Null
+          New-ItemProperty -Path $key -Name DumpType -Value 1 -PropertyType DWord -Force | Out-Null      # a minidump: every thread's stack, small
+          New-Item -ItemType Directory -Force C:\cores | Out-Null
+          $cdb = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe', 'C:\Program Files\Windows Kits\10\Debuggers\x64\cdb.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($cdb) { "CDB=$($cdb.FullName)" >> $env:GITHUB_ENV }
+          python -X faulthandler -c "import ctypes; ctypes.string_at(0)"
+          foreach ($i in 1..20) { if (Get-ChildItem C:\cores\*.dmp -ErrorAction SilentlyContinue) { break }; Start-Sleep -Milliseconds 500 }
+          $d = Get-ChildItem C:\cores\*.dmp -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($d -and $cdb -and ((& $cdb.FullName -z $d.FullName -c ".ecxr; kn 10; q" 2>&1) -match 'Child-SP')) {
+            "A crash leaves a dump cdb can read."
+          } else {
+            "::warning::A deliberate crash left no dump cdb could read (dump: $([bool]$d), cdb: $([bool]$cdb)): a crash in the tests will show Python frames only."
+          }
+          Remove-Item C:\cores\*.dmp -ErrorAction SilentlyContinue
+          exit 0
       - name: Run the test suite
         env:
           QT_QPA_PLATFORM: offscreen
           PYTHONUTF8: "1"
         run: python tests/run_all.py
+      - name: C++ stacks of any test that crashed
+        if: failure()
+        shell: pwsh
+        run: |
+          foreach ($d in Get-ChildItem C:\cores\*.dmp -ErrorAction SilentlyContinue) {
+            "== $($d.Name)"
+            if ($env:CDB) { & $env:CDB -z $d.FullName -c ".ecxr; kn 40; ~*kn 40; q" 2>&1 | Select-Object -First 600 } else { "(no cdb on this runner)" }
+          }
+          exit 0
   test-linux:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
