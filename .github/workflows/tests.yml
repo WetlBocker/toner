@@ -31,16 +31,7 @@ jobs:
           New-ItemProperty -Path $key -Name DumpFolder -Value 'C:\cores' -PropertyType ExpandString -Force | Out-Null
           New-ItemProperty -Path $key -Name DumpType -Value 1 -PropertyType DWord -Force | Out-Null      # a minidump: every thread's stack, small
           New-Item -ItemType Directory -Force C:\cores | Out-Null
-          # what may stop Windows Error Reporting on the runner: printed as found, then turned on
-          foreach ($k in 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting', 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Error Reporting') {
-            $v = (Get-ItemProperty $k -Name Disabled -ErrorAction SilentlyContinue).Disabled
-            "Error reporting Disabled at ${k}: $v"
-            if ($v) { Set-ItemProperty $k -Name Disabled -Value 0 }
-          }
-          $svc = Get-Service WerSvc -ErrorAction SilentlyContinue
-          "Error reporting service: $($svc.Status), start $($svc.StartType)"
-          if ($svc.StartType -eq 'Disabled') { Set-Service WerSvc -StartupType Manual }
-          Start-Service WerSvc -ErrorAction SilentlyContinue
+          Start-Service WerSvc -ErrorAction SilentlyContinue     # Manual (on demand) on the runner; started so it is ready
           $cdb = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe', 'C:\Program Files\Windows Kits\10\Debuggers\x64\cdb.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
           if ($cdb) { "CDB=$($cdb.FullName)" >> $env:GITHUB_ENV }
           # ctypes catches a bad read in its own calls (an OSError, no crash), so the crash is a native thread started at address 1
@@ -50,8 +41,7 @@ jobs:
           k.CreateThread.restype = ctypes.c_void_p
           k.CreateThread.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p]
           k.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
-          print("Error mode inherited from the runner:", hex(k.GetErrorMode()), flush=True)   # 0x2 (no fault box) skips error reporting
-          k.SetErrorMode(0)
+          k.SetErrorMode(k.GetErrorMode() & ~2)     # the runner passes down 0x8003; its 0x2 (no fault box) skips error reporting
           k.WaitForSingleObject(k.CreateThread(None, 0, 1, None, 0, None), 10000)
           '@ | Out-File -Encoding utf8 "$env:RUNNER_TEMP\crash.py"
           python -X faulthandler "$env:RUNNER_TEMP\crash.py"
@@ -68,7 +58,8 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
           PYTHONUTF8: "1"
-        run: python tests/run_all.py
+        # the error mode without 0x2, so a crashing test is reported (and dumped); each test file's process inherits it from run_all
+        run: python -c "import ctypes, runpy, sys; k = ctypes.windll.kernel32; k.SetErrorMode(k.GetErrorMode() & ~2); sys.argv = ['tests/run_all.py']; runpy.run_path('tests/run_all.py', run_name='__main__')"
       - name: C++ stacks of any test that crashed
         if: failure()
         shell: pwsh
