@@ -134,8 +134,10 @@ check("Use a different account cancels the wait and goes back to the name page",
 w.reject()
 
 window(); sign_in(); wait_for(lambda: page_is("key"))
+jobs = list(w._jobs)
 w.reject()
-check("closing the window during the wait releases it, nothing open", idle() and session.state() == "signed_out" and not datakey.is_open())
+check("closing the window during the wait releases it, nothing open", jobs and all(j.isFinished() for j in jobs) and not gate.is_set()
+      and session.state() == "signed_out" and not datakey.is_open())
 
 fidokey.value = real_value
 touched_late = threading.Event()
@@ -178,8 +180,9 @@ check("Use a different account from the key PIN page: released, the name page, t
       and w.key_pin.text() == "" and session.state() == "signed_out")
 w.reject()
 window(); sign_in(); wait_for(lambda: page_is("keypin"))
+jobs = list(w._jobs)
 w.reject()
-check("closing the window at the key PIN releases the worker", idle() and session.state() == "signed_out")
+check("closing the window at the key PIN releases the worker", jobs and all(j.isFinished() for j in jobs) and session.state() == "signed_out")
 fake.pin = None
 
 print("== a directory account, and an approver with a key")

@@ -375,6 +375,19 @@ check("an add whose write had begun: closing returns at once, and it lands exact
       and adds == [1] and [k["name"] for k in datakey.my_keys()] == ["Late"], (took, adds, datakey.my_keys()))
 datakey.add_key = real_add
 datakey.remove_key(PW, 0)
+gate, began = threading.Event(), threading.Event()
+datakey.add_key = slow_add
+d = opened()
+d.add.click(); d.secret.setText(PW); d.secret_next.click(); wait_for(lambda: on(d, d.name_page))
+d.key_name.setText("Late"); d.name_ok.click(); began.wait(5)
+session.lock(); app.processEvents()
+gate.set()
+check("an add whose write had begun, then a lock: it lands, and the list shows it", wait_for(lambda: idle(d)) and on(d, d.list_page)
+      and adds == [1, 1] and rows(d) == [("Late", today)], (adds, rows(d)))
+datakey.add_key = real_add
+session.unlock(PW, present=fake.present)
+d.reject()
+datakey.remove_key(PW, 0)
 
 def throttled(*a): raise datakey.Throttled(30)
 datakey.add_key = throttled

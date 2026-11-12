@@ -254,6 +254,8 @@ class KeysDialog(QDialog):
         job.page.setEnabled(True)
         if job.turn == self._turn:
             job.landed(result, error)
+        elif self.pages.currentWidget() is self.list_page:
+            self._refresh()                              # a step left while it ran may still have written (an add after a lock)
 
     def _drop(self):
         """Leave the step: a key's wait ends, a step still running lands on nothing, and what was typed and touched goes."""
@@ -264,6 +266,7 @@ class KeysDialog(QDialog):
     def _back(self):
         self._drop()
         self._go(self.list_page, self.add)
+        self._refresh()
 
     def _follow(self):
         if session.state() == "signed_out":
