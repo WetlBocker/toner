@@ -563,13 +563,15 @@ class SignInWindow(QDialog):
             self._push()
 
     def _begin(self):
-        login, pw = self.name.text().strip(), self.pw.text()
+        login, pw, forgot = self.name.text().strip(), self.pw.text(), self._forgot
         self.pw.setText("")
 
         def begin():
             a = dirsignin.begin(login, pw)
             if not a.offline:
                 dirsignin.after_password(a)
+                if forgot and a.duo_skipped:             # Forgot your PIN? takes the Duo skipped for a key first (asks Duo,
+                    dirsignin.restart_pin(a)             # so here on the Job, not in _route)
             return a
 
         def landed(a, e):

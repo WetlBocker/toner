@@ -199,6 +199,7 @@ SSO = {"id": "s1", "name": "Contoso", "kind": "oidc", "provider": "other", "issu
        "group_names": {"g1": "Techs"}, "everyone": None}
 SSO_USER = directory.User("sub-sso-user", "sso-user", "SSO User", ("g1",), True)
 SPIN = "a long pin-only pin 3"
+PIN4, PIN5 = "531864", "697420"
 
 
 def first_sign_in(login, password, pin):
@@ -307,12 +308,39 @@ S.finish(b, PIN2)
 check("and the PIN signs her in", b.stage == "done" and session.user() == "carol@acme.com" and seen == ["open"])
 session.sign_out()
 
+# ---------------------------------------------------------------- a skipped Duo is good only for the key at the PIN
+# (a) a forged hint, then "Forgot your PIN?": Duo first, nothing written before it, then a new PIN and the approval as today
+DUO["users"].clear()
+full_at_carol = datakey.directory_account("carol@acme.com")["full_at"]
+c = sign_in_until_pin("carol@acme.com", "pw-carol")               # (her hint is still forged)
+S.restart_pin(c)
+check("Forgot your PIN? on a skipped attempt: Duo next", c.stage == "duo" and DUO["users"] == ["carol@acme.com"] and not c.duo_skipped)
+check("...no new PIN or approval before it, nothing written", raises(lambda: S.choose_pin(c, PIN2), RuntimeError) is not None
+      and raises(lambda: S.approve(c, "Admin1", PW, key=fake.value), RuntimeError) is not None and c.stage == "duo"
+      and datakey.directory_account("carol@acme.com")["full_at"] == full_at_carol)
+S.duo_push(c, threading.Event())
+check("after Duo: a new PIN to choose, with today's text, and the full check written", c.stage == "choose-pin" and c.reset
+      and c.message == S.CHANGED and datakey.directory_account("carol@acme.com")["full_at"] > full_at_carol)
+S.choose_pin(c, PIN2)
+check("...then the approval as today", c.stage == "approve")
+
+# (d) Duo refusing on these paths: still out, in today's words
+DUO["preauth"] = "deny"
+x = sign_in_until_pin("carol@acme.com", "pw-carol")
+e = raises(lambda: S.restart_pin(x), duo.Denied)
+check("Duo denies Forgot your PIN?: today's words, back at the PIN, still skipped", e is not None and str(e) == S.DUO_DENIED
+      and x.stage == "pin" and x.duo_skipped and not x.reset and x.message is None)
+e = raises(lambda: S.finish(x, PIN2, key=fake.value), duo.Denied)
+check("...and a forged hint at the PIN: the same, nothing signed in", e is not None and str(e) == S.DUO_DENIED
+      and x.stage == "pin" and session.state() == "signed_out" and not datakey.is_open())
+DUO["preauth"], DUO["push"] = "auth", "deny"
+S.restart_pin(x)
+e = raises(lambda: S.duo_push(x, threading.Event()), duo.Denied)
+check("a push denied after Forgot your PIN?: today's words, no new PIN", e is not None and str(e) == S.DUO_DENIED and x.stage == "duo")
+DUO["push"] = "allow"
+
 # a forged hint on an Admin approving with their own sign-in: refused
 forge_keys_n("erin@acme.com", 1)
-c = sign_in_until_pin("carol@acme.com", "pw-carol")               # (her hint is still forged)
-c.stage = "pin"
-S.restart_pin(c)
-S.choose_pin(c, PIN2)
 approver = sign_in_until_pin("erin@acme.com", "pw-erin")
 check("(the approver's hint skips Duo)", approver.duo_skipped and approver.stage == "pin" and approver.fresh)
 e = raises(lambda: S.approve_with_account(c, approver, PIN3, key=fake.value), S.CannotApprove)
@@ -331,6 +359,78 @@ check("the approver then unlocks with presence", session.state() == "open")
 datakey.add_key(PW, *fake.register("Spare", os.urandom(32)), "Spare")
 check("...and adds a key", [k["name"] for k in datakey.my_keys()] == ["Admin's key", "Spare"])
 session.sign_out()
+S.finish(c, PIN2)
+check("(Carol signs in with her new PIN, audited as a reset)", c.stage == "done" and rows("PIN reset")[0]["detail"] == "carol@acme.com")
+datakey.add_key(PIN2, *fake.register("Green", os.urandom(32)), "Green")
+session.sign_out()
+
+# a keyed account whose PIN slot is missing on this computer (its hint intact): Duo before the new PIN
+FakeTpm.keys.pop("Toner-" + datakey.directory_account("carol@acme.com")["slot_id"])
+DUO["users"].clear()
+d = sign_in_until_pin("carol@acme.com", "pw-carol")
+S.finish(d, PIN2, key=fake.value)
+check("a missing slot on a skipped attempt: Duo first, nothing open", d.stage == "duo" and DUO["users"] == ["carol@acme.com"]
+      and session.state() == "signed_out" and not datakey.is_open())
+S.duo_push(d, threading.Event())
+check("...then a new PIN, as for any missing slot", d.stage == "choose-pin" and d.message == S.CHANGED and not d.reset)
+S.choose_pin(d, PIN4)
+S.approve(d, "Admin1", PW, key=fake.value)
+S.finish(d, PIN4)
+check("...approved, signed in", d.stage == "done" and session.user() == "carol@acme.com")
+session.sign_out()
+
+# a changed role on a skipped attempt: Duo before the approval, then the approval as today
+forge_keys_n("carol@acme.com", 1)
+DUO["users"].clear()
+k = sign_in_until_pin("carol@acme.com", "pw-carol")
+k.role = "Admin"                                                    # (as if her groups now made her an Admin)
+datakey.set_groups_role("carol@acme.com", "Admin")
+S.finish(k, PIN4, key=fake.value)
+check("a changed role on a skipped attempt: Duo first, no approval page", k.stage == "duo" and DUO["users"] == ["carol@acme.com"]
+      and session.state() == "signed_out")
+S.duo_push(k, threading.Event())
+S.finish(k, PIN4)
+check("...after Duo, the approval as today", k.stage == "approve" and k.message == S.CHANGED)
+
+# (c) a keyed account's "Forgot your PIN?": Duo, a new PIN, the approval, and the approved record has no keys
+DUO["users"].clear()
+f = sign_in_until_pin("bob@acme.com", "pw-bob")
+S.restart_pin(f)
+check("a keyed account's Forgot your PIN?: Duo first", f.stage == "duo" and DUO["users"] == ["bob@acme.com"])
+S.duo_push(f, threading.Event())
+S.choose_pin(f, PIN5)
+S.approve(f, "Admin1", PW, key=fake.value)
+r = datakey.directory_account("bob@acme.com")
+check("...then a new PIN and the approval; the approved record has no keys", f.stage == "pin" and "keyed" not in r and "keys_n" not in r)
+fake.calls.clear()
+S.finish(f, PIN5, key=fake.value)
+check("...and the new PIN signs in without the key", f.stage == "done" and datakey.my_keys() == [] and fake.calls == [])
+datakey.add_key(PIN5, *fake.register("Blue again", os.urandom(32)), "Blue again")
+session.sign_out()
+
+# (b) a keyed account whose keys an admin cleared: Duo is asked (no hint left), before the new PIN
+session.sign_in("Admin1", PW, key=fake.value)
+datakey.clear_keys("bob@acme.com")
+session.sign_out()
+DUO["users"].clear()
+g = sign_in_until_pin("bob@acme.com", "pw-bob")
+check("after an admin's clear: Duo, as for any account without a key", g.stage == "duo" and not g.duo_skipped and DUO["users"] == ["bob@acme.com"])
+S.duo_push(g, threading.Event())
+S.finish(g, PIN5)
+check("...then a new PIN", g.stage == "choose-pin" and g.message == S.CHANGED)
+
+# (e) a directory with Duo off: the paths are as before
+session.sign_in("Admin1", PW, key=fake.value)
+roles.set_directories([{**ACME, "duo": {**ACME["duo"], "on": False}}, SSO])
+session.sign_out()
+DUO["users"].clear()
+h = sign_in_until_pin("erin@acme.com", "pw-erin")                  # (her hint is forged)
+check("Duo off: nothing to skip, straight to the PIN", h.stage == "pin" and not h.duo_skipped)
+S.restart_pin(h)
+check("...and Forgot your PIN? goes straight to a new PIN, Duo never asked", h.stage == "choose-pin" and h.reset and DUO["users"] == [])
+session.sign_in("Admin1", PW, key=fake.value)
+roles.set_directories([ACME, SSO])
+session.sign_out()
 
 # ---------------------------------------------------------------- SSO: never asked for a key, never allowed one
 fake.calls.clear()
@@ -342,8 +442,8 @@ check("an SSO account is never asked for a key or allowed one", not S.keys_allow
 session.sign_out()
 
 session.sign_in("Admin1", PW, key=fake.value)
-check("the forged attempt left no signed-in row of its own", len(signed_in_rows("carol@acme.com")) == 2, len(signed_in_rows("carol@acme.com")))
-check("no secret in the audit log", not any(x in str(r["detail"]) for r in audit.recent(5000) for x in (PW, PIN, PIN2, PIN3, SPIN)))
+check("the forged attempt left no signed-in row of its own", len(signed_in_rows("carol@acme.com")) == 4, len(signed_in_rows("carol@acme.com")))
+check("no secret in the audit log", not any(x in str(r["detail"]) for r in audit.recent(5000) for x in (PW, PIN, PIN2, PIN3, PIN4, PIN5, SPIN)))
 session.sign_out()
 
 print(f"\n{ok} passed, {bad} failed"); sys.exit(1 if bad else 0)

@@ -321,10 +321,10 @@ def _onward(a, stage):
         fails = _clear_tries()
         if fails:                                           # as a local sign-in audits them (the row waits for the key)
             session.audit_soon(f"{fails} failed sign-in attempts since the last sign-in", who=a.user.name)
-        if rec and rec.get("sealed"):
+        if rec and rec.get("sealed") and a.message != CHANGED:
             a.stage = "pin"
-        else:
-            a.stage, a.message = "choose-pin", FIRST
+        else:                                               # (CHANGED: a new PIN was asked for before Duo, _duo_first)
+            a.stage, a.message = "choose-pin", a.message or FIRST
 
 
 def _denied(a):
@@ -357,6 +357,19 @@ def _duo(a):
     if r == "allow":                                        # Duo's bypass, set by its admin
         return _onward(a, "password")
     a.stage = "duo"
+
+
+def _duo_first(a, reset=False, message=None):
+    """A skipped Duo is good only for the key proving itself at the PIN: any other way on (a new PIN, an approval) takes Duo
+    first, from "pin", and after it arrives where it was going (message CHANGED: choose a PIN; None: the PIN again). Duo refusing
+    or down: back at "pin" as it was, still skipped."""
+    was = a.reset, a.message
+    a.duo_skipped, a.stage, a.reset, a.message = False, "password", reset, message
+    try:
+        _duo(a)
+    except BaseException:
+        a.duo_skipped, a.stage, (a.reset, a.message) = True, "pin", was
+        raise
 
 
 def duo_push(a, cancel):
@@ -768,7 +781,7 @@ def _put_back(held):
 def finish(a, pin, key=None):
     """`key`: fidokey.value, asked when the seal holds security keys. An attempt that skipped Duo for the record's key hint signs
     in only when the seal it opens is keyed (and only then is its full check written); else nothing is signed in, audited or told,
-    and it goes to Duo after all."""
+    and it goes to Duo after all. Its other ways on (an approval for a changed role, a new PIN for a missing slot) take Duo first."""
     _expect(a, "pin")
 
     def keyed():
@@ -784,10 +797,10 @@ def finish(a, pin, key=None):
             try:                                            # the PIN first (counted), so a wrong one never reaches approval
                 if not datakey.check_pin(a.name, pin):
                     raise pinslot.WrongPin()
-                if a.duo_skipped:                           # the seal holds no key
-                    raise _Unkeyed()
-            except datakey.KeyNeeded:                       # the PIN is right and the seal is keyed: the key is asked below
+            except datakey.KeyNeeded:                       # the PIN is right and the seal is keyed
                 pass
+            if a.duo_skipped:                               # an approval is no key proving itself: Duo, then the PIN again
+                return _duo_first(a)
             a.stage, a.message = "approve", CHANGED
             if a.ticket:
                 approve_by_helper(a)                        # approved: on with the PIN just checked
@@ -796,12 +809,12 @@ def finish(a, pin, key=None):
                 return
         session.sign_in_pin(a.name, pin, key=key, opened=keyed)     # offline, "changed" signs in with the keys it already has
     except _Unkeyed:
-        a.duo_skipped, a.stage = False, "password"
-        _duo(a)
-        return
+        return _duo_first(a)
     except pinslot.SlotMissing:
         if not a.fresh:                                     # a new PIN needs the password checked online
             raise directory.Unreachable(UNREACHABLE) from None
+        if a.duo_skipped:
+            return _duo_first(a, message=CHANGED)
         a.stage, a.message = "choose-pin", CHANGED
         return
     if a.tokens and a.tokens.refresh_token:                 # SSO: the background re-check's refresh token, once the vault is open
@@ -814,8 +827,11 @@ def finish(a, pin, key=None):
 
 def restart_pin(a):
     """"Forgot your PIN?": only after the password (and Duo) were checked online in this attempt. The old slot stays until the
-    approval of the new one lands (roles.approve removes it)."""
+    approval of the new one lands (roles.approve removes it). An attempt that skipped Duo for a key takes Duo first (stage "duo",
+    then "choose-pin"); Duo refusing or down raises today's errors, back at "pin"."""
     _expect(a, "pin")
     if not a.fresh:
         raise RuntimeError("a new PIN needs the password checked online first")
+    if a.duo_skipped:
+        return _duo_first(a, reset=True, message=CHANGED)
     a.reset, a.stage, a.message = True, "choose-pin", CHANGED

@@ -334,6 +334,26 @@ w.pin.setText(PIN2); w.pin_ok.click(); settle(w)
 check("...and the new PIN signs in", w.result() == Accepted and session.user() == "bob@acme.com")
 session.sign_out()
 
+print("== Forgot your PIN? when a key hint skipped Duo: Duo first, then Choose a PIN")
+d = json.loads(datakey.path().read_text(encoding="utf-8")); d["accounts"]["bob@acme.com"]["keys_n"] = 1      # (a forged hint)
+datakey.path().write_text(json.dumps(d), encoding="utf-8")
+w = start("bob@acme.com", "pw-bob")
+check("(the hint skips Duo: the PIN page)", at(w) == "pin" and w.seen == ["name", "password", "pin"], w.seen)
+w.forgot.click()
+w.pw.setText("pw-bob"); w.sign_in.click(); settle(w)
+check("...Forgot your PIN? then asks Duo before Choose a PIN", at(w) == "choose" and w.seen[-3:] == ["password", "duo", "choose"], w.seen)
+w.reject()
+w = start("bob@acme.com", "pw-bob")
+w.forgot.click()
+DUO["preauth"] = "deny"
+w.pw.setText("pw-bob"); w.sign_in.click(); settle(w)
+check("...Duo refusing it: today's words on the password page", at(w) == "password" and w.error.text() == "Duo didn't approve the sign-in.",
+      (at(w), w.error.text()))
+DUO["preauth"] = "auth"
+w.reject()
+d = json.loads(datakey.path().read_text(encoding="utf-8")); d["accounts"]["bob@acme.com"].pop("keys_n")
+datakey.path().write_text(json.dumps(d), encoding="utf-8")
+
 print("== another computer: the chip has no key")
 FakeTpm.keys.clear()
 w = start("bob@acme.com", "pw-bob")
