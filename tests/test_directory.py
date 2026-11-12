@@ -416,4 +416,23 @@ try: got2 = certpeek.fetch("127.0.0.1", P2, "starttls")
 except Exception as e: got2 = repr(e)
 check("StartTLS: the certificate is read after the StartTLS request", got2 == CDER, got2 if got2 != CDER else "")
 
+print("== why AD refused a bind (Settings' identities wizard says it; sign-in never does)")
+from ldap3.core import exceptions as lx
+def ad_refused(code):
+    return lx.LDAPInvalidCredentialsResult(result=49, description="invalidCredentials",
+                                           message=f"80090308: LdapErr: DSID-0C090447, comment: AcceptSecurityContext error, data {code}, v4563")
+check("each AD code in its approved words", [D.refusal(ad_refused(c)) for c in ("52e", "525", "530", "531", "532", "773", "533", "701", "775")] == [
+    "the account name or password is wrong (enter the account as user@domain or DOMAIN\\user)", "no such account (enter it as user@domain or DOMAIN\\user)",
+    "the account may not sign in at this time", "the account may not sign in from this computer", "the account's password has expired",
+    "the account's password must be changed before first use", "the account is disabled", "the account has expired", "the account is locked out"])
+check("another code: bind refused with the code, never the server's words", D.refusal(ad_refused("52F")) == "bind refused (data 52f)")
+check("another LDAP server, or no message at all: bind refused", D.refusal(lx.LDAPInvalidCredentialsResult(result=49, message="Invalid credentials")) == "bind refused"
+      and D.refusal(lx.LDAPBindError("x")) == "bind refused")
+class Refusing:
+    def bind(self): raise ad_refused("775")
+    def unbind(self): pass
+_open = D._open; D._open = lambda *a, **k: Refusing()
+check("connect says why (sign-in never shows it: tests/test_dirsignin.py)", raises(D.BadCredentials, D.connect, AD, "svc@corp.example", "pw") == "the account is locked out")
+D._open = _open
+
 print(f"\n{ok} passed, {bad} failed"); sys.exit(1 if bad else 0)

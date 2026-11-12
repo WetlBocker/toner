@@ -1,6 +1,6 @@
 """Directory client: binds to Active Directory or LDAP over TLS, reads a person's groups and state, maps groups to roles.
 No user-facing text lives here; exception messages are internal and never contain a password."""
-import hashlib, ssl, string, uuid
+import hashlib, re, ssl, string, uuid
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
@@ -185,13 +185,30 @@ def connect(cfg, who, password, ca_data=None):
             conn = _open(cfg, host, ca, user=who, password=password, authentication=ldap3.SIMPLE)
             conn.bind()
             return conn
-        except (lx.LDAPInvalidCredentialsResult, lx.LDAPBindError, lx.LDAPUserNameIsMandatoryError, lx.LDAPPasswordIsMandatoryError):
+        except (lx.LDAPInvalidCredentialsResult, lx.LDAPBindError, lx.LDAPUserNameIsMandatoryError, lx.LDAPPasswordIsMandatoryError) as e:
             _close(conn)
-            raise BadCredentials("bind refused") from None
+            raise BadCredentials(refusal(e)) from None
         except (lx.LDAPException, OSError, Unreachable) as e:
             _close(conn)
             down = e if isinstance(e, Untrusted) else Unreachable(f"cannot use {host}")
     raise down
+
+
+# why Active Directory refused a bind: the `data` code in its diagnostic message. Shown by Settings' identities wizard only:
+# sign-in catches BadCredentials by its type and says the one generic thing, so it never tells a stranger an account exists.
+REFUSALS = {"52e": "the account name or password is wrong (enter the account as user@domain or DOMAIN\\user)",
+            "525": "no such account (enter it as user@domain or DOMAIN\\user)",
+            "530": "the account may not sign in at this time", "531": "the account may not sign in from this computer",
+            "532": "the account's password has expired", "773": "the account's password must be changed before first use",
+            "533": "the account is disabled", "701": "the account has expired", "775": "the account is locked out"}
+
+
+def refusal(e):
+    """What a refused bind says: AD's reason by its data code, 'bind refused (data <code>)' for another code, else 'bind refused'
+    (another LDAP server, or no message). The server's own words are never shown, only the code."""
+    m = re.search(r"\bdata ([0-9a-f]{2,8})\b", str(getattr(e, "message", "") or ""), re.I)
+    code = m.group(1).lower() if m else None
+    return REFUSALS.get(code) or (f"bind refused (data {code})" if code else "bind refused")
 
 
 def _close(conn):

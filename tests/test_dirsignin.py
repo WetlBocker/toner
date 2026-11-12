@@ -314,6 +314,12 @@ before = fails()
 check("a wrong directory password: WrongPassword", str(raises(lambda: S.begin("bob@acme.com", "nope"), datakey.WrongPassword))
       == "That username or password isn't right.")
 check("...counted", fails() == before + 1)
+_ad_sign_in = directory.sign_in
+directory.sign_in = lambda *a: (_ for _ in ()).throw(directory.BadCredentials(directory.REFUSALS["775"]))   # AD said why
+check("AD's reason (locked out) is never told at sign-in: the same generic sentence",
+      str(raises(lambda: S.begin("bob@acme.com", "pw-bob"), datakey.WrongPassword)) == "That username or password isn't right.")
+directory.sign_in = _ad_sign_in
+before = fails() - 1                                # (the check below counts from the wrong password above, as before)
 e = raises(lambda: S.begin("dave@acme.com", "pw-dave"), S.NotInGroup)
 check("not in a Toner group: NotInGroup, with the approved sentence",
       e is not None and str(e) == "Your account isn't in a Toner group. Ask an admin." and fails() == before + 2)
