@@ -79,6 +79,7 @@ class _Screen(pyte.HistoryScreen):
 
 class TerminalView(QWidget):
     data_out = Signal(bytes)          # keystrokes to send to the remote side
+    reply_out = Signal(bytes)         # the terminal's own answers to the device (cursor position, ...): to its session only
     resized = Signal(int, int)        # (columns, rows)
 
     def __init__(self, cols=100, rows=30):
@@ -144,7 +145,7 @@ class TerminalView(QWidget):
         self.main = _Screen(self.cols, self.rows, history=self.scrollback)
         self.alt = _Screen(self.cols, self.rows, history=0)
         for s in (self.main, self.alt):
-            s.reply = self.data_out.emit
+            s.reply = self.reply_out.emit
         self.main_stream, self.alt_stream = pyte.ByteStream(self.main), pyte.ByteStream(self.alt)
         self.use_alt = False
 

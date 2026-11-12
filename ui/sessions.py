@@ -382,8 +382,7 @@ class SessionPane(QWidget):
         self.break_btn.setToolTip("Sends a serial break, which routers read as 'interrupt the boot' (ROMMON)")
         self.break_btn.setVisible(spec["kind"] == "serial")
         self.leave_out = QCheckBox("Leave out")                # shown only while Type in all sessions is on
-        self.leave_out.setToolTip("Keep this session out of Type in all sessions: what you type here stays here, "
-                                  "and nothing typed elsewhere is sent here.")
+        self.leave_out.setToolTip("Excluded sessions ignore input")
         self.leave_out.setVisible(False)
         self.pop_btn = QPushButton("Pop out")
         self.pop_btn.setToolTip("Move this session into its own window, which can be moved, resized or made full screen.")
@@ -407,6 +406,7 @@ class SessionPane(QWidget):
         lay.addLayout(bar)
         lay.addWidget(self.vsplit, 1)
         self.term.data_out.connect(self._to_session)
+        self.term.reply_out.connect(self.send_raw)          # never fanned out: it answers this device
         self.term.resized.connect(self._resize_session)
         self.reconnect_btn.clicked.connect(self.connect_now)
         self.disconnect_btn.clicked.connect(self.disconnect_now)
@@ -466,8 +466,8 @@ class SessionPane(QWidget):
         self.term.feed(text.replace("\n", "\r\n").encode())
 
     def _to_session(self, data):
-        if self.owner is not None and self.owner.typing_everywhere() and self.takes_part():
-            self.owner.send_everywhere(data)              # to every session that takes part, this one included
+        if self.owner is not None and self.owner.typing_everywhere():
+            self.owner.send_everywhere(data)              # to every session that takes part: this one only if it does (a left-out one ignores input)
         elif self.connected():
             self.session.send(data)
 
