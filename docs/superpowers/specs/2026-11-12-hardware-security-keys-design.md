@@ -1,7 +1,6 @@
 # Hardware security keys as a second sign-in step: design
 
-Status: the owner's decisions of 2026-11-12 are in (SSO accounts left out the same day). Nothing here is built. Items marked *(owner)* are the owner's decisions; items
-marked *(my call)* are choices the owner has not made yet.
+Status: built on branch security-keys (2026-11-12) from the owner's decisions of the same day; not yet merged or released. Items marked *(owner)* are the owner's decisions; items marked *(my call)* are choices the owner has not made yet.
 
 ## Why
 
@@ -165,7 +164,8 @@ A later piece of work teaches the helper which accounts have keys, so that it ca
   and never its credential id.
 - There is no macOS build or test job in this repository. The code is written to work there and stays unproven until a Mac build
   exists.
-- An older Toner shows an account that has keys as damaged, not as too new. The release notes say so.
+- An older Toner shows a local account that has keys as damaged, not as too new. For an AD or LDAP account that has keys it says the
+  PIN is wrong, and counts it on the wrong-tries wait. The release notes say so.
 - Signing in often is the owner's standing worry (the first sign-in design's anti-goal). The owner chose a touch at every unlock
   knowingly; nothing else in this work may add a prompt.
 
@@ -195,6 +195,8 @@ A later piece of work teaches the helper which accounts have keys, so that it ca
   row, "The key wasn't touched. Try again.". The key-PIN page's button is the sign-in window's existing "Next".
 - **After a recovery-key sign-in** the person is not sent to add a key for that one sign-in, even when keys are required, so an only
   admin who lost their key can get in and put things right.
+- **Unlock trusts the session, not the file.** Once signed in with a key, unlocking asks for one of the keys that session signed in with, whatever netcheck.keys says by then.
+- **The helper "in doubt" sentences.** With the helper installed but stopped, or enrolled by another user, an AD or LDAP person reads "...while "Let group members sign in without approval" is on" and an admin reads "Turn off ... first", while the Accounts page shows that switch off and greyed out. A truer sentence needs the owner's wording.
 
 ## Release note (draft; the wording is the owner's to approve)
 
@@ -202,7 +204,8 @@ A later piece of work teaches the helper which accounts have keys, so that it ca
   signing in needs your password or PIN, the key's own PIN and a touch; unlocking needs your password or PIN and a touch. An admin
   can require a key for every local, AD and LDAP account in Settings > Accounts.
 - Not available to AD and LDAP accounts while "Let group members sign in without approval" is on. SSO accounts are unchanged.
-- An older Toner shows an account that has security keys as damaged. Update every copy that shares the data before adding a key.
+- An older Toner shows a local account that has security keys as damaged; for an AD or LDAP account with keys it says the PIN is
+  wrong and counts it on the wrong-tries wait. Update every copy that shares the data before adding a key.
 - A security key protects copies of the data folder made after the key was added.
 
 ## What the spike found (Windows, the owner's key, 2026-11-12)
