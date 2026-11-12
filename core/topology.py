@@ -1,5 +1,5 @@
 """Neighbour discovery for the topology map: Layer 2 (LLDP / CDP over SNMP, over SSH for the SSH vendors, over the API for
-Fortinet and Palo Alto) and Layer 3 (BGP, OSPF and EIGRP adjacencies read the same ways), each device's role for its tile,
+Fortinet, Palo Alto and a UniFi console, which answers for every switch and access point it manages) and Layer 3 (BGP, OSPF and EIGRP adjacencies read the same ways), each device's role for its tile,
 two layouts (tiers and organic), endpoint grouping, the link state read beside the neighbours, and the last discovery kept
 per organization so the map is there on opening and changes since the one before are marked."""
 import math
@@ -21,6 +21,7 @@ CLI = {"cisco_ios": ("show cdp neighbors detail", "show lldp neighbors detail"),
 # the port-channel summary per platform: which physical ports are members of which channel, so the map can say a link runs over one
 CHANNELS = {"cisco_ios": "show etherchannel summary", "cisco_xe": "show etherchannel summary", "cisco_nxos": "show port-channel summary"}
 API_VENDORS = ("fortinet", "paloalto")
+UNIFI = ("unifi", "unifi_network")                 # a console on the network: its device list holds each device's LLDP table
 NOTHING = ("No devices that can report neighbours: set SNMP on a device (its SNMP tab) or a credential profile with SNMP, an SSH login "
            "on a Cisco, Arista, Juniper, HPE or MikroTik device, or the API key on a Fortinet or Palo Alto firewall.")
 
@@ -30,7 +31,7 @@ def devices():
     out = []
     for d in db.list_devices(enabled_only=True):
         v = d.get("vendor") or ""
-        if profiles.snmp_configured(d) or vendors.is_snmp(v) or v in API_VENDORS:
+        if profiles.snmp_configured(d) or vendors.is_snmp(v) or v in API_VENDORS or v in UNIFI:
             out.append(d)
         elif vendors.get(v).get("kind") == "ssh" and (d.get("platform") or vendors.default_platform(v)) in CLI:
             out.append(d)
@@ -44,6 +45,8 @@ def discover(dev):
     dev = profiles.resolve(dev)
     key = dev.get("key") or dev["name"]                          # Global: keyed apart from same-named devices
     v = dev.get("vendor") or ""
+    if v in UNIFI:                                               # its rows name the device each is from: the console's own are the entry's
+        return [{"via": "API", "local_up": None, "local_speed": "", **r} for r in _unifi_rows(dev)], []
     if profiles.snmp_configured(dev) or vendors.is_snmp(v):
         creds, port = snmp.credentials_for(dev)
         with snmp.Client(dev["host"], port, creds, timeout=4, retries=1) as c:
@@ -154,6 +157,91 @@ def _api_rows(dev):
         except Exception:
             quiet.ignored()
     return parse_panos(r.text), l3
+
+
+def _unifi_rows(dev):
+    """Every managed device's LLDP neighbours, from the console's own device list (/proxy/network/api/s/<site>/stat/device), with the
+    console login or the Network API key. shortcut: the key is sent to that same list, which a console may refuse it (the error says so);
+    read the Integration API's uplinks then, when someone needs the map from a key alone."""
+    import requests
+    from core import proxy, tlsverify
+    key = dev.get("key") or dev["name"]
+    base = f"https://{dev['host']}" + (f":{dev['port']}" if dev.get("port") else "")
+    timeout = db.runtime_options()["http_timeout"]
+    by_key = dev["vendor"] == "unifi_network"
+    s = requests.Session()
+    verify = tlsverify.verify(dev)             # requests lets REQUESTS_CA_BUNDLE (core/trust.py sets it) override a session's verify=False, so each call carries the flag itself
+    s.proxies.update(proxy.requests_kwargs(dev).get("proxies", {}))
+    if by_key:
+        s.headers["X-API-KEY"] = profiles.secret(dev) or ""
+    else:
+        from drivers.unifi import sign_in
+        sign_in(s, base, dev.get("username"), profiles.secret(dev), timeout, verify)
+
+    def get(path):
+        r = s.get(f"{base}/proxy/network/api/{path}", timeout=timeout, verify=verify)
+        if by_key and r.status_code in (401, 403):
+            raise ValueError(f"this API key may not read {path} (HTTP {r.status_code})")
+        r.raise_for_status()
+        return r.json()["data"]
+
+    try:
+        want = (dev.get("site") or "default").strip().lower()
+        sites = get("self/sites")
+        match = [x for x in sites if want in ("*", "all") or want in (str(x.get("name", "")).lower(), str(x.get("desc", "")).lower())]
+        if not match:
+            avail = ", ".join(f"{x.get('desc')} ({x.get('name')})" for x in sites) or "none visible"
+            raise ValueError(f"site '{want}' not found; this {'key' if by_key else 'account'} can see: {avail}")
+        return [r for x in match for r in parse_unifi(get(f"s/{x['name']}/stat/device"), key, dev.get("host") or "")]
+    finally:
+        if not by_key:
+            try:
+                s.post(f"{base}/api/auth/logout", timeout=min(5, timeout), verify=verify)
+            except requests.RequestException:
+                quiet.ignored()
+
+
+_UNIFI_CAPS = {"uap": "wlan", "usw": "bridge", "ugw": "router", "udm": "router", "uxg": "router"}      # what a device type is, for its tile
+
+
+def parse_unifi(devices, entry, host=""):
+    """A UniFi console's device list as neighbour rows: one per line of each device's lldp_table (the neighbour's chassis MAC and port,
+    on a local port). A neighbour that is another of the console's devices is named as the console names it, with the port that device
+    itself lists for the cable, so both ends agree; any other is the name it announced, else its MAC. `entry`: the inventory key of the
+    console's entry, which stands for the device at `host`, else the only gateway (as in the Inventory)."""
+    from drivers.unifi import own_device
+    devices = [d for d in devices or [] if isinstance(d, dict)]
+    kind = lambda d: str(d.get("type") or "").lower()
+    me = own_device(devices, host)
+    mac = lambda d: str(d.get("mac") or "").lower()
+    name = lambda d: entry if d is me else _pick(d, "name", "hostname", "mac")
+    table = lambda d: [n for n in d.get("lldp_table") or [] if isinstance(n, dict)]
+    chassis = lambda n: str(n.get("chassis_id") or "").lower()
+    port = lambda n: _pick(n, "local_port_name") or (f"Port {n['local_port_idx']}" if n.get("local_port_idx") is not None else "")
+    by_mac = {mac(d): d for d in devices if mac(d)}
+
+    def far_port(d, n, other):
+        """The port `other` lists for this cable. Several cables between the two: the one whose line names this port; else what was announced."""
+        back = [x for x in table(other) if chassis(x) == mac(d)]
+        if len(back) > 1:
+            back = [x for x in back if _pick(x, "port_id").lower() in (port(n).lower(), str(n.get("local_port_idx")))]
+        return port(back[0]) if len(back) == 1 and port(back[0]) else _pick(n, "port_id", "port_descr")
+
+    rows = []
+    for d in devices:
+        ports = {p.get("port_idx"): p for p in d.get("port_table") or [] if isinstance(p, dict)}
+        for n in table(d):
+            other, p = by_mac.get(chassis(n)), ports.get(n.get("local_port_idx")) or {}
+            mbps = p.get("speed") if isinstance(p.get("speed"), (int, float)) else 0
+            rows.append({"device": name(d), "protocol": "LLDP", "local_port": port(n),
+                         "local_up": p.get("up") if isinstance(p.get("up"), bool) else None,
+                         "local_speed": f"{mbps / 1000:g} Gbps" if mbps >= 1000 else f"{mbps:g} Mbps" if mbps else "",
+                         "local_desc": _pick(d, "model"), "local_caps": _UNIFI_CAPS.get(kind(d), ""),
+                         "remote_name": name(other) if other else _pick(n, "chassis_name", "system_name", "chassis_id"),
+                         "remote_port": far_port(d, n, other) if other else _pick(n, "port_id", "port_descr"),
+                         "remote_desc": (_pick(other, "model") if other else _pick(n, "chassis_descr", "system_descr"))[:120],
+                         "remote_caps": _UNIFI_CAPS.get(kind(other), "") if other else "", "remote_addr": _pick(other, "ip") if other else ""})
+    return [r for r in rows if r["device"] and r["local_port"] and (r["remote_name"] or r["remote_port"])]
 
 
 def _pick(d, *keys):
@@ -575,6 +663,8 @@ def role_of(name="", desc="", caps="", dev=None):
         return "router"
     if "phone" in c:
         return "phone"
+    if "wlan" in c:
+        return "ap"
     if "host" in c and "switch" not in c:
         return "server"
     for rx, role in _NAME_RULES:
@@ -593,6 +683,8 @@ def roles_for(nodes, rows=(), devices=None):
         k = _key(r.get("remote_name") or r.get("remote_addr") or "")
         if k and k not in said:
             said[k] = (r.get("remote_desc") or "", r.get("remote_caps") or "")
+        if r.get("local_desc") or r.get("local_caps"):         # a console said what its own device is
+            said.setdefault(_key(r["device"]), (r.get("local_desc") or "", r.get("local_caps") or ""))
     out = {}
     for name, info in nodes.items():
         dev = devices.get(name) if info.get("inventory") else None

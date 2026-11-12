@@ -16,6 +16,7 @@ from ui import icons, theme
 from ui import status as st
 from ui.finder import FilterButton, SearchBox, device_sections, shown_devices
 from ui.toast import toast
+from ui.widgets import FlowLayout
 
 
 def role_ok(label):
@@ -317,7 +318,9 @@ class MapView(QGraphicsView):
         self.layer = layer
         self.setScene(QGraphicsScene(self))
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
-        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)        # grab the canvas and move it (draw gives it the room to move in)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.on_select = self.on_open = self.on_menu = self.on_moved = self.on_link = None
         self.boxes, self.lines = {}, []
@@ -446,7 +449,10 @@ class MapView(QGraphicsView):
                 e = EdgeItem(self.boxes[l["a"]], self.boxes[l["b"]], l, self.layer, opts.get("short_ports", True), link_tip(l, self.layer))
                 sc.addItem(e)
                 self.lines.append(e)
-        sc.setSceneRect(sc.itemsBoundingRect().adjusted(-80, -80, 80, 80))
+        rect = sc.itemsBoundingRect().adjusted(-80, -80, 80, 80)
+        sc.setSceneRect(rect)                                      # the map itself: what Fit shows and Save as... draws
+        room = max(rect.width(), rect.height()) * 2 + 2000         # the view's own, wider rectangle: a map that all fits in the window has
+        self.setSceneRect(rect.adjusted(-room, -room, room, room))  # nowhere to scroll, so a drag would not move it
         self.fit()
 
     def fit(self):
@@ -511,9 +517,10 @@ class DetailCard(QFrame):
     def __init__(self, parent):
         super().__init__(parent)
         self.setProperty("card", True)
-        self.setFixedWidth(300)
+        self.setFixedWidth(340)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(14, 10, 12, 12)
+        lay.setSpacing(8)
         head = QHBoxLayout()
         self.title = QLabel("")
         f = self.title.font()
@@ -532,7 +539,8 @@ class DetailCard(QFrame):
         lay.addWidget(self.role)
         self.grid = QGridLayout()
         self.grid.setHorizontalSpacing(12)
-        self.grid.setVerticalSpacing(3)
+        self.grid.setVerticalSpacing(4)
+        self.grid.setColumnStretch(1, 1)                 # the names are as wide as their words; what they say has the rest
         lay.addLayout(self.grid)
         self.links_head = _heading("Links")
         lay.addWidget(self.links_head)
@@ -540,8 +548,7 @@ class DetailCard(QFrame):
         self.links.setWordWrap(True)
         self.links.setTextFormat(Qt.TextFormat.RichText)
         lay.addWidget(self.links)
-        self.acts = QHBoxLayout()
-        self.acts.setSpacing(6)
+        self.acts = FlowLayout(6, 6)                      # the buttons keep their words and wrap onto a second line
         lay.addLayout(self.acts)
         self.close_btn.clicked.connect(self.hide)
         self._buttons = []
@@ -550,12 +557,14 @@ class DetailCard(QFrame):
         while self.grid.count():
             w = self.grid.takeAt(0).widget()
             if w:
+                w.hide()                                 # gone now, not when Qt gets round to deleting it: it would show through the new ones
                 w.deleteLater()
         for i, (k, v) in enumerate(facts):
             kl, vl = _muted(k), QLabel(str(v))
             vl.setWordWrap(True)
             self.grid.addWidget(kl, i, 0)
             self.grid.addWidget(vl, i, 1)
+            kl.show(); vl.show()                         # on a card already open Qt shows a new row later, and _fit would not count it
 
     def show_link(self, title, sub, facts):
         """A link that was clicked: a Port-Channel and its members, or a cable and its ports."""
@@ -564,12 +573,23 @@ class DetailCard(QFrame):
         self._facts(facts)
         self.links_head.hide()
         self.links.hide()
-        for b in self._buttons:
-            b.deleteLater()
-        self._buttons = []
-        self.adjustSize()
+        self._clear_buttons()
+        self._fit()
         self.show()
         self.raise_()
+
+    def _clear_buttons(self):
+        for b in self._buttons:
+            self.acts.removeWidget(b)
+            b.hide()
+            b.deleteLater()
+        self._buttons = []
+
+    def _fit(self):
+        """As tall as its contents need at the card's own width. adjustSize asks the height for the width the contents would like
+        (wider than the card), which is too short: the rows were squeezed over each other."""
+        self.layout().activate()
+        self.setFixedHeight(self.layout().totalHeightForWidth(self.width()))
 
     def show_node(self, name, info, role, facts, links, actions):
         self.title.setText(db.label(name) if not info.get("group") else name.split(" » ", 1)[1])
@@ -590,15 +610,14 @@ class DetailCard(QFrame):
                 what = f"{l.get('protocol')} → {db.label(other)} <span style='color:{t.get('muted', '#888')}'>{l.get('state', '')}</span>"
             rows.append(f"<span style='color:{dot}'>●</span> {what}")
         self.links.setText("<br>".join(rows) or "<i>none</i>")
-        for b in self._buttons:
-            b.deleteLater()
-        self._buttons = []
+        self._clear_buttons()
         for label, fn in actions:
             b = QPushButton(label)
             b.clicked.connect(fn)
             self.acts.addWidget(b)
+            b.show()
             self._buttons.append(b)
-        self.adjustSize()
+        self._fit()
         self.show()
         self.raise_()
 
@@ -883,7 +902,10 @@ class TopologyTab(QWidget):
 
     def redraw(self):
         if not (self.nodes or self.nodes3):
+            self.drawn = {"l2": ({}, []), "l3": ({}, [])}
             self._legends()
+            if self.at:                                   # a discovery that found nothing still says so, and which devices failed
+                self._stats()
             return
         o = self.opts()
         status = topology.latest_status()
