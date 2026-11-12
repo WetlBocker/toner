@@ -160,6 +160,58 @@ check("a first key added while signed in, the record made plain by hand: unlock 
 session.unlock(PW, present=fake.present)
 check("...and it unlocks", session.state() == "open")
 datakey._write(saved)
+
+# ...however the file spells or files the account: every edit leaves a keyed session locked without one of its keys
+import copy
+session.lock()
+
+
+def plain_as(spelling):
+    """Admin1's record made plain, sealing junk under the password for `spelling`."""
+    r = {k: v for k, v in saved["accounts"]["Admin1"].items() if k not in ("keys", "keys_n", "sealed_k")}
+    kek = datakey._kek(PW, base64.b64decode(r["kdf"]["salt"]), r["kdf"])
+    r["key"] = b64(datakey._enc(kek, os.urandom(64), datakey._aad(spelling)))
+    return r
+
+
+def edited(change):
+    d = copy.deepcopy(saved)
+    d["accounts"] = change(d["accounts"])
+    datakey._write(d)
+
+
+def stays_locked():
+    """Unlock with no key, another key, and no touch: (all refused in words the lock screen has, still locked; what each did)."""
+    did = []
+    for present in (None, attacker.present, "no touch"):
+        fake.touch = present != "no touch"
+        try:
+            session.unlock(PW, present=fake.present if present == "no touch" else present)
+            did.append("open")
+        except (datakey.KeyNeeded, fidokey.Failed, datakey.WrongPassword, datakey.Throttled) as e:
+            did.append(type(e).__name__)
+        except Exception as e:
+            did.append("raised " + type(e).__name__)
+        fake.touch = True
+        if session.state() == "open":
+            session.lock()
+    return all(x in ("KeyNeeded", "NotRegistered", "NotTouched", "WrongPassword") for x in did), did
+
+
+CASES = {"the record renamed to another letter case, made plain": lambda a: {"admin1": plain_as("admin1"), **{k: v for k, v in a.items() if k != "Admin1"}},
+         "a second record whose name differs only in case, made plain": lambda a: {"admin1": plain_as("admin1"), **a},
+         "the record's kind swapped": lambda a: {**a, "Admin1": {**a["Admin1"], "kind": "directory"}},
+         "the record removed": lambda a: {k: v for k, v in a.items() if k != "Admin1"}}
+for what, change in CASES.items():
+    datakey.edit(lambda d: d.__setitem__("throttle", {"fails": 0, "until": 0}), signed_in=True)
+    saved = datakey.read()
+    edited(change)
+    refused, did = stays_locked()
+    datakey._write(saved)
+    session.unlock(PW, present=fake.present)
+    check(f"local, {what}: stays locked without its key; the file put back, its own key unlocks", refused and session.state() == "open", did)
+    session.lock()
+session.unlock(PW, present=fake.present)
 session.sign_out()
 
 print(f"\n{ok} passed, {bad} failed"); sys.exit(1 if bad else 0)

@@ -202,6 +202,15 @@ def _k2_of(keys, key):
         raise fidokey.NotRegistered() from None
 
 
+def _session_keys(name):
+    """The signed-in session's keys when `name`, as the caller asked it and matched as _find matches names, is its account; else
+    None. Never from the file: an unlock of a session signed in with keys always needs one of them, whatever the file says."""
+    if _name is None or _clean(name).casefold() != _name.casefold():
+        return None
+    held = _keys
+    return held if (held or {}).get("list") else None
+
+
 def _present(keys, present):
     """`present(creds) -> credential id` (a touch, the value is not read) answers for one of `keys`; never under a lock."""
     from core import fidokey
@@ -483,12 +492,12 @@ def check_password(name, password, present=None):
     """True when the password is right (for unlocking). Raises Throttled the same way opening does. An account with security keys
     also needs `present(creds) -> credential id` (fidokey.present: a touch, the value is not read); KeyNeeded without it. A
     session signed in with keys always needs one of them, whatever the file says by then."""
+    held = _session_keys(name)
     try:
-        got, stored, _ = _attempt(_clean(name), password or "")
+        got, _, _ = _attempt(_clean(name), password or "")
     except WrongPassword:
         return False
-    held = _keys if stored is not None and stored == _name else None
-    if (held or {}).get("list"):
+    if held is not None:
         _present(held, present)                         # unlock trusts the session, not the file (which the password can re-make)
     elif isinstance(got, tuple):
         _present(got[1], present)
@@ -896,6 +905,7 @@ def _pin(name, pin, key=None, present=None, unlock=False):
     them, whatever the seal holds by then."""
     from core import pinslot
     pin = pin or ""
+    held = _session_keys(name) if unlock else None
     with _lock:
         doc = read()
         stored = _find(doc, _clean(name))
@@ -912,8 +922,7 @@ def _pin(name, pin, key=None, present=None, unlock=False):
                     raise pinslot.PinLocked(e.seconds) from None
             raise pinslot.SlotMissing()
         payload = pinslot.open(rec["slot"], rec["slot_id"], pin, rec["sealed"])
-    held = _keys if stored == _name else None
-    if unlock and (held or {}).get("list"):
+    if held is not None:
         _present(held, present)                         # unlock trusts the session, not the file (a chip slot's seal needs no PIN to make)
         return None, stored, fails, None, None, rec["sealed"]
     keys = k2 = None
@@ -956,6 +965,10 @@ def check_pin(name, pin, present=None):
         return True
     except pinslot.WrongPin:
         return False
+    except (pinslot.SlotMissing, InvalidTag):
+        if _session_keys(name) is None:
+            raise
+        return False                                    # a keyed session whose slot the file no longer opens: it stays locked
 
 
 def _set_directory_field(name, field, value):

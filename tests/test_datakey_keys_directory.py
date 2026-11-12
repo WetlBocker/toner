@@ -311,6 +311,45 @@ fake.touch = True
 got = forged_unlock("ana", PIN, ATTACKER, ACRED)
 check("signed in with a key: a forged seal or key list doesn't unlock without it; it does", got == (True,) * 4, got)
 
+
+def pin_refused():
+    """check_pin with no key, another key and no touch: (all refused in words the lock screen has; what each did)."""
+    did = []
+    for present in (None, ATTACKER.present, "no touch"):
+        fake.touch = present != "no touch"
+        try:
+            did.append("open" if datakey.check_pin("ana", PIN, present=fake.present if present == "no touch" else present) else "WrongPin")
+        except (datakey.KeyNeeded, fidokey.Failed, pinslot.WrongPin, pinslot.PinLocked) as e:
+            did.append(type(e).__name__)
+        except Exception as e:
+            did.append("raised " + type(e).__name__)
+        fake.touch = True
+    return all(x in ("KeyNeeded", "NotRegistered", "NotTouched", "WrongPin") for x in did), did
+
+
+def sealed_as(a, spelling):
+    """ana's record under `spelling`, with a seal of junk and that spelling put in its chip slot (no PIN needed to make one)."""
+    r = copy.deepcopy(a["ana"])
+    r["sealed"] = pinslot.Slot(r["slot"], r["slot_id"]).seal(os.urandom(64) + spelling.encode("utf-8"))
+    return r
+
+
+DIR_CASES = {"the record renamed to another letter case, with a plain seal": lambda a: {"Ana": sealed_as(a, "Ana"), **{k: v for k, v in a.items() if k != "ana"}},
+             "a second record whose name differs only in case, with a plain seal": lambda a: {"Ana": sealed_as(a, "Ana"), **a},
+             "the record's kind swapped": lambda a: {**a, "ana": {**a["ana"], "kind": "local"}},
+             "the record removed": lambda a: {k: v for k, v in a.items() if k != "ana"},
+             "the record marked as cleared by an admin": lambda a: {**a, "ana": {**a["ana"], "slot_gone": True}}}
+for what, change in DIR_CASES.items():
+    reset_counters()
+    saved_doc = doc()
+    d = copy.deepcopy(saved_doc)
+    d["accounts"] = change(d["accounts"])
+    put(d)
+    refused, did = pin_refused()
+    put(saved_doc)
+    reset_counters()
+    check(f"directory, {what}: stays locked without its key; the file put back, its own key unlocks", refused and unlocks("ana", PIN), did)
+
 # a seal copied into another account's record opens nothing there, keyed or not
 d = doc()
 d["accounts"]["ben"].update({f: d["accounts"]["ana"][f] for f in ("slot_kind", "slot", "slot_id", "sealed")})
