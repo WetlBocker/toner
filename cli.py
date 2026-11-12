@@ -15,7 +15,7 @@ import signal
 import sys
 import threading
 
-from core import backupsplit, datakey, db, directory, dirsignin, duo, lockdown, oidc, passvault, pinslot, quiet, service, session
+from core import backupsplit, datakey, db, directory, dirsignin, duo, fidokey, lockdown, oidc, passvault, pinslot, quiet, service, session
 from drivers.base import SEVERITY
 
 SERVICE_OFF = ("Toner's background service is off while sign-in is turned on. "
@@ -110,7 +110,7 @@ def _sign_in(a):
                 print(APPROVAL, file=sys.stderr)       # approval needs an admin at the window; nothing was written for it
                 return 3
         else:
-            session.sign_in(user, password)
+            session.sign_in(user, password, _key)
         if lockdown.pending():                 # Toner's window finishes the upgrade; the command line never encrypts
             print(UNFINISHED, file=sys.stderr)
             return 3
@@ -131,7 +131,7 @@ def _sign_in(a):
         print(dirsignin.sso_said(kind[1], e), file=sys.stderr)
         return 3
     except (datakey.WrongPassword, datakey.Throttled, dirsignin.NotInGroup, dirsignin.CaChanged, duo.Unavailable, duo.Denied,
-            pinslot.WrongPin, pinslot.PinLocked) as e:      # WrongPin is a ValueError: keep it ahead of the damaged-file case
+            pinslot.WrongPin, pinslot.PinLocked, fidokey.Failed) as e:      # WrongPin is a ValueError: keep it ahead of the damaged-file case
         print(e, file=sys.stderr)
         return 3
     except (ValueError, KeyError, AttributeError):          # includes JSONDecodeError: a damaged keys file
@@ -147,8 +147,18 @@ def _directory_sign_in(login, password):
     if at.stage == "duo":
         _duo(at)
     if at.stage == "pin":
-        dirsignin.finish(at, getpass.getpass("PIN: "))
+        dirsignin.finish(at, getpass.getpass("PIN: "), key=_key)
+    if at.stage == "duo":                      # the Duo skip wasn't earned (no keys in the seal): Duo, then the PIN once more. Once only:
+        _duo(at)                               # a second return is left as it is, which reads as the approval sentence
+        if at.stage == "pin":
+            dirsignin.finish(at, getpass.getpass("PIN: "), key=_key)
     return at.stage == "done"
+
+
+def _key(creds):
+    """The security key's touch; its own PIN (off Windows, where the system asks itself) is read without echo."""
+    print("Touch your security key")
+    return fidokey.value(creds, ask_pin=lambda: getpass.getpass("Enter your security key's PIN: "))
 
 
 def _sso_sign_in(cfg, login):

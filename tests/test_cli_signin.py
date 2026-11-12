@@ -359,7 +359,7 @@ rc, out, err = call("status")
 check("That PIN isn't right., exit 3", rc == 3 and err.strip() == "That PIN isn't right.", (rc, err))
 answers["PIN: "] = PIN
 real_finish = S.finish
-S.finish = lambda a, pin: (_ for _ in ()).throw(pinslot.PinLocked(5))
+S.finish = lambda a, pin, key=None: (_ for _ in ()).throw(pinslot.PinLocked(5))
 rc, out, err = call("status")
 S.finish = real_finish
 check("Too many wrong PINs sentence, exit 3", rc == 3 and err.strip() == "Too many wrong PINs. Wait 5 seconds, then try again.", (rc, err))
