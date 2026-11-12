@@ -94,6 +94,7 @@ pinslot.best_kind = lambda: "chip"
 
 PW = "correct horse battery 42"
 PIN, NEW_PIN, PIN3, SPIN, WRONG = "246813", "975318", "802461", "a long store pin 77", "135792"
+CPIN, CPIN2 = "a long pin-only pin 3", "another pin-only pin 8"
 TECHS = "CN=Toner Techs,DC=acme,DC=com"
 ACME = {"id": "d1", "name": "ACME", "kind": "ad", "servers": ["dc1.acme.com"], "port": 636, "security": "ldaps", "ca_file": "",
         "base_dn": "DC=acme,DC=com", "netbios": "ACME", "suffixes": ["acme.com"], "service_dn": "CN=svc,DC=acme,DC=com",
@@ -103,6 +104,7 @@ SSO = {"id": "s1", "name": "Contoso", "kind": "oidc", "provider": "other", "issu
        "group_names": {"g1": "Techs"}, "everyone": None}
 ANA = directory.User("6f1c2a4e-0000-4000-8000-00000000000a", "ana", "Ana", (TECHS,), True)
 BEN = directory.User("6f1c2a4e-0000-4000-8000-00000000000b", "ben", "Ben", (TECHS,), True)
+CAT = directory.User("6f1c2a4e-0000-4000-8000-00000000000c", "cat", "Cat", (TECHS,), True)
 SSO_USER = directory.User("sub-sso-user", "sso-user", "SSO User", ("g1",), True)
 
 
@@ -162,6 +164,7 @@ roles.set_directories([ACME, SSO])
 DATA_KEY = bytes(datakey._key)
 new_account(ANA, "d1", "chip", PIN)
 new_account(BEN, "d1", "store", SPIN)
+new_account(CAT, "d1", "pin", CPIN)
 new_account(SSO_USER, "s1", "chip", PIN3)
 fake = fakekey.install()
 plain_record = rec_of("ana")
@@ -327,37 +330,64 @@ check("a store slot: keyed, the PIN alone refused, the PIN and the key open it",
 datakey.remove_key(SPIN, 0)
 check("...and removing it stores it as before", list(rec_of("ben")) == list(ben_plain) and datakey.open_with_pin("ben", SPIN) == 0)
 
-# an admin's clear
-as_("ana", PIN)
-datakey.add_key(PIN, cred, val, "Blue")
-as_admin()
-datakey.clear_keys("ana")
-rec = datakey.read()["accounts"]["ana"]
-
-
-def open_ana():
-    datakey.close()
-    datakey.open_with_pin("ana", PIN, key=fake.value)
-
-
-check("an admin's clear drops the slot and the key fields", "keyed" not in rec and "keys_n" not in rec and rec.get("sealed")
-      and raised(pinslot.SlotMissing, open_ana))
-check("...audited with the account and who cleared it", any(r["action"] == "security keys removed" and r["detail"] == "ana, by Admin1"
-                                                            for r in audit.recent(200)))
-
-
-def approve_new_slot(name, pin=NEW_PIN):
-    """The new-PIN approval as core/dirsignin.py makes it: a new slot, approved by Admin1. True once its seal holds no keys."""
+# an admin's clear, for a chip slot (ana) and a PIN-alone slot (cat), whose drop_slot has nothing to delete
+def approve_new_slot(name, pin=NEW_PIN, kind="chip"):
+    """The new-PIN approval as core/dirsignin.py makes it: a new slot, approved by Admin1. True once its seal holds no keys and
+    the record has no key fields and no clear mark."""
     session.sign_out()
-    slot = pinslot.new("chip", datakey.new_slot_id(), pin)
+    slot = pinslot.new(kind, datakey.new_slot_id(), pin)
     as_admin()
     roles.approve(name, slot)
     session.sign_out()
     r = rec_of(name)
-    return r["slot_id"] == slot.slot_id and "keyed" not in r and "keys_n" not in r and inside(name, pin)[:2] != b"K1"
+    return (r["slot_id"] == slot.slot_id and not {"keyed", "keys_n", "slot_gone"} & set(r) and inside(name, pin)[:2] != b"K1")
 
 
-check("the next approval makes a seal with no keys", approve_new_slot("ana") and datakey.open_with_pin("ana", NEW_PIN) == 0)
+for name, kind, pin, new_pin in (("ana", "chip", PIN, NEW_PIN), ("cat", "pin", CPIN, CPIN2)):
+    as_(name, pin)
+    datakey.add_key(pin, cred, val, "Blue")
+    as_admin()
+    datakey.clear_keys(name)
+    rec = rec_of(name)
+    cleared = doc()
+
+    def try_pin(name=name, pin=pin):
+        datakey.close(); fake.calls.clear()
+        datakey.open_with_pin(name, pin, key=fake.value)
+
+    reset_counters()
+    check(f"{kind}: an admin's clear drops the key fields, keeps the seal and marks the record", "keyed" not in rec and "keys_n" not in rec
+          and rec.get("sealed") and rec.get("slot_gone") is True)
+    check(f"{kind}: ...the next PIN finds no slot: SlotMissing, the key never asked, nothing open, not counted",
+          raised(pinslot.SlotMissing, try_pin) and fake.calls == [] and not datakey.is_open() and throttle_fails() == 0)
+    check(f"{kind}: ...unlock too", raised(pinslot.SlotMissing, lambda: datakey.check_pin(name, pin, present=fake.present)) and fake.calls == [])
+    datakey.edit(lambda d: d.__setitem__("throttle", {"fails": 9, "until": time.time() + 60}), signed_in=False)
+    check(f"{kind}: ...a running wait is honoured as for any PIN", raised(pinslot.PinLocked, try_pin))
+    reset_counters()
+    d = doc()
+    del d["accounts"][name]["slot_gone"]
+    put(d)
+    check(f"{kind}: the mark deleted by hand does not open it without the key",
+          raised(datakey.KeyNeeded if kind == "pin" else pinslot.SlotMissing, lambda: datakey.open_with_pin(name, pin)) and not datakey.is_open())
+    put(cleared)
+    check(f"{kind}: the next approval makes a seal with no keys, opened by the new PIN alone, and drops the mark",
+          approve_new_slot(name, new_pin, kind) and datakey.open_with_pin(name, new_pin) == 0 and datakey.my_keys() == [])
+
+check("an admin's clear is audited with the account and who cleared it", any(r["action"] == "security keys removed" and r["detail"] == "ana, by Admin1"
+                                                                           for r in audit.recent(200)))
+as_("cat", CPIN2)
+d2, dv2 = fake.register("Delta", os.urandom(32))
+datakey.add_key(CPIN2, d2, dv2, "Delta")
+d = doc()                                               # an admin's clear in another process while cat stays signed in here
+for f in ("keyed", "keys_n"):
+    d["accounts"]["cat"].pop(f)
+d["accounts"]["cat"]["slot_gone"] = True
+put(d)
+before_text = datakey.path().read_text(encoding="utf-8")
+check("pin: a session open before the clear can't add or remove a key with the right PIN (Locked, file unchanged)",
+      raised(datakey.Locked, lambda: datakey.add_key(CPIN2, cred, val, "Blue")) and raised(datakey.Locked, lambda: datakey.remove_key(CPIN2, 0))
+      and datakey.path().read_text(encoding="utf-8") == before_text)
+check("pin: ...and that account still finds no slot", raised(pinslot.SlotMissing, lambda: datakey.open_with_pin("cat", CPIN2, key=fake.value)))
 
 as_("ana", NEW_PIN)
 datakey.add_key(NEW_PIN, cred, val, "Blue")
@@ -374,6 +404,6 @@ check("an SSO account can't add a key", raised(ValueError, lambda: datakey.add_k
 captured_log.extend(f"{r['action']} {r['detail']}" for r in audit.recent(500))
 session.sign_out()
 check("no secret in any log line or audit row of this test", captured_log and not any(
-    s in line for line in captured_log for s in (PW, PIN, NEW_PIN, PIN3, SPIN, val.hex(), base64.b64encode(val).decode(), k2_hex)))
+    s in line for line in captured_log for s in (PW, PIN, NEW_PIN, PIN3, SPIN, CPIN, CPIN2, val.hex(), base64.b64encode(val).decode(), k2_hex)))
 
 print(f"\n{ok} passed, {bad} failed"); sys.exit(1 if bad else 0)

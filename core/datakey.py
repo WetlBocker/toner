@@ -559,14 +559,14 @@ def _dir_reseal(mine, pin, keys, k2):
     process changed it, and writing what this one holds would undo that."""
     from core import pinslot
     stored, rec = mine
-    if rec.get("sealed") != _seen:
+    if rec.get("sealed") != _seen or rec.get("slot_gone"):
         raise Locked("Sign in first.")
     payload = seal_payload(stored, _box)
     sealed = pinslot.reseal(rec["slot"], rec["slot_id"], pin or "", rec["sealed"], _dir_keyed(keys, k2, stored, payload) if keys["list"] else payload)
 
     def write(doc):
         r = doc["accounts"].get(stored)
-        if r is None or r.get("sealed") != _seen or r.get("slot_id") != rec["slot_id"]:
+        if r is None or r.get("sealed") != _seen or r.get("slot_id") != rec["slot_id"] or r.get("slot_gone"):
             raise Locked("Sign in first.")
         r["sealed"] = sealed
         if keys["list"]:
@@ -661,8 +661,9 @@ def remove(name):
 
 
 def clear_keys(name):
-    """An admin, for an AD or LDAP account whose key is lost: its slot goes from this computer and its key fields from its record
-    (the seal stays, unopenable here), so its next sign-in sets a new PIN through the new-PIN approval, which seals with no keys.
+    """An admin, for an AD or LDAP account whose key is lost: its slot goes from this computer and its key fields from its record,
+    and the record is marked (slot_gone) so its next PIN finds no slot whatever its kind (the seal stays): it sets a new PIN through
+    the new-PIN approval, which seals with no keys.
     ValueError for a local or SSO account."""
     def clear(doc):
         stored = _stored(doc, name)
@@ -671,6 +672,7 @@ def clear_keys(name):
             raise ValueError()
         rec.pop("keyed", None)
         rec.pop("keys_n", None)
+        rec["slot_gone"] = True                         # unsigned: deleting it only brings back the keyed seal, which needs the key
         return stored, copy.deepcopy(rec)
     stored, rec = _change(clear, accounts=True)
     drop_slot(rec)
@@ -828,6 +830,14 @@ def _pin(name, pin, key=None, present=None):
         if rec is None or rec.get("kind") != "directory" or not rec.get("sealed") or not _is_slot_id(rec.get("slot_id")):
             _pin_refused(pin)
         fails = (doc.get("throttle") or {}).get("fails", 0)
+        if rec.get("slot_gone"):                        # an admin cleared its keys: a new PIN, as for a slot not on this computer
+            with _FileLock():
+                d = _read()
+                try:
+                    _gate(d, d.setdefault("throttle", {"fails": 0, "until": 0}), time.time())
+                except Throttled as e:
+                    raise pinslot.PinLocked(e.seconds) from None
+            raise pinslot.SlotMissing()
         payload = pinslot.open(rec["slot"], rec["slot_id"], pin, rec["sealed"])
     keys = k2 = None
     if (blob := _dir_blob(payload)) is not None:
