@@ -700,7 +700,10 @@ def set_permissions(role, changes):
 
 
 def require_keys():
-    """Every local, AD and LDAP account must have a security key: from the verified rules."""
+    """Every local, AD and LDAP account must have a security key: from the verified rules, or while they don't verify, from what
+    was last signed (the database's copy), so taking the switch out of the file doesn't turn it off."""
+    if state() == "tampered":
+        return (last_signed() or {}).get("require_keys") is True
     return (verified() or {}).get("require_keys") is True
 
 

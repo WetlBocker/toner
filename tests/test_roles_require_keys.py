@@ -202,6 +202,19 @@ check("Linux: on without systemd running; refused with it running and the unit d
       and e.args[0] == roles.REQUIRE_HELPER_ON and not roles.require_keys())
 helperclient.sys, helperclient.SYSTEMD_DIR, helperclient.state = real_sys, real_dir, real_state
 subprocess.run, helperclient.not_installed = REAL_RUN, lambda: True
+
+# the switch taken out of the file by hand: the rules no longer verify, and the last signed copy still says on
+roles.set_require_keys(True)
+signed_text = datakey.path().read_text(encoding="utf-8")
+d = json.loads(signed_text)
+del d["require_keys"]
+datakey.path().write_text(json.dumps(d), encoding="utf-8")
+roles._invalidate()
+must = must_add_for("Tech1", PW2)
+check("the switch deleted from the file by hand: tampered, still required, and a keyless account is still sent to add one",
+      roles.state() == "tampered" and roles.require_keys() and must is True, (roles.state(), roles.require_keys(), must))
+datakey.path().write_text(signed_text, encoding="utf-8")
+roles._invalidate()
 session.sign_out()
 
 print(f"\n{ok} passed, {bad} failed"); sys.exit(1 if bad else 0)
