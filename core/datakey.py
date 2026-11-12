@@ -554,27 +554,46 @@ def _dir_blob(payload):
 
 
 def _dir_reseal(mine, pin, keys, k2):
-    """Re-seal the signed-in directory account's slot to hold `keys` (none: today's payload) once `pin` opens it, counted and
-    waited as check_pin's are. Returns the new seal. Locked when the seal is not the one this process last saw: another
-    process changed it, and writing what this one holds would undo that."""
+    """Re-seal the signed-in directory account to hold `keys` (none: today's payload) once `pin` opens its slot, counted and
+    waited as check_pin's are. Returns the new seal. A chip or store slot is replaced by a fresh one under the same PIN and the old
+    one dropped once the write lands, so no earlier seal put back opens again. Locked when the seal is not the one this process
+    last saw: another process changed it, and writing what this one holds would undo that."""
     from core import pinslot
     stored, rec = mine
     if rec.get("sealed") != _seen or rec.get("slot_gone"):
         raise Locked("Sign in first.")
     payload = seal_payload(stored, _box)
-    sealed = pinslot.reseal(rec["slot"], rec["slot_id"], pin or "", rec["sealed"], _dir_keyed(keys, k2, stored, payload) if keys["list"] else payload)
+    secret = _dir_keyed(keys, k2, stored, payload) if keys["list"] else payload
+    kind, new = rec["slot"]["kind"], None
+    if kind == "pin":
+        # shortcut: a PIN-alone slot has nothing on this computer to replace, so an earlier seal put back still opens with the PIN; upgrade if it gains one
+        sealed = pinslot.reseal(rec["slot"], rec["slot_id"], pin or "", rec["sealed"], secret)
+    else:
+        pinslot.open(rec["slot"], rec["slot_id"], pin or "", rec["sealed"])
+        new = pinslot.new(kind, new_slot_id(), pin or "")
+        sealed = new.seal(secret)
 
     def write(doc):
         r = doc["accounts"].get(stored)
         if r is None or r.get("sealed") != _seen or r.get("slot_id") != rec["slot_id"] or r.get("slot_gone"):
             raise Locked("Sign in first.")
+        if new is not None:
+            _fresh_slot(doc, new)
+            r["slot"], r["slot_id"] = new.rec, new.slot_id
         r["sealed"] = sealed
         if keys["list"]:
             r["keyed"], r["keys_n"] = True, len(keys["list"])
         else:
             r.pop("keyed", None)
             r.pop("keys_n", None)
-    _change(write)
+    try:
+        _change(write)
+    except BaseException:
+        if new is not None:
+            drop_slot({"kind": "directory", "slot": new.rec, "slot_id": new.slot_id})    # never written: the old slot stays
+        raise
+    if new is not None:
+        drop_slot(rec)                                  # (the record as read: its old slot)
     return sealed
 
 

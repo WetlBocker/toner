@@ -95,6 +95,7 @@ pinslot.best_kind = lambda: "chip"
 PW = "correct horse battery 42"
 PIN, NEW_PIN, PIN3, SPIN, WRONG = "246813", "975318", "802461", "a long store pin 77", "135792"
 CPIN, CPIN2 = "a long pin-only pin 3", "another pin-only pin 8"
+DPIN, EPIN = "314158", "a long store pin of eve 6"
 TECHS = "CN=Toner Techs,DC=acme,DC=com"
 ACME = {"id": "d1", "name": "ACME", "kind": "ad", "servers": ["dc1.acme.com"], "port": 636, "security": "ldaps", "ca_file": "",
         "base_dn": "DC=acme,DC=com", "netbios": "ACME", "suffixes": ["acme.com"], "service_dn": "CN=svc,DC=acme,DC=com",
@@ -105,6 +106,8 @@ SSO = {"id": "s1", "name": "Contoso", "kind": "oidc", "provider": "other", "issu
 ANA = directory.User("6f1c2a4e-0000-4000-8000-00000000000a", "ana", "Ana", (TECHS,), True)
 BEN = directory.User("6f1c2a4e-0000-4000-8000-00000000000b", "ben", "Ben", (TECHS,), True)
 CAT = directory.User("6f1c2a4e-0000-4000-8000-00000000000c", "cat", "Cat", (TECHS,), True)
+DEE = directory.User("6f1c2a4e-0000-4000-8000-00000000000d", "dee", "Dee", (TECHS,), True)
+EVE = directory.User("6f1c2a4e-0000-4000-8000-00000000000e", "eve", "Eve", (TECHS,), True)
 SSO_USER = directory.User("sub-sso-user", "sso-user", "SSO User", ("g1",), True)
 
 
@@ -165,6 +168,8 @@ DATA_KEY = bytes(datakey._key)
 new_account(ANA, "d1", "chip", PIN)
 new_account(BEN, "d1", "store", SPIN)
 new_account(CAT, "d1", "pin", CPIN)
+new_account(DEE, "d1", "chip", DPIN)
+new_account(EVE, "d1", "store", EPIN)
 new_account(SSO_USER, "s1", "chip", PIN3)
 fake = fakekey.install()
 plain_record = rec_of("ana")
@@ -178,8 +183,10 @@ cred, val = fake.register("Blue", os.urandom(32))
 datakey.add_key(PIN, cred, val, "Blue")
 k2_hex = datakey._k2.hex()
 rec = rec_of("ana")
-check("the first key: keyed, keys_n 1, the slot and every other field as before", rec["keyed"] is True and rec["keys_n"] == 1
-      and {k: v for k, v in rec.items() if k not in ("keyed", "keys_n", "sealed")} == {k: v for k, v in plain_record.items() if k != "sealed"})
+SEAL = ("slot", "slot_id", "sealed")
+check("the first key: keyed, keys_n 1, a fresh slot of the same kind, every other field as before", rec["keyed"] is True and rec["keys_n"] == 1
+      and rec["slot_id"] != plain_record["slot_id"] and rec["slot"]["kind"] == "chip" and "Toner-" + plain_record["slot_id"] not in FakeTpm.keys
+      and {k: v for k, v in rec.items() if k not in ("keyed", "keys_n") + SEAL} == {k: v for k, v in plain_record.items() if k not in SEAL})
 reset_counters()
 held_inside = inside("ana", PIN)
 blob = json.loads(held_inside[2:])
@@ -296,16 +303,17 @@ reset_counters()
 
 # another process changed the seal since this one read it: nothing is written
 as_("ana", PIN, fake.value)
-old = doc()
+this_process = (datakey._keys, datakey._k2, datakey._seen)
 g, gv = fake.register("Gamma", os.urandom(32))
-datakey.add_key(PIN, g, gv, "Gamma")                 # (as if another process: this one holds the newer seal, the file goes back)
-put(old)
+datakey.add_key(PIN, g, gv, "Gamma")                 # (as if another process: this one keeps what it held before)
+datakey._keys, datakey._k2, datakey._seen = this_process
 reset_counters()
 before_text = datakey.path().read_text(encoding="utf-8")
-check("a stale seal: add_key and remove_key are Locked, file unchanged", raised(datakey.Locked, lambda: datakey.add_key(PIN, g, gv, "Gamma"))
+check("a stale seal: add_key and remove_key are Locked, file unchanged", raised(datakey.Locked, lambda: datakey.add_key(PIN, g, gv, "Delta"))
       and raised(datakey.Locked, lambda: datakey.remove_key(PIN, 0)) and datakey.path().read_text(encoding="utf-8") == before_text)
 as_("ana", PIN, fake.value)
-check("signed in again, the two keys are what it holds", [k["name"] for k in datakey.my_keys()] == ["Blue", "Spare"])
+check("signed in again, it holds the other process's keys and can remove one", [k["name"] for k in datakey.my_keys()] == ["Blue", "Spare", "Gamma"]
+      and datakey.remove_key(PIN, 2) is None and [k["name"] for k in datakey.my_keys()] == ["Blue", "Spare"])
 
 # removing the keys
 datakey.remove_key(PIN, 0)
@@ -313,7 +321,7 @@ check("removing one of two keeps the other", [k["name"] for k in datakey.my_keys
       and raised(fidokey.NotRegistered, lambda: datakey.open_with_pin("ana", PIN, key=only(cred))) and datakey.open_with_pin("ana", PIN, key=fake.value) == 0)
 datakey.remove_key(PIN, 0)
 rec = rec_of("ana")
-plain_again = (list(rec) == list(plain_record) and {k: v for k, v in rec.items() if k != "sealed"} == {k: v for k, v in plain_record.items() if k != "sealed"}
+plain_again = (list(rec) == list(plain_record) and {k: v for k, v in rec.items() if k not in SEAL} == {k: v for k, v in plain_record.items() if k not in SEAL}
                and inside("ana", PIN) == DATA_KEY + datakey.box_private() + b"ana" and datakey.my_keys() == [] and not datakey.has_keys("ana"))
 check("removing the last key: the slot seals today's payload again", plain_again and datakey.open_with_pin("ana", PIN) == 0
       and datakey.box_public("ana") == box_before)
@@ -329,6 +337,72 @@ check("a store slot: keyed, the PIN alone refused, the PIN and the key open it",
       and datakey.box_public("ben") == ben_box)
 datakey.remove_key(SPIN, 0)
 check("...and removing it stores it as before", list(rec_of("ben")) == list(ben_plain) and datakey.open_with_pin("ben", SPIN) == 0)
+
+
+# every key write on a chip or store slot moves to a fresh slot: no earlier seal put back opens again
+def slot_here(r):
+    return ("Toner-" + r["slot_id"]) in FakeTpm.keys if r["slot"]["kind"] == "chip" else ("pin:" + r["slot_id"]) in PEPPERS
+
+
+def put_back(name, r):
+    d = doc()
+    d["accounts"][name] = r
+    put(d)
+
+
+never_opens = (pinslot.SlotMissing, pinslot.WrongPin)
+for name, kind, pin in (("dee", "chip", DPIN), ("eve", "store", EPIN)):
+    as_(name, pin)
+    box = datakey.box_public(name)
+    before_key = rec_of(name)
+    k1, v1 = fake.register("One", os.urandom(32))
+    datakey.add_key(pin, k1, v1, "One")
+    now = rec_of(name)
+    check(f"{kind}: the first key moves to a fresh slot of the same kind, the old one gone, the same box key, opened by PIN and key",
+          now["slot_id"] != before_key["slot_id"] and now["slot"]["kind"] == kind and slot_here(now) and not slot_here(before_key)
+          and datakey.box_public(name) == box and datakey.open_with_pin(name, pin, key=only(k1)) == 0)
+    datakey.close()
+    put_back(name, before_key)
+    reset_counters()
+    check(f"{kind}: the seal from before the first key put back by hand: the PIN no longer opens it",
+          raised(never_opens, lambda: datakey.open_with_pin(name, pin)) and raised(never_opens, lambda: datakey.open_with_pin(name, pin, key=only(k1)))
+          and not datakey.is_open())
+    put_back(name, now)
+    reset_counters()
+    as_(name, pin, only(k1))
+    k2c, v2c = fake.register("Two", os.urandom(32))
+    datakey.add_key(pin, k2c, v2c, "Two")
+    two = rec_of(name)
+    datakey.remove_key(pin, 0)
+    after = rec_of(name)
+    check(f"{kind}: removing a key moves to a fresh slot too; the other key and the PIN open it, the same box key",
+          after["slot_id"] != two["slot_id"] and not slot_here(two) and slot_here(after) and datakey.open_with_pin(name, pin, key=only(k2c)) == 0
+          and datakey.box_public(name) == box and raised(fidokey.NotRegistered, lambda: datakey.open_with_pin(name, pin, key=only(k1))))
+    datakey.close()
+    put_back(name, two)
+    reset_counters()
+    check(f"{kind}: the two-key record put back by hand: the removed key and the PIN don't open it",
+          raised(never_opens, lambda: datakey.open_with_pin(name, pin, key=only(k1))) and not datakey.is_open())
+    put_back(name, after)
+    reset_counters()
+    as_(name, pin, only(k2c))
+    real_written, slots_before = datakey.written, (set(FakeTpm.keys), set(PEPPERS))
+
+    def failing(landed, real=real_written):
+        if landed:
+            raise OSError("the write didn't land")
+        real(landed)
+    datakey.written = failing
+    k3, v3 = fake.register("Three", os.urandom(32))
+    failed = raised(OSError, lambda: datakey.add_key(pin, k3, v3, "Three"))
+    datakey.written = real_written
+    check(f"{kind}: a failed write leaves the record, the old slot working and no new slot behind",
+          failed and rec_of(name) == after and slot_here(after) and (set(FakeTpm.keys), set(PEPPERS)) == slots_before
+          and datakey.open_with_pin(name, pin, key=only(k2c)) == 0 and [k["name"] for k in datakey.my_keys()] == ["Two"])
+    datakey.remove_key(pin, 0)
+    check(f"{kind}: removing the last key: a fresh slot with today's payload, opened by the PIN alone",
+          not datakey.has_keys(name) and rec_of(name)["slot_id"] != after["slot_id"] and not slot_here(after)
+          and datakey.open_with_pin(name, pin) == 0 and datakey.box_public(name) == box)
 
 # an admin's clear, for a chip slot (ana) and a PIN-alone slot (cat), whose drop_slot has nothing to delete
 def approve_new_slot(name, pin=NEW_PIN, kind="chip"):
@@ -404,6 +478,6 @@ check("an SSO account can't add a key", raised(ValueError, lambda: datakey.add_k
 captured_log.extend(f"{r['action']} {r['detail']}" for r in audit.recent(500))
 session.sign_out()
 check("no secret in any log line or audit row of this test", captured_log and not any(
-    s in line for line in captured_log for s in (PW, PIN, NEW_PIN, PIN3, SPIN, CPIN, CPIN2, val.hex(), base64.b64encode(val).decode(), k2_hex)))
+    s in line for line in captured_log for s in (PW, PIN, NEW_PIN, PIN3, SPIN, CPIN, CPIN2, DPIN, EPIN, val.hex(), base64.b64encode(val).decode(), k2_hex)))
 
 print(f"\n{ok} passed, {bad} failed"); sys.exit(1 if bad else 0)
