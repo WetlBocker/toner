@@ -176,7 +176,8 @@ check("the session locking releases it too", on(d, d.list_page) and datakey.my_k
 session.unlock(PW)
 d.add.click(); d.secret.setText(PW); d.secret_next.click(); wait_for(lambda: on(d, d.touch_page))
 d.reject()
-check("closing the dialog during the touch releases it, nothing added", idle(d) and datakey.my_keys() == [])
+check("closing the dialog during the touch releases it (the held key ends without its gate), nothing added",
+      wait_for(lambda: not keysdialog._left) and not gate.is_set() and datakey.my_keys() == [])
 gate.set(); fidokey.register = real_register
 
 d = opened()
@@ -233,7 +234,7 @@ check("a wrong key PIN says so and asks again", wait_for(lambda: on(d, d.keypin_
 d.key_pin.setText(KEY_PIN); d.key_pin_ok.click()
 check("the right one goes on to the name", wait_for(lambda: on(d, d.name_page)) and d.key_pin.text() == "")
 d.reject()
-check("closing at the name adds nothing", idle(d) and datakey.my_keys() == [])
+check("closing at the name drops the touched key and adds nothing", d._made is None and d._secret is None and datakey.my_keys() == [])
 fake.pin = None
 
 print("== an AD account")
@@ -320,6 +321,101 @@ wait_for(lambda: "dialog" in seen, 3)
 check("...no dialog", seen.get("dialog") is None, seen)
 session.sign_out()
 SW.SignInWindow.exec, A.Main = real_exec, real_main
+
+print("== closing never waits on a Job")
+
+
+def stuck(real):
+    """`real` that waits for its gate only: a cancel does not end it (as keys_allowed waiting on the service manager)."""
+    gate, began = threading.Event(), threading.Event()
+    def call(*a, **kw):
+        began.set(); gate.wait(30)
+        return real(*a, **kw)
+    return call, gate, began
+
+
+def timed(fn):
+    t = time.time(); fn(); return time.time() - t
+
+
+session.sign_out(); session.sign_in_pin("cat", PIN)
+real_allowed = dirsignin.keys_allowed
+dirsignin.keys_allowed, gate, began = stuck(real_allowed)
+d = KeysDialog(); d.show(); began.wait(5)
+took = timed(d.reject)
+check("closing while keys_allowed still runs returns at once, the Job handed on", took < 0.5 and not d._jobs and len(keysdialog._left) == 1, took)
+gate.set()
+check("...and it later ends without touching the dialog", wait_for(lambda: not keysdialog._left) and not d.add.isEnabled() and not d.note.isVisible())
+dirsignin.keys_allowed = real_allowed
+session.sign_out(); session.sign_in("Admin1", PW)          # (the recovery reset above left Admin1 with no keys)
+
+fidokey.register, gate, began = stuck(real_register)
+d = opened()
+d.add.click(); d.secret.setText(PW); d.secret_next.click(); began.wait(5)
+took = timed(d.reject)
+check("closing while a held register runs returns at once", took < 0.5 and len(keysdialog._left) == 1, took)
+page = d.pages.currentWidget()
+gate.set()
+check("...the key it registered lands on nothing: no name page, nothing added", wait_for(lambda: not keysdialog._left)
+      and d.pages.currentWidget() is page and d._made is None and datakey.my_keys() == [])
+fidokey.register = real_register
+
+real_add, adds = datakey.add_key, []
+def slow_add(*a):
+    adds.append(1); began.set(); gate.wait(30)
+    return real_add(*a)
+gate, began = threading.Event(), threading.Event()
+datakey.add_key = slow_add
+d = opened()
+d.add.click(); d.secret.setText(PW); d.secret_next.click(); wait_for(lambda: on(d, d.name_page))
+d.key_name.setText("Late"); d.name_ok.click(); began.wait(5)
+took = timed(d.reject)
+gate.set()
+check("an add whose write had begun: closing returns at once, and it lands exactly once", took < 0.5 and wait_for(lambda: not keysdialog._left)
+      and adds == [1] and [k["name"] for k in datakey.my_keys()] == ["Late"], (took, adds, datakey.my_keys()))
+datakey.add_key = real_add
+datakey.remove_key(PW, 0)
+
+def throttled(*a): raise datakey.Throttled(30)
+datakey.add_key = throttled
+d = opened()
+d.add.click(); d.secret.setText(PW); d.secret_next.click(); wait_for(lambda: on(d, d.name_page))
+d.key_name.setText("Blue"); d.name_ok.click(); wait_for(lambda: idle(d))
+check("a wait from add_key: the password page's countdown, nothing added", on(d, d.secret_page)
+      and d.secret_error.text() == str(datakey.Throttled(30)) and not d.secret_next.isEnabled() and datakey.my_keys() == [], d.secret_error.text())
+d.wait.timer.stop(); d.reject()
+datakey.add_key = real_add
+
+print("== the start-up check fails closed")
+roles.set_require_keys(True)
+session.sign_out()
+real_must = roles.must_add_key
+def broken(): raise RuntimeError("the service manager went away")
+roles.must_add_key = broken
+signins.clear(); mains.clear()
+SW.SignInWindow.exec, A.Main = signed_in, (lambda *a, **k: mains.append(1))
+got = A.signed_in_window(app)
+check("must_add_key raising: signed out and back to the sign-in window, no main window", got is None and signins == ["signed_out", "signed_out"]
+      and session.state() == "signed_out" and mains == [], signins)
+roles.must_add_key = real_must
+SW.SignInWindow.exec, A.Main = real_exec, real_main
+session.sign_in("Admin1", PW); roles.set_require_keys(False)
+
+print("== Sign out from the menu while the dialog runs a Job (session.sign_out, then QApplication.quit)")
+from PySide6.QtWidgets import QWidget
+session.sign_out(); session.sign_in_pin("cat", PIN)
+dirsignin.keys_allowed, gate, began = stuck(real_allowed)
+def sign_out_and_quit(d):
+    began.wait(5); session.sign_out(); QApplication.quit()
+when_shown(sign_out_and_quit)
+owner = QWidget()
+took = timed(lambda: A.Main.security_keys(owner))
+app.sendPostedEvents(None, 52)                              # (QEvent.DeferredDelete: the dialog goes now)
+check("exec() ends at once and the dialog is ended properly: its running Job handed on, not destroyed",
+      took < 5 and len(keysdialog._left) == 1 and all(j.isRunning() for j in keysdialog._left), took)
+gate.set()
+check("...and the Job ends on its own, the process still here", wait_for(lambda: not keysdialog._left) and session.state() == "signed_out")
+dirsignin.keys_allowed = real_allowed
 
 check("no password, PIN or key PIN in the log", not any(s in line for line in captured_log for s in (PW, PW2, PIN, PIN2, KEY_PIN)))
 print(f"\n{ok} passed, {bad} failed"); sys.exit(1 if bad else 0)

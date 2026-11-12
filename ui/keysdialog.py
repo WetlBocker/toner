@@ -5,10 +5,11 @@ closing the dialog, or the session locking or signing out releases the key's wai
 added. A key registered but never added leaves nothing in Toner (and on the key, a non-resident credential that takes no slot).
 
 must_add (app.py, before the main window): keys are required and the account has none. It says why; closing it signs out."""
+import atexit
 import os
 from datetime import datetime
 
-from PySide6.QtCore import QEventLoop, Qt, Signal
+from PySide6.QtCore import QEventLoop, Qt, QTimer, Signal
 from PySide6.QtWidgets import (QAbstractItemView, QDialog, QHBoxLayout, QLineEdit, QMessageBox, QPushButton, QStackedWidget,
                                QTableWidget, QTableWidgetItem, QVBoxLayout)
 
@@ -54,6 +55,39 @@ def must_add():
     if out[0][1] is not None:
         raise out[0][1]
     return out[0][0]
+
+
+_left = set()      # Jobs still running when their dialog closed: kept until each ends (a QThread destroyed while it runs aborts Toner)
+_sweeper = None
+
+
+def _keep(job):
+    """Closing never waits on a Job (keys_allowed can take 20 s): it lands on nothing and is let go once it has ended."""
+    global _sweeper
+    job.landed = job.page = None
+    _left.add(job)
+    if _sweeper is None:
+        _sweeper = QTimer()
+        _sweeper.setInterval(200)
+        _sweeper.timeout.connect(_sweep)
+        atexit.register(_finish)
+    _sweeper.start()
+
+
+def _sweep():
+    for job in [j for j in _left if j.isFinished()]:
+        job.wait()
+        job.fn = None                                    # (its closure holds the password or PIN)
+        _left.discard(job)
+    if not _left:
+        _sweeper.stop()
+
+
+def _finish():
+    """Toner is exiting: the Jobs still running end first (their key waits were released when their dialog closed)."""
+    for job in list(_left):
+        job.wait()
+    _left.clear()
 
 
 def confirm(parent, text, more=""):
@@ -201,17 +235,19 @@ class KeysDialog(QDialog):
         self.note.setVisible(not allowed and self.kind == "directory")
 
     # ---------------------------------------------------------------- Jobs
-    def _run(self, fn, landed, ask=False):
-        """`fn` on a Job; `landed(result, error)` back on this thread, unless the step was left meanwhile. `ask`: it may ask a key."""
+    def _run(self, fn, landed, ask=None):
+        """`fn` on a Job; `landed(result, error)` back on this thread, unless the step was left meanwhile. `ask`: its keyask.arm()
+        Wait, when it may ask a key or must see the step left."""
         job = Job(fn)
-        job.landed, job.turn, job.page = landed, self._turn, self.pages.currentWidget()
-        job.ask = self.keyask.arm() if ask else None
+        job.landed, job.turn, job.page, job.ask = landed, self._turn, self.pages.currentWidget(), ask
         job.page.setEnabled(False)
         job.done.connect(self._landed, Qt.ConnectionType.QueuedConnection)
         self._jobs.add(job)
         job.start()
 
     def _landed(self, job, result, error):
+        if job not in self._jobs:
+            return                                       # handed on when the dialog closed (_keep): touches nothing here
         job.wait()
         job.fn = None                                    # (its closure holds the password or PIN)
         self._jobs.discard(job)
@@ -236,7 +272,9 @@ class KeysDialog(QDialog):
             self._back()
 
     def _fail(self, e, label):
-        if isinstance(e, (datakey.Throttled, pinslot.PinLocked)) and label is self.secret_error:
+        if isinstance(e, (datakey.Throttled, pinslot.PinLocked)):
+            if label is not self.secret_error:           # (from add_key or remove_key: the countdown is the password page's)
+                self._go(self.secret_page, self.secret)
             self.wait.start(e.seconds)
         elif isinstance(e, (datakey.WrongPassword, pinslot.WrongPin, datakey.Locked)) or str(e) == datakey.KEYS_HELPER_ON:
             say(label, str(e))
@@ -290,7 +328,8 @@ class KeysDialog(QDialog):
             self._made = made
             self._go(self.name_page, self.key_name)
             self.name_ok.setEnabled(False)
-        self._run(lambda: self.keyask.register(name, os.urandom(32)), landed, ask=True)
+        ask = self.keyask                                # (not self: the Job may outlive this dialog)
+        self._run(lambda: ask.register(name, os.urandom(32)), landed, ask=ask.arm())
 
     def _asking(self):
         """A key is being asked for the step on screen (a signal from a wait already cancelled lands on nothing)."""
@@ -318,12 +357,12 @@ class KeysDialog(QDialog):
         label = self.key_name.text().strip()
         if not label or self._made is None:
             return
-        (cred, value), secret, turn = self._made, self._secret, self._turn
+        (cred, value), secret, wait = self._made, self._secret, self.keyask.arm()
         self._secret = self._made = None
         first, me = not datakey.my_keys(), session.user()
 
         def add():
-            if turn != self._turn:
+            if wait.cancel.is_set():
                 raise fidokey.NotTouched()               # left (Cancel, closed, locked) before the write began: nothing added
             datakey.add_key(secret, cred, value, label)
             return first and [a["name"] for a in datakey.accounts() if a["role"] == "Admin"] == [me]
@@ -337,7 +376,7 @@ class KeysDialog(QDialog):
                 QMessageBox.information(self, TITLE, ONLY_ADMIN if only_admin else FIRST)
             if self.must_add:
                 self.accept()
-        self._run(add, landed)
+        self._run(add, landed, ask=wait)
 
     def _confirm(self, secret):
         index, keys, turn = self._index, datakey.my_keys(), self._turn
@@ -351,15 +390,16 @@ class KeysDialog(QDialog):
             self._go(self.list_page, self.add)
             self._refresh()
             if e is not None:
+                self._index = index                      # (a countdown goes back to the password page, for this key)
                 self._fail(e, self.error)
         self._run(lambda: datakey.remove_key(secret, index), landed)
 
     # ---------------------------------------------------------------- closing
     def done(self, r):
-        """Closing: release a key's wait and let every Job end first (one must not outlive its window)."""
+        """Closing: a key's wait is released and what was typed goes; a Job still running is handed on (_keep), never waited for."""
         self._drop()
-        for job in list(self._jobs):
-            job.wait()
+        for job in self._jobs:
+            _keep(job)
         self._jobs.clear()
         for box in (self.secret, self.key_pin):
             box.setText("")

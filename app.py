@@ -345,6 +345,7 @@ class Main(QMainWindow):
         from ui.keysdialog import KeysDialog
         dlg = KeysDialog(self)
         dlg.exec()
+        dlg.reject()                                   # (Sign out quits exec() before the dialog has ended: end it, its Jobs handed on)
         dlg.deleteLater()                              # nothing typed in it outlives it
 
     def lock(self):
@@ -1235,8 +1236,11 @@ def signed_in():
         w = SignInWindow()
         if w.exec() != QDialog.DialogCode.Accepted:
             return False
-        if w.pages.currentWidget() is w.reset_page or not must_add() or KeysDialog(must_add=True).exec() == QDialog.DialogCode.Accepted:
-            return True
+        try:
+            if w.pages.currentWidget() is w.reset_page or not must_add() or KeysDialog(must_add=True).exec() == QDialog.DialogCode.Accepted:
+                return True
+        except Exception:                              # fails closed: signed out, back to the sign-in window
+            quiet.ignored()
         session.sign_out()
 
 
