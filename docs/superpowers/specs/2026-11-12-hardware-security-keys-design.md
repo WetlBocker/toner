@@ -169,6 +169,42 @@ A later piece of work teaches the helper which accounts have keys, so that it ca
 - Signing in often is the owner's standing worry (the first sign-in design's anti-goal). The owner chose a touch at every unlock
   knowingly; nothing else in this work may add a prompt.
 
+## Limits found while building (2026-11-12)
+
+- **A copy taken before a key was added.** A copy holds one data key and it is never changed. A copy of `netcheck.keys` made before an
+  account's first key was added (or before a key was removed) still opens with that account's password alone, because it holds the
+  seal from that time. A key protects every copy of the data folder made after it was added, not one made before. Closing this would
+  mean re-encrypting the copy under a new data key, which needs every account's password at once.
+- **AD and LDAP accounts on a computer with no security chip and no protected store** (the PIN-only slot). There an older seal put
+  back into `netcheck.keys` by hand still opens with the Toner PIN, for the same reason. With a chip or a protected store, every key
+  change moves the account to a fresh PIN slot and deletes the old one, so an older seal opens nothing.
+- **Forgetting the Toner PIN, with a key.** An AD or LDAP person with a key who uses "Forgot your PIN?" is asked for Duo first (when
+  their directory has Duo on), then sets a new PIN with an admin's approval, and the approved account has no keys. Skipping Duo is
+  only good for the one path where the key then proves itself.
+- **Several Toner windows on one account.** A process may change its account's keys only if the file still holds what it last saw.
+  Otherwise nothing changes and it says "Sign in first." (an existing sentence).
+- **The helper service, when in doubt, counts as on.** AD and LDAP accounts cannot add keys, and the require switch cannot go on,
+  whenever this copy may be enrolled with the helper: the service installed but stopped or disabled, the service manager not
+  answering, or the helper enrolled by another user of the computer. On Linux without systemd there is no helper.
+- **The refusal to turn the helper switch on while an AD or LDAP account has keys** reads a count in the account's record that is not
+  signed. A person who edits it can hide their own keys from that check; their keys themselves are sealed and unaffected.
+- **Windows shows its own dialog for the key.** A missing or unregistered key ends with that dialog being dismissed, so Toner shows
+  "The key wasn't touched..." there. "Toner can't find a security key..." and "That key isn't registered to this account." appear
+  on Linux and macOS, where Toner talks to the key itself.
+- **Wording used in one more place than the table says.** In the "Security keys" dialog a key that is not touched shows the unlock
+  row, "The key wasn't touched. Try again.". The key-PIN page's button is the sign-in window's existing "Next".
+- **After a recovery-key sign-in** the person is not sent to add a key for that one sign-in, even when keys are required, so an only
+  admin who lost their key can get in and put things right.
+
+## Release note (draft; the wording is the owner's to approve)
+
+- Security keys: a local, AD or LDAP account can add FIDO2 security keys under your name > "Security keys...". Once it has one,
+  signing in needs your password or PIN, the key's own PIN and a touch; unlocking needs your password or PIN and a touch. An admin
+  can require a key for every local, AD and LDAP account in Settings > Accounts.
+- Not available to AD and LDAP accounts while "Let group members sign in without approval" is on. SSO accounts are unchanged.
+- An older Toner shows an account that has security keys as damaged. Update every copy that shares the data before adding a key.
+- A security key protects copies of the data folder made after the key was added.
+
 ## What the spike found (Windows, the owner's key, 2026-11-12)
 
 A throwaway script registered a test credential and read the key's value twice.
