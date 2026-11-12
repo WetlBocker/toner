@@ -450,25 +450,55 @@ win.sign_out()
 check("a refused question cancels it", win.isVisible() and session.state() == "open" and not win._signing_out and not win._quitting)
 del win.settings.unsaved_count, win.settings.confirm_leave
 win.lock_shortcut.activated.emit()
+applied = []
+win.about.apply_on_exit = lambda: applied.append(1)
+from core import roles, assistant as AIm
+alive = (len(session._callbacks), len(roles._callbacks), len(AIm._listeners))
 lock.other.click()
 check("Sign in as someone else signs out and closes the window", session.state() == "signed_out" and win._signing_out and not win.isVisible())
+check("...and installs no waiting update (Toner stays open)", applied == [])
 
-from PySide6.QtCore import QProcess
-started = []
-QProcess.startDetached = staticmethod(lambda prog, args: started.append((prog, list(args))) or True)
-argv = sys.argv
-sys.argv = ["app.py", "--minimized", "--x"]
-A.restart()
-check("Toner starts again: the same program and arguments, without --minimized", started[-1] == (sys.executable, ["app.py", "--x"]), started)
-sys.frozen = True
-sys.argv = [sys.executable, "--minimized"]
-A.restart()
-check("a built Toner passes only its own arguments", started[-1] == (sys.executable, []), started)
-os.environ["APPIMAGE"] = "/home/me/Toner.AppImage"
-A.restart()
-check("an AppImage starts the AppImage again", started[-1] == ("/home/me/Toner.AppImage", []), started)
-del os.environ["APPIMAGE"], sys.frozen
-sys.argv = argv
+print("== Toner stays open: the window goes, the next sign-in gets a new one")
+win.deleteLater(); app.sendPostedEvents(None, QEvent.Type.DeferredDelete); app.processEvents()
+gone = (len(session._callbacks), len(roles._callbacks), len(AIm._listeners))
+check("the old window's listeners went with it (sign-in changes, roles, the assistant)",
+      gone[0] < alive[0] and gone[1] < alive[1] and gone[2] < alive[2], (alive, gone))
+session.sign_in("Jordan", PW2)                       # what the sign-in page does next
+check("...and a sign-in after it tells no dead window (nothing raised)", session.state() == "open")
+win = A.Main(); win.show(); app.processEvents()
+check("the new window is built for whoever signed in", win.isVisible()
+      and (len(session._callbacks), len(roles._callbacks), len(AIm._listeners)) == alive, ((len(session._callbacks), len(roles._callbacks), len(AIm._listeners)), alive))
+win.sign_out(); app.processEvents()
+win.deleteLater(); app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+check("signing out again leaves no more listeners than the first time (nothing builds up)",
+      (len(session._callbacks), len(roles._callbacks), len(AIm._listeners)) == gone, (len(session._callbacks), gone))
+
+print("== Remember me: only the last username, kept for the next sign-in page")
+from ui import signinwindow as SW
+SW.remember("")
+if session.state() != "signed_out":
+    session.sign_out()
+w1 = SignInWindow()
+check("unticked and empty when nothing is remembered", w1.remember.text() == "Remember me" and not w1.remember.isChecked() and w1.name.text() == "")
+w1.name.setText("Jordan"); w1.remember.setChecked(True)
+session.sign_in("Jordan", PW2); w1.accept()
+kept = SW.remembered_path().read_text(encoding="utf-8")
+check("ticked and signed in: the username is kept, and nothing else (no password)", SW.remembered() == "Jordan" and PW2 not in kept, kept)
+session.sign_out()
+w2 = SignInWindow()
+check("the next sign-in page shows it, ticked; the password is still asked for", w2.name.text() == "Jordan" and w2.remember.isChecked() and w2.pw.text() == "")
+w2.remember.setChecked(False)
+session.sign_in("Jordan", PW2); w2.accept()
+check("unticked and signed in: it is forgotten", not SW.remembered_path().exists() and SignInWindow().name.text() == "")
+session.sign_out()
+SW.remember("Jordan")
+w3 = SignInWindow(); w3.name.setText("someone"); w3.accept()          # signed out: as the recovery key leaves it, no account
+check("a sign-in that is no account (the recovery key) changes nothing", SW.remembered() == "Jordan")
+check("an admin approving someone else's sign-in: no Remember me there", SignInWindow(approver_for=object()).remember is None)
+SW.remember("")
+SW.remembered_path().write_bytes(b"x" * 5000)
+check("a file that is not ours is ignored", SW.remembered() == "")
+SW.remember("")
 
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

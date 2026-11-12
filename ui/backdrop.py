@@ -41,7 +41,10 @@ class Backdrop(QWidget):
         self._heading = [rng.uniform(0, 2 * math.pi) for _ in _DOTS]
         self._speed = [rng.uniform(*SPEED) for _ in _DOTS]
         self.drift = motion.Phase(self, PERIOD_MS, self._on_phase)
-        QApplication.instance().applicationStateChanged.connect(lambda _s: self.restyle())
+        QApplication.instance().applicationStateChanged.connect(self._app_state)       # a method: it goes with the window
+
+    def _app_state(self, *_):
+        self.restyle()
 
     def restyle(self):
         """After the look changed, or the window was shown or hidden: start or stop drifting."""

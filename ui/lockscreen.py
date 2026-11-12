@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QVBoxLayout, QWid
 
 from core import datakey, db, dirpin, dirsignin, pinslot, session
 from ui import theme
+from ui.widgets import while_alive
 from ui.signinwindow import DAMAGED, DAMAGED_ERRORS, Job, Wait, card, centred, error_label, heading, link, primary, say, words
 
 _now = time.time                                         # wall-clock: it keeps counting while the computer sleeps (the tests move it)
@@ -84,7 +85,7 @@ class LockScreen(QWidget):
         self._passing = False                            # Sign in as someone else: Main's closing questions must show
         QApplication.instance().installEventFilter(self)
         self.changed.connect(self.follow)
-        session.on_change(lambda _state: self.changed.emit())
+        while_alive(self, session.on_change, session.off_change, lambda _state: self.changed.emit())
         self.follow()
 
     def eventFilter(self, obj, event):

@@ -10,6 +10,14 @@ from core import db, perms, quiet, reports
 from ui import status as st, theme
 
 
+def while_alive(owner, register, unregister, fn):
+    """register(fn) now and unregister(fn) when `owner` is destroyed: a callback kept in a core list (session.on_change, ...) must
+    not outlive its window, which goes at Sign out while Toner stays open."""
+    register(fn)
+    owner.destroyed.connect(lambda *_: unregister(fn))
+    return fn
+
+
 def remember_sizes(splitter, key):
     """Start a splitter at the sizes it had last time on this computer (the 'splitters' setting, one entry per pane), and keep
     the new sizes once it has been dragged. A wider window keeps the proportions."""

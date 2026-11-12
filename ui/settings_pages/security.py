@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDia
 from core import audit, db, passwords, display, legacyssh, nettools, passvault, session, sessionlog, vault
 from ui.settings_base import Page, compact_row, note, row_of
 from ui.toast import toast
-from ui.widgets import EmptyHint
+from ui.widgets import EmptyHint, while_alive
 
 
 # ------------------------------------------------------------------ Security
@@ -43,7 +43,7 @@ class SecurityPage(Page):
         self.lock_now = QPushButton("Lock now")                            # acts right away
         self.lock_now.clicked.connect(self._lock)
         self.session_changed.connect(self.show_vault)
-        session.on_change(lambda _state: self.session_changed.emit())
+        while_alive(self, session.on_change, session.off_change, lambda _state: self.session_changed.emit())
         self.lay.insertWidget(0, QLabel("<b>Vault</b>"))
         self.lay.insertWidget(1, compact_row(self.lock_now))
         from ui.vaultsettings import VaultSection

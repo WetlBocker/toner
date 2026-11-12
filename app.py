@@ -6,7 +6,7 @@ import traceback
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from PySide6.QtCore import QTimer, Qt, Signal
+from PySide6.QtCore import QEvent, QTimer, Qt, Signal
 from PySide6.QtGui import QAction, QIcon, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import QApplication, QMainWindow, QMenu, QMessageBox, QSplitter, QSystemTrayIcon, QWidget
 from core import agents, audit, checks, db, demarc, dircheck, display, legacyssh, notify, paths, perms, reports, roles, session, sessionlog, sessions, trends, trust, tunnel, updates
@@ -19,6 +19,7 @@ from ui.history import HistoryTab
 from ui.nav import NavStack
 from ui.inventory import InventoryTab
 from ui import otpprompt
+from ui.widgets import while_alive
 from ui.notifier import Notifier
 from ui.palette import CommandPalette
 from ui.results import ResultsTab
@@ -105,14 +106,6 @@ def plain_look(app):
     theme.apply(app, theme.plain_look(), ctx=dict(system_dark=dark, hour=hour, period=themes.period(hour), worst=None,
                                                           org_colour="", status=None))
     app.setWindowIcon(app_icon())
-
-
-def restart():
-    """Start Toner again after Sign out, so nothing of the old session stays in memory: the same program and arguments (an
-    AppImage starts the AppImage; its mount goes when this process ends), without --minimized, as someone is about to sign in."""
-    from PySide6.QtCore import QProcess
-    args = sys.argv[1:] if getattr(sys, "frozen", False) else sys.argv
-    QProcess.startDetached(os.environ.get("APPIMAGE") or sys.executable, [a for a in args if a != "--minimized"])
 
 
 class Main(QMainWindow):
@@ -250,7 +243,7 @@ class Main(QMainWindow):
         self.ai_button.clicked.connect(lambda: self.show_assistant(not self.assistant_open()))
         self.ai_button.moved.connect(self._ai_button_moved)
         self.ai_state_changed.connect(self._ai_state)
-        AI.add_listener(lambda on, text: self.ai_state_changed.emit(on, text))
+        while_alive(self, AI.add_listener, AI.remove_listener, lambda on, text: self.ai_state_changed.emit(on, text))
         self.automation.assistant_page.open_requested.connect(self.open_assistant_conversation)
         self.automation.assistant_page.settings_requested.connect(lambda: (self.go("Settings"), self.settings.select_page("AI")))
         self.assistant.turn_done.connect(self.automation.assistant_page.refresh)
@@ -286,7 +279,7 @@ class Main(QMainWindow):
         self.relook_timer.timeout.connect(self.relook)
         self.relook_timer.start()
         try:
-            QApplication.instance().styleHints().colorSchemeChanged.connect(lambda _s: self.relook())     # System (Qt 6.5+)
+            QApplication.instance().styleHints().colorSchemeChanged.connect(self._scheme_changed)     # System (Qt 6.5+); a method: it goes with the window
         except Exception:
             quiet.ignored()
         tabs.setCollapsed(bool(db.get_setting("sidebar_collapsed")))
@@ -318,8 +311,9 @@ class Main(QMainWindow):
         self.apply_permissions()
         self.rules_changed.connect(lambda: (self.apply_permissions(), self.settings.apply_role()),
                                    Qt.ConnectionType.QueuedConnection)
-        roles.on_change(self.rules_changed.emit)        # e.g. an Admin changing their own role, or the directory demoting them
-        session.on_change(lambda st: dircheck.stop() if st == "signed_out" else dircheck.start())   # the directory check runs while a session is open or locked
+        while_alive(self, roles.on_change, roles.off_change, self.rules_changed.emit)   # e.g. an Admin changing their own role, or the directory demoting them
+        while_alive(self, session.on_change, session.off_change,                     # the directory check runs while a session is open or locked
+                    lambda st: dircheck.stop() if st == "signed_out" else dircheck.start())
         if session.state() != "signed_out":
             dircheck.start()
 
@@ -346,7 +340,8 @@ class Main(QMainWindow):
 
     def sign_out(self):
         """Sign out (the user menu, or Sign in as someone else): the usual questions before closing first; if one is refused, nothing
-        happens. Then the data key closes and Toner ends; app.main starts it again."""
+        happens. Then the data key closes and this window goes; app.main shows the sign-in page and builds a new window for whoever
+        signs in. Toner stays open (the owner's choice over starting a fresh copy, which came back late or behind other windows)."""
         self._signing_out = self._quitting = True
         if not self.close():
             self._signing_out = self._quitting = False
@@ -357,6 +352,9 @@ class Main(QMainWindow):
     # ---------- the Assistant (core/assistant, ui/assistant.py)
     def _ai_state(self, connected, text):
         """The connection check finished (startup, Test, Save): the strip's words, and the side button only while connected."""
+        if self._signing_out:
+            return                                     # a check that ended after Sign out: the data is closed and this window is going
+                                                       # (not session.state(): with sign-in off it always reads signed_out)
         self.strip.show_ai()
         self.ai_button.set_provider(AI.provider_id())
         connected = bool(connected) and perms.allowed("ai")
@@ -991,6 +989,9 @@ class Main(QMainWindow):
         if apply_look(QApplication.instance()):
             self._restyle()
 
+    def _scheme_changed(self, *_):
+        self.relook()
+
     def relook(self):
         """An interactive theme's input may have changed (a run finished, the hour or the organization changed, Windows switched
         light/dark): apply the look again if so. Costs nothing otherwise. An unsaved preview stays as it is."""
@@ -1116,7 +1117,8 @@ class Main(QMainWindow):
         self.backup_scheduler.shutdown()
         agents.stop()
         demarc.stop()
-        self.about.apply_on_exit()     # a downloaded update installs as Toner closes, if automatic updating is on
+        if not self._signing_out:
+            self.about.apply_on_exit()     # a downloaded update installs as Toner closes, if automatic updating is on (not at Sign out: Toner stays)
         self.about.shutdown()
         self.lock_screen.release()     # the lock goes with Toner, or it would keep the app alive
         super().closeEvent(event)
@@ -1183,11 +1185,11 @@ def watch_password_manager(win):
     def tell():
         s = extstore.status()
         if not s.get("at"):
-            QTimer.singleShot(1000, tell)                    # the first round is still running
+            QTimer.singleShot(1000, win, tell)               # the first round is still running (win: it stops with the window)
         elif not s.get("connected"):
             from ui.toast import toast
             toast(win, extstore.status_text(s))
-    QTimer.singleShot(1500, tell)
+    QTimer.singleShot(1500, win, tell)
 
 
 def sign_in_at_start():
@@ -1231,9 +1233,29 @@ def main():
     ipmenu.install(app)                            # right-click on a selected IP address anywhere: Ping and WHOIS Lookup
     from core import passvault
     passvault.install()                            # saved passwords live in Toner's vault, which signing in opens
+    first = True
+    while True:
+        win = signed_in_window(app, first)
+        first = False
+        if win is None:                            # the person quit at the sign-in page
+            session.sign_out()
+            sys.exit(0)
+        code = app.exec()
+        tunnel.close_all()
+        log.info("Toner stopped" if not win._signing_out else "Signed out")
+        if not win._signing_out:
+            sys.exit(code)
+        from core import extstore
+        extstore.stop()                            # the password manager's rounds belong to the session that ended
+        win.deleteLater()
+        app.sendPostedEvents(None, QEvent.Type.DeferredDelete)       # the window and its listeners (ui.widgets.while_alive) go now
+        plain_look(app)                            # the sign-in page in the look it has before anyone signs in
+
+
+def signed_in_window(app, first=True):
+    """The sign-in page, then everything that needs the data open, then the main window. None when the person quit."""
     if not sign_in_at_start():
-        session.sign_out()
-        sys.exit(0)
+        return None
     db.init()
     trust.install()                                # web requests also trust what Windows trusts (HTTPS inspection)
     legacyssh.apply()                              # ssh-rsa and SHA-1 key exchange for older devices, unless turned off
@@ -1250,7 +1272,7 @@ def main():
     theme.write_plain(theme.saved_look()["theme"])    # (every start: existing users get the plain copy without visiting Settings)
     otpprompt.install()
     win = Main()
-    if "--minimized" in sys.argv and win.background_mode():
+    if first and "--minimized" in sys.argv and win.background_mode():
         win.update_tray()                          # started with Windows: wait in the tray
     else:
         win.show()
@@ -1259,12 +1281,7 @@ def main():
     if tunnel.enabled() and tunnel.settings()["autostart"]:
         QTimer.singleShot(1500, win.strip.connect_tunnel)          # Settings > Proxy > SSH Tunnel > Connect when Toner starts
     log.info("Toner started")
-    code = app.exec()
-    tunnel.close_all()
-    log.info("Toner stopped")
-    if win._signing_out:
-        restart()
-    sys.exit(code)
+    return win
 
 
 if __name__ == "__main__":

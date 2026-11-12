@@ -368,6 +368,12 @@ def on_change(fn):
     _callbacks.append(fn)
 
 
+def off_change(fn):
+    """Stop telling `fn` (a window that goes at Sign out)."""
+    if fn in _callbacks:
+        _callbacks.remove(fn)
+
+
 def groups_changed():
     """After the directory check wrote the signed-in account's groups role: let go of role keys it no longer allows, then tell
     the listeners."""

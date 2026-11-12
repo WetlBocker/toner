@@ -35,6 +35,12 @@ def on_change(fn):
     _callbacks.append(fn)
 
 
+def off_change(fn):
+    """Stop telling `fn` (a window that goes at Sign out: Toner stays open and builds the next one)."""
+    if fn in _callbacks:
+        _callbacks.remove(fn)
+
+
 def _notify(new):
     """Tell the listeners after the lock is released, so one that waits on another thread calling into session can't deadlock."""
     for fn in list(_callbacks):

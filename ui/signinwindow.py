@@ -9,13 +9,48 @@ import threading
 import webbrowser
 
 from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal
-from PySide6.QtWidgets import (QComboBox, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QStackedWidget,
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QStackedWidget,
                                QVBoxLayout)
 
-from core import audit, datakey, directory, dirsignin, duo, oidc, passvault, passwords, perms, pinslot, session
+import json
+import os
+
+from core import audit, datakey, db, directory, dirsignin, duo, oidc, passvault, passwords, perms, pinslot, session
 from ui import theme
 
 DAMAGED = "This file is damaged or was changed outside Toner."
+REMEMBER = "Remember me"
+
+
+def remembered_path():
+    """The last username signed in with, kept in plain beside the database when Remember me was ticked: the sign-in page shows
+    it before anything is open. Only the name, never a password; a factory reset removes it with the data folder."""
+    return db.base_path().with_suffix(".signin")
+
+
+def remembered():
+    """The remembered username, or ""."""
+    try:
+        with open(remembered_path(), "rb") as f:
+            raw = f.read(1025)                           # a name is a few bytes: anything bigger is not ours
+        name = json.loads(raw.decode("utf-8")).get("user") if len(raw) <= 1024 else ""
+        return name.strip() if isinstance(name, str) else ""
+    except (OSError, ValueError, AttributeError, RecursionError):
+        return ""
+
+
+def remember(name):
+    """Keep `name` for next time, or forget it ("")."""
+    p = remembered_path()
+    try:
+        if not name:
+            p.unlink(missing_ok=True)
+            return
+        tmp = p.with_name(p.name + ".tmp")
+        tmp.write_text(json.dumps({"user": name}), encoding="utf-8")
+        os.replace(tmp, p)
+    except OSError:
+        pass                                             # next time the box is just empty
 VAULT_CHANGED = "The vault changed after it was opened. Open it again, then try again."
 # what a damaged or foreign netcheck.keys raises (JSONDecodeError is a ValueError); WrongPassword, also a ValueError, is caught first
 DAMAGED_ERRORS = (OSError, ValueError, KeyError, TypeError)
@@ -187,6 +222,14 @@ class SignInWindow(QDialog):
 
         self.name_page, lay = self._page(APPROVER_TITLE, APPROVER_TEXT) if approver_for else self._page("Sign in")
         self.name = field(lay, "Username or email")
+        self.remember = None if approver_for else QCheckBox(REMEMBER)     # (an admin approving someone else's sign-in: nothing kept)
+        if self.remember is not None:
+            lay.addSpacing(4)
+            lay.addWidget(self.remember, 0, Qt.AlignmentFlag.AlignLeft)
+            last = remembered()
+            if last:
+                self.name.setText(last)
+                self.remember.setChecked(True)
         self.name_error = error_label()
         self.next = primary("Next")
         self._finish(lay, self.name, self.name_error, self.next, self._next)
@@ -674,6 +717,13 @@ class SignInWindow(QDialog):
     def done(self, r):
         self._stop()
         super().done(r)
+
+    def accept(self):
+        """Signed in, by any way: keep the username for next time when Remember me is ticked, else forget it. The recovery key
+        is no account: nothing changes."""
+        if self.remember is not None and session.user() is not None:
+            remember(self.name.text().strip() if self.remember.isChecked() else "")
+        super().accept()
 
     def reject(self):
         self._stop()                                     # a PIN step that opens the session ends before the check below
