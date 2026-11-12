@@ -62,6 +62,7 @@ for n, d in (("ana", "d1"), ("bob", "d1"), ("sso-user", "s1")):
 def hint(name, n):                                      # the record's key count, as a first key leaves it (the keys themselves: test_datakey_keys*)
     datakey.edit(lambda d: d["accounts"][name].__setitem__("keys_n", n))
 hint("Admin1", 2); hint("ana", 1)
+hint("sso-user", 1)                                     # forged: an SSO account never has keys, whatever its record says
 
 page = A.AccountsPage()
 page.load()
@@ -74,6 +75,9 @@ check("the list has a Keys column with each account's count; SSO rows are blank"
 page.table.selectRow(page.table.findItems("Tech1", A.Qt.MatchFlag.MatchExactly)[0].row())
 dlg = A.AccountDialog("Tech1")
 check("resetting a local password says what it does to keys", "Resetting the password also removes this account's security keys." in [l.text() for l in dlg.findChildren(QLabel)])
+dlg.deleteLater()
+dlg = A.AccountDialog("admin1")
+check("...but not when it is your own, whose keys stay", not any("security keys" in l.text() for l in dlg.findChildren(QLabel)))
 dlg.deleteLater()
 
 def selects(name):
@@ -139,5 +143,23 @@ page.remove_keys.click()
 check("a non-Admin can't remove keys: said, kept", msgs == [A.perms.REASON] and datakey.has_keys("bob"), msgs)
 page.load()
 check("...and the switches are hidden from them", page.require.isHidden() and page.helper.isHidden())
+
+# an AD Admin's own row: their keys go through "Security keys...", never Remove keys... (it would drop the slot their unlock needs)
+session.sign_out()
+slot = pinslot.new("pin", datakey.new_slot_id(), "a long pin 4321")
+datakey.start_directory_account(directory.User("6f1c2a4e-0000-4000-8000-000000000004", "dan", "dan", (TECHS,), True), "d1", slot, role="Admin")
+session.sign_in("Admin1", PW)
+roles.approve("dan", slot)
+hint("dan", 1)
+session.sign_out(); session.sign_in_pin("dan", "a long pin 4321")
+page.load()
+dan_before = datakey.read()["accounts"]["dan"]
+msgs.clear()
+check("signed in as an AD Admin with keys: Remove keys... is off on their own row, on for another keyed AD row", A.perms.is_admin()
+      and not selects("dan") and selects("bob"))
+selects("dan"); page.remove_keys.setEnabled(True)
+QMessageBox.exec = answer("Remove")
+page.remove_keys.click()
+check("...and forced, it changes nothing", datakey.read()["accounts"]["dan"] == dan_before and datakey.has_keys("dan") and msgs == [], msgs)
 
 print(f"\n{ok} passed, {bad} failed"); sys.exit(1 if bad else 0)

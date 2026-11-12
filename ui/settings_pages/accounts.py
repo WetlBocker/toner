@@ -79,7 +79,9 @@ class AccountDialog(_CardDialog):
     """Add an account, or (with `name`) set a new password for that one. Accepting does it."""
 
     def __init__(self, name=None, parent=None):
-        super().__init__("Reset password" if name else "Add account", RESET_NOTE if name else "", parent)
+        me = session.user()
+        mine = bool(name and me and name.casefold() == me.casefold())     # your own reset keeps your keys (datakey.set_password)
+        super().__init__("Reset password" if name else "Add account", RESET_NOTE if name and not mine else "", parent)
         self.fixed = name
         self.name = field(self.lay, "Username")
         self.pw = field(self.lay, "Password", secret=True)
@@ -243,9 +245,10 @@ class AccountsPage(Page):
     def refresh(self):
         self.table.setRowCount(0)
         self._directory_rows, self._keyed = set(), set()
+        me = (session.user() or "").casefold()
         for a in (datakey.accounts() if datakey.exists() else []):      # (no keys file: sign-in is not set up yet)
             self.table.insertRow(self.table.rowCount())
-            if a.get("directory_kind") in ("ad", "ldap") and a["keys"]:
+            if a.get("directory_kind") in ("ad", "ldap") and a["keys"] and a["name"].casefold() != me:    # your own: "Security keys..."
                 self._keyed.add(a["name"])
             keys = "" if a.get("directory_kind") == "oidc" else str(a["keys"])     # an SSO account never has keys: its cell is blank
             for j, v in enumerate((a["name"], type_of(a), str(a["created"]), a["role"], unlocks_with(a), keys)):
@@ -345,7 +348,8 @@ class AccountsPage(Page):
 
     def _remove_keys(self):
         name = self._selected()
-        if name not in self._keyed:
+        me = session.user()
+        if name not in self._keyed or (me and name.casefold() == me.casefold()):     # your own slot would go, and your unlock with it
             return
         try:
             if not perms.is_admin():                    # datakey.clear_keys checks no permission itself
