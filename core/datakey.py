@@ -46,6 +46,7 @@ _box = None       # the signed-in account's (or the recovery key's) private box 
 _name = None      # the signed-in account's stored spelling; None for the recovery key
 _keys = None      # the signed-in account's security keys, {"list": [...], "wraps": [...]}, as its record's keys blob holds them
 _k2 = None        # ... and the secret each key's value unwraps, which with the password key seals its data key
+_seen = None      # its record's "keys" as this process last read or wrote it: a key write refuses once the file holds another
 _started = {}     # slot id -> a started directory account's box private, held until an approval seals it (roles.approve)
 # core/roles sets this (it reads this module, so this one can't import it): fn(before, after) inside each write that adds, removes or
 # re-keys an account or the recovery key. It drops grants made for a box key that is gone, re-signs the rules, and may refuse. It
@@ -186,7 +187,7 @@ def _creds(keys):
 def _with_key(got, stored, key):
     """(the payload, K2) of a keyed record whose password _attempt proved. It asks the key (a touch, minutes), so never under a lock."""
     from core import fidokey
-    kek, keys, sealed = got
+    kek, keys, sealed, _ = got
     if key is None:
         raise KeyNeeded()
     cid, value = key(_creds(keys))
@@ -292,7 +293,8 @@ def _failed(doc, counter, now, free=FREE_TRIES):
 
 def _attempt(name, secret):
     """(the payload of `name`'s seal (None: the recovery seal), the stored name, the failed tries counted before it). For a keyed
-    record the "payload" is (the password key, its keys blob, its sealed_k), for _with_key once the locks are let go. A Part 1
+    record the "payload" is (the password key, its keys blob, its sealed_k, its "keys" as stored), for _with_key once the locks
+    are let go. A Part 1
     seal gains its box key in the same write that clears the count. Every password try, for any name, real or not, counts against
     one shared counter (per-name counts would show which names exist); the recovery key has its own. The count is read, changed
     and written under the file lock, so two Toner processes can't race it. Raises Throttled while a wait runs (without
@@ -315,7 +317,7 @@ def _attempt(name, secret):
                 _kek(secret, _DUMMY_SALT, PASSWORD_KDF)       # an unknown name costs what a real check costs
             elif "keys" in rec:
                 kek = _kek(secret, _unb64(rec["kdf"]["salt"]), rec["kdf"])
-                key = kek, _keys_of(kek, rec, stored), _unb64(rec["sealed_k"])
+                key = kek, _keys_of(kek, rec, stored), _unb64(rec["sealed_k"]), rec["keys"]
             else:
                 key = _unseal(secret, rec, _aad(stored))
         except InvalidTag:
@@ -330,10 +332,10 @@ def _attempt(name, secret):
         return key, stored, fails
 
 
-def _open(payload, name, keys=None, k2=None):
-    global _key, _box, _name, _keys, _k2
+def _open(payload, name, keys=None, k2=None, seen=None):
+    global _key, _box, _name, _keys, _k2, _seen
     sqldb.set_key(payload[:32])
-    _key, _box, _name, _keys, _k2 = payload[:32], payload[32:], name, keys, k2
+    _key, _box, _name, _keys, _k2, _seen = payload[:32], payload[32:], name, keys, k2, seen
 
 
 def _change(fn, accounts=False, signed_in=True):
@@ -403,7 +405,7 @@ def open_with_password(name, password, key=None):
     got, stored, fails = _attempt(_clean(name), password or "")
     if isinstance(got, tuple):
         payload, k2 = _with_key(got, stored, key)
-        _open(payload, stored, got[1], k2)
+        _open(payload, stored, got[1], k2, got[3])
     else:
         _open(got, stored)
     return fails
@@ -459,7 +461,7 @@ def add_local(name, password, role="Admin"):
 def set_password(name, password):
     """Also clears the password tries' wait: whoever sets a password has the key open (a password or the recovery key), and the
     new password must work at once (the reset after a recovery-key sign-in signs in with it straight away)."""
-    global _box
+    global _box, _seen
     def reseal(doc):
         stored = _stored(doc, name)
         old = doc["accounts"][stored]
@@ -467,43 +469,49 @@ def set_password(name, password):
             raise WrongPassword(WRONG)                  # its directory keeps its password
         _check(password, stored)
         doc["accounts"][stored], private = _account(stored, password, _key, old.get("created"), old.get("role", "Admin"))
-        if stored == _name and "keys" in old and _k2 is not None:
-            # your own keys stay, with no touch: the keys blob and sealed_k go under the new password with the K2 held
-            rec = doc["accounts"][stored]
-            _keyed(rec, _kek(password, _unb64(rec["kdf"]["salt"]), rec["kdf"]), _key + private, _keys, _k2, stored)
+        if stored == _name:
+            if old.get("keys") != _seen:
+                raise Locked("Sign in first.")          # another process changed your keys: re-sealing what this one holds would undo it
+            if "keys" in old:
+                # your own keys stay, with no touch: the keys blob and sealed_k go under the new password with the K2 held
+                rec = doc["accounts"][stored]
+                _keyed(rec, _kek(password, _unb64(rec["kdf"]["salt"]), rec["kdf"]), _key + private, _keys, _k2, stored)
         doc["throttle"] = {"fails": 0, "until": 0}
-        return stored, private
-    stored, private = _change(reseal, accounts=True)
+        return stored, private, doc["accounts"][stored].get("keys")
+    stored, private, seen = _change(reseal, accounts=True)
     if stored == _name:                 # your own password: hold the new box key (only once the write has landed)
-        _box = private
+        _box, _seen = private, seen
 
 
 def _mine(doc, secret):
     """(the signed-in account's stored name, record, password key, keys blob, payload) once `secret` is its password; the blob is
-    empty for an account without keys. WrongPassword (not counted: the key is already open); KeyNeeded when another process gave
-    the account keys since this one signed in, so the K2 they seal is not held here."""
+    empty for an account without keys. A wrong password counts on the shared counter, and a running wait is honoured, as
+    check_password's are (an open session is no uncounted way to guess it): WrongPassword or Throttled. Locked when the record's
+    keys are not what this process last saw: another process changed them, and writing what this one holds would undo that."""
+    counter = doc.setdefault("throttle", {"fails": 0, "until": 0})
+    now = time.time()
+    _gate(doc, counter, now)
     stored = _find(doc, _name) if _name is not None else None
     rec = doc["accounts"].get(stored)
-    if rec is None or rec.get("kind") != "local":
-        raise Locked("Sign in first.")                 # the recovery key or a directory account: no local record of yours to key
+    if rec is None or rec.get("kind") != "local" or rec.get("keys") != _seen:
+        raise Locked("Sign in first.")                 # (also the recovery key or a directory account: no local record of yours)
     kek = _kek(secret or "", _unb64(rec["kdf"]["salt"]), rec["kdf"])
     try:
-        if "keys" not in rec:
-            return stored, rec, kek, {"list": [], "wraps": []}, _dec(kek, _unb64(rec["key"]), _aad(stored))
-        keys = _keys_of(kek, rec, stored)
+        keys = _keys_of(kek, rec, stored) if "keys" in rec else {"list": [], "wraps": []}
+        payload = _dec(kek, _unb64(rec["key"]), _aad(stored)) if "keys" not in rec else None
     except InvalidTag:
+        _failed(doc, counter, now)
         raise WrongPassword(WRONG) from None
-    try:
-        payload = _dec(_hkdf(kek + (_k2 or b""), KEYED_INFO), _unb64(rec["sealed_k"]), _aad(stored))
-    except InvalidTag:
-        raise KeyNeeded() from None
+    counter["fails"], counter["until"] = 0, 0
+    if payload is None:
+        payload = _dec(_hkdf(kek + _k2, KEYED_INFO), _unb64(rec["sealed_k"]), _aad(stored))
     return stored, rec, kek, keys, payload
 
 
 def add_key(secret, cred, value, label):
     """Add a key (fidokey.register's credential and value) to the signed-in account. The first one takes the password-only seal
     away in the same write. The box key and the payload stay, so the roles hook has nothing to see."""
-    global _keys, _k2
+    global _keys, _k2, _seen
 
     def add(doc):
         stored, rec, kek, keys, payload = _mine(doc, secret)
@@ -512,14 +520,14 @@ def add_key(secret, cred, value, label):
                              "added": datetime.now(timezone.utc).isoformat(timespec="seconds")})
         keys["wraps"].append(_b64(_enc(_hkdf(value, KEY_INFO), k2)))
         _keyed(rec, kek, payload, keys, k2, stored)
-        return keys, k2
-    _keys, _k2 = _change(add)
+        return keys, k2, rec["keys"]
+    _keys, _k2, _seen = _change(add)
     audit.log("security key added", label)
 
 
 def remove_key(secret, index):
     """Remove the signed-in account's key at `index` (of my_keys()). Removing the last stores the account as one without keys."""
-    global _keys, _k2
+    global _keys, _k2, _seen
 
     def drop(doc):
         stored, rec, kek, keys, payload = _mine(doc, secret)
@@ -527,7 +535,7 @@ def remove_key(secret, index):
         keys["wraps"].pop(index)
         if keys["list"]:
             _keyed(rec, kek, payload, keys, _k2, stored)
-            return label, keys, _k2
+            return label, keys, _k2, rec["keys"]
         plain = {}                                      # the fields in the order an account without keys has them
         for k, v in rec.items():
             if k not in ("keys_n", "keys", "sealed_k"):
@@ -535,8 +543,8 @@ def remove_key(secret, index):
             if k == "kdf":
                 plain["key"] = _b64(_enc(kek, payload, _aad(stored)))
         doc["accounts"][stored] = plain
-        return label, None, None
-    label, _keys, _k2 = _change(drop)
+        return label, None, None, None
+    label, _keys, _k2, _seen = _change(drop)
     audit.log("security key removed", label)
 
 
@@ -769,8 +777,8 @@ def drop_slot(rec):
 
 
 def _drop_keys():
-    global _keys, _k2
-    _keys = _k2 = None
+    global _keys, _k2, _seen
+    _keys = _k2 = _seen = None
 
 
 def close():
