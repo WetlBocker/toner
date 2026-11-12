@@ -104,5 +104,22 @@ check("a chip with nothing behind it says so", r.table.topLevelItemCount() == 0 
 r.show_all(); app.processEvents()
 check("Show all results clears the chip too", r.chip == "ALL" and r.chips.current == "ALL" and r.table.topLevelItemCount() == 3)
 
+print("== the card's height follows its checks (last: its 15 results would change the counts above)")
+dev("big-sw")
+db.save_run([Result("big-sw", f"check {i:02}", "OK", "1", "a long message that would widen the pane if its columns counted " * 2) for i in range(15)])
+w.go("Inventory"); inv.show_details_pane(); inv.refresh(); app.processEvents()
+width = inv.pane.width()
+pick("big-sw"); app.processEvents()
+t, card = inv.pane.summary.checks, inv.pane.body.parentWidget()
+def tall(h):
+    w.resize(1400, h); app.processEvents(); app.processEvents()
+    return t.verticalScrollBar().isVisible(), card.geometry().bottom(), inv.pane.height()
+scrolls, bottom, room = tall(1600)
+check("room enough: all 15 checks show, no scroll bar, and the card ends under them, not at the window's bottom",
+      t.rowCount() == 15 and not scrolls and bottom < room - 40, (scrolls, bottom, room))
+check("...and the pane keeps its width (long messages don't widen it)", inv.pane.width() == width, (inv.pane.width(), width))
+scrolls, bottom, room = tall(700)
+check("a short window: the checks scroll and the card stays inside the window", scrolls and bottom <= room, (scrolls, bottom, room))
+
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

@@ -4,8 +4,8 @@ from datetime import datetime
 
 from PySide6.QtCore import QEvent, QThread, QTimer, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QFormLayout, QHBoxLayout, QLabel, QMessageBox,
-                               QPushButton, QScrollArea, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QAbstractItemView, QAbstractScrollArea, QComboBox, QDialog, QFormLayout, QHBoxLayout, QLabel, QMessageBox,
+                               QPushButton, QScrollArea, QSizePolicy, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
 from core import backup, db, display, perms, profiles, sessions, snmp, unifikids, vendors
 from core.chartkinds import over_time_kind, shown_name, stored_names
 from core.firmware import human_size
@@ -67,6 +67,10 @@ class DeviceSummary(QWidget):
         self.checks.setItemDelegateForColumn(1, StatusDelegate(self.checks))
         self.checks_title = QLabel("<b>Latest checks</b>")
         if stacked:                                                 # the pane: facts above the checks
+            # the card ends under its last check (not ~5 rows down), and the checks scroll only when the window is shorter than that;
+            # its width stays the pane's, never its columns'
+            self.checks.setSizeAdjustPolicy(QAbstractScrollArea.SizeAdjustPolicy.AdjustToContents)
+            self.checks.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
             lay = QVBoxLayout(self)
             lay.setContentsMargins(0, 0, 0, 0)
             lay.addWidget(info_w)
