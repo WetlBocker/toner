@@ -191,13 +191,15 @@ check("demoting the only Admin: said, nothing changed", msgs == ["Toner needs at
       and page.table.item(rows().index("Admin"), 3).text() == "Admin", msgs)
 
 PUSH = [i for i, (k, _) in enumerate(perms.PERMISSIONS) if k == "push"][0]
-check("Roles table: PERMISSIONS order, labels, Engineer and Tech columns only",
-      [page.perm_table.verticalHeaderItem(i).text() for i in range(page.perm_table.rowCount())] == [l for _, l in perms.PERMISSIONS]
-      and [page.perm_table.horizontalHeaderItem(j).text() for j in range(page.perm_table.columnCount())] == ["Engineer", "Tech"]
-      and page.perm_table.verticalHeaderItem(PUSH).text() == "Push changes to devices")
 from PySide6.QtCore import Qt
-check("Roles table shows the defaults", page.perm_table.item(PUSH, 0).checkState() == Qt.CheckState.Checked
-      and page.perm_table.item(PUSH, 1).checkState() == Qt.CheckState.Unchecked)
+check("Roles table: PERMISSIONS order, labels in a column of their own (not a row header), then Engineer and Tech",
+      [page.perm_table.item(i, 0).text() for i in range(page.perm_table.rowCount())] == [l for _, l in perms.PERMISSIONS]
+      and [page.perm_table.horizontalHeaderItem(j).text() for j in range(page.perm_table.columnCount())] == ["", "Engineer", "Tech"]
+      and page.perm_table.item(PUSH, 0).text() == "Push changes to devices" and page.perm_table.verticalHeader().isHidden()
+      and not page.perm_table.item(PUSH, 0).flags() & Qt.ItemFlag.ItemIsUserCheckable)
+from PySide6.QtCore import Qt
+check("Roles table shows the defaults", page.perm_table.item(PUSH, 1).checkState() == Qt.CheckState.Checked
+      and page.perm_table.item(PUSH, 2).checkState() == Qt.CheckState.Unchecked)
 check("no tamper banner", page.banner.isHidden())
 from PySide6.QtTest import QTest
 page.resize(900, 1400); page.show(); QApplication.processEvents()
@@ -205,18 +207,18 @@ pt = page.perm_table
 check("Roles: whole rows show (none cut off at the foot), and the table is no wider than its two columns",
       pt.viewport().height() % pt.rowHeight(0) == 0 and pt.viewport().width() == pt.horizontalHeader().length(),
       (pt.viewport().height(), pt.rowHeight(0), pt.viewport().width(), pt.horizontalHeader().length()))
-mid = pt.visualRect(pt.model().index(PUSH, 1)).center()
+mid = pt.visualRect(pt.model().index(PUSH, 2)).center()
 QTest.mouseClick(pt.viewport(), Qt.MouseButton.LeftButton, pos=mid); QApplication.processEvents()
-on = pt.item(PUSH, 1).checkState() == Qt.CheckState.Checked
+on = pt.item(PUSH, 2).checkState() == Qt.CheckState.Checked
 QTest.mouseClick(pt.viewport(), Qt.MouseButton.LeftButton, pos=mid); QApplication.processEvents()
 check("...a box sits in the middle of its cell, under its role, and a click there ticks it (and again unticks it)",
-      on and pt.item(PUSH, 1).checkState() == Qt.CheckState.Unchecked)
+      on and pt.item(PUSH, 2).checkState() == Qt.CheckState.Unchecked)
 n = acts().count("role permissions changed")
-page.perm_table.item(PUSH, 0).setCheckState(Qt.CheckState.Unchecked)
+page.perm_table.item(PUSH, 1).setCheckState(Qt.CheckState.Unchecked)
 page.save_roles.click()
 check("Save roles: stored", roles.permissions("Engineer")["push"] is False and roles.permissions("Tech") == perms.DEFAULTS["Tech"])
 check("...one audit row", acts().count("role permissions changed") == n + 1, acts())
-check("...the table keeps it", page.perm_table.item(PUSH, 0).checkState() == Qt.CheckState.Unchecked)
+check("...the table keeps it", page.perm_table.item(PUSH, 1).checkState() == Qt.CheckState.Unchecked)
 session.sign_out(); session.sign_in("Enid", PW3)
 check("an Engineer signing in afterwards can't push", perms.allowed("push") is False)
 from types import SimpleNamespace
@@ -231,7 +233,7 @@ session.sign_out(); session.sign_in("Admin", PW)
 session.sign_out(); session.sign_in("Tia", PW2)
 page.refresh()
 msgs.clear()
-page.perm_table.item(PUSH, 1).setCheckState(Qt.CheckState.Checked)
+page.perm_table.item(PUSH, 2).setCheckState(Qt.CheckState.Checked)
 page.save_roles.click()
 page.table.selectRow(rows().index("Enid")); A.RoleDialog.exec = pick("Tech"); page.change.click()
 A.AccountDialog.exec = fill("Zed", PW3); page.add.click()
@@ -248,8 +250,8 @@ datakey.close(); session.sign_out(); session.sign_in("Admin", PW)
 page.refresh()
 check("tampered: banner shown, with the approved words", not page.banner.isHidden() and page.banner.text() ==
       "The roles were changed outside Toner, so everyone has a Tech's permissions for now. Sign in with the recovery key, then save the roles to put them right.")
-check("tampered: the table shows what is stored", page.perm_table.item(PUSH, 0).checkState() == Qt.CheckState.Unchecked
-      and page.perm_table.item(PUSH, 1).checkState() == Qt.CheckState.Unchecked and page.table.item(rows().index("Enid"), 3).text() == "Admin")
+check("tampered: the table shows what is stored", page.perm_table.item(PUSH, 1).checkState() == Qt.CheckState.Unchecked
+      and page.perm_table.item(PUSH, 2).checkState() == Qt.CheckState.Unchecked and page.table.item(rows().index("Enid"), 3).text() == "Admin")
 msgs.clear()
 page.save_roles.click()
 check("tampered: an ordinary sign-in can't save, says why", msgs == [perms.REASON], msgs)
@@ -260,7 +262,7 @@ check("tampered: a non-Admin's Settings save leaves the session length and idle 
 check("...and the two fields go back to the stored values", (page.session.value(), page.idle.value()) == (12, 15), (page.session.value(), page.idle.value()))
 session.sign_out(); session.sign_in_recovery(shownkey[0])
 page.refresh()
-page.perm_table.item(PUSH, 0).setCheckState(Qt.CheckState.Checked)
+page.perm_table.item(PUSH, 1).setCheckState(Qt.CheckState.Checked)
 page.save_roles.click()
 check("recovery sign-in saving roles clears the banner", roles.state() == "ok" and page.banner.isHidden(), roles.state())
 check("...and signs what was shown", roles.permissions("Engineer")["push"] is True and roles.role_of("Enid") == "Admin")

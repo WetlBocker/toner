@@ -54,6 +54,8 @@ class _Fitter(QObject):
         self.head.sectionResized.connect(self._resized)
         self.head.setResizeContentsPrecision(200)                   # at most 200 rows are measured
         if isinstance(view, QTableView): view.verticalHeader().setResizeContentsPrecision(200)   # (the table asks this one)
+        if self.head.defaultAlignment() & Qt.AlignmentFlag.AlignHCenter:   # a table's headings over its text, as a tree's are (Qt centres them);
+            self.head.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)   # a column of its own sets its item's
         view.installEventFilter(self); view.viewport().installEventFilter(self); self.hv, self.vp = self.head.viewport(), view.viewport(); self.hv.installEventFilter(self)
         self.run()
 

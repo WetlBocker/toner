@@ -3,7 +3,7 @@ the idle-lock minutes and the session length follow Save."""
 import sys
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QHeaderView, QLabel, QMenu, QMessageBox, QPushButton, QTableWidget,
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QLabel, QMenu, QMessageBox, QPushButton, QTableWidget,
                                QTableWidgetItem)
 
 from core import audit, datakey, db, helperclient, osstore, passvault, passwords, perms, quiet, roles, session
@@ -180,15 +180,18 @@ class AccountsPage(Page):
         self.remove_ident.clicked.connect(self._remove_ident)
         self.idents.itemSelectionChanged.connect(self._ident_buttons)
         self.banner = note(TAMPERED)
-        self.perm_table = QTableWidget(len(perms.PERMISSIONS), 2)
-        self.perm_table.setHorizontalHeaderLabels(["Engineer", "Tech"])
-        self.perm_table.setVerticalHeaderLabels([label for _, label in perms.PERMISSIONS])
+        self.perm_table = QTableWidget(len(perms.PERMISSIONS), 3)           # the permission, then a tick box per role
+        self.perm_table.setHorizontalHeaderLabels(["", "Engineer", "Tech"])
+        self.perm_table.verticalHeader().setVisible(False)  # the names are a column: their lines and padding are the cells' (a row header's were not)
+        for i, (_, label) in enumerate(perms.PERMISSIONS):
+            it = QTableWidgetItem(label)
+            it.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            self.perm_table.setItem(i, 0, it)
         self.perm_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-        self.perm_table.setItemDelegate(CentredCheck(self.perm_table))           # the boxes centred under Engineer and Tech
-        for j in range(2):
-            self.perm_table.horizontalHeader().setSectionResizeMode(j, QHeaderView.ResizeMode.Fixed)
-            self.perm_table.setColumnWidth(j, 110)
-        self.perm_table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
+        centred = CentredCheck(self.perm_table)                                   # the boxes centred under Engineer and Tech
+        for j in (1, 2):
+            self.perm_table.setItemDelegateForColumn(j, centred)
+            self.perm_table.horizontalHeaderItem(j).setTextAlignment(Qt.AlignmentFlag.AlignCenter)
         self.perm_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)     # its room is kept, so the width is fixed
         self.perm_table.setAccessibleName("Roles")
         self.save_roles = QPushButton("Save roles")
@@ -253,12 +256,14 @@ class AccountsPage(Page):
                 it = QTableWidgetItem()
                 it.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
                 it.setCheckState(Qt.CheckState.Checked if self._shown[r][key] else Qt.CheckState.Unchecked)
-                self.perm_table.setItem(i, j, it)
+                self.perm_table.setItem(i, j + 1, it)
         t = self.perm_table                                             # whole rows only (none cut off at the foot), and no wider than its columns
+        t.setWordWrap(False)                                            # a name on one line: every row the same height
+        t.resizeColumnsToContents()                                     # the widths every table fits to (ui/tablefit.py), so none is left over
         t.resizeRowsToContents()
         frame, rows = 2 * t.frameWidth(), min(t.rowCount(), 12)
         t.setFixedHeight(sum(t.rowHeight(i) for i in range(rows)) + t.horizontalHeader().sizeHint().height() + frame)
-        t.setFixedWidth(t.verticalHeader().sizeHint().width() + t.horizontalHeader().length() + t.verticalScrollBar().sizeHint().width() + frame)
+        t.setFixedWidth(t.horizontalHeader().length() + t.verticalScrollBar().sizeHint().width() + frame)
 
     def _selected(self):
         r = self.table.currentRow()
@@ -292,7 +297,7 @@ class AccountsPage(Page):
     def _save_roles(self):
         try:
             for j, r in enumerate(("Engineer", "Tech")):
-                now = {k: self.perm_table.item(i, j).checkState() == Qt.CheckState.Checked for i, (k, _) in enumerate(perms.PERMISSIONS)}
+                now = {k: self.perm_table.item(i, j + 1).checkState() == Qt.CheckState.Checked for i, (k, _) in enumerate(perms.PERMISSIONS)}
                 roles.set_permissions(r, {k: v for k, v in now.items() if v != self._shown[r][k]})
         except (ValueError, datakey.Locked, perms.Denied) as e:
             QMessageBox.warning(self, self.title, str(e))
