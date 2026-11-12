@@ -14,7 +14,7 @@ STORE = {}
 keyring.set_password = lambda s, u, p: STORE.__setitem__((s, u), p)
 keyring.get_password = lambda s, u: STORE.get((s, u))
 keyring.delete_password = lambda s, u: STORE.pop((s, u), None)
-import builtins, hashlib, http.server, json, pathlib, subprocess, threading, urllib.parse, uuid
+import builtins, hashlib, http.server, json, pathlib, subprocess, threading, types, urllib.parse, uuid
 import ldap3
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
@@ -341,6 +341,24 @@ check("keys are allowed only when the helper's state says this copy isn't enroll
       allowed == {st: st in ALLOWED for st in STATES}, allowed)
 check("...and add_key refuses in every other state, an unreadable one too", refused == {st: True for st in STATES if st not in ALLOWED}
       and len(datakey.my_keys()) == 1, refused)
+
+# Linux: the helper is a systemd service, so where systemd isn't the running init (WSL without it) there is no helper
+real_sys, real_dir, asked = helperclient.sys, helperclient.SYSTEMD_DIR, []
+helperclient.sys, helperclient.state, helperclient.not_installed = types.SimpleNamespace(platform="linux"), state_is("absent"), REAL_NOT_INSTALLED
+helperclient.SYSTEMD_DIR = pathlib.Path(_tmp.mkdtemp(prefix="netcheck_run_")) / "systemd" / "system"     # (not there)
+subprocess.run = lambda cmd, **kw: asked.append(cmd) or service_manager("absent: installed but disabled")(cmd, **kw)
+check("Linux without systemd running: no helper, keys allowed, systemctl never asked",
+      REAL_NOT_INSTALLED() is True and S.keys_allowed("bob@acme.com") and asked == [])
+helperclient.SYSTEMD_DIR.mkdir(parents=True)                       # systemd is the running init
+linux = {}
+for st in ("absent: no such service", "absent: installed but disabled", "absent: timeout", "absent: error"):
+    subprocess.run = lambda cmd, st=st, **kw: asked.append(cmd) or service_manager(st)(cmd, **kw)
+    linux[st] = S.keys_allowed("bob@acme.com")
+check("Linux with systemd running: only a unit systemd doesn't know is no helper; disabled, a timeout or an error count as on",
+      linux == {"absent: no such service": True, "absent: installed but disabled": False, "absent: timeout": False, "absent: error": False}
+      and asked and all(c[0] == "systemctl" for c in asked), linux)
+helperclient.sys, helperclient.SYSTEMD_DIR, helperclient.state = real_sys, real_dir, real_state
+subprocess.run, helperclient.not_installed = REAL_RUN, lambda: True
 session.sign_out()
 
 # ---------------------------------------------------------------- a forged hint: Duo after all, and nothing saw a sign-in

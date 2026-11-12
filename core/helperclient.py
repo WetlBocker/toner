@@ -177,13 +177,19 @@ def installed():
         return False
 
 
+SYSTEMD_DIR = Path("/run/systemd/system")              # exists only while systemd is the running init (sd_booted)
+
+
 def not_installed():
     """The stricter question beside installed(), for security keys (dirsignin.helper_may_be_on): True only when the service
     manager answers that no helper service exists: Windows' 1060 (no such service), or no toner-helper unit known to systemd.
-    Installed but disabled or stopped, or an error or timeout while asking: False. Another OS has no helper: True."""
+    Installed but disabled or stopped, or an error or timeout while asking: False. Another OS, or Linux where systemd isn't the
+    running init (WSL without it), has no helper: True."""
     if sys.platform not in ("win32", "linux"):
         return True
-    nt = os.name == "nt"
+    nt = sys.platform == "win32"
+    if not nt and not SYSTEMD_DIR.is_dir():             # systemd's own test that it is the running init (not PATH)
+        return True
     cmd = ["sc.exe", "query", _plat.SERVICE] if nt else ["systemctl", "show", "--property=LoadState", "--value", "toner-helper.service"]
     try:
         r = subprocess.run(cmd, capture_output=True, timeout=10, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))

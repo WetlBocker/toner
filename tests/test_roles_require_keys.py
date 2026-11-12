@@ -13,7 +13,7 @@ STORE = {}
 keyring.set_password = lambda s, u, p: STORE.__setitem__((s, u), p)
 keyring.get_password = lambda s, u: STORE.get((s, u))
 keyring.delete_password = lambda s, u: STORE.pop((s, u), None)
-import base64, json, pathlib, subprocess
+import base64, json, pathlib, subprocess, types
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fakekey
 from core import audit, datakey, db, directory, envelope, helperclient, osstore, pinslot, roles, session, updates
@@ -187,6 +187,21 @@ for st in STATES:
 helperclient.state, subprocess.run, helperclient.not_installed = real_state, REAL_RUN, lambda: True
 check("it goes on only when the helper's state says this copy isn't enrolled (fail closed, an unreadable state too)",
       went_on == {st: st in ALLOWED for st in STATES}, went_on)
+
+# Linux: where systemd isn't the running init there is no helper; where it is, a disabled unit still counts as on
+real_sys, real_dir = helperclient.sys, helperclient.SYSTEMD_DIR
+helperclient.sys, helperclient.state, helperclient.not_installed = types.SimpleNamespace(platform="linux"), state_is("absent"), REAL_NOT_INSTALLED
+helperclient.SYSTEMD_DIR = pathlib.Path(_tmp.mkdtemp(prefix="netcheck_run_")) / "systemd" / "system"     # (not there)
+subprocess.run = service_manager("absent: installed but disabled")
+roles.set_require_keys(True)
+no_systemd = roles.require_keys()
+roles.set_require_keys(False)
+helperclient.SYSTEMD_DIR.mkdir(parents=True)
+e = raised(ValueError, lambda: roles.set_require_keys(True))
+check("Linux: on without systemd running; refused with it running and the unit disabled", no_systemd and e is not None
+      and e.args[0] == roles.REQUIRE_HELPER_ON and not roles.require_keys())
+helperclient.sys, helperclient.SYSTEMD_DIR, helperclient.state = real_sys, real_dir, real_state
+subprocess.run, helperclient.not_installed = REAL_RUN, lambda: True
 session.sign_out()
 
 print(f"\n{ok} passed, {bad} failed"); sys.exit(1 if bad else 0)
