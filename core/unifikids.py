@@ -6,7 +6,7 @@ first and last seen. A device the console stops reporting stays listed, greyed, 
 drops that bookkeeping row and nothing else."""
 from core import db, display
 
-KINDS = ("unifi_network", "unifi_cloud")             # Network API consoles, and Site Manager entries scoped to a site
+KINDS = ("unifi", "unifi_network", "unifi_cloud")    # consoles by login or Network API key, and Site Manager entries scoped to a site
 WORST = {"ERROR": 0, "FAIL": 1, "WARN": 2}
 
 
@@ -23,6 +23,12 @@ def note(c, results, now):
         c.executemany("INSERT INTO unifi_seen(device, key, label, model, first_seen, last_seen) VALUES(?,?,?,?,?,?) "
                       "ON CONFLICT(device, key) DO UPDATE SET label=excluded.label, model=excluded.model, last_seen=excluded.last_seen",
                       [(p, k, label, model, now, now) for (p, k), (label, model) in seen.items()])
+        # a name this run reported under another key (the console is now read another way: an id then, a MAC now) is listed once
+        for parent in {p for p, _k in seen}:
+            keys, names = {k for p, k in seen if p == parent}, {v[0] for (p, _k), v in seen.items() if p == parent}
+            c.executemany("DELETE FROM unifi_seen WHERE device=? AND key=?",
+                          [(parent, r["key"]) for r in c.execute("SELECT key, label FROM unifi_seen WHERE device=?", (parent,)).fetchall()
+                           if r["label"] in names and r["key"] not in keys])
 
 
 def _seen(dev):
@@ -46,20 +52,23 @@ def labels(dev):
 
 def children(dev):
     """[{'key', 'name', 'model', 'first_seen', 'last_seen', 'gone', 'status'}], worst status first and gone ones last. Gone: not in the
-    newest run that reported any of its devices (a run that could not read the console marks nothing gone)."""
+    newest run that reported any of its devices (a run that could not read the console marks nothing gone). Status is '' for a
+    device the console's newest run did not report (the console could not be read): how it is now is not known."""
     seen = _seen(dev)
     if not seen:
         return []
     newest = max(r["last_seen"] for r in seen)
     with db.within(dev.get("org")):
         latest, _at = db._latest_results_here()
-    worst = {}
+    worst, ran = {}, ""
     for r in latest:
         parent, _, label = (r["device"] or "").partition(" / ")
+        if parent == dev["name"]:
+            ran = max(ran, r["at"] or "")
         if parent == dev["name"] and label and WORST.get(r["status"], 9) < WORST.get(worst.get(label), 9):
             worst[label] = r["status"]
     out = [{"key": r["key"], "name": r["label"], "model": r["model"] or "", "first_seen": r["first_seen"], "last_seen": r["last_seen"],
-            "gone": r["last_seen"] < newest, "status": worst.get(r["label"], "OK")} for r in seen]
+            "gone": r["last_seen"] < newest, "status": worst.get(r["label"], "OK") if r["last_seen"] >= ran else ""} for r in seen]
     out.sort(key=lambda k: (k["gone"], WORST.get(k["status"], 9), k["name"].lower()))
     return out
 

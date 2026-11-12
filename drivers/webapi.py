@@ -36,6 +36,7 @@ class WebApi(Driver):
 
     def transport(self, method, url, **kw):
         """Send one request and return the response. The session for this run; RestApi sends each on its own."""
+        kw.setdefault("verify", self.session().verify)     # requests lets REQUESTS_CA_BUNDLE (core/trust.py sets it) override a session's verify=False, so each call carries the flag itself
         return self.session().request(method, url, **kw)
 
     def call(self, method, path, optional=False, raw=False, **kw):

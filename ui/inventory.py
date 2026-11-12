@@ -335,6 +335,26 @@ class DeviceDialog(QDialog):
         v = self.vendor.currentData()
         return (self.platform.currentData() or v) if vendors.modes(v) else v
 
+    def _other_secret(self):
+        """(what the stored secret is, what the chosen type signs in with) when they differ: a device saved with an API key whose type is
+        now a login gives ('API key', 'password'). None when the stored value still fits or a credential profile supplies it. Left
+        blank, the box would send the old secret as the new one."""
+        if not self.dev or self.profile.currentData() or not self.access.isRowVisible(self.secret):
+            return None
+        words = lambda v: (lambda s: s if s.startswith(("API", "SNMP")) else s[:1].lower() + s[1:])(vendors.get(v)["secret"].split(" (")[0])
+        was, now = words(self.dev.get("vendor")), words(self._vendor())
+        return (was, now) if was and now and was != now else None
+
+    def _needs_secret(self):
+        """True, after saying so, when the secret must be typed because the stored one is of another kind."""
+        other = self._other_secret()
+        if not other or self.secret.text():
+            return False
+        self.tabs.setCurrentIndex(1)
+        self.secret.setFocus()
+        QMessageBox.warning(self, "Missing data", f"Enter the {other[1]}: the stored value is this device's {other[0]}.")
+        return True
+
     def adapt(self, vendor):
         modes = vendors.modes(vendor)
         info = vendors.get(vendor)
@@ -421,6 +441,9 @@ class DeviceDialog(QDialog):
         self._proxy_rows()
         self._windows_rows()
         self._link_rows()
+        other = self._other_secret()
+        self.secret.setPlaceholderText("leave blank to keep the stored value" if not other else
+                                       "enter the password for this login" if other[1] == "password" else f"enter the {other[1]}")
         if snmp_only:
             self.use_snmp.setChecked(True)
         self.snmp.setEnabled(self.use_snmp.isChecked())
@@ -680,6 +703,8 @@ class DeviceDialog(QDialog):
         if not v["name"] or not v["host"]:
             QMessageBox.warning(self, "Missing data", "Name and host are required.")
             return
+        if self._needs_secret():
+            return
         bad = self.checks_tab.problems()
         if bad:
             self.tabs.setCurrentWidget(self.checks_tab)
@@ -715,6 +740,8 @@ class DeviceDialog(QDialog):
             self.tabs.setCurrentIndex(0)
             self.host.setFocus()
             QMessageBox.warning(self, "Invalid host", str(e))
+            return
+        if self._needs_secret():
             return
         dev = self.values()
         if self.secret.text():
@@ -1517,7 +1544,7 @@ class InventoryTab(QWidget):
             key = f"kid:{item.data(0, ROLE)}/{k['key']}"
             it.setData(0, ROLE, key)
             self.payload[key] = {"kid": k, "parent": d}
-            it.setIcon(0, self._icon("device") if k["gone"] else self._device_icon(k["status"]))
+            it.setIcon(0, self._icon("device") if k["gone"] or not k["status"] else self._device_icon(k["status"]))
             it.setFlags(Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled)
             if k["gone"]:
                 for col in range(len(self.COLS)):

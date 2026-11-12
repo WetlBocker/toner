@@ -137,7 +137,7 @@ check("Meraki with a bad key: one 'connection' row that says what happened", len
 check("... and no address in it", "api.meraki.com" not in rows[0].message and "http" not in rows[0].message.lower().replace("api answered http", ""))
 UN.requests.Session = lambda: type("S", (), {"verify": True, "proxies": {}, "headers": {}, "post": lambda self, *a, **k: R(401)})()
 rows = run_one({"name": "uni", "vendor": "unifi", "host": "127.0.0.1", "username": "u", "password": "k", "checkopts": "", "location": ""}, th, {**db.runtime_options(), "retries": 0})
-check("the older UniFi login with a bad password says the same", rows[0].message.startswith("the device's API answered HTTP 401"), rows)
+check("the UniFi console login with a bad password says the sign-in was refused, with no address", rows[0].message == "the console did not accept the user name and password (HTTP 401)", rows)
 class Weird(Exception): pass
 check("other errors read as they did", __import__("drivers.base", fromlist=["x"]).Driver.explain(Weird("boom")) == "Weird: boom")
 

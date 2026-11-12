@@ -431,5 +431,116 @@ item.setExpanded(False); item.setExpanded(True); app.processEvents()
 check("and the list is built once", len(calls) == 1 and item.childCount() == 300, len(calls))
 unifikids.children = real_children
 
+print("== a console changed from the Network API to the console login")
+import drivers.unifi as UL
+net_routes([GATEWAY] + NET)
+con = add_dev(name="con", host="10.0.0.1", password="NETKEY")
+run_and_save(con)
+check("by API key: its five devices, keyed by the API's ids", sorted(k["key"] for k in unifikids.children(con)) == ["d1", "d2", "d3", "d4", "d5"])
+CLASSIC = [{"name": "Gateway", "mac": "aa:00", "ip": "10.0.0.1", "type": "udm", "model": "UDMPRO", "state": 1, "uptime": 9 * 86400, "system-stats": {"cpu": "30", "mem": "40"}}] + [
+    {"name": n, "mac": m, "ip": f"10.0.0.{i}", "type": t, "model": "CODE", "shortname": short, "state": st, "uptime": 9 * 86400, "system-stats": {"cpu": "11", "mem": "21"}}
+    for i, (n, m, t, short, st) in enumerate((("AP Lobby", "aa:01", "uap", "U6-Pro", 1), ("AP Hall", "aa:02", "uap", "U6-Lite", 1), ("AP Yard", "aa:03", "uap", "", 0),
+                                              ("Core Switch", "aa:04", "usw", "USW-Pro-24", 1), ("Edge Switch", "aa:05", "usw", "USW-Lite-8", 1)), 11)]
+class LoginResp:
+    def __init__(self, data): self.data, self.headers = data, {}
+    def json(self): return {"data": self.data}
+    def raise_for_status(self): pass
+class LoginSession:
+    def __init__(self): self.headers, self.proxies, self.verify = {}, {}, True
+    verifies, refuse, sent = [], None, []
+    def post(self, url, **k):
+        LoginSession.verifies.append(k.get("verify")); LoginSession.sent.append(k.get("json"))
+        if LoginSession.refuse and url.endswith("/login"):
+            r = LoginResp(None); r.status_code = 403; r.json = lambda: LoginSession.refuse; return r
+        return LoginResp([])
+    def get(self, url, **k):
+        LoginSession.verifies.append(k.get("verify"))
+        return LoginResp([{"name": "default", "desc": "Default"}] if url.endswith("self/sites") else CLASSIC if url.endswith("stat/device") else [{"subsystem": "wan", "status": "ok"}])
+UL.requests.Session = LoginSession
+time.sleep(1.1)
+db.save_device({**db.get_device(con["id"]), "vendor": "unifi", "username": "admin"})
+con = db.get_device(con["id"])
+rows = run_and_save(con)
+kids = unifikids.children(con)
+check("by login: the same five devices, each listed once and none gone", sorted(k["name"] for k in kids) == ["AP Hall", "AP Lobby", "AP Yard", "Core Switch", "Edge Switch"]
+      and not any(k["gone"] for k in kids), [(k["name"], k["key"], k["gone"]) for k in kids])
+check("now keyed by MAC, with the model the console shows (its code when it gives no other)", {k["key"]: k["model"] for k in kids}
+      == {"aa:01": "U6-Pro", "aa:02": "U6-Lite", "aa:03": "CODE", "aa:04": "USW-Pro-24", "aa:05": "USW-Lite-8"}, [(k["key"], k["model"]) for k in kids])
+check("the gateway's rows are the console's own", {r.check for r in rows if r.device == "con"} >= {"state", "cpu", "memory", "site wan"}
+      and not any(r.device == "con / Gateway" for r in rows), sorted({(r.device, r.check) for r in rows}))
+check("a device's page shows its own rows", {r["check_name"] for r in unifikids.rows_for(con, "aa:01")} >= {"state", "cpu", "memory", "clients"}
+      and unifikids.labels(con) == {"AP Hall", "AP Lobby", "AP Yard", "Core Switch", "Edge Switch"})
+check("an offline device is still listed, with its FAIL", next(k["status"] for k in kids if k["name"] == "AP Yard") == "FAIL")
+tab.refresh()
+item = find_item(tab, "con"); item.setExpanded(True); app.processEvents()
+check("the Inventory lists them under the console", item.childCount() == 5, item.childCount())
+with db.connect() as c:                                     # two devices with one name: neither removes the other
+    unifikids.note(c, [type("R", (), {"device": "con / Twin", "kid": (k, "U6"), "seen": None})() for k in ("t1", "t2")], "2026-11-12 10:00:00")
+    twins = c.execute("SELECT COUNT(*) FROM unifi_seen WHERE device='con' AND label='Twin'").fetchone()[0]
+check("two devices of one name in one run are both kept", twins == 2, twins)
+check("every call to the console says not to verify its certificate (a session-wide setting loses to REQUESTS_CA_BUNDLE)",
+      len(LoginSession.verifies) == 5 and set(LoginSession.verifies) == {False}, LoginSession.verifies)
+LoginSession.verifies.clear()
+run_and_save({**con, "verify_ssl": 1})
+check("...and to verify it when the device says so", set(LoginSession.verifies) == {True}, LoginSession.verifies)
+with db.connect() as c:
+    c.execute("DELETE FROM unifi_seen WHERE device='con' AND label='Twin'")
+time.sleep(1.1)
+db.save_run([Result("con", "connection", "ERROR", "", "SSLError: certificate verify failed")])       # what the runner stores when the console cannot be read
+kids = unifikids.children(con)
+check("a console that could not be read: its devices stay listed, with no status (not healthy)", len(kids) == 5 and not any(k["gone"] for k in kids)
+      and {k["status"] for k in kids} == {""}, [(k["name"], k["status"], k["gone"]) for k in kids])
+tab.refresh()
+item = find_item(tab, "con"); item.setExpanded(True); app.processEvents()
+check("the Inventory shows no status for them", [item.child(i).text(tab.STATUS) for i in range(item.childCount())] == [""] * 5)
+time.sleep(1.1)
+run_and_save(con)
+check("read again: their statuses are back", sorted(k["status"] for k in unifikids.children(con)) == ["FAIL", "OK", "OK", "OK", "OK"], [(k["name"], k["status"]) for k in unifikids.children(con)])
+
+print("== a sign-in the console refuses, and a type changed from an API key to a login")
+from drivers.base import AuthRejected
+def refused(dev):
+    try:
+        run_and_save({**dev, "password": "wrong-secret"}); return None
+    except Exception as e:
+        return e
+LoginSession.refuse = {"code": "AUTHENTICATION_FAILED_INVALID_CREDENTIALS", "message": "Invalid username or password"}
+e = refused(con)
+check("a refused sign-in says so, with the console's reason", isinstance(e, AuthRejected)
+      and str(e) == "the console did not accept the user name and password (HTTP 403): Invalid username or password", repr(e))
+check("...and never the password", "wrong-secret" not in str(e))
+LoginSession.refuse = {"unexpected": True}
+check("no reason given: the sentence alone", str(refused(con)) == "the console did not accept the user name and password (HTTP 403)")
+LoginSession.refuse = None
+import core.topology as T
+real_secret = T.profiles.secret
+T.profiles.secret = lambda d, kind="main": "wrong-secret"
+LoginSession.refuse = {"message": "Invalid username or password"}
+_r, _l3, errs = T.collect([con])
+T.profiles.secret = real_secret
+LoginSession.refuse = None
+check("the topology says the same", errs == {"con": "the console did not accept the user name and password (HTTP 403): Invalid username or password"}, errs)
+net_routes([GATEWAY] + NET)
+keyed = add_dev(name="keyed", host="10.0.0.1", password="NETKEY")
+warned = []
+QMessageBox.warning = staticmethod(lambda *a, **k: warned.append(a[2]))
+d = I.DeviceDialog(keyed)
+check("an API-key entry as saved: blank keeps the stored key", d.secret.placeholderText() == "leave blank to keep the stored value" and d._other_secret() is None)
+d.platform.setCurrentIndex(d.platform.findData("unifi")); app.processEvents()
+check("changed to the console login: the box asks for the password", d.secret.placeholderText() == "enter the password for this login" and d._other_secret() == ("API key", "password"))
+LoginSession.sent.clear()
+d.username.setText("admin"); d.test()
+check("Test with the box blank asks for it and sends nothing", warned == ["Enter the password: the stored value is this device's API key."] and LoginSession.sent == [], (warned, LoginSession.sent))
+warned.clear(); d.accept()
+check("Save with the box blank asks too, and does not close", warned == ["Enter the password: the stored value is this device's API key."] and d.result() != d.DialogCode.Accepted, warned)
+warned.clear(); d.secret.setText("the-password"); d.test()
+check("typed: the login goes out with what was typed, not the stored key", warned == [] and LoginSession.sent and LoginSession.sent[0] == {"username": "admin", "password": "the-password"}, (warned, LoginSession.sent[:1]))
+d.secret.clear(); d.platform.setCurrentIndex(d.platform.findData("unifi_network")); app.processEvents()
+check("changed back: blank keeps the stored key again", d.secret.placeholderText() == "leave blank to keep the stored value" and d._other_secret() is None)
+back = I.DeviceDialog(con); back.platform.setCurrentIndex(back.platform.findData("unifi_protect")); app.processEvents()
+check("a login entry changed to an API key asks for the key", back.secret.placeholderText() == "enter the API key" and back._other_secret() == ("password", "API key"), back.secret.placeholderText())
+check("a new device is not asked", I.DeviceDialog()._other_secret() is None)
+QMessageBox.warning = staticmethod(lambda *a, **k: None)
+
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

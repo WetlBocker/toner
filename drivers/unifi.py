@@ -1,6 +1,6 @@
 from core import proxy, display, tlsverify
 import requests
-from .base import Driver, OK, WARN, FAIL, grade, grade_low
+from .base import AuthRejected, Driver, OK, WARN, FAIL, grade, grade_low
 
 STATES = {0: "disconnected", 1: "connected", 2: "pending", 4: "upgrading",
           5: "provisioning", 6: "heartbeat missed", 7: "adopting", 11: "isolated"}
@@ -8,23 +8,45 @@ STATES = {0: "disconnected", 1: "connected", 2: "pending", 4: "upgrading",
 def fmt_uptime(s):
     return display.uptime(seconds=s)
 
+
+def sign_in(s, base, username, password, timeout, verify):
+    """Sign a session in to a UniFi OS console. A refusal (401 or 403: a console answers a wrong password with 403) says so in words,
+    with the console's own reason and never the password; it is not retried (repeating a refused login is how accounts get locked)."""
+    r = s.post(f"{base}/api/auth/login", timeout=timeout, verify=verify, json={"username": username, "password": password})
+    if getattr(r, "status_code", 200) in (401, 403):
+        try:
+            body = r.json()
+            said = str(body.get("message") or body.get("code") or "") if isinstance(body, dict) else ""
+        except ValueError:
+            said = ""
+        raise AuthRejected(f"the console did not accept the user name and password (HTTP {r.status_code})" + (f": {said[:200]}" if said else ""))
+    r.raise_for_status()
+    token = getattr(r, "headers", {}).get("X-CSRF-Token")
+    if token:
+        s.headers["X-CSRF-Token"] = token
+
+
+def own_device(devices, host):
+    """The device a console's entry itself stands for: the one at the entry's address, else the only gateway (UDM, UGW, UXG). Its rows
+    are the entry's own; every other device is listed under the entry (core/unifikids.py), as the Network API driver does."""
+    host = (host or "").strip().lower()
+    here = [d for d in devices if host and str(d.get("ip") or "").lower() == host]
+    gws = [d for d in devices if str(d.get("type") or "").lower() in ("ugw", "udm", "uxg")]
+    return here[0] if here else gws[0] if len(gws) == 1 else None
+
 class UnifiDriver(Driver):
     def run(self):
         d = self.dev
         verify = tlsverify.verify(d)
         base = f"https://{d['host']}" + (f":{d['port']}" if d.get("port") else "")
         s = requests.Session()
-        s.verify = verify
         s.proxies.update(proxy.requests_kwargs(d).get("proxies", {}))
         timeout = self.opts["http_timeout"]
-        r = s.post(f"{base}/api/auth/login", timeout=timeout,
-                   json={"username": d["username"], "password": self.password})
-        r.raise_for_status()
-        if "X-CSRF-Token" in r.headers:
-            s.headers["X-CSRF-Token"] = r.headers["X-CSRF-Token"]
+        # requests lets REQUESTS_CA_BUNDLE (core/trust.py sets it) override a session's verify=False, so each call carries the flag itself
+        sign_in(s, base, d["username"], self.password, timeout, verify)
 
         def get(url):
-            resp = s.get(url, timeout=timeout)
+            resp = s.get(url, timeout=timeout, verify=verify)
             resp.raise_for_status()
             return resp.json()["data"]
 
@@ -48,20 +70,23 @@ class UnifiDriver(Driver):
         for h in health if self.enabled("site health") else []:
             ok = h.get("status") in ("ok", "unknown")
             out.append(self.result(f"site {h['subsystem']}", OK if ok else WARN, h.get("status", "?")))
+        own = own_device(devices, d.get("host"))
         for dev in devices:
-            self.safe(out, "device", lambda dev=dev: self.check_device(dev))
+            self.safe(out, "device", lambda dev=dev: self.check_device(dev, dev is own))
         try:
-            s.post(f"{base}/api/auth/logout", timeout=min(5, timeout))
+            s.post(f"{base}/api/auth/logout", timeout=min(5, timeout), verify=verify)
         except requests.RequestException:
             pass
         return out
 
-    def check_device(self, dev):
-        label = f"{self.name} / {dev.get('name') or dev.get('mac')}"
+    def check_device(self, dev, own=False):
+        label = self.name if own else f"{self.name} / {dev.get('name') or dev.get('mac')}"
         rows = []
         def add(check, status, value="", msg="", numeric=None):
             r = self.result(check, status, value, msg, numeric)
             r.device = label
+            if not own:                              # listed under the console in the Inventory, by its MAC
+                r.kid = (dev.get("mac") or dev.get("name"), dev.get("shortname") or dev.get("model") or "")
             rows.append(r)
         def level(check, v, key=None, unit="%"):
             t = self.th[key or check]
