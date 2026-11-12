@@ -48,18 +48,22 @@ class Stub:
         self.prf, self.give_value, self.has_pin = prf, give_value, has_pin
         self.calls, self.challenges, self.events, self.pins_asked = [], [], [], 0
         self.created = self.got = self.ask_pin = None
-        self.forge = self.blocked = False
-        self.wrong = 0
+        self.forge = self.blocked = self.always_uv = self.bad_challenge = False
+        self.wrong, self.fail, self.client_fail, self.value_len = 0, None, None, 32
 
     def client(self, window, ask_pin):
+        if self.client_fail is not None:
+            raise self.client_fail
         self.ask_pin = ask_pin
         return self
 
     def _gate(self, uv, event):
         self.events.append(event)
+        if self.fail is not None:
+            raise self.fail                                    # what the transport raises, not the library's ClientError
         if event is not None and event.is_set():
             raise ClientError.ERR.TIMEOUT()                    # what the library raises when the event is set before the touch
-        if uv != "required":
+        if uv != "required" and not self.always_uv:            # always_uv: a key set to always verify asks its PIN for presence too
             return
         if not self.has_pin:
             raise ClientError.ERR.CONFIGURATION_UNSUPPORTED("User verification not configured/supported")
@@ -75,7 +79,7 @@ class Stub:
         self.wrong = 0
 
     def _value(self, salt):
-        return hmac.new(self.secret, salt, hashlib.sha256).digest()
+        return hmac.new(self.secret, salt, hashlib.sha256).digest()[:self.value_len]
 
     def _sign(self, data):
         return (ec.generate_private_key(ec.SECP256R1()) if self.forge else self.key).sign(data, ec.ECDSA(hashes.SHA256()))
@@ -84,7 +88,7 @@ class Stub:
         self.calls.append("make"); self.created = options
         uv = options["authenticatorSelection"]["userVerification"]
         self._gate(uv, event)
-        cd = CollectedClientData.create(CollectedClientData.TYPE.CREATE, options["challenge"], fidokey.ORIGIN)
+        cd = CollectedClientData.create(CollectedClientData.TYPE.CREATE, os.urandom(32) if self.bad_challenge else options["challenge"], fidokey.ORIGIN)
         data = AttestedCredentialData.create(Aaguid.NONE, self.cred_id, ES256.from_cryptography_key(self.key.public_key()))
         auth = AuthenticatorData.create(hashlib.sha256(options["rp"]["id"].encode()).digest(), F.UP | F.AT | (F.UV if uv == "required" else 0), 0, data)
         prf = (options.get("extensions") or {}).get("prf")
@@ -196,6 +200,25 @@ try:
 finally:
     fido2.hid.CtapHidDevice.list_devices, sys.platform = real_list, real_platform
 check("no key plugged in", nokey.text == "Toner can't find a security key. Plug yours in and try again.")
+
+from fido2.hid import ConnectionFailure
+for exc, want in ((OSError("the key was unplugged"), fidokey.NoKey), (ConnectionFailure(), fidokey.NoKey),
+                  (CtapError(CtapError.ERR.PIN_INVALID), fidokey.WrongKeyPin)):
+    in_call, at_client, at_make = Stub(), Stub(), Stub()
+    in_call.fail, at_client.client_fail, at_make.fail = exc, exc, exc
+    got = (raised(want, on(in_call, lambda: fidokey.value([cred], ask_pin=lambda: KEY_PIN))), raised(want, on(at_client, lambda: fidokey.present([cred]))),
+           raised(want, on(at_make, lambda: fidokey.register("Blue key", SALT))))
+    check(f"{type(exc).__name__} from the key, or while finding it, is {want.__name__}", all(isinstance(g, want) for g in got), [getattr(g, "text", g) for g in got])
+bad_reg = Stub(); bad_reg.bad_challenge = True
+check("a registration the server can't verify: Unsupported", isinstance(raised(fidokey.Unsupported, on(bad_reg, lambda: fidokey.register("Blue key", SALT))), fidokey.Unsupported))
+short = Stub(); short.value_len = 16
+check("a registration value that is not 32 bytes: Unsupported", isinstance(raised(fidokey.Unsupported, on(short, lambda: fidokey.register("Blue key", SALT))), fidokey.Unsupported))
+always = Stub()
+cred_a, _ = on(always, lambda: fidokey.register("Blue key", SALT, ask_pin=lambda: KEY_PIN))()
+always.always_uv, always.pins_asked, asked = True, 0, []
+present_with_pin = on(always, lambda: fidokey.present([cred_a], ask_pin=lambda: asked.append(1) or KEY_PIN))
+check("a key that always verifies: presence asks its PIN through ask_pin, still asking for no verification itself",
+      present_with_pin() == cred_a.id and asked == [1] and always.pins_asked == 1 and always.got["userVerification"] == "discouraged", (asked, always.got))
 
 cancel = threading.Event(); cancel.set()
 cancelled = Stub()

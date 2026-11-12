@@ -82,5 +82,4 @@ class KeyAsk(QObject):
         return self._with_pin(lambda **kw: fidokey.register(label, salt, **kw))
 
     def present(self, creds):
-        w = self._start()
-        return fidokey.present(creds, cancel=w.cancel, window=self.window)
+        return self._with_pin(lambda **kw: fidokey.present(creds, **kw))

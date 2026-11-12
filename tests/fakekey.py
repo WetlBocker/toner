@@ -51,7 +51,7 @@ class FakeKey:
         cred = self._mine(creds)
         return cred.id, hmac.new(self.secrets[cred.id], cred.salt, hashlib.sha256).digest()
 
-    def present(self, creds: Sequence[Cred], *, cancel=None, window=None) -> bytes:
+    def present(self, creds: Sequence[Cred], *, ask_pin=None, cancel=None, window=None) -> bytes:
         self.calls.append("present")
         self._touch(cancel)
         return self._mine(creds).id

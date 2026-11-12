@@ -84,11 +84,19 @@ def _client(window, ask_pin):
     return Fido2Client(dev, client_data_collector=collector, user_interaction=Ask())
 
 
-def _call(method, options, cancel):
+def _call(method, options, ask_pin, cancel, window):
+    """The client's `method` (make_credential or get_assertion), found and called with every failure as a Failed."""
+    from fido2.hid import ConnectionFailure
     try:
-        return method(options, event=cancel)
+        return getattr(_client(window, ask_pin), method)(options, event=cancel)
+    except Failed:
+        raise
     except ClientError as e:
         raise _failed(e) from None
+    except CtapError as e:
+        raise _CTAP.get(e.code, NotTouched)() from None
+    except (OSError, ConnectionFailure):          # the key unplugged mid-call, off Windows
+        raise NoKey() from None
 
 
 def _first(results) -> bytes | None:
@@ -106,7 +114,7 @@ def _assert(creds, uv, extensions, ask_pin, cancel, window):
         raise NotRegistered()
     server, datas = Fido2Server({"id": RP_ID, "name": "Toner"}), [_data(c) for c in creds]
     request, state = server.authenticate_begin(datas, user_verification=uv)         # a fresh random challenge every time
-    got = _call(_client(window, ask_pin).get_assertion, {**request["publicKey"], **extensions}, cancel).get_response(0)
+    got = _call("get_assertion", {**request["publicKey"], **extensions}, ask_pin, cancel, window).get_response(0)
     try:
         return server.authenticate_complete(state, datas, got).credential_id, got
     except ValueError:                        # a signature that does not verify, or a credential that is not one of creds
@@ -118,8 +126,11 @@ def register(label: str, salt: bytes, *, ask_pin=None, cancel=None, window=None)
     create, state = server.register_begin({"id": os.urandom(16), "name": label, "displayName": label},
                                           user_verification="required", authenticator_attachment="cross-platform")
     # the library drops an empty prf request on Windows, so the number goes in at registration too
-    made = _call(_client(window, ask_pin).make_credential, {**create["publicKey"], "extensions": {"prf": {"eval": {"first": salt}}}}, cancel)
-    data = server.register_complete(state, made).credential_data
+    made = _call("make_credential", {**create["publicKey"], "extensions": {"prf": {"eval": {"first": salt}}}}, ask_pin, cancel, window)
+    try:
+        data = server.register_complete(state, made).credential_data
+    except ValueError:                        # an answer the server can't verify
+        raise Unsupported() from None
     cred = Cred(data.credential_id, salt, cbor.encode(data.public_key))
     prf = AuthenticatorExtensionsPRFOutputs.from_dict(made.client_extension_results.get("prf"))
     if not (prf and prf.enabled):
@@ -127,6 +138,8 @@ def register(label: str, salt: bytes, *, ask_pin=None, cancel=None, window=None)
     first = _first(made.client_extension_results)
     if first is None:                         # some keys only give the value on a read, not at registration
         return cred, value([cred], ask_pin=ask_pin, cancel=cancel, window=window)[1]
+    if len(first) != 32:
+        raise Unsupported()
     return cred, first
 
 
@@ -141,5 +154,6 @@ def value(creds: Sequence[Cred], *, ask_pin=None, cancel=None, window=None) -> t
     return cid, first
 
 
-def present(creds: Sequence[Cred], *, cancel=None, window=None) -> bytes:
-    return _assert(creds, "discouraged", {}, None, cancel, window)[0]
+def present(creds: Sequence[Cred], *, ask_pin=None, cancel=None, window=None) -> bytes:
+    # ask_pin: only a key set to always verify asks for its PIN here; Toner itself asks for no verification
+    return _assert(creds, "discouraged", {}, ask_pin, cancel, window)[0]
