@@ -80,6 +80,8 @@ class LockScreen(QWidget):
         self.wait = Wait(self.error, self.unlock)
         self.keyask, self._reason = KeyAsk(self), ""
         self.keyask.touching.connect(self._touching)
+        # shortcut: no key-PIN step here yet, so a key that asks for its PIN at unlock ends as not touched; upgrade with that step
+        self.keyask.pin_wanted.connect(lambda: self.keyask.give_pin(None))
         centred(frame, QVBoxLayout(self))
         self.idle = QTimer(self)                         # checks now and then; input moves `last` (eventFilter)
         self.idle.setInterval(15000)

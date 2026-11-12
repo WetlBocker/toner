@@ -258,6 +258,18 @@ check("not touched at unlock: stays locked, in the unlock words", lock_error(tou
       and session.state() == "locked" and lock.head.text() == "Toner is locked" and lock.pw.isEnabled(), lock.error.text())
 lock.pw.setText("not the password at all"); fake.calls.clear(); lock.unlock.click(); wait_for(lambda: not lock._jobs)
 check("a wrong password at unlock never asks the key", lock.error.text() == datakey.WRONG and fake.calls == [] and session.state() == "locked")
+pins_asked = []
+def always_verifies(creds, ask_pin=None, **kw):                     # a key set to always verify asks for its PIN at presence too
+    pins_asked.append(ask_pin is not None)
+    if ask_pin is None or ask_pin() is None:
+        raise fidokey.NotTouched()
+    return real_present(creds, **kw)
+fidokey.present = always_verifies
+lock.pw.setText(PW); lock.unlock.click()
+check("a key that asks for its PIN at unlock: asked through the window, no step for it here yet, so not touched as before",
+      wait_for(lambda: not lock._jobs, 5) and pins_asked == [True] and lock.error.text() == "The key wasn't touched. Try again."
+      and session.state() == "locked", (pins_asked, lock.error.text()))
+fidokey.present = real_present
 fidokey.present, gate = held(real_present)
 lock.pw.setText(PW); lock.unlock.click(); wait_for(lambda: lock_text() == "Touch your security key")
 check("while the key is asked, Sign in as someone else is the way out", lock.other.isEnabled() and not lock.unlock.isEnabled())
