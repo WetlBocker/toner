@@ -48,7 +48,7 @@ _box = None       # the signed-in account's (or the recovery key's) private box 
 _name = None      # the signed-in account's stored spelling; None for the recovery key
 _keys = None      # the signed-in account's security keys, {"list": [...], "wraps": [...]}, as its record's keys blob holds them
 _k2 = None        # ... and the secret each key's value unwraps, which with the password key seals its data key
-_seen = None      # its record's "keys" as this process last read or wrote it: a key write refuses once the file holds another
+_seen = None      # its record's "keys" (an AD or LDAP account's: its "sealed") as this process last read or wrote it: a key write refuses once the file holds another
 _started = {}     # slot id -> a started directory account's box private, held until an approval seals it (roles.approve)
 # core/roles sets this (it reads this module, so this one can't import it): fn(before, after) inside each write that adds, removes or
 # re-keys an account or the recovery key. It drops grants made for a box key that is gone, re-signs the rules, and may refuse. It
@@ -312,11 +312,10 @@ def _failed(doc, counter, now, free=FREE_TRIES):
 def _attempt(name, secret):
     """(the payload of `name`'s seal (None: the recovery seal), the stored name, the failed tries counted before it). For a keyed
     record the "payload" is (the password key, its keys blob, its sealed_k, its "keys" as stored), for _with_key once the locks
-    are let go. A Part 1
-    seal gains its box key in the same write that clears the count. Every password try, for any name, real or not, counts against
-    one shared counter (per-name counts would show which names exist); the recovery key has its own. The count is read, changed
-    and written under the file lock, so two Toner processes can't race it. Raises Throttled while a wait runs (without
-    checking), else WrongPassword."""
+    are let go. A Part 1 seal gains its box key in the same write that clears the count. Every password try, for any name, real
+    or not, counts against one shared counter (per-name counts would show which names exist); the recovery key has its own. The
+    count is read, changed and written under the file lock, so two Toner processes can't race it. Raises Throttled while a wait
+    runs (without checking), else WrongPassword."""
     with _lock, _FileLock():
         doc = _read()
         counter = doc["recovery"] if name is None else doc.setdefault("throttle", {"fails": 0, "until": 0})
@@ -482,12 +481,16 @@ def open_with_keys(data_key):
 
 def check_password(name, password, present=None):
     """True when the password is right (for unlocking). Raises Throttled the same way opening does. An account with security keys
-    also needs `present(creds) -> credential id` (fidokey.present: a touch, the value is not read); KeyNeeded without it."""
+    also needs `present(creds) -> credential id` (fidokey.present: a touch, the value is not read); KeyNeeded without it. A
+    session signed in with keys always needs one of them, whatever the file says by then."""
     try:
-        got, _, _ = _attempt(_clean(name), password or "")
+        got, stored, _ = _attempt(_clean(name), password or "")
     except WrongPassword:
         return False
-    if isinstance(got, tuple):
+    held = _keys if stored is not None and stored == _name else None
+    if (held or {}).get("list"):
+        _present(held, present)                         # unlock trusts the session, not the file (which the password can re-make)
+    elif isinstance(got, tuple):
         _present(got[1], present)
     return True
 
@@ -885,11 +888,12 @@ def _pin_refused(pin):
     raise pinslot.WrongPin()
 
 
-def _pin(name, pin, key=None, present=None):
+def _pin(name, pin, key=None, present=None, unlock=False):
     """(the data key and box private (None after `present`), the stored name, the failed tries counted before it, its keys blob
     or None, K2 or None, its seal as read); WrongPin, PinLocked or SlotMissing. A keyed seal (known from what the slot holds,
     never from the record's keyed field) also needs `key` (fidokey.value) or, to unlock, `present` (fidokey.present), asked once
-    the PIN is right and the locks are let go: KeyNeeded without one."""
+    the PIN is right and the locks are let go: KeyNeeded without one. `unlock`: a session signed in with keys always needs one of
+    them, whatever the seal holds by then."""
     from core import pinslot
     pin = pin or ""
     with _lock:
@@ -908,6 +912,10 @@ def _pin(name, pin, key=None, present=None):
                     raise pinslot.PinLocked(e.seconds) from None
             raise pinslot.SlotMissing()
         payload = pinslot.open(rec["slot"], rec["slot_id"], pin, rec["sealed"])
+    held = _keys if stored == _name else None
+    if unlock and (held or {}).get("list"):
+        _present(held, present)                         # unlock trusts the session, not the file (a chip slot's seal needs no PIN to make)
+        return None, stored, fails, None, None, rec["sealed"]
     keys = k2 = None
     if (blob := _dir_blob(payload)) is not None:
         keys = {"list": blob["list"], "wraps": blob["wraps"]}
@@ -944,7 +952,7 @@ def check_pin(name, pin, present=None):
     also needs `present(creds) -> credential id` (fidokey.present: a touch, the value is not read); KeyNeeded without it."""
     from core import pinslot
     try:
-        _pin(name, pin, present=present)
+        _pin(name, pin, present=present, unlock=True)
         return True
     except pinslot.WrongPin:
         return False

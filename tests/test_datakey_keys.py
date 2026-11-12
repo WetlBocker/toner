@@ -182,7 +182,7 @@ check("removing the last: stored as an account without keys is", set(rec) == set
       and rec["kdf"]["n"] == plain_record["kdf"]["n"] and reopens_with(PW2, None))
 check("...with the box key kept", datakey.box_public("Admin1") == box_now and datakey.my_keys() == [] and not datakey.has_keys("Admin1"))
 check("a wrong password cannot add or remove", raised(datakey.WrongPassword, lambda: datakey.add_key("nope", cred, val, "x"))
-      and raised(IndexError, lambda: datakey.remove_key(PW2, 0)) and "keys_n" not in datakey.read()["accounts"]["Admin1"])
+      and raised(datakey.WrongPassword, lambda: datakey.remove_key("nope", 0)) and "keys_n" not in datakey.read()["accounts"]["Admin1"])
 
 # an admin's reset of someone else
 datakey.add_local("Tech1", TPW, role="Tech")

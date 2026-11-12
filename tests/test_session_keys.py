@@ -105,4 +105,61 @@ check("a second sign-in during the touch is refused; the first one signs in, tol
 check("no secret in the audit log", not any(PW in str(r["detail"]) for r in audit.recent(200)))
 session.sign_out()
 
+# unlock trusts the session, not the file: someone who knows the password and rewrites netcheck.keys still needs one of its keys
+import base64, json
+b64 = lambda b: base64.b64encode(b).decode("ascii")
+attacker = fakekey.FakeKey()
+acred, _ = attacker.register("Mine", os.urandom(32))
+
+
+def forge(keys_list=None):
+    """Admin1's record rewritten under the password: a plain record sealing junk, or (keys_list) its key list re-made."""
+    d = datakey.read(); r = d["accounts"]["Admin1"]
+    kek = datakey._kek(PW, base64.b64decode(r["kdf"]["salt"]), r["kdf"])
+    if keys_list is None:
+        for f in ("keys", "keys_n", "sealed_k"):
+            r.pop(f, None)
+        r["key"] = b64(datakey._enc(kek, os.urandom(64), datakey._aad("Admin1")))
+    else:
+        blob = {"list": [{"id": b64(c.id), "salt": b64(c.salt), "pub": b64(c.public), "name": "Mine", "added": "2026-11-12T00:00:00+00:00"} for c in keys_list],
+                "wraps": [b64(os.urandom(60)) for _ in keys_list]}
+        r["keys"] = b64(datakey._enc(kek, json.dumps(blob).encode(), datakey.KEYS_AAD + b"Admin1"))
+    datakey._write(d)
+
+
+session.sign_in("Admin1", PW, key=fake.value)
+session.lock()
+saved = datakey.read()
+forge()
+check("signed in with a key, the record made plain by hand: unlock without a key stays locked",
+      raised(datakey.KeyNeeded, lambda: session.unlock(PW)) and session.state() == "locked")
+fake.touch = False
+check("...and without the touch", raised(fidokey.NotTouched, lambda: session.unlock(PW, present=fake.present)) and session.state() == "locked")
+fake.touch = True
+session.unlock(PW, present=fake.present)
+check("...the session's own key still unlocks it", session.state() == "open")
+datakey._write(saved)
+session.lock()
+forge([acred])
+check("its key list re-made with another key by hand: that key doesn't unlock it",
+      raised(fidokey.NotRegistered, lambda: session.unlock(PW, present=attacker.present)) and session.state() == "locked")
+session.unlock(PW, present=fake.present)
+check("...the session's own key still does", session.state() == "open")
+datakey._write(saved)
+datakey.remove_key(PW, 0)
+session.lock()
+session.unlock(PW)
+check("the last key removed while signed in: the password alone unlocks, as for any account without keys", session.state() == "open")
+gcred, gval = fake.register("Green", os.urandom(32))
+datakey.add_key(PW, gcred, gval, "Green")
+session.lock()
+saved = datakey.read()
+forge()
+check("a first key added while signed in, the record made plain by hand: unlock still needs it",
+      raised(datakey.KeyNeeded, lambda: session.unlock(PW)) and session.state() == "locked")
+session.unlock(PW, present=fake.present)
+check("...and it unlocks", session.state() == "open")
+datakey._write(saved)
+session.sign_out()
+
 print(f"\n{ok} passed, {bad} failed"); sys.exit(1 if bad else 0)

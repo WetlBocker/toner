@@ -160,6 +160,43 @@ def inside(name, pin):
     return pinslot.open(r["slot"], r["slot_id"], pin, r["sealed"])
 
 
+b64 = lambda b: base64.b64encode(b).decode("ascii")
+
+
+def forge_seal(name, secret):
+    """A seal put in a chip slot's record by someone who can write netcheck.keys: the slot's public key is in the record, so no PIN is needed."""
+    d = doc(); r = d["accounts"][name]
+    r["sealed"] = pinslot.Slot(r["slot"], r["slot_id"]).seal(secret)
+    put(d)
+
+
+def unlocks(name, pin):
+    """True when the PIN and the session's own key (the fake's) unlock it."""
+    try:
+        return datakey.check_pin(name, pin, present=fake.present) is True
+    except Exception as e:
+        print("   (raised", type(e).__name__, e, ")")
+        return False
+
+
+def forged_unlock(name, pin, attacker, acred):
+    """The signed-in keyed session's unlock against forged seals: (a plain seal: refused with no key and with no touch; the session's
+    own key unlocks; a key list naming another key: that key refused; the session's own key unlocks)."""
+    saved_doc = doc()
+    forge_seal(name, os.urandom(64) + name.encode("utf-8"))
+    fake.touch = False
+    plain = raised(datakey.KeyNeeded, lambda: datakey.check_pin(name, pin)) and raised(fidokey.NotTouched, lambda: datakey.check_pin(name, pin, present=fake.present))
+    fake.touch = True
+    own = unlocks(name, pin)
+    entry = {"id": b64(acred.id), "salt": b64(acred.salt), "pub": b64(acred.public), "name": "Mine", "added": "2026-11-12T00:00:00+00:00"}
+    forge_seal(name, b"K1" + json.dumps({"list": [entry], "wraps": [b64(os.urandom(60))], "sealed_k": b64(os.urandom(60))}).encode())
+    listed = raised(fidokey.NotRegistered, lambda: datakey.check_pin(name, pin, present=attacker.present))
+    own2 = unlocks(name, pin)
+    put(saved_doc)
+    reset_counters()
+    return plain, own, listed, own2
+
+
 # ---------------------------------------------------------------- set up: an Admin, the directories, ana (chip), ben (store), an SSO account
 recovery = datakey.create("Admin1", PW)
 db.init()
@@ -197,6 +234,10 @@ check("the slot now holds K1 and the keys, not the data key", held_inside[:2] ==
 check("the key's id, number and public half are not in the file in the clear",
       all(base64.b64encode(x).decode() not in json.dumps(rec) and x.hex() not in json.dumps(rec) for x in (cred.id, cred.salt, cred.public)))
 check("has_keys reads the hint; my_keys lists it", datakey.has_keys("ana") and datakey.my_keys()[0]["name"] == "Blue")
+ATTACKER = fakekey.FakeKey()
+ACRED, _ = ATTACKER.register("Mine", os.urandom(32))
+got = forged_unlock("ana", PIN, ATTACKER, ACRED)
+check("a first key added while signed in: a forged seal or key list doesn't unlock without it; it does", got == (True,) * 4, got)
 datakey.close()
 check("the PIN alone no longer opens a keyed account", raised(datakey.KeyNeeded, lambda: datakey.open_with_pin("ana", PIN)) and not datakey.is_open())
 check("the PIN and the key open it, with the same box key as before", datakey.open_with_pin("ana", PIN, key=fake.value) == 0
@@ -267,6 +308,8 @@ fake.touch = False
 check("unlock: no touch is NotTouched and not counted", raised(fidokey.NotTouched, lambda: datakey.check_pin("ana", PIN, present=fake.present))
       and throttle_fails() == 0)
 fake.touch = True
+got = forged_unlock("ana", PIN, ATTACKER, ACRED)
+check("signed in with a key: a forged seal or key list doesn't unlock without it; it does", got == (True,) * 4, got)
 
 # a seal copied into another account's record opens nothing there, keyed or not
 d = doc()
@@ -322,8 +365,9 @@ datakey.remove_key(PIN, 0)
 check("removing one of two keeps the other", [k["name"] for k in datakey.my_keys()] == ["Spare"] and rec_of("ana")["keys_n"] == 1
       and raised(fidokey.NotRegistered, lambda: datakey.open_with_pin("ana", PIN, key=only(cred))) and datakey.open_with_pin("ana", PIN, key=fake.value) == 0)
 datakey.remove_key(PIN, 0)
+check("the last key removed while signed in: the PIN alone unlocks, as for any account without keys", datakey.check_pin("ana", PIN) is True)
 rec = rec_of("ana")
-plain_again = (list(rec) == list(plain_record) and {k: v for k, v in rec.items() if k not in SEAL} == {k: v for k, v in plain_record.items() if k not in SEAL}
+plain_again =(list(rec) == list(plain_record) and {k: v for k, v in rec.items() if k not in SEAL} == {k: v for k, v in plain_record.items() if k not in SEAL}
                and inside("ana", PIN) == DATA_KEY + datakey.box_private() + b"ana" and datakey.my_keys() == [] and not datakey.has_keys("ana"))
 check("removing the last key: the slot seals today's payload again", plain_again and datakey.open_with_pin("ana", PIN) == 0
       and datakey.box_public("ana") == box_before)

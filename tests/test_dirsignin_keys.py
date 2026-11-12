@@ -14,7 +14,7 @@ STORE = {}
 keyring.set_password = lambda s, u, p: STORE.__setitem__((s, u), p)
 keyring.get_password = lambda s, u: STORE.get((s, u))
 keyring.delete_password = lambda s, u: STORE.pop((s, u), None)
-import builtins, hashlib, http.server, json, pathlib, subprocess, threading, types, urllib.parse, uuid
+import base64, builtins, hashlib, http.server, json, pathlib, subprocess, threading, types, urllib.parse, uuid
 import ldap3
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
@@ -469,6 +469,17 @@ check("an admin with a key approving someone: their key is asked, with session's
       and free == [True])
 check("...and their own session is as it was", session.user() == "Admin1" and len(datakey.my_keys()) == 1)
 session.lock()
+saved_keys_file = datakey.read()
+forged = datakey.read()                                             # Admin1's record made plain by hand, under the password
+r = forged["accounts"]["Admin1"]
+kek = datakey._kek(PW, base64.b64decode(r["kdf"]["salt"]), r["kdf"])
+for f in ("keys", "keys_n", "sealed_k"):
+    r.pop(f, None)
+r["key"] = base64.b64encode(datakey._enc(kek, os.urandom(64), datakey._aad("Admin1"))).decode("ascii")
+datakey._write(forged)
+check("after approving, the record made plain by hand: unlock still needs the approver's key", raises(lambda: session.unlock(PW), datakey.KeyNeeded)
+      is not None and session.state() == "locked")
+datakey._write(saved_keys_file)
 session.unlock(PW, present=fake.present)
 check("the approver then unlocks with presence", session.state() == "open")
 datakey.add_key(PW, *fake.register("Spare", os.urandom(32)), "Spare")
