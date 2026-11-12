@@ -37,6 +37,7 @@ FREE_TRIES, FIRST_WAIT, MAX_WAIT = 5, 30, 900
 _DUMMY_SALT = b"toner-datakey:no-such-account"     # an unknown name still runs scrypt, so timing doesn't tell names apart
 WRONG = "That username or password isn't right."
 WRONG_RECOVERY = "That recovery key isn't right."
+KEYS_HELPER_ON = "Security keys can't be added to this account while \"Let group members sign in without approval\" is on."
 MISSING = ("Toner's data is encrypted, but netcheck.keys is missing from its data folder. Put netcheck.keys back next to netcheck.db, "
            "then start Toner again.")
 
@@ -617,6 +618,9 @@ def add_key(secret, cred, value, label):
         _keyed(rec, kek, payload, keys, k2, stored)
         return keys, k2, rec["keys"]
     mine = _dir_mine()
+    from core import dirsignin                          # (dirsignin imports this module)
+    if mine is not None and not dirsignin.keys_allowed(_name):
+        raise ValueError(KEYS_HELPER_ON)
     if mine is None:
         _keys, _k2, _seen = _change(add)
     else:

@@ -114,6 +114,7 @@ class Attempt:
         self.helper = False         # helper_ready() when the attempt began
         self.pending = None         # the helper's pending Duo check (its id)
         self.ticket = None          # the helper's ticket for this sign-in, used up by approve_by_helper
+        self.duo_skipped = False    # Duo skipped for the record's key hint: finish proves the seal is keyed, else Duo after all
 
 
 def _keys_doc():
@@ -228,6 +229,19 @@ def begin(login, password):
     return a
 
 
+def keys_allowed(name):
+    """Whether account `name` may have security keys: never an SSO account, nor an AD or LDAP account while sign-in without
+    approval is on (the helper is a way round a key)."""
+    rec = datakey.directory_account(name)
+    if rec is None:                                     # a local account
+        return True
+    return not datakey._sso(datakey.read(), rec) and not helper_ready()
+
+
+class _Unkeyed(Exception):
+    """A sign-in that skipped Duo opened a seal without keys."""
+
+
 def helper_ready():
     """Sign-in without approval is on for this copy: the helper service answers, enrolled by it."""
     try:
@@ -300,8 +314,9 @@ def _onward(a, stage):
         rec = _mine(a)
         if rec:
             now = time.time()
-            datakey.set_online(a.name, now)
-            datakey.set_full(a.name, now)
+            if not a.duo_skipped:                           # skipped for a key: written once finish has opened a keyed seal
+                datakey.set_online(a.name, now)
+                datakey.set_full(a.name, now)
             datakey.set_groups_role(a.name, a.role)
         fails = _clear_tries()
         if fails:                                           # as a local sign-in audits them (the row waits for the key)
@@ -323,6 +338,15 @@ def after_password(a):
         return
     if a.ticket or not (a.cfg.get("duo") or {}).get("on"):     # a ticket: the helper checked Duo (or it was bypassed)
         return _onward(a, "password")
+    rec = _mine(a)
+    if a.cfg.get("kind") != "oidc" and rec and rec.get("sealed") and datakey.has_keys(a.name):
+        a.duo_skipped = True                                # the key is the second step (a hint only: finish proves it)
+        return _onward(a, "password")
+    _duo(a)
+
+
+def _duo(a):
+    """Duo's preauth for an attempt at "password": stage "duo", or onward on Duo's bypass."""
     try:
         r = duo.preauth(a.cfg, a.user.name)
     except duo.Unavailable:
@@ -626,17 +650,19 @@ def _drop(slot):
         quiet.ignored()
 
 
-def approve(a, admin_name, admin_password):
-    _approve(a, lambda: datakey.open_with_password(admin_name, admin_password))
+def approve(a, admin_name, admin_password, key=None):
+    """`key`: fidokey.value, asked when the admin's account has security keys."""
+    _approve(a, lambda: datakey.open_with_password(admin_name, admin_password, key=key))
 
 
 def approve_recovery(a, recovery):
     _approve(a, lambda: datakey.open_with_recovery(recovery))
 
 
-def approve_with_account(a, approver, pin):
+def approve_with_account(a, approver, pin, key=None):
     """A directory or SSO Admin approves with their own sign-in (an Attempt at its PIN, checked online just now) and their Toner
-    PIN on this computer. Their session is never opened; the audit credits them by name."""
+    PIN on this computer (and `key`, fidokey.value, when their seal holds security keys). Their session is never opened; the
+    audit credits them by name. An approver whose sign-in skipped Duo for a key their seal turns out not to hold can't approve."""
     if str(approver.name or "").casefold() == str(a.name or "").casefold():
         raise CannotApprove(CANNOT_APPROVE)
     rec = datakey.directory_account(approver.name) if approver.name else None
@@ -647,9 +673,12 @@ def approve_with_account(a, approver, pin):
 
     def opener():
         try:
-            return datakey.open_with_pin(approver.name, pin)
+            fails = datakey.open_with_pin(approver.name, pin, key=key)
         except pinslot.SlotMissing:                         # no PIN slot on this computer: they'd need a new PIN here first
             raise CannotApprove(NOT_HERE_BEFORE) from None
+        if approver.duo_skipped and not datakey.my_keys():
+            raise CannotApprove(CANNOT_APPROVE)
+        return fails
     _approve(a, opener)
 
 
@@ -690,7 +719,7 @@ def _approve(a, opener, by=None, signer=None):
     name when no account opens the key (the helper's opener holds its own role key)."""
     _expect(a, "approve")
     with session._lock:
-        held = (datakey._key + datakey._box, datakey._name) if datakey.is_open() else None
+        held = (datakey._key + datakey._box, datakey._name, datakey._keys, datakey._k2, datakey._seen) if datakey.is_open() else None
         try:
             _approve_as(a, opener, by, signer)
         except BaseException:
@@ -736,19 +765,40 @@ def _put_back(held):
                 datakey.close()
 
 
-def finish(a, pin):
+def finish(a, pin, key=None):
+    """`key`: fidokey.value, asked when the seal holds security keys. An attempt that skipped Duo for the record's key hint signs
+    in only when the seal it opens is keyed (and only then is its full check written); else nothing is signed in, audited or told,
+    and it goes to Duo after all."""
     _expect(a, "pin")
+
+    def keyed():
+        if not a.duo_skipped:
+            return
+        if not datakey.my_keys():
+            raise _Unkeyed()
+        now = time.time()                                   # the password and the key: the full check
+        datakey.set_online(a.name, now)
+        datakey.set_full(a.name, now)
     try:
         if not a.offline and roles.needs_approval(a.name) == "changed":
-            if not datakey.check_pin(a.name, pin):          # the PIN first (counted), so a wrong one never reaches approval
-                raise pinslot.WrongPin()
+            try:                                            # the PIN first (counted), so a wrong one never reaches approval
+                if not datakey.check_pin(a.name, pin):
+                    raise pinslot.WrongPin()
+                if a.duo_skipped:                           # the seal holds no key
+                    raise _Unkeyed()
+            except datakey.KeyNeeded:                       # the PIN is right and the seal is keyed: the key is asked below
+                pass
             a.stage, a.message = "approve", CHANGED
             if a.ticket:
                 approve_by_helper(a)                        # approved: on with the PIN just checked
             if a.stage != "pin":
                 _why_admin(a)
                 return
-        session.sign_in_pin(a.name, pin)                    # offline, "changed" signs in with the keys it already has
+        session.sign_in_pin(a.name, pin, key=key, opened=keyed)     # offline, "changed" signs in with the keys it already has
+    except _Unkeyed:
+        a.duo_skipped, a.stage = False, "password"
+        _duo(a)
+        return
     except pinslot.SlotMissing:
         if not a.fresh:                                     # a new PIN needs the password checked online
             raise directory.Unreachable(UNREACHABLE) from None

@@ -13,6 +13,7 @@ _state, _user, _callbacks = "signed_out", None, []
 _kind = None          # "local", "directory" or "recovery" while signed in
 _full_at = None       # a directory account's last full check (password and Duo): its full_at
 _refused = False      # lock(reason="refused"): no unlock until a new sign-in
+_opening = False      # a sign-in's opener is running (it may wait on a security key's touch, without the lock)
 # shortcut: kept in memory, so rows waiting here are lost if Toner exits first; upgrade by counting them in netcheck.keys.
 _soon = []            # audit rows from while the key was closed (the audit table is encrypted), written at the next sign-in
 SOON_MAX = 100
@@ -55,30 +56,43 @@ def _after_open():
 
 
 def _opened(opener, action, who, kind="local", detail=""):
-    """Open the key, then the rest; if any step fails, close what opened so the state and the key agree."""
-    global _state, _user, _kind, _full_at, _refused
+    """Open the key, then the rest; if any step fails, close what opened so the state and the key agree. The opener may wait
+    minutes on a security key's touch, so it runs without the lock (_opening keeps a second sign-in out meanwhile)."""
+    global _state, _user, _kind, _full_at, _refused, _opening
     with _lock:
-        if _state != "signed_out":
+        if _state != "signed_out" or _opening:
             raise RuntimeError("Already signed in.")
+        _opening = True
+    try:
         try:
             fails = opener()
-            _after_open()
-            roles.unlock()                       # inside the rollback: anything it raises closes what opened
-            who = who() if callable(who) else who
-            detail = detail() if callable(detail) else detail
-            _state, _user, _kind, _refused = "open", who, kind, False     # before the audit row, so it names the Toner user
-            _full_at = datakey.directory_account(who)["full_at"] if kind == "directory" else None
         except BaseException:
-            _close()
+            with _lock:
+                _close()
             raise
-        audit.log(action, detail)
-        if fails:                                # counted in netcheck.keys; the audit table opens only now
-            audit.log(f"{fails} failed sign-in attempts since the last sign-in")
-        while _soon:
-            audit.log(*_soon.pop(0))
-        doc = roles.verified()
-        if doc is not None:                      # the rules (and so the directories) verified: remember that doc here
-            dirpin.remember(doc)
+        with _lock:
+            try:
+                _after_open()
+                roles.unlock()                       # inside the rollback: anything it raises closes what opened
+                who = who() if callable(who) else who
+                detail = detail() if callable(detail) else detail
+                _state, _user, _kind, _refused = "open", who, kind, False     # before the audit row, so it names the Toner user
+                _full_at = datakey.directory_account(who)["full_at"] if kind == "directory" else None
+            except BaseException:
+                _close()
+                raise
+            finally:
+                _opening = False
+            audit.log(action, detail)
+            if fails:                                # counted in netcheck.keys; the audit table opens only now
+                audit.log(f"{fails} failed sign-in attempts since the last sign-in")
+            while _soon:
+                audit.log(*_soon.pop(0))
+            doc = roles.verified()
+            if doc is not None:                      # the rules (and so the directories) verified: remember that doc here
+                dirpin.remember(doc)
+    finally:
+        _opening = False
     _notify("open")
 
 
@@ -99,8 +113,9 @@ def _stored_name(name):
     return next((a["name"] for a in datakey.accounts() if a["name"].casefold() == name.strip().casefold()), None)
 
 
-def sign_in(name, password):
-    _opened(lambda: datakey.open_with_password(name, password), "signed in", lambda: _stored_name(name))
+def sign_in(name, password, key=None):
+    """`key`: fidokey.value, asked when the account has security keys (KeyNeeded without it)."""
+    _opened(lambda: datakey.open_with_password(name, password, key=key), "signed in", lambda: _stored_name(name))
 
 
 def sign_in_recovery(recovery):
@@ -113,9 +128,16 @@ def _directory_name(name):
     return next((d.get("name", "") for d in doc.get("directories") or [] if d.get("id") == rec.get("directory")), "")
 
 
-def sign_in_pin(name, pin):
-    """A directory account's sign-in with its PIN (core/dirsignin.py checks the directory and Duo first)."""
-    _opened(lambda: datakey.open_with_pin(name, pin), "signed in", lambda: _stored_name(name), "directory",
+def sign_in_pin(name, pin, key=None, opened=None):
+    """A directory account's sign-in with its PIN (core/dirsignin.py checks the directory and Duo first). `key`: fidokey.value,
+    asked when the seal holds security keys. `opened()`: run once the seal is open, before anything is signed in, audited or told;
+    what it raises closes it all again (dirsignin's check that a sign-in that skipped Duo opened a keyed seal)."""
+    def opener():
+        fails = datakey.open_with_pin(name, pin, key=key)
+        if opened is not None:
+            opened()
+        return fails
+    _opened(opener, "signed in", lambda: _stored_name(name), "directory",
             lambda: f"directory {_directory_name(name)}")
 
 
@@ -145,7 +167,7 @@ def refused():
 def audit_soon(action, detail="", who=None):
     """Audit now while the key is open, else at the next sign-in in this process."""
     with _lock:
-        if datakey.is_open():
+        if datakey.is_open() and not _opening:     # (a sign-in still opening may yet be closed again)
             audit.log(action, detail, who)
         elif len(_soon) < SOON_MAX:
             _soon.append((action, detail, who))
@@ -165,44 +187,46 @@ def lock(reason=None):
     _notify("locked")
 
 
-def unlock(password):
+def _unlock(check, locked_out, wrong):
+    """check(user) -> right or not; it may wait minutes on a security key's touch, so it runs without the lock, and the state is
+    looked at again once it is back: signed out or refused meanwhile, nothing opens. A key failure raises, still locked."""
     global _state
     with _lock:
         if _state != "locked":
             raise RuntimeError("Toner isn't locked.")
         if _refused:
             raise Refused(REFUSED)
-        try:
-            right = datakey.check_password(_user, password)
-        except datakey.Throttled:
-            audit.log("unlock failed", "too many tries")
-            raise
-        if not right:
-            audit.log("unlock failed")
-            raise datakey.WrongPassword(datakey.WRONG)
-        audit.log("unlocked")
-        _state = "open"
-    _notify("open")
-
-
-def unlock_pin(pin):
-    global _state
+        who = _user
+    err = right = None
+    try:
+        right = check(who)
+    except locked_out as e:
+        err = e
     with _lock:
-        if _state != "locked":
+        if _state != "locked" or _user != who:
             raise RuntimeError("Toner isn't locked.")
         if _refused:
             raise Refused(REFUSED)
-        try:
-            right = datakey.check_pin(_user, pin)
-        except pinslot.PinLocked:
+        if err is not None:
             audit.log("unlock failed", "too many tries")
-            raise
+            raise err
         if not right:
             audit.log("unlock failed")
-            raise pinslot.WrongPin()
+            raise wrong()
         audit.log("unlocked")
         _state = "open"
     _notify("open")
+
+
+def unlock(password, present=None):
+    """`present`: fidokey.present, a touch, when the account has security keys (KeyNeeded without it)."""
+    _unlock(lambda who: datakey.check_password(who, password, present=present), datakey.Throttled,
+            lambda: datakey.WrongPassword(datakey.WRONG))
+
+
+def unlock_pin(pin, present=None):
+    """`present`: fidokey.present, a touch, when the seal holds security keys (KeyNeeded without it)."""
+    _unlock(lambda who: datakey.check_pin(who, pin, present=present), pinslot.PinLocked, pinslot.WrongPin)
 
 
 def sign_out():

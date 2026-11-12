@@ -27,6 +27,7 @@ from core import audit, datakey, db, dirpin, envelope, quiet, sqldb
 ROLES = ("Admin", "Engineer", "Tech")
 KINDS = ("rules", "backups")
 LAST_ADMIN = "Toner needs at least one Admin."
+REQUIRE_HELPER_ON = "Turn off \"Let group members sign in without approval\" first. It can't be on while security keys are required."
 
 
 class NotHeld(ValueError):
@@ -126,6 +127,8 @@ def _signed(doc):
         body["directories"] = doc["directories"]
     if "rules_version" in doc:
         body["rules_version"] = doc["rules_version"]
+    if "require_keys" in doc:                           # only while on: a copy that never used it signs as before
+        body["require_keys"] = doc["require_keys"]
     return envelope.canonical(body)
 
 
@@ -692,6 +695,41 @@ def set_permissions(role, changes):
         _written(pub)
         for k in changed:
             audit.log("role permissions changed", f"{role}: {labels[k]} {'on' if changes[k] else 'off'}")
+        _trim()
+    _notify()
+
+
+def require_keys():
+    """Every local, AD and LDAP account must have a security key: from the verified rules."""
+    return (verified() or {}).get("require_keys") is True
+
+
+def must_add_key():
+    """The signed-in account is sent to add a key before anything else opens: keys are required, it may have them (local, AD
+    or LDAP; never SSO or the recovery key) and it has none."""
+    from core import dirsignin                          # (dirsignin imports this module)
+    name = datakey.signed_in_name()
+    return name is not None and require_keys() and dirsignin.keys_allowed(name) and not datakey.my_keys()
+
+
+def set_require_keys(on):
+    """An Admin's switch, signed with the rules. Refused while sign-in without approval is on (the helper is a way round a key)."""
+    from core import helperclient
+    if on and helperclient.state(datakey.path(), ask_service=False) == "on":
+        raise ValueError(REQUIRE_HELPER_ON)
+    with _lock:
+        def go(doc):
+            repair = _may_write(doc)
+            was = doc.get("require_keys") is True
+            if on:
+                doc["require_keys"] = True
+            else:
+                doc.pop("require_keys", None)
+            return was, _resign(doc, repair)
+        was, pub = datakey.edit(go)
+        _written(pub)
+        if was != bool(on):
+            audit.log(f"security keys required turned {'on' if on else 'off'}", f"by {audit.actor()}")
         _trim()
     _notify()
 
