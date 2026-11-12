@@ -4,7 +4,8 @@ password to lock with). The card helpers here are shared with the first start (u
 
 A directory account (core/dirsignin.py) goes from the password to Duo, the PIN, and when needed a new PIN and an admin's
 approval. Each slow step runs on a Job thread; its result is used only while the window is still on that attempt. An SSO
-account goes to the browser instead of the password and Duo."""
+account goes to the browser instead of the password and Duo. An account with security keys is asked for one (ui/keyask.py) once its
+password or PIN is right, on the key page (and on Linux and macOS the key's own PIN on the key PIN page)."""
 import threading
 import webbrowser
 
@@ -15,8 +16,9 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFrame, QHBoxLayou
 import json
 import os
 
-from core import audit, datakey, db, directory, dirsignin, duo, oidc, passvault, passwords, perms, pinslot, session
+from core import audit, datakey, db, directory, dirsignin, duo, fidokey, oidc, passvault, passwords, perms, pinslot, session
 from ui import theme
+from ui.keyask import KeyAsk
 
 DAMAGED = "This file is damaged or was changed outside Toner."
 REMEMBER = "Remember me"
@@ -69,6 +71,11 @@ SSO_AGAIN = "Open the page again"
 APPROVE_WITH_ACCOUNT = "Approve with a directory account"
 APPROVER_TITLE = "Admin approval"
 APPROVER_TEXT = "An admin who has signed in on this computer before signs in with their own account, then types their Toner PIN."
+KEY_TITLE = "Touch your security key"
+KEY_TEXT = "Plug it in if it isn't already, then touch it."
+KEY_BACK = "Use a different account"
+KEY_PIN_TITLE = "Enter your security key's PIN"
+KEY_PIN_TEXT = "This is the PIN set on the key itself, not the one you use for Toner."
 # directory steps' errors whose text is already the approved sentence
 SAID = (datakey.WrongPassword, datakey.NameTaken, dirsignin.NotInGroup, dirsignin.Paused, dirsignin.CannotApprove, dirsignin.CaChanged,
         duo.Unavailable, duo.Denied, pinslot.WrongPin)
@@ -323,13 +330,32 @@ class SignInWindow(QDialog):
         self.approve_key_error, self.approve_key_ok = error_label(), primary("Approve")
         self._finish(lay, self.approve_key, self.approve_key_error, self.approve_key_ok, self._approve_key, self._not_you_link())
 
+        # ------------------------------------------------ a security key, once the password or PIN is right
+        self.keyask, self._key_pins = KeyAsk(self), 0
+        self.key_page, lay = self._page(KEY_TITLE, KEY_TEXT)
+        self.key_back = link(KEY_BACK)
+        lay.addSpacing(10)
+        lay.addWidget(self.key_back, 0, Qt.AlignmentFlag.AlignLeft)
+        self.keypin_page, lay = self._page(KEY_PIN_TITLE, KEY_PIN_TEXT)
+        self.key_pin = QLineEdit()
+        self.key_pin.setEchoMode(QLineEdit.EchoMode.Password)
+        self.key_pin.setAccessibleName(KEY_PIN_TITLE)
+        lay.addSpacing(6)
+        lay.addWidget(self.key_pin)
+        self.key_pin_error, self.key_pin_ok, key_pin_back = error_label(), primary("Next"), link(KEY_BACK)
+        self._finish(lay, self.key_pin, self.key_pin_error, self.key_pin_ok, self._give_key_pin, key_pin_back)
+        for b in (self.key_back, key_pin_back):
+            b.clicked.connect(self._not_you)             # (_drop cancels the wait: the step lands as NotTouched, on nothing)
+        self.keyask.touching.connect(self._touching)
+        self.keyask.pin_wanted.connect(self._pin_wanted)
+
         self.pin_wait = Wait(self.pin_error, self.pin_ok, pinslot.PinLocked)
         self.choose_wait = Wait(self.choose_error, self.choose_ok, pinslot.PinLocked)      # the chip's lockout refuses new keys too
         self.approve_wait = Wait(self.approve_error, self.approve_ok)
         self.approve_key_wait = Wait(self.approve_key_error, self.approve_key_ok)
         self._waits = (self.pin_wait, self.choose_wait, self.approve_wait, self.approve_key_wait)
         self._secrets = (self.pw, self.code, self.pin, self.pin1, self.pin2, self.admin, self.admin_pw, self.approve_key,
-                         self.recovery, self.new_pw, self.confirm)
+                         self.recovery, self.new_pw, self.confirm, self.key_pin)
         if approver_for:                                 # the approver's own sign-in: no recovery key, new PIN or session
             self.use_recovery.hide()
             self.forgot.hide()
@@ -365,6 +391,7 @@ class SignInWindow(QDialog):
         if not self.sign_in_wait.timer.isActive():
             say(self.error, "")
         say(self.code_error, "")
+        say(self.key_pin_error, "")
         for wait in self._waits:
             if not wait.timer.isActive():
                 say(wait.label, "")
@@ -402,10 +429,12 @@ class SignInWindow(QDialog):
             return self._sso()
         self._go(self.password_page, self.pw)
 
-    def _try(self, signing_in, error, wait, opener):
-        """Run a sign-in; say what went wrong in `error`. True when it opened."""
+    def _try(self, signing_in, error, wait, opener, raised=None):
+        """Run a sign-in (or take what it `raised` on a Job); say what went wrong in `error`. True when it opened."""
         try:
             try:
+                if raised is not None:
+                    raise raised
                 signing_in()
             except passvault.Locked:
                 if not self._adopt_old_vault(opener):    # set up stopped before the old vault moved over: finish that first
@@ -420,6 +449,8 @@ class SignInWindow(QDialog):
             say(error, VAULT_CHANGED)
         except (passvault.WrongPassword, *DAMAGED_ERRORS):
             say(error, DAMAGED)
+        except fidokey.Failed as e:
+            say(error, e.text)
         return False
 
     def _adopt_old_vault(self, opener):
@@ -435,10 +466,14 @@ class SignInWindow(QDialog):
             return self._begin()
         name, pw = self.name.text().strip(), self.pw.text()
         self.pw.setText("")
-        if self._try(lambda: session.sign_in(name, pw), self.error, self.sign_in_wait, lambda: datakey.open_with_password(name, pw)):
-            self.accept()
-        else:
+
+        def landed(_r, e):
+            # (an old vault still to move over: before any key could be added, so the retry here asks none)
+            if e is None or self._try(lambda: session.sign_in(name, pw), self.error, self.sign_in_wait,
+                                      lambda: datakey.open_with_password(name, pw), raised=e):
+                return self.accept()
             self.pw.setFocus()
+        self._run(lambda: session.sign_in(name, pw, key=self.keyask.key), landed)
 
     def _sign_in_recovery(self):
         key = self.recovery.text()
@@ -486,6 +521,7 @@ class SignInWindow(QDialog):
         self._turn += 1
         if self._cancel is not None:
             self._cancel.set()
+        self.keyask.cancel()
         self.attempt, self._forgot = None, False
 
     def _not_you(self):
@@ -497,6 +533,7 @@ class SignInWindow(QDialog):
         is off while it runs (the push leaves its page on, for Cancel and Enter a code instead)."""
         job = Job(fn)
         job.landed, job.turn, job.page = landed, self._turn, self.pages.currentWidget() if block else None
+        job.ask = self.keyask.arm()
         if job.page is not None:
             job.page.setEnabled(False)
         job.done.connect(self._landed, Qt.ConnectionType.QueuedConnection)
@@ -510,7 +547,33 @@ class SignInWindow(QDialog):
         if job.page is not None:
             job.page.setEnabled(True)
         if job.turn == self._turn:
+            if error is not None and job.page is not None and self.pages.currentWidget() in (self.key_page, self.keypin_page):
+                self._go(job.page, job.page)             # the key failed: back to the page it was asked from
             job.landed(result, error)
+        elif error is None and job.ask.asked and session.state() == "open" and not self.approver_for:
+            session.sign_out()                           # touched just as the person went back: the sign-in did not complete
+
+    def _asking(self):
+        """A key is being asked for the attempt on screen (a signal from a wait already cancelled lands on nothing)."""
+        return any(j.turn == self._turn and j.ask.asked and not j.ask.cancel.is_set() for j in self._jobs)
+
+    def _touching(self):
+        if self._asking():
+            self._key_pins = 0
+            self._go(self.key_page, self.key_back)
+
+    def _pin_wanted(self):
+        if self._asking():
+            self._go(self.keypin_page, self.key_pin)
+            if self._key_pins:                           # asked again: the PIN given was wrong
+                say(self.key_pin_error, fidokey.WrongKeyPin.text)
+
+    def _give_key_pin(self):
+        pin = self.key_pin.text()
+        self.key_pin.setText("")
+        self._key_pins += 1
+        self._go(self.key_page, self.key_back)
+        self.keyask.give_pin(pin)
 
     def _fail(self, e, label, wait, box=None):
         if isinstance(e, (datakey.Throttled, pinslot.PinLocked)) and wait is not None:
@@ -521,6 +584,8 @@ class SignInWindow(QDialog):
             say(label, dirsignin.sso_said(self.sso, e))
         elif isinstance(e, SAID):
             say(label, str(e))
+        elif isinstance(e, fidokey.Failed):
+            say(label, e.text)
         elif isinstance(e, DAMAGED_ERRORS):
             say(label, DAMAGED)
         else:
@@ -619,9 +684,9 @@ class SignInWindow(QDialog):
         a, pin = self.attempt, self.pin.text()
         self.pin.setText("")
         if self.approver_for:
-            return self._run(lambda: dirsignin.approve_with_account(self.approver_for, a, pin),
+            return self._run(lambda: dirsignin.approve_with_account(self.approver_for, a, pin, key=self.keyask.key),
                              lambda _r, e: self.accept() if e is None else self._fail(e, self.pin_error, self.pin_wait, self.pin))
-        self._step(lambda: dirsignin.finish(a, pin), self.pin_error, self.pin_wait, self.pin)
+        self._step(lambda: dirsignin.finish(a, pin, key=self.keyask.key), self.pin_error, self.pin_wait, self.pin)
 
     def _forgot_pin(self):
         """A new PIN needs the password (and Duo) checked online again, in a new attempt."""
@@ -694,7 +759,7 @@ class SignInWindow(QDialog):
     def _approve(self):
         a, admin, pw = self.attempt, self.admin.text().strip(), self.admin_pw.text()
         self.admin_pw.setText("")
-        self._step(lambda: dirsignin.approve(a, admin, pw), self.approve_error, self.approve_wait, self.admin_pw)
+        self._step(lambda: dirsignin.approve(a, admin, pw, key=self.keyask.key), self.approve_error, self.approve_wait, self.admin_pw)
 
     def _approve_with_account(self):
         """The nested window: once it closes, whatever its result (its Jobs have ended), this window routes the attempt on (to its
@@ -728,7 +793,8 @@ class SignInWindow(QDialog):
         super().accept()
 
     def reject(self):
+        asked = any(j.ask.asked for j in self._jobs) and not self.approver_for
         self._stop()                                     # a PIN step that opens the session ends before the check below
-        if session.state() != "signed_out" and session.user() is None:
-            session.sign_out()                           # never leave a recovery session behind
+        if session.state() != "signed_out" and (session.user() is None or asked):
+            session.sign_out()                           # never leave a recovery session, or one a key opened as it closed, behind
         super().reject()

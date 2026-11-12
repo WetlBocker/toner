@@ -31,6 +31,12 @@ def undone(box):
     """What undo brings back into a box (Password mode hides undo, so it is read as a show-password switch would)."""
     mode = box.echoMode(); box.setEchoMode(box.EchoMode.Normal); box.undo(); text = box.text(); box.setEchoMode(mode)
     return text
+def settle(x):
+    """A sign-in or unlock runs on a Job (a security key may be asked there): wait until it has landed."""
+    end = time.time() + 30
+    while x._jobs and time.time() < end:
+        app.processEvents(); time.sleep(0.005)
+    app.processEvents()
 
 PW, PW2, PW3 = "violet staple orbit 42", "amber kettle meadow 77", "copper willow harbor 58"
 KEY_PATTERN = re.compile(r"^([A-Z2-7]{4}-){7}[A-Z2-7]{4}$")
@@ -151,15 +157,15 @@ check("an empty name is refused", w.name_error.text() == "Enter a username." and
 w.name.setText("nobody here"); w.next.click()
 check("Next with a name that doesn't exist still asks for a password (names aren't revealed)",
       w.pages.currentWidget() is w.password_page and w.who.text() == "nobody here")
-w.pw.setText("wrong password 123"); w.sign_in.click()
+w.pw.setText("wrong password 123"); w.sign_in.click(); settle(w)
 check("a wrong password shows the agreed message", w.error.text() == datakey.WRONG and session.state() == "signed_out", w.error.text())
 check("...and the password box is emptied", w.pw.text() == "")
 w.not_you.click()
 check("Not you? goes back to the name", w.pages.currentWidget() is w.name_page)
 real_sign_in = session.sign_in
-def throttled(*_a): raise datakey.Throttled(30)
+def throttled(*_a, **_k): raise datakey.Throttled(30)
 session.sign_in = throttled
-w.name.setText("Jordan"); w.next.click(); w.pw.setText(PW); w.sign_in.click()
+w.name.setText("Jordan"); w.next.click(); w.pw.setText(PW); w.sign_in.click(); settle(w)
 check("too many tries: Sign in is off and the countdown shows", not w.sign_in.isEnabled() and w.error.text() == "Too many tries. Wait 30 seconds, then try again.", w.error.text())
 w.sign_in_wait.timer.timeout.emit()
 check("...counting down", w.error.text() == "Too many tries. Wait 29 seconds, then try again.", w.error.text())
@@ -168,10 +174,10 @@ check("...and Sign in comes back when it ends", w.sign_in.isEnabled() and not w.
 session.sign_in = real_sign_in
 keys = datakey.path().read_bytes()
 datakey.path().write_text("{not json", encoding="utf-8")
-w.pw.setText(PW); w.sign_in.click()
+w.pw.setText(PW); w.sign_in.click(); settle(w)
 check("a damaged keys file: one clear sentence, no parser message", w.error.text() == "This file is damaged or was changed outside Toner.", w.error.text())
 datakey.path().write_bytes(keys)
-w.pw.setText(PW); w.sign_in.click()
+w.pw.setText(PW); w.sign_in.click(); settle(w)
 check("the right password signs in (any capitals in the name)", w.result() == SignInWindow.DialogCode.Accepted and session.user() == "Jordan")
 check("...and undo can't bring the password back into its box", undone(w.pw) == "")
 session.sign_out()
@@ -210,7 +216,7 @@ passvault.create("old master password!", remember=False, carry={"c": "3"}); pass
 datakey.create("Admin", PW); datakey.close()
 setupdlg.OldVaultDialog.exec = old_master
 w = SignInWindow(); w.show()
-w.name.setText("Admin"); w.next.click(); w.pw.setText(PW); w.sign_in.click()
+w.name.setText("Admin"); w.next.click(); w.pw.setText(PW); w.sign_in.click(); settle(w)
 check("signing in asks for the master password once, then opens", w.result() == SignInWindow.DialogCode.Accepted and session.user() == "Admin"
       and passvault.get("c") == "3" and not passvault.uses_master())
 check("...and the data still to encrypt is left for app.main", lockdown.pending() != [])
@@ -236,7 +242,7 @@ check("...and if a wait started anyway, the password step shows the countdown wi
       and w.error.text() == "Too many tries. Wait 30 seconds, then try again." and session.state() == "signed_out", w.error.text())
 check("...and the new password boxes are empty, undo included", w.new_pw.text() == w.confirm.text() == "" and undone(w.new_pw) == undone(w.confirm) == "")
 w.sign_in_wait.timer.stop(); w.sign_in.setEnabled(True)
-w.pw.setText(PW2); w.sign_in.click()
+w.pw.setText(PW2); w.sign_in.click(); settle(w)
 check("...after which signing in works", w.result() == SignInWindow.DialogCode.Accepted and session.user() == "Jordan")
 session.sign_out()
 
@@ -343,9 +349,9 @@ check("the idle timer stops while locked", not lock.idle.isActive())
 check("what's under it can't be reached: the lock is the newest modal", QApplication.activeModalWidget() is lock)
 win.hide(); win.show_window(); app.processEvents()
 check("the tray's Open Toner shows the lock screen", win.isVisible() and lock.isVisible())
-lock.pw.setText("wrong password 123"); lock.unlock.click()
+lock.pw.setText("wrong password 123"); lock.unlock.click(); settle(lock)
 check("a wrong password says so", lock.error.text() == datakey.WRONG and session.state() == "locked")
-lock.pw.setText(PW2); lock.unlock.click()
+lock.pw.setText(PW2); lock.unlock.click(); settle(lock)
 check("the right password uncovers the window", session.state() == "open" and not lock.isVisible() and not lock.covers
       and QApplication.activeModalWidget() is None)
 check("...and undo can't bring the password back into the lock's box", undone(lock.pw) == "")
@@ -361,7 +367,7 @@ for parent, kind in ((win, "inside the window"), (None, "on its own")):
     check(f"a modal dialog {kind}: the lock is above it and takes input", QApplication.activeModalWidget() is lock
           and QApplication.focusWidget() is lock.pw, (QApplication.activeModalWidget(), QApplication.focusWidget()))
     check("...the dialog stays open, covered", d.isVisible() and lock.covers[d].isVisible() and lock.covers[d].geometry() == d.rect())
-    QTest.keyClicks(lock.pw, PW2); QTest.keyClick(lock.pw, Qt.Key.Key_Return); app.processEvents()
+    QTest.keyClicks(lock.pw, PW2); QTest.keyClick(lock.pw, Qt.Key.Key_Return); settle(lock)
     check("...unlock gives it back with what was typed", session.state() == "open" and d.isVisible() and typed.text() == "half typed"
           and QApplication.activeModalWidget() is d and not lock.covers)
     d.close(); d.deleteLater(); app.processEvents()

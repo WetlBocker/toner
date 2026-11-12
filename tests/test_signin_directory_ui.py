@@ -434,7 +434,7 @@ w = open_window()
 w.name.setText("bob@acme.com"); w.next.click()
 check("a changed directories list: the paused sentence on the name page", at(w) == "name"
       and w.name_error.text() == "Directory sign-in is paused on this computer. An admin needs to sign in first.", w.name_error.text())
-w.name.setText("Admin1"); w.next.click(); w.pw.setText(PW); w.sign_in.click()
+w.name.setText("Admin1"); w.next.click(); w.pw.setText(PW); w.sign_in.click(); settle(w)
 check("...a local name still signs in, as today", w.result() == Accepted and session.user() == "Admin1")
 session.sign_out()
 DIRS[dirpin.store_name()] = remembered

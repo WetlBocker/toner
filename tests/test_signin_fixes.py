@@ -44,6 +44,12 @@ CHANGED = "The vault changed after it was opened. Open it again, then try again.
 
 from PySide6.QtWidgets import QApplication, QMessageBox
 app = QApplication([])
+def settle(x):
+    """A sign-in or unlock runs on a Job (a security key may be asked there): wait until it has landed."""
+    end = time.time() + 30
+    while x._jobs and time.time() < end:
+        app.processEvents(); time.sleep(0.005)
+    app.processEvents()
 import app as A
 A.plain_look(app)
 from ui import setupdlg
@@ -73,7 +79,7 @@ db.init(); db.release()
 passvault.create("old master password!", remember=True, carry={"s": "2"}); passvault.lock()
 datakey.create("Admin", PW); datakey.close()
 w = SignInWindow(); w.show()
-w.name.setText("Admin"); w.next.click(); w.pw.setText(PW); w.sign_in.click()
+w.name.setText("Admin"); w.next.click(); w.pw.setText(PW); w.sign_in.click(); settle(w)
 check("signs in with no dialog", w.result() == SignInWindow.DialogCode.Accepted and asked == [], (w.error.text(), asked))
 check("...and the password moved over", passvault.get("s") == "2" and not passvault.uses_master() and not passvault.key_path().exists())
 session.sign_out()
@@ -106,7 +112,7 @@ w = SignInWindow(); w.show()
 setupdlg.OldVaultDialog.exec = lambda self: 1          # (accepted, but the vault still isn't adopted: replaced meanwhile)
 w.name.setText("Admin"); w.next.click(); w.pw.setText(PW)
 try:
-    w.sign_in.click(); raised = None
+    w.sign_in.click(); settle(w); raised = None
 except Exception as e:
     raised = e
 check("the sign-in window says so instead of crashing", raised is None and w.error.text() == CHANGED

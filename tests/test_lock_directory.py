@@ -190,16 +190,16 @@ check("it shows the field PIN", lock.locked and lock.pw.placeholderText() == "PI
       and lock.pw.isVisibleTo(lock))
 check("...and the same buttons as ever", shown(lock) == sorted(["Toner is locked", "Locked by bob@acme.com.", "bob@acme.com",
                                                                   "Unlock", "Sign in as someone else"]), shown(lock))
-lock.pw.setText("975310"); lock.unlock.click(); app.processEvents()
+lock.pw.setText("975310"); lock.unlock.click(); pump(lambda: not lock._jobs)
 check("a wrong PIN says so and empties the field", lock.error.text() == pinslot.WRONG and lock.pw.text() == ""
       and session.state() == "locked", lock.error.text())
 FakeTpm.locked = 28800
-lock.pw.setText(PIN); lock.unlock.click(); app.processEvents()
+lock.pw.setText(PIN); lock.unlock.click(); pump(lambda: not lock._jobs)
 check("a wait is worded as the PIN's wait, and Unlock is off", lock.error.text() == str(pinslot.PinLocked(28800))
       and not lock.unlock.isEnabled(), lock.error.text())
 FakeTpm.locked = 0
 lock.wait.timer.stop(); lock.unlock.setEnabled(True)
-lock.pw.setText(PIN); lock.unlock.click(); app.processEvents()
+lock.pw.setText(PIN); lock.unlock.click(); pump(lambda: not lock._jobs)
 check("the right PIN unlocks, the field is empty", session.state() == "open" and lock.pw.text() == "" and not lock.locked)
 check("...and undo can't bring the PIN back", undone(lock.pw) == "")
 
@@ -223,7 +223,7 @@ session.sign_out(); app.processEvents()
 print("== the session is over")
 calls, threads, spy = [], [], []
 real_unlock_pin = session.unlock_pin
-session.unlock_pin = lambda pin: spy.append(pin) or real_unlock_pin(pin)
+session.unlock_pin = lambda pin, present=None: spy.append(pin) or real_unlock_pin(pin, present)
 def probe(up):
     def fn(cfg):
         threads.append(threading.current_thread()); calls.append(cfg["id"])
@@ -251,7 +251,7 @@ session.lock(); app.processEvents()
 check("a new lock starts from the PIN screen again", lock.pw.isVisibleTo(lock) and not lock.again.isVisibleTo(lock))
 calls.clear(); threads.clear()
 directory.reachable = probe(False)
-lock.pw.setText("975310"); lock.unlock.click(); pump(lambda: spy)
+lock.pw.setText("975310"); lock.unlock.click(); pump(lambda: spy and not lock._jobs)
 check("unreachable: the PIN is tried (a wrong one is counted and said)", spy == ["975310"] and lock.error.text() == pinslot.WRONG
       and lock.pw.isEnabled() and lock.unlock.isEnabled() and lock.pw.text() == "", (spy, lock.error.text()))
 lock.pw.setText(PIN); lock.unlock.click(); pump(lambda: session.state() == "open")
@@ -271,7 +271,7 @@ print("== within the session there is no probe")
 sign_in_bob(); calls.clear(); spy.clear()
 directory.reachable = probe(True)
 session.lock(); app.processEvents()
-lock.pw.setText(PIN); lock.unlock.click(); app.processEvents()
+lock.pw.setText(PIN); lock.unlock.click(); pump(lambda: not lock._jobs)
 check("the PIN is tried at once", spy == [PIN] and calls == [] and session.state() == "open")
 session.sign_out(); app.processEvents()
 directory.reachable = real_reachable
@@ -338,7 +338,7 @@ session.sign_in("Admin1", PW)
 session.lock(); app.processEvents()
 check("Password, not PIN", lock.pw.placeholderText() == "Password" and lock.pw.accessibleName() == "Password"
       and shown(lock) == sorted(["Toner is locked", "Locked by Admin1.", "Admin1, local account", "Unlock", "Sign in as someone else"]), shown(lock))
-lock.pw.setText(PW); lock.unlock.click(); app.processEvents()
+lock.pw.setText(PW); lock.unlock.click(); pump(lambda: not lock._jobs)
 check("...and the password unlocks", session.state() == "open")
 session.sign_out()
 

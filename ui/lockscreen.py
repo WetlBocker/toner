@@ -5,20 +5,25 @@ It is its own application-modal window, so it is the newest modal even when a di
 blocked, and keeps what was typed), and every Toner window, Main included, gets an opaque cover over its contents until unlock.
 A window that opens while locked is covered too, and the lock takes the top of the modal stack again.
 
-Locking keeps the data key open (core/session.py), so scheduled checks and backups go on underneath; only the windows are hidden."""
+Locking keeps the data key open (core/session.py), so scheduled checks and backups go on underneath; only the windows are hidden.
+An account with security keys touches one after its password or PIN (ui/keyask.py): the unlock runs on a Job meanwhile."""
 import time
 
 from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QVBoxLayout, QWidget
 
-from core import datakey, db, dirpin, dirsignin, pinslot, session
+from core import datakey, db, dirpin, dirsignin, fidokey, pinslot, session
 from ui import theme
+from ui.keyask import KeyAsk
 from ui.widgets import while_alive
-from ui.signinwindow import DAMAGED, DAMAGED_ERRORS, Job, Wait, card, centred, error_label, heading, link, primary, say, words
+from ui.signinwindow import (DAMAGED, DAMAGED_ERRORS, KEY_TEXT, KEY_TITLE, Job, Wait, card, centred, error_label, heading, link, primary,
+                             say, words)
 
 _now = time.time                                         # wall-clock: it keeps counting while the computer sleeps (the tests move it)
 _INPUT = {QEvent.Type.KeyPress, QEvent.Type.MouseButtonPress, QEvent.Type.MouseMove, QEvent.Type.Wheel, QEvent.Type.TouchBegin}
 _NOT_WINDOWS = (Qt.WindowType.Popup, Qt.WindowType.ToolTip, Qt.WindowType.Desktop)    # menus, drop-downs and tips are not covered
+LOCKED = "Toner is locked"
+NOT_TOUCHED = "The key wasn't touched. Try again."
 
 
 class LockScreen(QWidget):
@@ -37,7 +42,7 @@ class LockScreen(QWidget):
         self.avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(self.avatar)
         lay.addSpacing(6)
-        self.head = heading("Toner is locked")
+        self.head = heading(LOCKED)
         lay.addWidget(self.head)
         self.reason = words()
         lay.addWidget(self.reason)
@@ -73,6 +78,8 @@ class LockScreen(QWidget):
         self._locks = 0                                  # counts the locks: a probe's answer belongs to the lock that asked
         self._jobs = set()                               # the directory probes running off this thread
         self.wait = Wait(self.error, self.unlock)
+        self.keyask, self._reason = KeyAsk(self), ""
+        self.keyask.touching.connect(self._touching)
         centred(frame, QVBoxLayout(self))
         self.idle = QTimer(self)                         # checks now and then; input moves `last` (eventFilter)
         self.idle.setInterval(15000)
@@ -164,6 +171,7 @@ class LockScreen(QWidget):
         """What the screen shows: "local" (password), "directory" (PIN), "again" (the session is over and the directory is
         reachable: sign in in full) or "refused" (only the sentence and the way out)."""
         full = mode in ("local", "directory")
+        self.head.setText(LOCKED)                        # (not "Touch your security key" left from a wait this ends)
         label = "PIN" if mode == "directory" else "Password"
         self.pw.setPlaceholderText(label)
         self.pw.setAccessibleName(label)
@@ -240,6 +248,7 @@ class LockScreen(QWidget):
 
     def release(self):
         """Toner is closing: the lock and its covers go, so it isn't the last window left."""
+        self._end_jobs()
         self._uncover()
         self.close()
 
@@ -280,6 +289,7 @@ class LockScreen(QWidget):
             else:
                 self._try(session.unlock_pin, pin)
         job = Job(probe)
+        job.ask = None
         job.done.connect(landed, Qt.ConnectionType.QueuedConnection)
         for w in (self.pw, self.unlock, self.other):
             w.setEnabled(False)
@@ -287,24 +297,64 @@ class LockScreen(QWidget):
         job.start()
 
     def _try(self, unlock, secret):
-        try:
-            unlock(secret)
-        except (datakey.Throttled, pinslot.PinLocked) as e:
-            self.wait.start(e.seconds)
-        except (datakey.WrongPassword, pinslot.WrongPin) as e:
-            say(self.error, str(e))
-        except session.Refused:
-            self._arrange("refused")
-        except RuntimeError:
-            self.follow()                                # unlocked already (from elsewhere)
-        except DAMAGED_ERRORS:
-            say(self.error, DAMAGED)
+        """The unlock on a Job, the field off meanwhile: a keyed account's touch waits there (Sign in as someone else stays on)."""
+        turn, ask = self._locks, self.keyask.arm()
+
+        def landed(job, _r, e):
+            job.wait()
+            job.fn = None
+            self._jobs.discard(job)
+            if self.head.text() == KEY_TITLE:
+                self.head.setText(LOCKED)
+                self.reason.setText(self._reason)
+            for w in (self.pw, self.unlock, self.other):
+                w.setEnabled(True)
+            self.pw.setFocus()                           # (turning the field off moved the focus away)
+            if e is None or turn != self._locks or session.state() != "locked":
+                return                                   # open: follow() uncovers (changed); or signed out, or a later lock
+            try:
+                raise e
+            except (datakey.Throttled, pinslot.PinLocked) as e:
+                self.wait.start(e.seconds)
+            except (datakey.WrongPassword, pinslot.WrongPin) as e:
+                say(self.error, str(e))
+            except session.Refused:
+                self._arrange("refused")
+            except RuntimeError:
+                self.follow()                            # unlocked already (from elsewhere)
+            except fidokey.NotTouched:
+                say(self.error, NOT_TOUCHED)
+            except fidokey.Failed as e:
+                say(self.error, e.text)
+            except DAMAGED_ERRORS:
+                say(self.error, DAMAGED)
+        job = Job(lambda: unlock(secret, present=self.keyask.present))
+        job.ask = ask
+        job.done.connect(landed, Qt.ConnectionType.QueuedConnection)
+        for w in (self.pw, self.unlock, self.other):
+            w.setEnabled(False)
+        self._jobs.add(job)
+        job.start()
+
+    def _touching(self):
+        """The password or PIN was right and the account has keys: say to touch one; the way out stays open meanwhile."""
+        if not any(j.ask is not None and j.ask.asked and not j.ask.cancel.is_set() for j in self._jobs):
+            return                                       # (a wait already cancelled)
+        self._reason = self.reason.text()
+        self.head.setText(KEY_TITLE)
+        self.reason.setText(KEY_TEXT)
+        self.other.setEnabled(True)
+
+    def _end_jobs(self):
+        """Release a key's wait, then let every Job end (one must not outlive the window, as SignInWindow._stop)."""
+        self.keyask.cancel()
+        for j in list(self._jobs):
+            j.wait()
 
     def _sign_out(self):
         """Sign in as someone else: Main's closing questions (unsaved settings, a running playbook) must be answerable, so the
         lock steps aside for them, the windows staying covered; if one is refused, the lock comes back."""
-        for j in list(self._jobs):
-            j.wait()                                     # a probe must not outlive the window (as SignInWindow._stop)
+        self._end_jobs()
         self._passing = True
         self.pw.setText("")
         self.hide()
