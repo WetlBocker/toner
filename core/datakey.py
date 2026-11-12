@@ -19,15 +19,18 @@ import time
 from datetime import datetime, timezone
 
 from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
-from core import db, envelope, passwords, quiet, sqldb
+from core import audit, db, envelope, passwords, quiet, sqldb
 
 FORMAT = "toner-keys"
 PASSWORD_KDF = {"n": 2 ** 16, "r": 8, "p": 1}
 RECOVERY_KDF = {"n": 2 ** 14, "r": 8, "p": 1}
 RECOVERY_AAD = b"toner-datakey:recovery"
+KEYS_AAD, KEY_INFO, KEYED_INFO = b"toner-datakey-keys:", b"toner-datakey:key", b"toner-datakey:keyed"
 ROLES = ("Admin", "Engineer", "Tech")
 FREE_TRIES, FIRST_WAIT, MAX_WAIT = 5, 30, 900
 _DUMMY_SALT = b"toner-datakey:no-such-account"     # an unknown name still runs scrypt, so timing doesn't tell names apart
@@ -41,6 +44,8 @@ _lock = threading.RLock()
 _key = None
 _box = None       # the signed-in account's (or the recovery key's) private box key
 _name = None      # the signed-in account's stored spelling; None for the recovery key
+_keys = None      # the signed-in account's security keys, {"list": [...], "wraps": [...]}, as its record's keys blob holds them
+_k2 = None        # ... and the secret each key's value unwraps, which with the password key seals its data key
 _started = {}     # slot id -> a started directory account's box private, held until an approval seals it (roles.approve)
 # core/roles sets this (it reads this module, so this one can't import it): fn(before, after) inside each write that adds, removes or
 # re-keys an account or the recovery key. It drops grants made for a box key that is gone, re-signs the rules, and may refuse. It
@@ -70,6 +75,10 @@ class NameTaken(ValueError):
 
 class LastAccount(ValueError):
     pass
+
+
+class KeyNeeded(Exception):
+    """The account has security keys and the caller gave no way to ask one."""
 
 
 # ---------------------------------------------------------------- where it lives
@@ -138,6 +147,57 @@ def _boxed(secret, key, aad, kdf):
 
 def _aad(name):
     return b"toner-datakey:" + name.encode("utf-8")
+
+
+# ---------------------------------------------------------------- security keys
+# A keyed local record has no "key": "keys" (sealed under the password key) lists the keys and holds, per key, K2 sealed under that
+# key's value; "sealed_k" is the usual payload under the password key and K2 together. "keys_n" is a hint for the sign-in window.
+def _enc(key, data, aad=None):
+    nonce = os.urandom(12)
+    return nonce + AESGCM(key).encrypt(nonce, data, aad)
+
+
+def _dec(key, raw, aad=None):
+    return AESGCM(key).decrypt(raw[:12], raw[12:], aad)
+
+
+def _hkdf(material, info):
+    return HKDF(hashes.SHA256(), 32, None, info).derive(material)
+
+
+def _keys_of(kek, rec, name):
+    """The record's keys blob opened with the password key (InvalidTag: the password is wrong)."""
+    return json.loads(_dec(kek, _unb64(rec["keys"]), KEYS_AAD + name.encode("utf-8")))
+
+
+def _keyed(rec, kek, payload, keys, k2, name):
+    """Make `rec` a keyed record holding `keys`; its kdf, box_pub and everything else stay."""
+    rec.pop("key", None)
+    rec["keys_n"] = len(keys["list"])
+    rec["keys"] = _b64(_enc(kek, json.dumps(keys).encode("utf-8"), KEYS_AAD + name.encode("utf-8")))
+    rec["sealed_k"] = _b64(_enc(_hkdf(kek + k2, KEYED_INFO), payload, _aad(name)))
+
+
+def _creds(keys):
+    from core import fidokey
+    return [fidokey.Cred(_unb64(k["id"]), _unb64(k["salt"]), _unb64(k["pub"])) for k in keys["list"]]
+
+
+def _with_key(got, stored, key):
+    """(the payload, K2) of a keyed record whose password _attempt proved. It asks the key (a touch, minutes), so never under a lock."""
+    from core import fidokey
+    kek, keys, sealed = got
+    if key is None:
+        raise KeyNeeded()
+    cid, value = key(_creds(keys))
+    i = next((i for i, k in enumerate(keys["list"]) if _unb64(k["id"]) == cid), None)
+    if i is None:
+        raise fidokey.NotRegistered()
+    try:
+        k2 = _dec(_hkdf(value, KEY_INFO), _unb64(keys["wraps"][i]))
+    except InvalidTag:
+        raise fidokey.NotRegistered() from None
+    return _dec(_hkdf(kek + k2, KEYED_INFO), sealed, _aad(stored)), k2
 
 
 def _read():
@@ -231,7 +291,8 @@ def _failed(doc, counter, now, free=FREE_TRIES):
 
 
 def _attempt(name, secret):
-    """(the payload of `name`'s seal (None: the recovery seal), the stored name, the failed tries counted before it). A Part 1
+    """(the payload of `name`'s seal (None: the recovery seal), the stored name, the failed tries counted before it). For a keyed
+    record the "payload" is (the password key, its keys blob, its sealed_k), for _with_key once the locks are let go. A Part 1
     seal gains its box key in the same write that clears the count. Every password try, for any name, real or not, counts against
     one shared counter (per-name counts would show which names exist); the recovery key has its own. The count is read, changed
     and written under the file lock, so two Toner processes can't race it. Raises Throttled while a wait runs (without
@@ -252,6 +313,9 @@ def _attempt(name, secret):
                 key = _unseal(secret, rec, RECOVERY_AAD)
             elif stored is None:
                 _kek(secret, _DUMMY_SALT, PASSWORD_KDF)       # an unknown name costs what a real check costs
+            elif "keys" in rec:
+                kek = _kek(secret, _unb64(rec["kdf"]["salt"]), rec["kdf"])
+                key = kek, _keys_of(kek, rec, stored), _unb64(rec["sealed_k"])
             else:
                 key = _unseal(secret, rec, _aad(stored))
         except InvalidTag:
@@ -266,10 +330,10 @@ def _attempt(name, secret):
         return key, stored, fails
 
 
-def _open(payload, name):
-    global _key, _box, _name
+def _open(payload, name, keys=None, k2=None):
+    global _key, _box, _name, _keys, _k2
     sqldb.set_key(payload[:32])
-    _key, _box, _name = payload[:32], payload[32:], name
+    _key, _box, _name, _keys, _k2 = payload[:32], payload[32:], name, keys, k2
 
 
 def _change(fn, accounts=False, signed_in=True):
@@ -332,10 +396,16 @@ def create(name, password):
     return shown
 
 
-def open_with_password(name, password):
-    """Opens the key; returns how many password tries failed (for any name) since the last one that worked."""
-    key, stored, fails = _attempt(_clean(name), password or "")
-    _open(key, stored)
+def open_with_password(name, password, key=None):
+    """Opens the key; returns how many password tries failed (for any name) since the last one that worked. An account with
+    security keys also needs `key(creds) -> (credential id, value)` (fidokey.value), asked once the password is right; KeyNeeded
+    without it. A key failure (fidokey.Failed) leaves nothing open and is not counted as a wrong password."""
+    got, stored, fails = _attempt(_clean(name), password or "")
+    if isinstance(got, tuple):
+        payload, k2 = _with_key(got, stored, key)
+        _open(payload, stored, got[1], k2)
+    else:
+        _open(got, stored)
     return fails
 
 
@@ -355,15 +425,24 @@ def open_with_keys(data_key):
     with _lock:
         sqldb.set_key(data_key)
         _key, _box, _name = data_key, None, None
+        _drop_keys()
 
 
-def check_password(name, password):
-    """True when the password is right (for unlocking). Raises Throttled the same way opening does."""
+def check_password(name, password, present=None):
+    """True when the password is right (for unlocking). Raises Throttled the same way opening does. An account with security keys
+    also needs `present(creds) -> credential id` (fidokey.present: a touch, the value is not read); KeyNeeded without it."""
     try:
-        _attempt(_clean(name), password or "")
-        return True
+        got, _, _ = _attempt(_clean(name), password or "")
     except WrongPassword:
         return False
+    if isinstance(got, tuple):
+        from core import fidokey
+        if present is None:
+            raise KeyNeeded()
+        creds = _creds(got[1])
+        if present(creds) not in [c.id for c in creds]:
+            raise fidokey.NotRegistered()
+    return True
 
 
 def add_local(name, password, role="Admin"):
@@ -388,11 +467,89 @@ def set_password(name, password):
             raise WrongPassword(WRONG)                  # its directory keeps its password
         _check(password, stored)
         doc["accounts"][stored], private = _account(stored, password, _key, old.get("created"), old.get("role", "Admin"))
+        if stored == _name and "keys" in old and _k2 is not None:
+            # your own keys stay, with no touch: the keys blob and sealed_k go under the new password with the K2 held
+            rec = doc["accounts"][stored]
+            _keyed(rec, _kek(password, _unb64(rec["kdf"]["salt"]), rec["kdf"]), _key + private, _keys, _k2, stored)
         doc["throttle"] = {"fails": 0, "until": 0}
         return stored, private
     stored, private = _change(reseal, accounts=True)
     if stored == _name:                 # your own password: hold the new box key (only once the write has landed)
         _box = private
+
+
+def _mine(doc, secret):
+    """(the signed-in account's stored name, record, password key, keys blob, payload) once `secret` is its password; the blob is
+    empty for an account without keys. WrongPassword (not counted: the key is already open); KeyNeeded when another process gave
+    the account keys since this one signed in, so the K2 they seal is not held here."""
+    stored = _find(doc, _name) if _name is not None else None
+    rec = doc["accounts"].get(stored)
+    if rec is None or rec.get("kind") != "local":
+        raise Locked("Sign in first.")                 # the recovery key or a directory account: no local record of yours to key
+    kek = _kek(secret or "", _unb64(rec["kdf"]["salt"]), rec["kdf"])
+    try:
+        if "keys" not in rec:
+            return stored, rec, kek, {"list": [], "wraps": []}, _dec(kek, _unb64(rec["key"]), _aad(stored))
+        keys = _keys_of(kek, rec, stored)
+    except InvalidTag:
+        raise WrongPassword(WRONG) from None
+    try:
+        payload = _dec(_hkdf(kek + (_k2 or b""), KEYED_INFO), _unb64(rec["sealed_k"]), _aad(stored))
+    except InvalidTag:
+        raise KeyNeeded() from None
+    return stored, rec, kek, keys, payload
+
+
+def add_key(secret, cred, value, label):
+    """Add a key (fidokey.register's credential and value) to the signed-in account. The first one takes the password-only seal
+    away in the same write. The box key and the payload stay, so the roles hook has nothing to see."""
+    global _keys, _k2
+
+    def add(doc):
+        stored, rec, kek, keys, payload = _mine(doc, secret)
+        k2 = _k2 if keys["list"] else os.urandom(32)
+        keys["list"].append({"id": _b64(cred.id), "salt": _b64(cred.salt), "pub": _b64(cred.public), "name": label,
+                             "added": datetime.now(timezone.utc).isoformat(timespec="seconds")})
+        keys["wraps"].append(_b64(_enc(_hkdf(value, KEY_INFO), k2)))
+        _keyed(rec, kek, payload, keys, k2, stored)
+        return keys, k2
+    _keys, _k2 = _change(add)
+    audit.log("security key added", label)
+
+
+def remove_key(secret, index):
+    """Remove the signed-in account's key at `index` (of my_keys()). Removing the last stores the account as one without keys."""
+    global _keys, _k2
+
+    def drop(doc):
+        stored, rec, kek, keys, payload = _mine(doc, secret)
+        label = keys["list"].pop(index)["name"]
+        keys["wraps"].pop(index)
+        if keys["list"]:
+            _keyed(rec, kek, payload, keys, _k2, stored)
+            return label, keys, _k2
+        plain = {}                                      # the fields in the order an account without keys has them
+        for k, v in rec.items():
+            if k not in ("keys_n", "keys", "sealed_k"):
+                plain[k] = v
+            if k == "kdf":
+                plain["key"] = _b64(_enc(kek, payload, _aad(stored)))
+        doc["accounts"][stored] = plain
+        return label, None, None
+    label, _keys, _k2 = _change(drop)
+    audit.log("security key removed", label)
+
+
+def my_keys():
+    """The signed-in account's keys, [{"name", "added"}], from memory."""
+    return [{"name": k["name"], "added": k["added"]} for k in (_keys or {}).get("list", [])]
+
+
+def has_keys(name):
+    """The record's keys_n: a hint for the sign-in window, never proof."""
+    doc = read()
+    stored = _find(doc, _clean(name))
+    return bool(stored and doc["accounts"][stored].get("keys_n"))
 
 
 def remove(name):
@@ -611,8 +768,14 @@ def drop_slot(rec):
         quiet.ignored()
 
 
+def _drop_keys():
+    global _keys, _k2
+    _keys = _k2 = None
+
+
 def close():
     global _key, _box, _name
     with _lock:
         _key = _box = _name = None
+        _drop_keys()
         sqldb.set_key(None)
