@@ -229,13 +229,27 @@ def begin(login, password):
     return a
 
 
+HELPER_OFF = ("off", "absent", "portable", "other_user")     # helperclient.state: this copy is positively not enrolled
+
+
+def helper_may_be_on():
+    """For keys (keys_allowed, roles.set_require_keys): sign-in without approval counts as on unless helperclient.state says
+    this copy isn't enrolled. Not running (it may be enrolled and come back), outdated, rules_changed (its spare copy may not be
+    forgotten yet) or unreadable: on. helper_ready is the sign-in's other question (does it answer now)."""
+    try:
+        return helperclient.state(datakey.path()) not in HELPER_OFF
+    except Exception:
+        quiet.ignored()
+        return True
+
+
 def keys_allowed(name):
     """Whether account `name` may have security keys: never an SSO account, nor an AD or LDAP account while sign-in without
-    approval is on (the helper is a way round a key)."""
+    approval may be on (the helper is a way round a key)."""
     rec = datakey.directory_account(name)
     if rec is None:                                     # a local account
         return True
-    return not datakey._sso(datakey.read(), rec) and not helper_ready()
+    return not datakey._sso(datakey.read(), rec) and not helper_may_be_on()
 
 
 class _Unkeyed(Exception):
@@ -304,9 +318,10 @@ def _helper_duo(a, req, cancel, refused):
 
 
 def _onward(a, stage):
-    """The password, and Duo when on, passed online: the full check. Only now are the offline hour, the groups' role and the
-    shared counter written (the password alone must not open the way to an offline PIN sign-in). Does nothing when the attempt
-    has moved on from that stage meanwhile (a push that ends after a code was entered)."""
+    """The password, and Duo when on, passed online: the full check. Only now are the groups' role and the shared counter
+    written, and the offline hour and full_at too, except for an attempt that skipped Duo for a key: finish writes those once
+    the key has opened a keyed seal (the password alone must not open the way to an offline PIN sign-in). Does nothing when the
+    attempt has moved on from that stage meanwhile (a push that ends after a code was entered)."""
     with _steps:
         if a.stage != stage:
             return
@@ -664,8 +679,9 @@ def _drop(slot):
 
 
 def approve(a, admin_name, admin_password, key=None):
-    """`key`: fidokey.value, asked when the admin's account has security keys."""
-    _approve(a, lambda: datakey.open_with_password(admin_name, admin_password, key=key))
+    """`key`: fidokey.value, asked when the admin's account has security keys (before session's lock is taken)."""
+    _approve(a, lambda proof: datakey.open_proof(proof, admin_name),
+             prove=lambda: datakey.prove_password(admin_name, admin_password, key=key))
 
 
 def approve_recovery(a, recovery):
@@ -675,24 +691,33 @@ def approve_recovery(a, recovery):
 def approve_with_account(a, approver, pin, key=None):
     """A directory or SSO Admin approves with their own sign-in (an Attempt at its PIN, checked online just now) and their Toner
     PIN on this computer (and `key`, fidokey.value, when their seal holds security keys). Their session is never opened; the
-    audit credits them by name. An approver whose sign-in skipped Duo for a key their seal turns out not to hold can't approve."""
-    if str(approver.name or "").casefold() == str(a.name or "").casefold():
-        raise CannotApprove(CANNOT_APPROVE)
-    rec = datakey.directory_account(approver.name) if approver.name else None
-    if not (rec and rec.get("sealed")):
-        raise CannotApprove(NOT_HERE_BEFORE)
-    if approver.stage != "pin" or not approver.fresh or approver.role != "Admin":     # the role from this sign-in's groups
-        raise CannotApprove(CANNOT_APPROVE)
+    audit credits them by name. An approver whose sign-in skipped Duo for a key their seal turns out not to hold can't approve.
+    The PIN and the key are asked before session's lock is taken; these checks are made again under it."""
+    name = approver.name
 
-    def opener():
+    def ready():
+        if approver.name != name or str(name or "").casefold() == str(a.name or "").casefold():
+            raise CannotApprove(CANNOT_APPROVE)
+        rec = datakey.directory_account(name) if name else None
+        if not (rec and rec.get("sealed")):
+            raise CannotApprove(NOT_HERE_BEFORE)
+        if approver.stage != "pin" or not approver.fresh or approver.role != "Admin":     # the role from this sign-in's groups
+            raise CannotApprove(CANNOT_APPROVE)
+    ready()
+
+    def prove():
         try:
-            fails = datakey.open_with_pin(approver.name, pin, key=key)
+            return datakey.prove_pin(name, pin, key=key)
         except pinslot.SlotMissing:                         # no PIN slot on this computer: they'd need a new PIN here first
             raise CannotApprove(NOT_HERE_BEFORE) from None
+
+    def opener(proof):
+        ready()
+        fails = datakey.open_proof(proof, name)
         if approver.duo_skipped and not datakey.my_keys():
             raise CannotApprove(CANNOT_APPROVE)
         return fails
-    _approve(a, opener)
+    _approve(a, opener, prove=prove)
 
 
 def approve_by_helper(a):
@@ -726,22 +751,38 @@ def approve_by_helper(a):
         quiet.ignored()
 
 
-def _approve(a, opener, by=None, signer=None):
+def _session_now():
+    return session.state(), session.user(), datakey._key
+
+
+def _approve(a, opener, by=None, signer=None, prove=None):
     """Open the key as the approver with no session change, approve, then put back whatever was open before (a signed-in
     session keeps its keys) or close it all. A cleanup failure never hides the approval's own error. `by`: the approver's
-    name when no account opens the key (the helper's opener holds its own role key)."""
+    name when no account opens the key (the helper's opener holds its own role key). `prove()`: the approver's password or PIN
+    and key (a touch may take minutes), asked before session's lock is taken; `opener(proof)` opens it under the lock, once the
+    attempt and the session are found as they were (a sign-in, lock or sign-out meanwhile: RuntimeError, no approval)."""
     _expect(a, "approve")
-    with session._lock:
-        held = (datakey._key + datakey._box, datakey._name, datakey._keys, datakey._k2, datakey._seen) if datakey.is_open() else None
-        try:
-            _approve_as(a, opener, by, signer)
-        except BaseException:
+    slot, name, before = a.slot, a.name, _session_now()
+    proof = prove() if prove is not None else None
+    try:
+        with session._lock:
+            _expect(a, "approve")
+            if a.slot is not slot or a.name != name:
+                raise RuntimeError("this sign-in changed while the approver was asked")
+            if session._opening or _session_now() != before:
+                raise RuntimeError("the session changed while the approver was asked")
+            held = (datakey._key + datakey._box, datakey._name, datakey._keys, datakey._k2, datakey._seen) if datakey.is_open() else None
             try:
-                _put_back(held)
-            except Exception:
-                quiet.ignored()
-            raise
-        _put_back(held)
+                _approve_as(a, opener if prove is None else lambda: opener(proof), by, signer)
+            except BaseException:
+                try:
+                    _put_back(held)
+                except Exception:
+                    quiet.ignored()
+                raise
+            _put_back(held)
+    finally:
+        proof = None                                    # (it holds the data key: not past this call)
 
 
 def _approve_as(a, opener, by=None, signer=None):

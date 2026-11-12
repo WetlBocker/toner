@@ -713,9 +713,10 @@ def must_add_key():
 
 
 def set_require_keys(on):
-    """An Admin's switch, signed with the rules. Refused while sign-in without approval is on (the helper is a way round a key)."""
-    from core import helperclient
-    if on and helperclient.state(datakey.path(), ask_service=False) == "on":
+    """An Admin's switch, signed with the rules. Refused while sign-in without approval may be on (the helper is a way round a
+    key): dirsignin.helper_may_be_on."""
+    from core import dirsignin                          # (dirsignin imports this module)
+    if on and dirsignin.helper_may_be_on():
         raise ValueError(REQUIRE_HELPER_ON)
     with _lock:
         def go(doc):

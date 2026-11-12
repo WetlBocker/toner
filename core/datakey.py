@@ -420,13 +420,39 @@ def open_with_password(name, password, key=None):
     """Opens the key; returns how many password tries failed (for any name) since the last one that worked. An account with
     security keys also needs `key(creds) -> (credential id, value)` (fidokey.value), asked once the password is right; KeyNeeded
     without it. A key failure (fidokey.Failed) leaves nothing open and is not counted as a wrong password."""
+    return open_proof(prove_password(name, password, key=key), name)
+
+
+class Proof:
+    """An account's password or PIN (and key) proven, not yet open: open_proof opens it once, as that account only. It holds the
+    data key, so it is never shown (repr) and its holder drops it at the end of the call."""
+    __slots__ = ("_args", "fails")
+
+    def __init__(self, args, fails):
+        self._args, self.fails = args, fails
+
+    def __repr__(self):
+        return "<datakey.Proof>"
+
+
+def prove_password(name, password, key=None):
+    """open_with_password's checks (counted as it counts them) and its key, without opening: a Proof. The key's touch may take
+    minutes, so dirsignin's approvals ask it here, before session's lock."""
     got, stored, fails = _attempt(_clean(name), password or "")
     if isinstance(got, tuple):
         payload, k2 = _with_key(got, stored, key)
-        _open(payload, stored, got[1], k2, got[3])
-    else:
-        _open(got, stored)
-    return fails
+        return Proof((payload, stored, got[1], k2, got[3]), fails)
+    return Proof((got, stored), fails)
+
+
+def open_proof(proof, name):
+    """Opens the key with a Proof made for account `name` (ValueError for another account's, or one used already); returns the
+    failed tries counted before it."""
+    args, proof._args = proof._args, None
+    if args is None or args[1] is None or args[1].casefold() != _clean(name).casefold():
+        raise ValueError("that proof doesn't open this account")
+    _open(*args)
+    return proof.fails
 
 
 def open_with_recovery(recovery):
@@ -884,9 +910,13 @@ def open_with_pin(name, pin, key=None):
     """Opens the key; returns how many tries failed (for any name) since the last one that worked. An account with security
     keys also needs `key(creds) -> (credential id, value)` (fidokey.value), asked once the PIN is right; KeyNeeded without it.
     A key failure (fidokey.Failed) leaves nothing open and is not counted as a wrong PIN."""
+    return open_proof(prove_pin(name, pin, key=key), name)
+
+
+def prove_pin(name, pin, key=None):
+    """open_with_pin's checks (counted as it counts them) and its key, without opening: a Proof for open_proof."""
     payload, stored, fails, keys, k2, sealed = _pin(name, pin, key=key)
-    _open(payload, stored, keys, k2, sealed)
-    return fails
+    return Proof((payload, stored, keys, k2, sealed), fails)
 
 
 def check_pin(name, pin, present=None):

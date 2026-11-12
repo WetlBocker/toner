@@ -199,7 +199,7 @@ SSO = {"id": "s1", "name": "Contoso", "kind": "oidc", "provider": "other", "issu
        "group_names": {"g1": "Techs"}, "everyone": None}
 SSO_USER = directory.User("sub-sso-user", "sso-user", "SSO User", ("g1",), True)
 SPIN = "a long pin-only pin 3"
-PIN4, PIN5 = "531864", "697420"
+PIN4, PIN5, PIN6 = "531864", "697420", "813579"
 
 
 def first_sign_in(login, password, pin):
@@ -221,6 +221,29 @@ def forge_keys_n(name, n):
     d = doc()
     d["accounts"][name]["keys_n"] = n
     datakey.path().write_text(json.dumps(d), encoding="utf-8")
+
+
+def lock_free():
+    """True when another thread can take session's lock now (the caller is inside a touch)."""
+    got = []
+    def take():
+        if session._lock.acquire(timeout=2):
+            got.append(1)
+            session._lock.release()
+    t = threading.Thread(target=take); t.start(); t.join()
+    return got == [1]
+
+
+STATES = ("portable", "absent", "not_running", "outdated", "other_user", "rules_changed", "off", "on", "raises")
+ALLOWED = {"off", "absent", "portable", "other_user"}             # helperclient.state: this copy is positively not enrolled
+
+
+def state_is(st):
+    def state(*a, **k):
+        if st == "raises":
+            raise OSError("the helper's state can't be read")
+        return st
+    return state
 
 
 def signed_in_rows(who):
@@ -286,6 +309,18 @@ check("with the helper switch on an AD account cannot add a key, in the approved
 check("...and keys_allowed says so; a local account is unaffected", not S.keys_allowed("bob@acme.com") and S.keys_allowed("Admin1"))
 HELPER_ON[0] = False
 check("with it off they are allowed again", S.keys_allowed("bob@acme.com"))
+real_state, allowed, refused = helperclient.state, {}, {}
+for st in STATES:
+    helperclient.state = state_is(st)
+    allowed[st] = S.keys_allowed("bob@acme.com")
+    if st not in ALLOWED:
+        e = raises(lambda: datakey.add_key(PIN, *fake.register("Red", os.urandom(32)), "Red"), ValueError)
+        refused[st] = e is not None and e.args[0] == datakey.KEYS_HELPER_ON
+helperclient.state = real_state
+check("keys are allowed only when the helper's state says this copy isn't enrolled (fail closed)",
+      allowed == {st: st in ALLOWED for st in STATES}, allowed)
+check("...and add_key refuses in every other state, an unreadable one too", refused == {st: True for st in STATES if st not in ALLOWED}
+      and len(datakey.my_keys()) == 1, refused)
 session.sign_out()
 
 # ---------------------------------------------------------------- a forged hint: Duo after all, and nothing saw a sign-in
@@ -348,10 +383,36 @@ check("an approver whose seal holds no key can't approve with a forged hint", e 
       and session.state() == "signed_out" and not datakey.is_open())
 
 # ---------------------------------------------------------------- the approver's key, and a signed-in approver's session after it
+# a sign-in, a lock or a sign-out while the approver touches their key: no approval, and the session as that left it
+unsealed = lambda: datakey.directory_account("carol@acme.com")["slot_id"] != c.slot.slot_id
+e = raises(lambda: S.approve(c, "Admin1", PW, key=lambda creds: session.sign_in("Admin1", PW, key=fake.value) or fake.value(creds)), RuntimeError)
+check("a sign-in during the approver's touch: no approval, the new session intact", e is not None and c.stage == "approve" and unsealed()
+      and session.state() == "open" and session.user() == "Admin1" and len(datakey.my_keys()) == 1 and roles.holds("rules"))
+e = raises(lambda: S.approve(c, "Admin1", PW, key=lambda creds: session.lock() or fake.value(creds)), RuntimeError)
+check("a lock during it: no approval, still locked with its keys", e is not None and c.stage == "approve" and unsealed()
+      and session.state() == "locked" and datakey.is_open() and datakey.signed_in_name() == "Admin1" and len(datakey.my_keys()) == 1)
+session.unlock(PW, present=fake.present)
+e = raises(lambda: S.approve(c, "Admin1", PW, key=lambda creds: session.sign_out() or fake.value(creds)), RuntimeError)
+check("a sign-out during it: no approval, nothing open", e is not None and c.stage == "approve" and unsealed()
+      and session.state() == "signed_out" and not datakey.is_open())
+
+# the approver's proof: never shown, opens once, as that account only
+proof = datakey.prove_password("Admin1", PW, key=fake.value)
+check("a proof shows nothing of itself", repr(proof) == "<datakey.Proof>" and not datakey.is_open())
+check("...doesn't open as another account", raises(lambda: datakey.open_proof(proof, "bob@acme.com"), ValueError) is not None
+      and not datakey.is_open())
+proof = datakey.prove_password("Admin1", PW, key=fake.value)
+check("...opens as its own account, once", datakey.open_proof(proof, "admin1") == 0 and datakey.signed_in_name() == "Admin1"
+      and raises(lambda: datakey.open_proof(proof, "Admin1"), ValueError) is not None)
+del proof
+session.sign_out()
+
 session.sign_in("Admin1", PW, key=fake.value)
 fake.calls.clear()
-S.approve(c, "Admin1", PW, key=fake.value)
-check("an admin with a key approving someone: their key is asked", c.stage == "pin" and fake.calls == ["value"])
+free = []
+S.approve(c, "Admin1", PW, key=lambda creds: free.append(lock_free()) or fake.value(creds))
+check("an admin with a key approving someone: their key is asked, with session's lock free", c.stage == "pin" and fake.calls == ["value"]
+      and free == [True])
 check("...and their own session is as it was", session.user() == "Admin1" and len(datakey.my_keys()) == 1)
 session.lock()
 session.unlock(PW, present=fake.present)
@@ -432,6 +493,28 @@ session.sign_in("Admin1", PW, key=fake.value)
 roles.set_directories([ACME, SSO])
 session.sign_out()
 
+# ---------------------------------------------------------------- a keyed directory Admin approves with their own sign-in
+d_ = doc(); d_["accounts"]["erin@acme.com"].pop("keys_n"); datakey.path().write_text(json.dumps(d_), encoding="utf-8")
+e2 = to_pin("erin@acme.com", "pw-erin")
+S.finish(e2, PIN3)
+datakey.add_key(PIN3, *fake.register("Erin's key", os.urandom(32)), "Erin's key")
+session.sign_out()
+S.choose_pin(g, PIN6)                                               # (bob's new PIN, from the admin's clear)
+approver = sign_in_until_pin("erin@acme.com", "pw-erin")
+check("(a keyed Admin skips Duo)", approver.duo_skipped and approver.stage == "pin")
+e = raises(lambda: S.approve_with_account(g, approver, PIN3, key=lambda creds: session.sign_in("Admin1", PW, key=fake.value)
+                                          or fake.value(creds)), RuntimeError)
+check("a sign-in during that approver's touch: no approval, the new session intact", e is not None and g.stage == "approve"
+      and session.user() == "Admin1" and len(datakey.my_keys()) == 2)
+session.sign_out()
+free = []
+S.approve_with_account(g, approver, PIN3, key=lambda creds: free.append(lock_free()) or fake.value(creds))
+check("approve_with_account: the approver's key asked with session's lock free, and approved", g.stage == "pin" and free == [True]
+      and session.state() == "signed_out" and not datakey.is_open())
+S.finish(g, PIN6)
+check("...and the approved PIN signs in", g.stage == "done" and session.user() == "bob@acme.com")
+session.sign_out()
+
 # ---------------------------------------------------------------- SSO: never asked for a key, never allowed one
 fake.calls.clear()
 s = S.Attempt(SSO, "sso-user")
@@ -443,7 +526,7 @@ session.sign_out()
 
 session.sign_in("Admin1", PW, key=fake.value)
 check("the forged attempt left no signed-in row of its own", len(signed_in_rows("carol@acme.com")) == 4, len(signed_in_rows("carol@acme.com")))
-check("no secret in the audit log", not any(x in str(r["detail"]) for r in audit.recent(5000) for x in (PW, PIN, PIN2, PIN3, PIN4, PIN5, SPIN)))
+check("no secret in the audit log", not any(x in str(r["detail"]) for r in audit.recent(5000) for x in (PW, PIN, PIN2, PIN3, PIN4, PIN5, PIN6, SPIN)))
 session.sign_out()
 
 print(f"\n{ok} passed, {bad} failed"); sys.exit(1 if bad else 0)

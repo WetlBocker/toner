@@ -123,8 +123,8 @@ check("an account without a key must add one; one with a key need not; an SSO ac
 session.sign_out()
 session.sign_in_recovery(recovery)
 check("nor is the recovery key", roles.must_add_key() is False)
-check("a Tech cannot turn it off", must_add_for("Tech1", PW2) is not None and raised(Exception, lambda: roles.set_require_keys(False)) is not None
-      and roles.require_keys())
+must_add_for("Tech1", PW2)                                         # (signed in as Tech1)
+check("a Tech cannot turn it off", raised(datakey.Locked, lambda: roles.set_require_keys(False)) is not None and roles.require_keys())
 session.sign_out()
 session.sign_in("Admin1", PW, key=fake.value)
 roles.set_require_keys(False)
@@ -141,6 +141,32 @@ e = raised(ValueError, lambda: roles.set_require_keys(True))
 check("it cannot go on while the helper switch is on", e is not None and e.args[0] == 'Turn off "Let group members sign in without approval" '
       'first. It can\'t be on while security keys are required.' and not roles.require_keys())
 HELPER_ON[0] = False
+STATES = ("portable", "absent", "not_running", "outdated", "other_user", "rules_changed", "off", "on", "raises")
+ALLOWED = {"off", "absent", "portable", "other_user"}             # helperclient.state: this copy is positively not enrolled
+
+
+def state_is(st):
+    def state(*a, **k):
+        if st == "raises":
+            raise OSError("the helper's state can't be read")
+        return st
+    return state
+
+
+real_state, went_on = helperclient.state, {}
+for st in STATES:
+    helperclient.state = state_is(st)
+    e = raised(ValueError, lambda: roles.set_require_keys(True)) if st not in ALLOWED else None
+    went_on[st] = roles.require_keys()
+    if st in ALLOWED:
+        roles.set_require_keys(True)
+        went_on[st] = roles.require_keys()
+        roles.set_require_keys(False)
+    elif e is None or e.args[0] != roles.REQUIRE_HELPER_ON:
+        went_on[st] = "not refused in the approved words"
+helperclient.state = real_state
+check("it goes on only when the helper's state says this copy isn't enrolled (fail closed, an unreadable state too)",
+      went_on == {st: st in ALLOWED for st in STATES}, went_on)
 session.sign_out()
 
 print(f"\n{ok} passed, {bad} failed"); sys.exit(1 if bad else 0)
