@@ -13,7 +13,7 @@ STORE = {}
 keyring.set_password = lambda s, u, p: STORE.__setitem__((s, u), p)
 keyring.get_password = lambda s, u: STORE.get((s, u))
 keyring.delete_password = lambda s, u: STORE.pop((s, u), None)
-import base64, json, pathlib
+import base64, json, pathlib, subprocess
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fakekey
 from core import audit, datakey, db, directory, envelope, helperclient, osstore, pinslot, roles, session, updates
@@ -65,6 +65,7 @@ def fake_connect():
 
 helperclient._connect = fake_connect
 helperclient.installed = lambda: False
+REAL_NOT_INSTALLED, helperclient.not_installed = helperclient.not_installed, lambda: True    # (whatever is installed here)
 updates.installed_kind = lambda: "installed"
 
 PW, PW2, PIN = "correct horse battery 42", "techs have long passwords 7", "a long pin-only pin 3"
@@ -141,21 +142,40 @@ e = raised(ValueError, lambda: roles.set_require_keys(True))
 check("it cannot go on while the helper switch is on", e is not None and e.args[0] == 'Turn off "Let group members sign in without approval" '
       'first. It can\'t be on while security keys are required.' and not roles.require_keys())
 HELPER_ON[0] = False
-STATES = ("portable", "absent", "not_running", "outdated", "other_user", "rules_changed", "off", "on", "raises")
-ALLOWED = {"off", "absent", "portable", "other_user"}             # helperclient.state: this copy is positively not enrolled
+STATES = ("portable", "absent: no such service", "absent: installed but disabled", "absent: timeout", "absent: error",
+          "not_running", "outdated", "other_user", "rules_changed", "off", "on", "raises")
+# this copy positively not enrolled: off, portable, or no helper service at all (another OS has none)
+ALLOWED = {"off", "portable", "absent: no such service"} | (set() if sys.platform in ("win32", "linux") else
+                                                             {s for s in STATES if s.startswith("absent")})
+REAL_RUN = subprocess.run
 
 
 def state_is(st):
     def state(*a, **k):
         if st == "raises":
             raise OSError("the helper's state can't be read")
-        return st
+        return st.split(":")[0]
     return state
 
 
+def service_manager(st):
+    """sc.exe or systemctl as helperclient.not_installed asks them, for the "absent" cases."""
+    def run(cmd, **kw):
+        if st == "absent: timeout":
+            raise subprocess.TimeoutExpired(cmd, 10)
+        if st == "absent: error":
+            raise OSError("no service manager")
+        missing = st == "absent: no such service"
+        if cmd[0] == "sc.exe":
+            return subprocess.CompletedProcess(cmd, 1060 if missing else 0, b"", b"")
+        return subprocess.CompletedProcess(cmd, 0, b"not-found\n" if missing else b"loaded\n", b"")
+    return run
+
+
 real_state, went_on = helperclient.state, {}
+helperclient.not_installed = REAL_NOT_INSTALLED          # (asking the faked service manager)
 for st in STATES:
-    helperclient.state = state_is(st)
+    helperclient.state, subprocess.run = state_is(st), service_manager(st)
     e = raised(ValueError, lambda: roles.set_require_keys(True)) if st not in ALLOWED else None
     went_on[st] = roles.require_keys()
     if st in ALLOWED:
@@ -164,7 +184,7 @@ for st in STATES:
         roles.set_require_keys(False)
     elif e is None or e.args[0] != roles.REQUIRE_HELPER_ON:
         went_on[st] = "not refused in the approved words"
-helperclient.state = real_state
+helperclient.state, subprocess.run, helperclient.not_installed = real_state, REAL_RUN, lambda: True
 check("it goes on only when the helper's state says this copy isn't enrolled (fail closed, an unreadable state too)",
       went_on == {st: st in ALLOWED for st in STATES}, went_on)
 session.sign_out()

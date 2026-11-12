@@ -7,6 +7,7 @@ import base64
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -174,6 +175,21 @@ def installed():
                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
+
+
+def not_installed():
+    """The stricter question beside installed(), for security keys (dirsignin.helper_may_be_on): True only when the service
+    manager answers that no helper service exists: Windows' 1060 (no such service), or no toner-helper unit known to systemd.
+    Installed but disabled or stopped, or an error or timeout while asking: False. Another OS has no helper: True."""
+    if sys.platform not in ("win32", "linux"):
+        return True
+    nt = os.name == "nt"
+    cmd = ["sc.exe", "query", _plat.SERVICE] if nt else ["systemctl", "show", "--property=LoadState", "--value", "toner-helper.service"]
+    try:
+        r = subprocess.run(cmd, capture_output=True, timeout=10, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return r.returncode == 1060 if nt else r.returncode == 0 and r.stdout.strip() == b"not-found"
 
 
 def state(keys_path, ask_service=True):

@@ -449,9 +449,15 @@ def open_proof(proof, name):
     """Opens the key with a Proof made for account `name` (ValueError for another account's, or one used already); returns the
     failed tries counted before it."""
     args, proof._args = proof._args, None
-    if args is None or args[1] is None or args[1].casefold() != _clean(name).casefold():
-        raise ValueError("that proof doesn't open this account")
-    _open(*args)
+    try:
+        if args is None or args[1] is None or args[1].casefold() != _clean(name).casefold():
+            raise ValueError("that proof doesn't open this account")
+        try:
+            _open(*args)
+        except BaseException as e:
+            raise e.with_traceback(None) from None      # _open's frame holds the data key: not kept in the traceback
+    finally:
+        del args
     return proof.fails
 
 

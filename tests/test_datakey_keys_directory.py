@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fakekey
 from core import audit, datakey, db, directory, fidokey, helperclient, osstore, pinslot, roles, session, sqldb, tpm_windows
 def _no_helper(): raise helperclient.NotRunning()
-helperclient._connect, helperclient.installed = _no_helper, lambda: False      # no helper on this computer, whatever is installed here
+helperclient._connect, helperclient.installed, helperclient.not_installed = _no_helper, lambda: False, lambda: True   # no helper here
 from core.platforms import FileLock
 
 ok = bad = 0

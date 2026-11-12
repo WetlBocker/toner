@@ -229,15 +229,17 @@ def begin(login, password):
     return a
 
 
-HELPER_OFF = ("off", "absent", "portable", "other_user")     # helperclient.state: this copy is positively not enrolled
+HELPER_OFF = ("off", "portable")     # helperclient.state: this copy is positively not enrolled ("absent": see helper_may_be_on)
 
 
 def helper_may_be_on():
     """For keys (keys_allowed, roles.set_require_keys): sign-in without approval counts as on unless helperclient.state says
-    this copy isn't enrolled. Not running (it may be enrolled and come back), outdated, rules_changed (its spare copy may not be
-    forgotten yet) or unreadable: on. helper_ready is the sign-in's other question (does it answer now)."""
+    this copy isn't enrolled ("off", "portable"), or "absent" with the service positively not installed (not_installed).
+    Not running (it may be enrolled and come back), other_user (it may be this keys file under another OS user), outdated,
+    rules_changed (its spare copy may not be forgotten yet), or unreadable: on. helper_ready is the sign-in's other question."""
     try:
-        return helperclient.state(datakey.path()) not in HELPER_OFF
+        st = helperclient.state(datakey.path())
+        return not helperclient.not_installed() if st == "absent" else st not in HELPER_OFF
     except Exception:
         quiet.ignored()
         return True

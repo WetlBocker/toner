@@ -14,7 +14,7 @@ STORE = {}
 keyring.set_password = lambda s, u, p: STORE.__setitem__((s, u), p)
 keyring.get_password = lambda s, u: STORE.get((s, u))
 keyring.delete_password = lambda s, u: STORE.pop((s, u), None)
-import builtins, hashlib, http.server, json, pathlib, threading, urllib.parse, uuid
+import builtins, hashlib, http.server, json, pathlib, subprocess, threading, urllib.parse, uuid
 import ldap3
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
@@ -192,6 +192,7 @@ def fake_connect():
 
 helperclient._connect = fake_connect
 helperclient.installed = lambda: False
+REAL_NOT_INSTALLED, helperclient.not_installed = helperclient.not_installed, lambda: True    # (whatever is installed here)
 updates.installed_kind = lambda: "installed"
 
 SSO = {"id": "s1", "name": "Contoso", "kind": "oidc", "provider": "other", "issuer": "https://login.example.com", "client_id": "toner-app",
@@ -234,16 +235,34 @@ def lock_free():
     return got == [1]
 
 
-STATES = ("portable", "absent", "not_running", "outdated", "other_user", "rules_changed", "off", "on", "raises")
-ALLOWED = {"off", "absent", "portable", "other_user"}             # helperclient.state: this copy is positively not enrolled
+STATES = ("portable", "absent: no such service", "absent: installed but disabled", "absent: timeout", "absent: error",
+          "not_running", "outdated", "other_user", "rules_changed", "off", "on", "raises")
+# this copy positively not enrolled: off, portable, or no helper service at all (another OS has none)
+ALLOWED = {"off", "portable", "absent: no such service"} | (set() if sys.platform in ("win32", "linux") else
+                                                             {s for s in STATES if s.startswith("absent")})
+REAL_RUN = subprocess.run
 
 
 def state_is(st):
     def state(*a, **k):
         if st == "raises":
             raise OSError("the helper's state can't be read")
-        return st
+        return st.split(":")[0]
     return state
+
+
+def service_manager(st):
+    """sc.exe or systemctl as helperclient.not_installed asks them, for the "absent" cases."""
+    def run(cmd, **kw):
+        if st == "absent: timeout":
+            raise subprocess.TimeoutExpired(cmd, 10)
+        if st == "absent: error":
+            raise OSError("no service manager")
+        missing = st == "absent: no such service"
+        if cmd[0] == "sc.exe":
+            return subprocess.CompletedProcess(cmd, 1060 if missing else 0, b"", b"")
+        return subprocess.CompletedProcess(cmd, 0, b"not-found\n" if missing else b"loaded\n", b"")
+    return run
 
 
 def signed_in_rows(who):
@@ -310,13 +329,14 @@ check("...and keys_allowed says so; a local account is unaffected", not S.keys_a
 HELPER_ON[0] = False
 check("with it off they are allowed again", S.keys_allowed("bob@acme.com"))
 real_state, allowed, refused = helperclient.state, {}, {}
+helperclient.not_installed = REAL_NOT_INSTALLED          # (asking the faked service manager)
 for st in STATES:
-    helperclient.state = state_is(st)
+    helperclient.state, subprocess.run = state_is(st), service_manager(st)
     allowed[st] = S.keys_allowed("bob@acme.com")
     if st not in ALLOWED:
         e = raises(lambda: datakey.add_key(PIN, *fake.register("Red", os.urandom(32)), "Red"), ValueError)
         refused[st] = e is not None and e.args[0] == datakey.KEYS_HELPER_ON
-helperclient.state = real_state
+helperclient.state, subprocess.run, helperclient.not_installed = real_state, REAL_RUN, lambda: True
 check("keys are allowed only when the helper's state says this copy isn't enrolled (fail closed)",
       allowed == {st: st in ALLOWED for st in STATES}, allowed)
 check("...and add_key refuses in every other state, an unreadable one too", refused == {st: True for st in STATES if st not in ALLOWED}
@@ -404,8 +424,24 @@ check("...doesn't open as another account", raises(lambda: datakey.open_proof(pr
 proof = datakey.prove_password("Admin1", PW, key=fake.value)
 check("...opens as its own account, once", datakey.open_proof(proof, "admin1") == 0 and datakey.signed_in_name() == "Admin1"
       and raises(lambda: datakey.open_proof(proof, "Admin1"), ValueError) is not None)
-del proof
 session.sign_out()
+proof = datakey.prove_password("Admin1", PW, key=fake.value)
+held = proof._args[0]
+real_set_key = datakey.sqldb.set_key
+def broken(k): raise OSError("the database can't take the key")
+datakey.sqldb.set_key = broken
+tb_locals = []
+try:
+    datakey.open_proof(proof, "Admin1")
+except OSError as e:
+    tb = e.__traceback__.tb_next                                    # (past this script's own frame)
+    while tb is not None:
+        tb_locals += list(tb.tb_frame.f_locals.values()); tb = tb.tb_next
+datakey.sqldb.set_key = real_set_key
+check("...and when opening fails, its traceback holds none of it", tb_locals != [] and not any(
+      v is held or (isinstance(v, (tuple, list)) and any(x is held for x in v)) or (isinstance(v, bytes) and held[:32] in v)
+      for v in tb_locals) and not datakey.is_open())
+del proof, held, tb_locals
 
 session.sign_in("Admin1", PW, key=fake.value)
 fake.calls.clear()
