@@ -80,6 +80,16 @@ class _Fitter(QObject):
                 QToolTip.showText(e.globalPos(), text, self.view.viewport()); return True
         return False
 
+    def _widget_pad(self, c):
+        """Qt sizes a column of cell widgets (a row's buttons) to the widgets alone, without the padding the style puts round a cell, so
+        the widgets would be squeezed over each other: what the first one's cell is wider than it by. None: the column has no widgets."""
+        m = self.view.model()
+        for r in range(min(m.rowCount(), 50)):
+            w = self.view.indexWidget(m.index(r, c))
+            if w is not None and w.isVisible():
+                return max(0, min(64, self.view.visualRect(m.index(r, c)).width() - w.width()))
+        return None
+
     def run(self):
         view, head = self.view, self.head
         m = view.model()
@@ -98,8 +108,10 @@ class _Fitter(QObject):
         if not cols:
             return
         taken = sum(head.sectionSize(c) for c in range(head.count()) if not head.isSectionHidden(c) and c in self.pinned)
-        content = [view.sizeHintForColumn(c) for c in cols]
+        pads = [self._widget_pad(c) for c in cols]
+        content = [view.sizeHintForColumn(c) + (p or 0) for c, p in zip(cols, pads)]
         heads = [head.sectionSizeFromContents(c).width() for c in cols]
+        heads = [h if p is None else max(h, w) for h, w, p in zip(heads, content, pads)]      # widgets cannot be cut short as text can: the text columns give way
         widths = fit_widths(content, heads, max(0, view.viewport().width() - taken))
         self.busy = True
         try:

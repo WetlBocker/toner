@@ -169,5 +169,29 @@ check("the details pane hugs its content too", inv.pane.layout().count() == 2 an
 print("== the Assistant button keeps off the title row")
 check("its topmost spot is under the header", A.HEADER_CLEAR == 72)
 
+print("== the row buttons under the table-fitting rule")
+from ui import tablefit
+db.save_device(dict(name="srv-1", vendor="windows", host="10.0.0.99", port=0, platform="winrm", username="u", site="default", verify_ssl=0, ha_expected=0, enabled=1,
+                    location="HQ", details="", folder_id=None))
+db.save_run([Result("srv-1", "events", "FAIL", "", "Critical/Error in the last 24 h: .NET Runtime x96, Application Error x96, Service Control Manager x96, and a good deal more to say about it")])
+fitted = D.DashboardTab(); fitted.show(); tf = fitted.attention
+tablefit.fit(tf)                                             # what the app does for every table (install_everywhere)
+def squeezed(dash):
+    """[(a button, the next one)] that overlap in any row, and rows whose buttons do not fit their cell."""
+    out = []
+    for r in range(dash.attention.rowCount()):
+        cell = dash.attention.cellWidget(r, 4)
+        bs = [(k, b) for k, b in (getattr(cell, "buttons", None) or {}).items() if b is not None and b.isVisibleTo(dash.attention)]
+        out += [(a[0], b[0]) for a, b in zip(bs, bs[1:]) if b[1].geometry().left() <= a[1].geometry().right()]
+        out += [("cell", r)] if bs and bs[-1][1].geometry().right() > cell.width() else []
+    return out
+for wide in (2000, 1500, 1200, 1000, 800, 600):
+    fitted.resize(wide, 700)
+    for _ in range(4): app.processEvents(); time.sleep(0.01)
+    check(f"at {wide} wide no row button sits over another (a column of buttons keeps its padding and is not cut as text is)", squeezed(fitted) == [],
+          (squeezed(fitted), tf.columnWidth(4), tf.viewport().width()))
+check("a Windows row has Remote Desktop and the ... after it", any(b.get("connect") is not None and b["connect"].text() == "Remote Desktop"
+                                                                   for b in (fitted.row_actions(r) for r in range(tf.rowCount())) if b))
+
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)
