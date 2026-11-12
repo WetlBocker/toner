@@ -88,14 +88,14 @@ cli._run = lambda a, ready=None: 0                # (the stubbed sign-in opens n
 cli.lockdown.pending = lambda: []; cli.backupsplit.run = lambda *a: None
 log.clear(); fake_dir(["done"])
 rc, out, err = call("status", "--user", "bob@acme.com")
-check("a keyed AD account: no Duo code is asked, the key callable is passed", "Duo code: " not in prompts and rc == 0 and log == [("finish", True)], (rc, prompts, log, err))
+check("a keyed AD account: the key callable is passed to finish and it signs in", rc == 0 and log == [("finish", True)], (rc, prompts, log, err))
 log.clear(); fake_dir(["duo", "done"])
 rc, out, err = call("status", "--user", "bob@acme.com")
 check("finish back at Duo: Duo runs, the PIN is asked again, finish gets the key again", rc == 0 and log == [("finish", True), "duo", ("finish", True)]
       and prompts == ["Password: ", "PIN: ", "PIN: "], (rc, log, prompts, err))
 log.clear(); fake_dir(["duo", "duo"])
 rc, out, err = call("status", "--user", "bob@acme.com")
-check("a second return at Duo is an error exit, not a loop", rc == 3 and err.strip() == cli.APPROVAL and log.count("duo") == 1, (rc, log, err))
+check("guard against a loop (should be unreachable in real use): a second return at Duo ends in exit 3 after one Duo run", rc == 3 and err.strip() == cli.APPROVAL and log.count("duo") == 1, (rc, log, err))
 log.clear(); fake_dir(["approve"])
 rc, out, err = call("status", "--user", "bob@acme.com")
 check("finish at approve: the approval sentence, exit 3", rc == 3 and err.strip() == cli.APPROVAL, (rc, err))

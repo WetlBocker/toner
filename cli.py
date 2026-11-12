@@ -149,10 +149,10 @@ def _directory_sign_in(login, password):
     if at.stage == "pin":
         dirsignin.finish(at, getpass.getpass("PIN: "), key=_key)
     if at.stage == "duo":                      # the Duo skip wasn't earned (no keys in the seal): Duo, then the PIN once more. Once only:
-        _duo(at)                               # a second return is left as it is, which reads as the approval sentence
+        _duo(at)
         if at.stage == "pin":
             dirsignin.finish(at, getpass.getpass("PIN: "), key=_key)
-    return at.stage == "done"
+    return at.stage == "done"       # a second return at "duo" should be unreachable (Duo clears duo_skipped); APPROVAL is shown only because no other sentence fits
 
 
 def _key(creds):
