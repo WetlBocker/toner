@@ -755,7 +755,7 @@ def accounts():
         doc = _read()
     kinds = {d.get("id"): d.get("kind") for d in doc.get("directories") or [] if isinstance(d, dict)}
     return sorted(({"name": n, "kind": a["kind"], "created": a["created"],
-                    "role": (a.get("groups_role") or "Tech") if a["kind"] == "directory" else a.get("role", "Admin"),
+                    "keys": a.get("keys_n", 0), "role": (a.get("groups_role") or "Tech") if a["kind"] == "directory" else a.get("role", "Admin"),
                     **({"directory_kind": kinds.get(a.get("directory")), "slot_kind": a.get("slot_kind")} if a["kind"] == "directory" else {})}
                    for n, a in doc["accounts"].items()), key=lambda a: a["name"].casefold())
 

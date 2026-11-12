@@ -39,6 +39,12 @@ OFF_RULES = "Sign-in without approval was turned off because Toner's rules key w
 INSTALL_FAILED = "Toner's helper service couldn't be installed: {reason}"
 OFF_FAILED = ("Toner's helper service couldn't be reached, so its spare copy of Toner's key is still there. Try again when it's "
               "running.")
+RESET_NOTE = "Resetting the password also removes this account's security keys."
+REMOVE_KEYS = "Remove {name}'s security keys? They will set a new PIN, with an admin's approval, the next time they sign in."
+REQUIRE = "Require a security key for every local, AD and LDAP account"
+HELPER_NEEDS_REQUIRE_OFF = ('Turn off "Require a security key for every local, AD and LDAP account" first. It can\'t be on while group '
+                            'members sign in without approval.')
+HELPER_NEEDS_KEYS_GONE = "Remove the security keys from AD and LDAP accounts first. This can't be on while they have keys."
 HELPER_NOTES = {"portable": OFF_PORTABLE, "other_user": OFF_OTHER_USER, "not_running": OFF_NOT_RUNNING, "outdated": OFF_OUTDATED,
                 "rules_changed": OFF_RULES}
 
@@ -73,7 +79,7 @@ class AccountDialog(_CardDialog):
     """Add an account, or (with `name`) set a new password for that one. Accepting does it."""
 
     def __init__(self, name=None, parent=None):
-        super().__init__("Reset password" if name else "Add account", "", parent)
+        super().__init__("Reset password" if name else "Add account", RESET_NOTE if name else "", parent)
         self.fixed = name
         self.name = field(self.lay, "Username")
         self.pw = field(self.lay, "Password", secret=True)
@@ -146,23 +152,25 @@ class AccountsPage(Page):
 
     def __init__(self):
         super().__init__()
-        self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["Username", "Type", "Created", "Role", "Unlocks with"])
+        self.table = QTableWidget(0, 6)
+        self.table.setHorizontalHeaderLabels(["Username", "Type", "Created", "Role", "Unlocks with", "Keys"])
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setMinimumHeight(120)
         self.table.setAccessibleName("Accounts")
-        self.add, self.change, self.reset, self.remove, self.recovery = (QPushButton(t) for t in
-            ("Add account...", "Change role...", "Reset password...", "Remove", "Make a new recovery key..."))
+        self.add, self.change, self.reset, self.remove, self.recovery, self.remove_keys = (QPushButton(t) for t in
+            ("Add account...", "Change role...", "Reset password...", "Remove", "Make a new recovery key...", "Remove keys..."))
         self.add.clicked.connect(self._add)
         self.change.clicked.connect(self._change)
         self.reset.clicked.connect(self._reset)
         self.remove.clicked.connect(self._remove)
         self.recovery.clicked.connect(self._recovery)
+        self.remove_keys.clicked.connect(self._remove_keys)
         self.table.itemSelectionChanged.connect(self._selection)
         self._directory_rows = set()
+        self._keyed = set()                             # AD and LDAP accounts that have keys: the ones Remove keys... is for
         self.idents = QTableWidget(0, 3)
         self.idents.setHorizontalHeaderLabels(["Name", "Type", "2FA"])
         self.idents.horizontalHeader().setStretchLastSection(True)
@@ -206,11 +214,15 @@ class AccountsPage(Page):
         self.helper.setProperty("notSetting", True)                     # it acts at once, through its own confirmation
         self.helper.toggled.connect(self._helper_toggled)
         self.helper_note = note("")
+        self.require = QCheckBox(REQUIRE)                               # the signed rules' state, acted on at once like the switch below
+        self.require.setProperty("notSetting", True)
+        self.require.toggled.connect(self._require_toggled)
+        self.form.addRow(self.require)
         self.form.addRow(self.helper)
         self.form.addRow(self.helper_note)
         self._helper_state = None
         for i, w in enumerate((self.banner, QLabel("<b>Accounts</b>"), note("Changes to accounts take effect right away."), self.table,
-                               compact_row(self.add, self.change, self.reset, self.remove), compact_row(self.recovery),
+                               compact_row(self.add, self.change, self.reset, self.remove, self.remove_keys), compact_row(self.recovery),
                                QLabel("<b>External Identities</b>"), self.idents, compact_row(self.add_ident, self.edit_ident, self.remove_ident),
                                QLabel("<b>Roles</b>"), note(ROLES_NOTE), self.perm_table, compact_row(self.save_roles))):
             self.lay.insertWidget(i, w)
@@ -230,10 +242,13 @@ class AccountsPage(Page):
 
     def refresh(self):
         self.table.setRowCount(0)
-        self._directory_rows = set()
+        self._directory_rows, self._keyed = set(), set()
         for a in (datakey.accounts() if datakey.exists() else []):      # (no keys file: sign-in is not set up yet)
             self.table.insertRow(self.table.rowCount())
-            for j, v in enumerate((a["name"], type_of(a), str(a["created"]), a["role"], unlocks_with(a))):
+            if a.get("directory_kind") in ("ad", "ldap") and a["keys"]:
+                self._keyed.add(a["name"])
+            keys = "" if a.get("directory_kind") == "oidc" else str(a["keys"])     # an SSO account never has keys: its cell is blank
+            for j, v in enumerate((a["name"], type_of(a), str(a["created"]), a["role"], unlocks_with(a), keys)):
                 self.table.setItem(self.table.rowCount() - 1, j, QTableWidgetItem(v))
             if a["kind"] == "directory":
                 self._directory_rows.add(a["name"])
@@ -274,6 +289,7 @@ class AccountsPage(Page):
         local = self._selected() not in self._directory_rows
         self.change.setEnabled(local)
         self.reset.setEnabled(local)
+        self.remove_keys.setEnabled(self._selected() in self._keyed)
 
     def _add(self):
         dlg = AccountDialog(parent=self)
@@ -327,6 +343,20 @@ class AccountsPage(Page):
         audit.log("account removed", name)
         self.refresh()
 
+    def _remove_keys(self):
+        name = self._selected()
+        if name not in self._keyed:
+            return
+        try:
+            if not perms.is_admin():                    # datakey.clear_keys checks no permission itself
+                raise perms.Denied()
+            if not confirm(self, self.title, REMOVE_KEYS.format(name=name)):
+                return
+            datakey.clear_keys(name)                    # it writes the audit row
+        except (ValueError, datakey.Locked, perms.Denied) as e:        # "Sign in first.", an account the file no longer has, the role
+            QMessageBox.warning(self, self.title, str(e))
+        self.refresh()
+
     def _recovery(self):
         if QMessageBox.question(self, self.title, NEW_KEY_ASK) != QMessageBox.StandardButton.Yes:
             return
@@ -342,6 +372,10 @@ class AccountsPage(Page):
     def _load_helper(self):
         """The switch as the helper service has it, for Admins only (enrolling needs the rules key an Admin holds)."""
         admin = perms.is_admin() and roles.holds("rules")
+        self.require.setVisible(admin)
+        self.require.blockSignals(True)
+        self.require.setChecked(roles.require_keys())
+        self.require.blockSignals(False)
         self.helper.setVisible(admin)
         self.helper_note.setVisible(False)
         if not admin:
@@ -363,7 +397,9 @@ class AccountsPage(Page):
         """Ticked: the warning, then the helper installed when it isn't there or is out of date, then enrolled. Unticked: the
         spare copy forgotten. Both at once, not at Save."""
         try:
-            if on and self._helper_warned():
+            if on and (why := self._helper_refused()):  # before the warning, and before anything is installed or enrolled
+                QMessageBox.warning(self, self.title, why)
+            elif on and self._helper_warned():
                 if self._helper_state in ("absent", "outdated"):
                     # shortcut: the window waits while the administrator prompt is up (up to 2 minutes); a Job if it matters
                     helperclient.install_elevated()
@@ -382,6 +418,20 @@ class AccountsPage(Page):
             quiet.ignored()                             # the switch shows what the helper has now, and its note why
         finally:
             self._load_helper()                         # (whatever happened: the switch shows the helper's state)
+
+    def _helper_refused(self):
+        if roles.require_keys():
+            return HELPER_NEEDS_REQUIRE_OFF
+        return HELPER_NEEDS_KEYS_GONE if any(a.get("directory_kind") in ("ad", "ldap") and a["keys"] for a in datakey.accounts()) else None
+
+    def _require_toggled(self, on):
+        """At once, as the switch below: the rules say, and the switch is put back to what they say after a refusal."""
+        try:
+            roles.set_require_keys(on)                  # shortcut: up to 20 s on the window's thread (it asks the service manager), as the helper calls here; a Job if it matters
+        except (ValueError, datakey.Locked, perms.Denied) as e:        # the helper switch is on, "Sign in first.", the role
+            QMessageBox.warning(self, self.title, str(e))
+        finally:
+            self._load_helper()
 
     def _helper_warned(self):
         text = WARN_TEXT + (" " + WARN_LINUX if sys.platform.startswith("linux") else "")     # (Windows: sealed by the chip)
