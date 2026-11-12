@@ -217,9 +217,9 @@ class AccountsPage(Page):
         self.require = QCheckBox(REQUIRE)                               # the signed rules' state, acted on at once like the switch below
         self.require.setProperty("notSetting", True)
         self.require.toggled.connect(self._require_toggled)
-        self.form.addRow(self.require)
         self.form.addRow(self.helper)
         self.form.addRow(self.helper_note)
+        self.form.addRow(self.require)
         self._helper_state = None
         for i, w in enumerate((self.banner, QLabel("<b>Accounts</b>"), note("Changes to accounts take effect right away."), self.table,
                                compact_row(self.add, self.change, self.reset, self.remove, self.remove_keys), compact_row(self.recovery),
