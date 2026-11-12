@@ -338,8 +338,8 @@ A.apply_look(app)
 win = A.Main(); win.resize(1024, 700); win.show(); app.processEvents()
 lock = win.lock_screen
 check("open: no lock screen, the idle timer runs", not lock.isVisible() and lock.idle.isActive())
-check("the user menu names who is signed in, then Lock and Sign out",
-      [a.text() for a in win.user_menu.actions() if not a.isSeparator()] == ["Jordan", "Lock (Ctrl+Shift+L)", "Sign out"])
+check("the user menu names who is signed in, then Lock, Security keys... and Sign out",
+      [a.text() for a in win.user_menu.actions() if not a.isSeparator()] == ["Jordan", "Lock (Ctrl+Shift+L)", "Security keys...", "Sign out"])
 win.lock_shortcut.activated.emit(); app.processEvents()
 check("Ctrl+Shift+L locks the session and the lock sits over the window", session.state() == "locked" and lock.isVisible()
       and lock.geometry() == win.geometry())

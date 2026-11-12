@@ -298,13 +298,8 @@ class Main(QMainWindow):
         self.housekeeping.start()
         QTimer.singleShot(5000, self.do_housekeeping)
         QTimer.singleShot(0, AI.check_in_background)   # the same test as Settings > AI > Test, when a key is stored
-        self.user_menu = QMenu(self)                    # who is signed in, Lock and Sign out
-        if session.user():
-            self.user_menu.addAction(session.user()).setEnabled(False)
-            self.user_menu.addSeparator()
-            self.user_menu.addAction("Lock (Ctrl+Shift+L)", self.lock)
-            self.user_menu.addAction("Sign out", self.sign_out)
-            tabs.set_user(session.user(), self.user_menu)
+        self.user_menu = QMenu(self)                    # who is signed in, Lock, Security keys... and Sign out
+        self.fill_user_menu()
         self.lock_shortcut = QShortcut(QKeySequence("Ctrl+Shift+L"), self, activated=self.lock)
         from ui.lockscreen import LockScreen
         self.lock_screen = LockScreen(self)             # last, so it is above everything else in the window
@@ -333,6 +328,25 @@ class Main(QMainWindow):
         self.strip.show_ai()
 
     # ---------- signing in (core/session.py)
+    def fill_user_menu(self):
+        """The menu under the signed-in account's name (each sign-in builds a new window, and with it this menu)."""
+        from ui import keysdialog
+        self.user_menu.clear()
+        if session.user():
+            self.user_menu.addAction(session.user()).setEnabled(False)
+            self.user_menu.addSeparator()
+            self.user_menu.addAction("Lock (Ctrl+Shift+L)", self.lock)
+            if keysdialog.offered():                   # local, AD and LDAP accounts: never SSO
+                self.user_menu.addAction("Security keys...", self.security_keys)
+            self.user_menu.addAction("Sign out", self.sign_out)
+            self.tabs.set_user(session.user(), self.user_menu)
+
+    def security_keys(self):
+        from ui.keysdialog import KeysDialog
+        dlg = KeysDialog(self)
+        dlg.exec()
+        dlg.deleteLater()                              # nothing typed in it outlives it
+
     def lock(self):
         """Ctrl+Shift+L: the lock screen covers the window until the password is entered (a recovery-key session can't lock)."""
         if session.state() == "open" and session.user() is not None:
@@ -1195,14 +1209,12 @@ def watch_password_manager(win):
 def sign_in_at_start():
     """The first start (a new install or an upgrade) or the sign-in window; then whatever is still plain gets encrypted (looked at
     every start: a session log left open last time, or a first start that stopped halfway). False: the person quit."""
-    from PySide6.QtWidgets import QDialog
     from core import datakey, lockdown
     from ui import setupdlg
-    from ui.signinwindow import SignInWindow
     if not datakey.exists():
         if not setupdlg.run_first_start():
             return False
-    elif SignInWindow().exec() != QDialog.DialogCode.Accepted:
+    elif not signed_in():
         return False
     if lockdown.pending() and not setupdlg.encrypt():
         return False
@@ -1210,6 +1222,22 @@ def sign_in_at_start():
         setupdlg.split_backups()                   # (every sign-in: passwords in old backups go behind the backups key)
     setupdlg.carry_credential_manager()            # (every start: a first start that stopped halfway left them there)
     return True
+
+
+def signed_in():
+    """The sign-in window; then, when keys are required and the account has none, adding one before anything else opens (never
+    after a recovery-key sign-in, which is how an account that lost its key gets back in). Closing that signs out and asks again.
+    False: the person quit."""
+    from PySide6.QtWidgets import QDialog
+    from ui.keysdialog import KeysDialog, must_add
+    from ui.signinwindow import SignInWindow
+    while True:
+        w = SignInWindow()
+        if w.exec() != QDialog.DialogCode.Accepted:
+            return False
+        if w.pages.currentWidget() is w.reset_page or not must_add() or KeysDialog(must_add=True).exec() == QDialog.DialogCode.Accepted:
+            return True
+        session.sign_out()
 
 
 def main():

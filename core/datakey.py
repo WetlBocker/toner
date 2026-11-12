@@ -662,6 +662,20 @@ def add_key(secret, cred, value, label):
     audit.log("security key added", label)
 
 
+def prove_mine(secret):
+    """The signed-in account's password (an AD or LDAP account's: its Toner PIN) checked as add_key and remove_key check it, with
+    the same counting, waits and errors, and no touch: the keys dialog asks it before the key, so a typo is caught first."""
+    mine = _dir_mine()
+    if mine is None:
+        _change(lambda doc: _mine(doc, secret)[0])
+        return
+    from core import pinslot
+    _, rec = mine
+    if rec.get("sealed") != _seen or rec.get("slot_gone"):
+        raise Locked("Sign in first.")
+    pinslot.open(rec["slot"], rec["slot_id"], secret or "", rec["sealed"])
+
+
 def remove_key(secret, index):
     """Remove the signed-in account's key at `index` (of my_keys()). Removing the last stores the account as one without keys."""
     global _keys, _k2, _seen
