@@ -265,6 +265,17 @@ def open(rec, slot_id, pin, sealed):
         return secret
 
 
+def reseal(rec, slot_id, pin, sealed, secret):
+    """`secret` sealed in place of what `sealed` holds, once `pin` opens it exactly as open does (the same errors and counting)."""
+    open(rec, slot_id, pin, sealed)
+    if rec["kind"] == "chip":
+        return Slot(rec, slot_id).seal(secret)
+    pepper = None
+    if rec["kind"] == "store" and (pepper := osstore.get(_pepper_name(slot_id))) is None:
+        raise SlotMissing()                               # (gone since open read it) a seal without it would never open again
+    return Slot(rec, slot_id, _kek(rec, pin or "", pepper)).seal(secret)
+
+
 def remove(rec, slot_id):
     """Deletes the slot's TPM key or pepper from this computer, if it's here."""
     if rec["kind"] == "chip":

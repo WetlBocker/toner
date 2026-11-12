@@ -31,6 +31,7 @@ PASSWORD_KDF = {"n": 2 ** 16, "r": 8, "p": 1}
 RECOVERY_KDF = {"n": 2 ** 14, "r": 8, "p": 1}
 RECOVERY_AAD = b"toner-datakey:recovery"
 KEYS_AAD, KEY_INFO, KEYED_INFO = b"toner-datakey-keys:", b"toner-datakey:key", b"toner-datakey:keyed"
+DIR_KEYED_INFO = b"toner-datakey:keyed:"           # + the name: a keyed directory seal's K2 key
 ROLES = ("Admin", "Engineer", "Tech")
 FREE_TRIES, FIRST_WAIT, MAX_WAIT = 5, 30, 900
 _DUMMY_SALT = b"toner-datakey:no-such-account"     # an unknown name still runs scrypt, so timing doesn't tell names apart
@@ -184,10 +185,10 @@ def _creds(keys):
     return [fidokey.Cred(_unb64(k["id"]), _unb64(k["salt"]), _unb64(k["pub"])) for k in keys["list"]]
 
 
-def _with_key(got, stored, key):
-    """(the payload, K2) of a keyed record whose password _attempt proved. It asks the key (a touch, minutes), so never under a lock."""
+def _k2_of(keys, key):
+    """K2, unwrapped with the value `key(creds) -> (credential id, value)` gives. It asks the key (a touch, minutes), so never
+    under a lock."""
     from core import fidokey
-    kek, keys, sealed, _ = got
     if key is None:
         raise KeyNeeded()
     cid, value = key(_creds(keys))
@@ -195,9 +196,25 @@ def _with_key(got, stored, key):
     if i is None:
         raise fidokey.NotRegistered()
     try:
-        k2 = _dec(_hkdf(value, KEY_INFO), _unb64(keys["wraps"][i]))
+        return _dec(_hkdf(value, KEY_INFO), _unb64(keys["wraps"][i]))
     except InvalidTag:
         raise fidokey.NotRegistered() from None
+
+
+def _present(keys, present):
+    """`present(creds) -> credential id` (a touch, the value is not read) answers for one of `keys`; never under a lock."""
+    from core import fidokey
+    if present is None:
+        raise KeyNeeded()
+    creds = _creds(keys)
+    if not creds or present(creds) not in [c.id for c in creds]:
+        raise fidokey.NotRegistered()
+
+
+def _with_key(got, stored, key):
+    """(the payload, K2) of a keyed record whose password _attempt proved."""
+    kek, keys, sealed, _ = got
+    k2 = _k2_of(keys, key)
     return _dec(_hkdf(kek + k2, KEYED_INFO), sealed, _aad(stored)), k2
 
 
@@ -438,12 +455,7 @@ def check_password(name, password, present=None):
     except WrongPassword:
         return False
     if isinstance(got, tuple):
-        from core import fidokey
-        if present is None:
-            raise KeyNeeded()
-        creds = _creds(got[1])
-        if present(creds) not in [c.id for c in creds]:
-            raise fidokey.NotRegistered()
+        _present(got[1], present)
     return True
 
 
@@ -508,26 +520,105 @@ def _mine(doc, secret):
     return stored, rec, kek, keys, payload
 
 
+def _sso(doc, rec):
+    return any(isinstance(d, dict) and d.get("id") == rec.get("directory") and d.get("kind") == "oidc" for d in doc.get("directories") or [])
+
+
+def _dir_mine():
+    """(stored name, record) when the signed-in account is an AD or LDAP account, else None; ValueError for an SSO one."""
+    doc = read()
+    stored = _find(doc, _name) if _name is not None else None
+    rec = doc["accounts"].get(stored)
+    if rec is None or rec.get("kind") != "directory":
+        return None
+    if _sso(doc, rec):
+        raise ValueError()                              # SSO accounts never have keys (the refusal people see is the window's)
+    return stored, rec
+
+
+def _dir_keyed(keys, k2, name, payload):
+    """What a keyed directory account's slot seals: K1, then its keys and today's payload sealed under K2."""
+    sealed_k = _enc(_hkdf(k2, DIR_KEYED_INFO + name.encode("utf-8")), payload)
+    return b"K1" + json.dumps({**keys, "sealed_k": _b64(sealed_k)}).encode("utf-8")
+
+
+def _dir_blob(payload):
+    """The keys blob a keyed directory seal holds, or None for today's payload (whose random data key may begin with K1 too)."""
+    if payload[:2] != b"K1":
+        return None
+    try:
+        blob = json.loads(payload[2:])
+    except ValueError:
+        return None
+    return blob if isinstance(blob, dict) and {"list", "wraps", "sealed_k"} <= set(blob) else None
+
+
+def _dir_reseal(mine, pin, keys, k2):
+    """Re-seal the signed-in directory account's slot to hold `keys` (none: today's payload) once `pin` opens it, counted and
+    waited as check_pin's are. Returns the new seal. Locked when the seal is not the one this process last saw: another
+    process changed it, and writing what this one holds would undo that."""
+    from core import pinslot
+    stored, rec = mine
+    if rec.get("sealed") != _seen:
+        raise Locked("Sign in first.")
+    payload = seal_payload(stored, _box)
+    sealed = pinslot.reseal(rec["slot"], rec["slot_id"], pin or "", rec["sealed"], _dir_keyed(keys, k2, stored, payload) if keys["list"] else payload)
+
+    def write(doc):
+        r = doc["accounts"].get(stored)
+        if r is None or r.get("sealed") != _seen or r.get("slot_id") != rec["slot_id"]:
+            raise Locked("Sign in first.")
+        r["sealed"] = sealed
+        if keys["list"]:
+            r["keyed"], r["keys_n"] = True, len(keys["list"])
+        else:
+            r.pop("keyed", None)
+            r.pop("keys_n", None)
+    _change(write)
+    return sealed
+
+
 def add_key(secret, cred, value, label):
     """Add a key (fidokey.register's credential and value) to the signed-in account. The first one takes the password-only seal
-    away in the same write. The box key and the payload stay, so the roles hook has nothing to see."""
+    (for an AD or LDAP account, `secret` is its Toner PIN: the PIN-only seal) away in the same write. The box key and the payload
+    stay, so the roles hook has nothing to see."""
     global _keys, _k2, _seen
+    entry = {"id": _b64(cred.id), "salt": _b64(cred.salt), "pub": _b64(cred.public), "name": label,
+             "added": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+
+    def added(keys, k2):
+        k2 = k2 if keys["list"] else os.urandom(32)
+        keys["list"].append(entry)
+        keys["wraps"].append(_b64(_enc(_hkdf(value, KEY_INFO), k2)))
+        return keys, k2
 
     def add(doc):
         stored, rec, kek, keys, payload = _mine(doc, secret)
-        k2 = _k2 if keys["list"] else os.urandom(32)
-        keys["list"].append({"id": _b64(cred.id), "salt": _b64(cred.salt), "pub": _b64(cred.public), "name": label,
-                             "added": datetime.now(timezone.utc).isoformat(timespec="seconds")})
-        keys["wraps"].append(_b64(_enc(_hkdf(value, KEY_INFO), k2)))
+        keys, k2 = added(keys, _k2)
         _keyed(rec, kek, payload, keys, k2, stored)
         return keys, k2, rec["keys"]
-    _keys, _k2, _seen = _change(add)
+    mine = _dir_mine()
+    if mine is None:
+        _keys, _k2, _seen = _change(add)
+    else:
+        keys, k2 = added(copy.deepcopy(_keys or {"list": [], "wraps": []}), _k2)
+        _seen = _dir_reseal(mine, secret, keys, k2)
+        _keys, _k2 = keys, k2
     audit.log("security key added", label)
 
 
 def remove_key(secret, index):
     """Remove the signed-in account's key at `index` (of my_keys()). Removing the last stores the account as one without keys."""
     global _keys, _k2, _seen
+    mine = _dir_mine()
+    if mine is not None:
+        keys = copy.deepcopy(_keys or {"list": [], "wraps": []})
+        label = keys["list"].pop(index)["name"]
+        keys["wraps"].pop(index)
+        _seen = _dir_reseal(mine, secret, keys, _k2)
+        _keys, _k2 = (keys, _k2) if keys["list"] else (None, None)
+        audit.log("security key removed", label)
+        return
 
     def drop(doc):
         stored, rec, kek, keys, payload = _mine(doc, secret)
@@ -567,6 +658,23 @@ def remove(name):
             raise LastAccount("Toner needs at least one account.")
         return doc["accounts"].pop(stored)
     drop_slot(_change(drop, accounts=True))
+
+
+def clear_keys(name):
+    """An admin, for an AD or LDAP account whose key is lost: its slot goes from this computer and its key fields from its record
+    (the seal stays, unopenable here), so its next sign-in sets a new PIN through the new-PIN approval, which seals with no keys.
+    ValueError for a local or SSO account."""
+    def clear(doc):
+        stored = _stored(doc, name)
+        rec = doc["accounts"][stored]
+        if rec.get("kind") != "directory" or _sso(doc, rec):
+            raise ValueError()
+        rec.pop("keyed", None)
+        rec.pop("keys_n", None)
+        return stored, copy.deepcopy(rec)
+    stored, rec = _change(clear, accounts=True)
+    drop_slot(rec)
+    audit.log("security keys removed", f"{stored}, by {_name or audit.actor()}")
 
 
 def accounts():
@@ -706,8 +814,11 @@ def _pin_refused(pin):
     raise pinslot.WrongPin()
 
 
-def _pin(name, pin):
-    """(the data key and box private, the stored name, the failed tries counted before it); WrongPin, PinLocked or SlotMissing."""
+def _pin(name, pin, key=None, present=None):
+    """(the data key and box private (None after `present`), the stored name, the failed tries counted before it, its keys blob
+    or None, K2 or None, its seal as read); WrongPin, PinLocked or SlotMissing. A keyed seal (known from what the slot holds,
+    never from the record's keyed field) also needs `key` (fidokey.value) or, to unlock, `present` (fidokey.present), asked once
+    the PIN is right and the locks are let go: KeyNeeded without one."""
     from core import pinslot
     pin = pin or ""
     with _lock:
@@ -718,23 +829,39 @@ def _pin(name, pin):
             _pin_refused(pin)
         fails = (doc.get("throttle") or {}).get("fails", 0)
         payload = pinslot.open(rec["slot"], rec["slot_id"], pin, rec["sealed"])
-        if payload[64:] != stored.encode("utf-8"):
-            _pin_refused(None)                          # another account's seal copied into this record
-        return payload[:64], stored, fails
+    keys = k2 = None
+    if (blob := _dir_blob(payload)) is not None:
+        keys = {"list": blob["list"], "wraps": blob["wraps"]}
+        if present is not None:
+            # the name can't be read without K2: only keys this session opened its own seal with answer (a copied seal's don't)
+            held = [k["id"] for k in (_keys or {}).get("list", [])] if stored == _name else []
+            _present({"list": [k for k in keys["list"] if k["id"] in held]}, present)
+            return None, stored, fails, keys, None, rec["sealed"]
+        k2 = _k2_of(keys, key)
+        try:
+            payload = _dec(_hkdf(k2, DIR_KEYED_INFO + stored.encode("utf-8")), _unb64(blob["sealed_k"]))
+        except InvalidTag:
+            payload = b""                               # sealed for another name: refused below
+    if payload[64:] != stored.encode("utf-8"):
+        _pin_refused(None)                              # another account's seal copied into this record
+    return payload[:64], stored, fails, keys, k2, rec["sealed"]
 
 
-def open_with_pin(name, pin):
-    """Opens the key; returns how many tries failed (for any name) since the last one that worked."""
-    payload, stored, fails = _pin(name, pin)
-    _open(payload, stored)
+def open_with_pin(name, pin, key=None):
+    """Opens the key; returns how many tries failed (for any name) since the last one that worked. An account with security
+    keys also needs `key(creds) -> (credential id, value)` (fidokey.value), asked once the PIN is right; KeyNeeded without it.
+    A key failure (fidokey.Failed) leaves nothing open and is not counted as a wrong PIN."""
+    payload, stored, fails, keys, k2, sealed = _pin(name, pin, key=key)
+    _open(payload, stored, keys, k2, sealed)
     return fails
 
 
-def check_pin(name, pin):
-    """True when the PIN is right (for unlocking). Raises PinLocked the same way opening does."""
+def check_pin(name, pin, present=None):
+    """True when the PIN is right (for unlocking). Raises PinLocked the same way opening does. An account with security keys
+    also needs `present(creds) -> credential id` (fidokey.present: a touch, the value is not read); KeyNeeded without it."""
     from core import pinslot
     try:
-        _pin(name, pin)
+        _pin(name, pin, present=present)
         return True
     except pinslot.WrongPin:
         return False

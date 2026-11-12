@@ -753,6 +753,8 @@ def approve(name, slot=None, approved_by=None, signer=None):
                     doc["grants"].pop(stored, None)     # wrapped to the old box key
             if slot is not None:
                 rec["sealed"] = slot.seal(datakey.seal_payload(stored, private))
+                rec.pop("keyed", None)                  # a new seal holds no security keys
+                rec.pop("keys_n", None)
             had = _admins(doc)
             rec["approved_role"] = rec["groups_role"]
             if had and not _admins(doc):
