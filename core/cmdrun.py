@@ -63,12 +63,17 @@ CHANGE_WORDS = {"clear", "kill", "reset", "reboot", "restart", "delete", "erase"
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 
 
+WRITES = re.compile(r"\|\s*(redirect|append|tee|save)\b|>", re.I)   # show ... | redirect flash:x writes a file, so it is not a show
+
+
 def read_only(command):
     if _CONTROL.search((command or "").strip()):           # a line break inside would reach the device as a second command
         return False
     c = (command or "").strip().lower()
     if not c:
         return True
+    if WRITES.search(c):
+        return False
     if not c.startswith(READ_ONLY) or any(c.startswith(d) for d in DANGEROUS):
         return False
     if c.startswith("/") and re.search(r"[;\[\]{}]|\bfile=", c):   # RouterOS: ; runs another command, [ ] one inside, file= writes
@@ -376,7 +381,17 @@ def need_push(devs, commands):
     """Refuse, before connecting, when a role without "push" asks for a command that could change a device."""
     from core import perms
     if not perms.allowed("push") and (risky := risky_commands(devs, commands)):
-        raise perms.Denied(f"Your role can't run commands that change a device: {', '.join(risky)}")
+        raise perms.Denied(REFUSAL + ", ".join(risky))
+
+
+REFUSAL = "Your role can't run commands that change a device: "
+
+
+def need_push_line(command):
+    """The same refusal for one network-device line with no device at hand (a custom SSH check, saved or tested)."""
+    from core import perms
+    if not perms.allowed("push") and not read_only(command):
+        raise perms.Denied(REFUSAL + (command or "").strip())
 
 
 def run_many(devices, commands, workers=8, on_result=None, opts=None, cancel=None):

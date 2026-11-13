@@ -155,6 +155,9 @@ NOT_PORTABLE = {"vault_provider", "vault_config", "vault_collections_migrated", 
                 "update_last_check", "update_skip", "update_pending", "sessions_expanded", "agent_enabled", "agent_enroll", "agent_bind",
                 "agent_address", "install_uid", "demarc", "assistant_button", "credential_manager_carried", "rules_key", "rules_signed",
                 "signin_session_hours", "signin_idle_minutes", "helper_off_notice"}
+# A saved key or password is sent to wherever these settings point, so a settings file may change them only while none is saved.
+SECRETS_FOLLOW = {"iplookup_url": ("ipstack",), "proxy": ("service:proxy", "service:proxy-otp"),
+                  "ssh_tunnel": ("service:ssh-tunnel", "service:ssh-tunnel-otp")}
 
 DEVICE_FIELDS = ["name", "vendor", "host", "port", "platform", "username",
                  "site", "verify_ssl", "ha_expected", "enabled", "location", "details", "folder_id",
@@ -790,6 +793,13 @@ def schema_version():
 
 
 # ---------- secrets (Toner's vault, core/passvault.py, reached through keyring) ----------
+def _saved(name):
+    try:
+        return bool(keyring.get_password(SERVICE, name))
+    except Exception:
+        return True                                     # can't tell: treat it as saved
+
+
 def set_secret(name, secret):
     keyring.set_password(SERVICE, name, secret)
 
@@ -1465,6 +1475,8 @@ def import_settings(data):
                 applied.append(key)
             else:
                 skipped.append(key)
+        elif key in SECRETS_FOLLOW and value != get_setting(key) and any(_saved(n) for n in SECRETS_FOLLOW[key]):
+            skipped.append(key)
         elif key in DEFAULT_SETTINGS and key not in NOT_PORTABLE:
             want = type(DEFAULT_SETTINGS[key])
             good = isinstance(value, want) and not (want is int and isinstance(value, bool)) \

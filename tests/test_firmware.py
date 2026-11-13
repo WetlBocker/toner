@@ -118,6 +118,12 @@ LS_OUT = ("total 8\n-rw-r--r-- 1 root root 3000 Oct 22 09:15 cat9k_iosxe.17.09.0
 scp_only = ShellServer(user="u", password="scp-pw", exec_handler=lambda cmd: (LS_OUT, 0) if cmd.startswith("ls -l") else (b"", 127))
 files = FW.list_files({**ssrc, "proto": "scp", "port": scp_only.port, "password": "scp-pw"})
 check("an SCP server without SFTP is asked for ls -l instead", names(files) == ["asa9-18-4-smp-k8.bin", "cat9k_iosxe.17.09.04a.SPA.bin"] and scp_only.execs == ["ls -l /firmware"], (names(files), scp_only.execs))
+_real_list = FW._list_ssh
+FW._list_ssh = lambda src, timeout: [{"name": "ok.bin", "size": 5, "modified": None}, {"name": "asa.bin\nconfigure terminal\nend", "size": 5, "modified": None},
+                                     {"name": "tab\there.bin", "size": 5, "modified": None}]
+check("a listed name with a line break or other control character is not offered (it would be typed on the device as more commands)",
+      names(FW.list_files({**ssrc, "proto": "scp"})) == ["ok.bin"], names(FW.list_files({**ssrc, "proto": "scp"})))
+FW._list_ssh = _real_list
 missing = ShellServer(user="u", password="scp-pw", exec_handler=lambda cmd: (b"", 2))
 check("...and a missing folder there", raises(lambda: FW.list_files({**ssrc, "proto": "scp", "port": missing.port, "password": "scp-pw", "folder": "/nowhere"}))
       == "The folder /nowhere was not found on the server.")
@@ -571,6 +577,10 @@ r_tr = FW.transfer(dev_en, r, {"name": "asa9-18-1-smp-k8.bin", "size": 100, "md5
 check("the refused copy says so with the device's words, then where to look", not r_tr["ok"] and "refused" in r_tr["detail"].lower()
       and r_tr["detail"].endswith(" The device could not connect to 127.0.0.1 port 1; Toner could, from this computer. Check the server's firewall from the "
                                   "device's side and, for FTP, its passive-mode settings."), r_tr["detail"])
+typed_before = len(asa_en.commands)
+r_tr = FW.transfer(dev_en, r, {"name": "asa.bin\nreload", "size": 100, "md5": "0" * 32}, src, poll=0.1)
+check("a file name with a line break is refused before anything is typed on the device", not r_tr["ok"]
+      and r_tr["detail"] == "The file name has characters that cannot be typed on a device." and len(asa_en.commands) == typed_before, (r_tr, asa_en.commands[typed_before:]))
 print("== a copy over HTTP (the ASA pulls from the web server)")
 import hashlib as _hl
 ASA_ = "asa9-18-4-smp-k8.bin"

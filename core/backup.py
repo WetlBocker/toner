@@ -45,25 +45,46 @@ VOLATILE = [re.compile(p, re.I) for p in (
     r"^\s*uptime is .*$", r"^#\s*\w{3}/\d+/\d{4}.*$", r"^#\s+software id.*$",
 )]
 
+_H = r"[^\S\n]"                 # white space that stays on its line: \s let a rule run across lines, slowly on a long run of them
+
+
+def _same_line(pattern):
+    return pattern.replace(r"[^\s{]", "\0").replace(r"\s", _H).replace("\0", r"[^\s{]")
+
+
+def _cli(m):
+    """The first rule's replacement: the rest of the line is the secret, and a line's ending ; stays."""
+    rest = m.group(2).rstrip()
+    return m.group(1) + " <masked>" + (";" if len(rest) > 1 and rest.endswith(";") else "")
+
+
 MASKS = [
-    # Cisco / Arista / HPE / generic CLI: the word, an optional type digit, then the secret
+    # Cisco / Arista / HPE / generic CLI: the word, an optional type digit, then the secret (a list of line shapes: the first
+    # five lines of words are the ones whose secret sits after other words; a bare `key <value>` with no type digit is not here,
+    # because `key 1` in a key chain looks the same)
     # not a secret: a bare keyword opening a block (`password {`), and a bare `password minimum length N` / `password minimum-length N` / `password maximum <word> N`
-    (re.compile(r"(?im)^(?!\s*[\w-]+\s+\{\s*$)(?!\s*password\s+minimum\s+length\s+\d+\s*;?\s*$)(?!\s*password\s+maximum\s+\S+\s+\d+\s*$)(?!\s*password\s+minimum-length\s+\d+\s*$)"
-                r"(\s*(?:enable\s+(?:secret|password)|username\s+\S+\s+(?:\S+\s+){0,3}?(?:secret|password)|"
-                r"snmp-server\s+community|snmp-server\s+user\s+\S+\s+\S+\s+v3\s+auth\s+\S+|"
-                r"(?:tacacs|radius)(?:-server)?\s+(?:host\s+\S+\s+)?key|ntp\s+authentication-key\s+\d+\s+\S+|"
-                r"(?:crypto\s+)?(?:isakmp|ikev2)\s+key|pre-shared-key|password|secret|key-string|"
-                r"authentication-key|encrypted-password|wpa-psk|auth-password|priv-password))\s+(?:\d\s+)?\S.*?(;?)\s*$"),
-     r"\1 <masked>\2"),
+    (re.compile(_same_line(
+        r"(?im)^(?!\s*[\w-]+\s+\{\s*$)(?!\s*password\s+minimum\s+length\s+\d+\s*;?\s*$)(?!\s*password\s+maximum\s+\S+\s+\d+\s*$)(?!\s*password\s+minimum-length\s+\d+\s*$)"
+        r"(\s*(?:neighbor\s+\S+\s+password|(?:ip\s+|ipv6\s+)?ospf\s+(?:authentication-key|message-digest-key\s+\d+\s+md5)|"
+        r"(?:(?:standby|vrrp|glbp)\s+\d+\s+)?authentication\s+(?:md5\s+key-string|text)|(?:standby|vrrp|glbp)\s+\d+\s+authentication|"
+        r"snmp-server\s+host\s+\S+(?:\s+(?:traps|informs))?(?:\s+version\s+(?:1|2c|3\s+\S+))?(?=\s+\S)|"
+        r"(?:tacacs|radius)(?:-server)?\s+host\s+\S+\s+(?:\S+\s+)*?key|server-private\s+\S+\s+(?:\S+\s+)*?key|"
+        r"key(?=\s+\d\s+[^\s{])|"
+        r"enable\s+(?:secret|password)|username\s+\S+\s+(?:\S+\s+){0,3}?(?:secret|password)|"
+        r"snmp-server\s+community|snmp-server\s+user\s+\S+\s+\S+\s+v3\s+auth\s+\S+|"
+        r"(?:tacacs|radius)(?:-server)?\s+(?:host\s+\S+\s+)?key|ntp\s+authentication-key\s+\d+\s+\S+|"
+        r"(?:crypto\s+)?(?:isakmp|ikev2)\s+key|pre-shared-key|password|secret|key-string|"
+        r"authentication-key|encrypted-password|wpa-psk|auth-password|priv-password))") + _H + r"+(?:\d" + _H + r"+)?(\S[^\n]*)"),
+     _cli),
     # Junos
-    (re.compile(r'(?i)\b(encrypted-password|secret|authentication-key|pre-shared-key\s+(?:ascii-text|hexadecimal)|'
+    (re.compile(r'(?i)\b(encrypted-password|simple-password|key|secret|authentication-key|pre-shared-key\s+(?:ascii-text|hexadecimal)|'
                 r'community-name|community)\s+"[^"]*"'), r'\1 "<masked>"'),
-    (re.compile(r'(?im)^(\s*set\s+snmp\s+community)\s+(?:"[^"]*"|\S+)'), r'\1 "<masked>"'),
+    (re.compile(_same_line(r'(?im)^(\s*set\s+snmp\s+community)\s+(?:"[^"]*"|\S+)')), r'\1 "<masked>"'),
     # FortiOS
-    (re.compile(r"(?im)^(\s*set\s+(?:password|passwd|psksecret|secret|key|community-name|auth-pwd|priv-pwd|"
-                r"private-key|passphrase))\s+.*$"), r"\1 <masked>"),
+    (re.compile(_same_line(r"(?im)^(\s*set\s+(?:password|passwd|psksecret|secret|key|community-name|auth-pwd|priv-pwd|"
+                           r"private-key|passphrase))\s+.*$")), r"\1 <masked>"),
     # PAN-OS XML
-    (re.compile(r"<(phash|password|key|secret|community-name|snmp-community-string|community|authpwd|privpwd|passphrase|private-key)>[^<]*</\1>"),
+    (re.compile(r"<(bind-password|phash|password|key|secret|community-name|snmp-community-string|community|authpwd|privpwd|passphrase|private-key)>[^<]*</\1>"),
      r"<\1><masked></\1>"),
     # RouterOS
     (re.compile(r"(?i)\b(password|secret|passphrase|private-key|wpa-pre-shared-key|wpa2-pre-shared-key|trap-community)=(\"[^\"]*\"|\S+)"),
@@ -255,11 +276,20 @@ def _ssh_config(dev, user, pw, opts):
             except Exception:
                 quiet.ignored()
     if dev["vendor"] == "paloalto":
-        m = re.search(r"<config\b.*</config>", out or "", re.S)
-        if not m:
+        xml = _xml_config(out)
+        if xml is None:
             raise BackupError("the firewall did not answer with its configuration as XML: " + " ".join((out or "").split())[:100])
-        out = m.group(0)
+        out = xml
     return out
+
+
+def _xml_config(out):
+    """The <config>...</config> document inside what a PAN-OS firewall printed, or None. (Two finds, not one pattern with .* in
+    it: that took a time that grew with the square of an answer repeating '<config'.)"""
+    out = out or ""
+    m = re.search(r"<config\b", out)
+    end = out.rfind("</config>")
+    return out[m.start():end + len("</config>")] if m and end > m.start() else None
 
 
 def session_file(dev):

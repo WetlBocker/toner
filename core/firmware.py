@@ -148,7 +148,11 @@ def list_files(src, timeout=15):
         files = _list_ftp(src, timeout)
     else:
         files = _list_ssh(src, timeout)
+    files = [f for f in files if not _UNSAFE_NAME.search(f["name"])]
     return sorted(files, key=lambda f: f["name"].lower())
+
+
+_UNSAFE_NAME = re.compile(r"[\x00-\x1f\x7f]")           # a line break in a name would reach the device as another command
 
 
 def _check_named(src, timeout):
@@ -1086,6 +1090,8 @@ def transfer(dev, r, choice, src, vrf="management", on_step=None, cancel=None, p
         say("Failed", None, mask(detail, secrets))
         return {"ok": False, "stopped": False, "detail": mask(detail, secrets)}
 
+    if _UNSAFE_NAME.search(name):                           # the list already leaves these out; this is the copy's own check
+        return fail("The file name has characters that cannot be typed on a device.")
     if cancel is not None and cancel.is_set():
         say("Not started (stopped)", None, "")
         return {"ok": False, "stopped": True, "detail": ""}

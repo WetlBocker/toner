@@ -10,6 +10,7 @@ doubling up to 15 minutes.
 """
 import base64
 import copy
+import hmac
 import json
 import math
 import os
@@ -494,13 +495,18 @@ def check_password(name, password, present=None):
     session signed in with keys always needs one of them, whatever the file says by then."""
     held = _session_keys(name)
     try:
-        got, _, _ = _attempt(_clean(name), password or "")
+        got, stored, _ = _attempt(_clean(name), password or "")
     except WrongPassword:
         return False
+    mine = _key is not None and stored == _name         # the open session's own account: an unlock
     if held is not None:
         _present(held, present)                         # unlock trusts the session, not the file (which the password can re-make)
     elif isinstance(got, tuple):
+        if mine:
+            return False                                # keys this session didn't open with: a full sign-in, not an unlock
         _present(got[1], present)
+    elif mine and not hmac.compare_digest(got[:32], _key):
+        return False                                    # a seal written since: it doesn't hold this session's data key
     return True
 
 
@@ -940,6 +946,8 @@ def _pin(name, pin, key=None, present=None, unlock=False):
             payload = b""                               # sealed for another name: refused below
     if payload[64:] != stored.encode("utf-8"):
         _pin_refused(None)                              # another account's seal copied into this record
+    if unlock and _key is not None and stored == _name and not hmac.compare_digest(payload[:32], _key):
+        _pin_refused(None)                              # a seal written since: it doesn't hold this session's data key
     return payload[:64], stored, fails, keys, k2, rec["sealed"]
 
 

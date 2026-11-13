@@ -795,7 +795,7 @@ def _approve_as(a, opener, by=None, signer=None):
     if fails:                                               # counted in netcheck.keys; audited while the key is open
         audit.log(f"{fails} failed sign-in attempts since the last sign-in", who=by)
     try:
-        roles.approve(a.name, a.slot, approved_by=by, signer=signer)
+        roles.approve(a.name, a.slot, approved_by=by, signer=signer, role=a.role)
     except perms.Denied:
         raise CannotApprove(CANNOT_APPROVE) from None
     except roles.NotHeld:                                   # Toner restarted since the PIN was chosen: choose it again

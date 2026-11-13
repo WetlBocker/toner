@@ -96,7 +96,15 @@ g = inv["all"]["children"]
 check("groups: each vendor, each folder (with its path), each location and each tag", set(g["cisco"]["hosts"]) == {"core_sw1", "nx1"} and set(g["windows"]["hosts"]) == {"dc01", "pc-agent"}
       and "core_sw1" in g["folder_Acme_Dental"]["hosts"] and "nx1" in g["folder_Acme_Dental_Branch"]["hosts"] and "core_sw1" in g["location_Chicago"]["hosts"]
       and "core_sw1" in g["tag_core"]["hosts"] and "core_sw1" in g["tag_pci"]["hosts"], sorted(g))
-check("the inventory is YAML Ansible can read", yaml.safe_load(text)["all"]["hosts"]["core_sw1"]["ansible_host"] == "10.0.0.1")
+class _Reads(yaml.SafeLoader): pass                         # reads Ansible's !unsafe tag as the plain text it marks
+_Reads.add_constructor("!unsafe", lambda loader, node: loader.construct_scalar(node))
+check("the inventory is YAML Ansible can read", yaml.load(text, Loader=_Reads)["all"]["hosts"]["core_sw1"]["ansible_host"] == "10.0.0.1")
+tpl = "{{ 7 * 7 }}"
+tinv, tlogins, _n = AN.build_inventory([dev("tpl1", "cisco", "10.0.0.77", username=tpl, location=tpl)])
+ttext = AN.dump_yaml(tinv)
+check("text from a device list is marked !unsafe, so Ansible never runs it as a template",
+      f"ansible_user: !unsafe '{tpl}'" in ttext and f"toner_location: !unsafe '{tpl}'" in ttext, ttext)
+check("every text value is marked, and host and group names stay plain keys", "ansible_host: !unsafe" in ttext and "  tpl1:" in ttext and "!unsafe tpl1" not in ttext, ttext)
 secrets_in = ["S3cretIOS", "arpw", "WinPW!", "FG-TOKEN-XYZ", "PAN-KEY"]
 check("no password or token is in the inventory", not any(s in text for s in secrets_in) and "ansible_password" not in text)
 lg = logins["all"]["hosts"]

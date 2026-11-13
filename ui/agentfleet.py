@@ -174,7 +174,7 @@ class AgentFleet(QWidget):
     def _revoke(self):
         names = self._selected()
         if names and QMessageBox.question(self, "Revoke", "Stop accepting the agent on: " + ", ".join(db.label_org(n) for n in names) + "?\n\nThe device stays in the "
-                                          "inventory. To start again, give the computer a new package or script.") == QMessageBox.StandardButton.Yes:
+                                          "inventory. To start again, make a new script for it, or remove it and run the package on the computer again.") == QMessageBox.StandardButton.Yes:
             for n in names:
                 agents.revoke(n)
                 with db.within(db.split_key(n)[1]):

@@ -138,6 +138,13 @@ check("from the store: the answer, its Sources line, the usage line with the sea
       and texts[3] == "Sources: Cisco Security Advisory (sec.cloudapps.cisco.com)" and texts[4] == "1,000 tokens in, 100 out, 1 search, USD 0.02"
       and texts[8] == "1,000 tokens in, 100 out, 2 searches, USD 0.03" and texts[9] == "Searched the web for CVE-2026-0235…", (kinds, texts))
 check("the Sources are links that open outside Toner", panel.view.openExternalLinks() and 'href="https://sec.cloudapps.cisco.com' in panel.view.toHtml())
+from PySide6.QtCore import QUrl
+opened = []
+UA.QDesktopServices = type("Opener", (), {"openUrl": staticmethod(lambda u: opened.append(u.toString()) or True)})
+for u in ("https://sec.cloudapps.cisco.com/a", "smb://host/share/a.lnk", "search-ms:query=x", "file:///C:/x.txt"):
+    panel.view.anchorClicked.emit(QUrl(u))
+check("a click opens web links only: no other scheme reaches the system, and the transcript loads no file itself",
+      opened == ["https://sec.cloudapps.cisco.com/a"] and not panel.view.openLinks(), (opened, panel.view.openLinks()))
 panel.new_conversation(); AI.set_state(True, "Connected: Claude Opus 5.5.", "Claude Opus 5.5"); settle()
 UA.Worker.run = lambda self: agent.run_turn(self.conv_id, self.org, self.question, self.screen, lambda k, p: self.event.emit(k, p), self.cancel,
                                             provider=Scripted([("live", "CVE-2026-0235", "Yes.")]))

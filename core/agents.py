@@ -256,7 +256,8 @@ def _enroll(computer, source, org):
     if existing:
         with db.connect() as c:
             row = c.execute("SELECT token_hash FROM agent_reports WHERE device=?", (existing["name"],)).fetchone()
-        if not (existing["vendor"] == "windows" and existing["platform"] == "agent" and not (row and row["token_hash"])):
+        # (a row with no token is a revoked computer, not one waiting for its first agent)
+        if not (existing["vendor"] == "windows" and existing["platform"] == "agent" and row is None):
             return 409, {"ok": False, "error": f"Toner already has a device named {existing['name']}. Delete it in Toner, or use its own agent script."}
         name = existing["name"]                       # a device someone added by hand, waiting for its agent
     else:
@@ -435,7 +436,8 @@ def overview():
             rep = {}
         out.append({"device": r["device"], "org": r["org"], "received_at": r["received_at"], "source": r["source"], "age": age,
                     "has_token": bool(r["token_hash"]), "version": r["version"], "issued_at": r["issued_at"],
-                    "computer": rep.get("computer", ""), "os": rep.get("os", ""), "domain": rep.get("domain", "") if rep.get("joined") else "",
+                    "computer": str(rep.get("computer") or ""), "os": str(rep.get("os") or ""),      # text, whatever was stored
+                    "domain": str(rep.get("domain") or "") if rep.get("joined") else "",
                     "pending_reboot": bool(rep.get("reboot")), "uptime_h": rep.get("uptime_h"), "kind": agent_kind_of(rep) if rep else ""})
     return out
 
@@ -504,9 +506,32 @@ def _file_sha256(path):
 
 
 # ---------------------------------------------------------------- the receiver
+REQUEST_SECONDS = 30                    # one request's total time: the 20 s socket timeout starts again with every byte
+# shortcut: one cap for everyone, so one address can still take every slot for REQUEST_SECONDS at a time; count per address if seen
+_slots = threading.BoundedSemaphore(64)
+
+
+def _cut(connection):
+    try:
+        connection.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass
+
+
 class _Handler(http.server.BaseHTTPRequestHandler):
     server_version = "Toner"
     protocol_version = "HTTP/1.1"
+
+    def handle_one_request(self):
+        # the timer is given the socket, never this handler: the connection is closed when the handler is let go, and a handler
+        # its own timer still pointed at would stay (and an agent's next report would wait on a connection nobody reads)
+        self._deadline = threading.Timer(REQUEST_SECONDS, _cut, [self.connection])
+        self._deadline.daemon = True
+        self._deadline.start()
+        try:
+            super().handle_one_request()
+        finally:
+            self._deadline.cancel()
 
     def setup(self):
         # the TLS handshake happens here, in the connection's own thread, so a client that never finishes it cannot
@@ -546,6 +571,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 return self._send(404, b'{"ok":false,"error":"no agent binary for this platform"}')
             with open(path, "rb") as f:
                 data = f.read()
+            self._deadline.cancel()                         # a known agent on a slow link may take longer to download
             self.send_response(200)
             self.send_header("Content-Type", "application/octet-stream")
             self.send_header("Content-Length", str(len(data)))
@@ -610,6 +636,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         except (ValueError, OSError):
             owner.rejected += 1
             return self._send(400, b'{"ok":false,"error":"not a report"}')
+        self._deadline.cancel()                             # read in full: a busy database must not cut a known agent's answer
         version = (self.headers.get("X-Toner-Agent") or "").strip()[:20]
         kind, _ = agent_kind(version)
         with db.within(org):                                # into the device's own organization's file
@@ -629,6 +656,21 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
 class _Server(http.server.ThreadingHTTPServer):
     daemon_threads = True
+
+    def process_request(self, request, client_address):
+        if not _slots.acquire(blocking=False):
+            return self.shutdown_request(request)           # full: turned away instead of given a thread
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            _slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            _slots.release()
 
     def handle_error(self, request, client_address):
         pass                                      # a client that drops the connection or fails the handshake is not news

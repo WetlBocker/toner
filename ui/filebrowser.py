@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QHeaderView, QInp
                                QProgressBar, QPushButton, QSplitter, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 from ui.widgets import gate_push, remember_sizes
 from core import perms, quiet
+from core.scp import safe_name                                       # one rule for every name a device sends
 
 MIME = "application/x-toner-files"            # a drag from one of the two lists: {"side": "local"|"remote", "paths": [...]}
 NOT_CONNECTED = "Connect the session to browse the device's files."
@@ -191,10 +192,11 @@ class RemoteFs:
             here = posixpath.join(path, rel) if rel else path
             files = []
             for a in self.sftp.listdir_attr(here):
+                name = safe_name(a.filename)                         # raises before anything in the folder is copied
                 if stat.S_ISDIR(a.st_mode or 0):
-                    todo.append(posixpath.join(rel, a.filename) if rel else a.filename)
+                    todo.append(posixpath.join(rel, name) if rel else name)
                 else:
-                    files.append(a.filename)
+                    files.append(name)
             out.append((rel, sorted(files)))
         return out
 
@@ -287,7 +289,7 @@ def copy_file(worker, src_fs, src, dst_fs, dst, label, policy):
             perms.require("push")
             worker.sftp.put(src, dst, callback=cb)
         else:
-            worker.sftp.get(src, dst, callback=cb)
+            worker.sftp.get(src, dst, callback=cb, prefetch=False)   # no read plan sized by what the device reports
     except Cancelled:
         try:
             dst_fs.delete(dst)                                       # the unfinished file is removed
@@ -322,6 +324,8 @@ def transfer(worker, src_fs, items, dst_fs, dst_folder, verb):
     try:
         for path in items:
             base = os.path.basename(path.rstrip("\\/")) if src_fs.sep != "/" else posixpath.basename(path.rstrip("/"))
+            if isinstance(dst_fs, LocalFs) and not isinstance(src_fs, LocalFs):
+                safe_name(base)                                      # a device's name with a backslash or a drive letter
             dst = dst_fs.join(dst_folder, base)
             if src_fs.is_dir(path):
                 copied += copy_tree(worker, src_fs, path, dst_fs, dst, verb, policy)

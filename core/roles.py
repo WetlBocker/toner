@@ -607,6 +607,10 @@ def _rekey(doc):
         doc["attested"] = {n: (old[n] or {}).get("box_pub") if n in old else "" for n in doc["accounts"]}
         doc["recovery_attested"] = last.get("recovery_box_pub")
         doc["backups_pub"] = last["backups_pub"]
+        if "directories" in last:                       # the list last signed: the page shows none while the rules don't verify
+            doc["directories"] = last["directories"]
+        else:
+            doc.pop("directories", None)
         if "backups" in _held and _b64(_public("backups", _held["backups"])) != last["backups_pub"]:
             del _held["backups"]
     kept = [g for g in grants.values() if isinstance(g, dict) and "backups" in g] + (["backups"] if "backups" in rg else [])
@@ -756,9 +760,10 @@ def needs_approval(name):
     return "changed" if (now == "Admin" and was != "Admin") or (unmasked(now) and not unmasked(was)) else None
 
 
-def approve(name, slot=None, approved_by=None, signer=None):
+def approve(name, slot=None, approved_by=None, signer=None, role=None):
     """An Admin (who holds the rules key) or the recovery key approves a directory account: its approved role becomes its groups'
-    role, and the role keys follow.
+    role, and the role keys follow. `role`: the role the directory gave this sign-in; it is what gets signed, because the file's
+    groups_role is unsigned and the person being approved can edit it while the approval waits.
       first approval    `slot` is the one start_directory_account wrote: seals the data key and the box private held since then
                         under it, and vouches for that box key.
       new slot          (an approved account's new PIN, or another computer) `slot` is a new one: a new box key, vouched for and
@@ -777,6 +782,8 @@ def approve(name, slot=None, approved_by=None, signer=None):
             repair = _may_write(doc) if signer is None else False
             stored = datakey._stored(doc, name)
             rec = doc["accounts"][stored]
+            if role in ROLES:
+                rec["groups_role"] = role
             if not _directory(rec) or rec.get("groups_role") not in ROLES:
                 raise ValueError("only a directory account in a Toner group can be approved")
             first, old = not rec.get("sealed"), None
@@ -857,7 +864,7 @@ def set_directories(directories, edited=None):
             raise ValueError(f"two directories share a {field} name")
     with _lock:
         def go(doc):
-            repair = _may_write(doc)
+            pub = _rekey(doc) if _may_write(doc) else None      # first: a repair puts back the list last signed
             old = {d.get("id"): d for d in doc.get("directories") or []}
             doc["directories"] = list(new.values())
             had = _admins(doc)
@@ -865,7 +872,8 @@ def set_directories(directories, edited=None):
             dropped = [doc["accounts"].pop(n) for n in gone]
             if had and not _admins(doc):
                 raise ValueError(LAST_ADMIN)
-            return old, dropped, _resign(doc, repair), doc
+            _sync(doc)
+            return old, dropped, pub, doc
         old, dropped, pub, wrote = datakey.edit(go)
         _written(pub)
         if pub is None:

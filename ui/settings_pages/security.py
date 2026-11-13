@@ -276,6 +276,10 @@ class DataPage(Page):
             toast(self, "Settings exported. Devices and passwords are not included.")
 
     def import_settings(self):
+        from core import perms
+        if not all(perms.allowed(k) for k, _ in perms.SETTINGS):      # the file can hold any page's settings
+            QMessageBox.warning(self, "Import settings", perms.REASON)
+            return
         path, _ = QFileDialog.getOpenFileName(self, "Import settings", "", "JSON (*.json)")
         if not path:
             return

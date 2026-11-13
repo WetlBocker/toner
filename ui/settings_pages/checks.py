@@ -174,7 +174,7 @@ class CheckDialog(QDialog):
             v = self.values()
             custom.validate(v)
             return v
-        except ValueError as e:
+        except (ValueError, PermissionError) as e:
             QMessageBox.warning(self, "Custom check", str(e))
             return None
 
@@ -265,7 +265,7 @@ class CustomChecksPage(Page):
     def _save(self, dlg):
         try:
             custom.save_check(dlg.values())
-        except ValueError as e:
+        except (ValueError, PermissionError) as e:
             QMessageBox.warning(self, "Custom check", str(e))
             return
         with db.within(dlg.values()["org"]):

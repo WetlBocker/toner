@@ -139,7 +139,7 @@ class FakeSftp:
         import types
         return types.SimpleNamespace(st_mode=0o100644)
     def put(self, src, dst, callback=None): self.calls.append(("put", dst))
-    def get(self, src, dst, callback=None): self.calls.append(("get", src))
+    def get(self, src, dst, callback=None, prefetch=True): self.calls.append(("get", src))      # (paramiko's own signature)
 
 
 def drive_files(who, allowed):

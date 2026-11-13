@@ -338,7 +338,7 @@ def read_session_log(args):
             "log": text, "note": note}
 
 
-_WRITES = re.compile(r"\|\s*(redirect|append|tee|save)\b|>", re.I)   # show ... | redirect flash:x writes, so it is not a show
+_WRITES = cmdrun.WRITES                                 # one pattern for the Command Runner and the Assistant
 
 
 def refused(kind, command):
@@ -491,7 +491,16 @@ SEARCH_SEES = "the internet, through the provider's own search (allowed under Se
 def offered():
     """The tools the model is given: every reader, and run_commands only while Settings > AI allows it."""
     from core import assistant as AI
-    return [t for t in TOOLS if t.name != "run_commands" or AI.commands_allowed()]
+    return [t for t in TOOLS if _may(t.name) and (t.name != "run_commands" or AI.commands_allowed())]
+
+
+NEEDS = {"run_commands": "tool:command-runner", "list_session_logs": "tool:sessions", "read_session_log": "tool:sessions"}
+
+
+def _may(name):
+    """The signed-in role may use the Assistant and the page this tool reaches (the windows only hide those pages)."""
+    from core import perms
+    return perms.allowed("ai") and (name not in NEEDS or perms.allowed(NEEDS[name]))
 
 
 def what_it_sees():
@@ -505,6 +514,9 @@ def run(name, args, screen=None, values=None):
     tool = BY_NAME.get(name)
     if tool is None:
         return json.dumps({"error": f"There is no tool called {name}."})
+    if not _may(name):
+        from core import perms
+        return json.dumps({"error": perms.REASON})
     args = args if isinstance(args, dict) else {}
     if tool.audit(args):
         audit.log("assistant", tool.audit(args))

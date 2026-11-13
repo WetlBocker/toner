@@ -524,7 +524,8 @@ def lookup(dev, creds=None):
 
 # where a stored configuration backup states the software version, for a device whose checks have not recorded one
 BACKUP_VERSION = {"fortinet": [r"^#config-version=\S+?-(\d+\.\d+\.\d+)-FW-build"],
-                  "paloalto": [r'<config\b[^>]*\bdetail-version="([^"]+)"', r'<config\b[^>]*\bversion="([^"]+)"'],
+                  # (the tag is short; a bound keeps an answer that repeats '<config' from taking a time that grows with its square)
+                  "paloalto": [r'<config\b[^>]{0,300}\bdetail-version="([^"]+)"', r'<config\b[^>]{0,300}\bversion="([^"]+)"'],
                   "juniper": [r"^version (\S+);"]}
 
 

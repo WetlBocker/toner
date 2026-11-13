@@ -248,7 +248,10 @@ def _parse(text):
 
 
 def parse_report(text):
-    return _parse(text)
+    data = _parse(text)
+    if any(not isinstance(data.get(k), (str, type(None))) for k in ("computer", "os", "domain")):
+        raise ValueError("a report's computer, system and domain are text")     # (the receiver answers "not a report")
+    return data
 
 
 LIST_SERVICES = r"""

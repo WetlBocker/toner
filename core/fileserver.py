@@ -701,6 +701,8 @@ def _sftp_classes():
             return True
 
         def check_auth_password(self, username, password):
+            if self.srv.locked(self.ip):                    # the lockout also covers a connection that is already open
+                return paramiko.AUTH_FAILED
             good_user = hmac.compare_digest(username.encode(), self.srv.username.encode())
             good_pass = hmac.compare_digest(password.encode(), self.srv.password.encode())
             if good_user and good_pass:
@@ -726,6 +728,7 @@ class _Ctx:
 
 class SftpServer(_Base):
     LOCK_AFTER, LOCK_SECONDS = 5, 300
+    AUTH_WAIT = 60                                          # seconds a connection has to sign in (a password typed by hand)
 
     def __init__(self, root, username, password, port=22, bind="0.0.0.0", host_key_path="", allow_write=False,
                  allow_overwrite=False, allowed=(), max_bytes=512 * 1024 * 1024, on_event=None, max_connections=8):
@@ -815,7 +818,9 @@ class SftpServer(_Base):
             transport.add_server_key(self.host_key)
             transport.set_subsystem_handler("sftp", paramiko.SFTPServer, sftp_si=Jail, ctx=_Ctx(self, ip))
             transport.start_server(server=Auth(self, ip))
-            channel = transport.accept(30)                  # keep the reference: a dropped channel is closed
+            channel = transport.accept(self.AUTH_WAIT)      # keep the reference: a dropped channel is closed
+            if not transport.is_authenticated():            # no sign-in in that time: the slot goes back
+                return
             while transport.is_active() and not self.stop_event.is_set():
                 time.sleep(0.3)
         except Exception as e:
@@ -938,7 +943,12 @@ def _scp_send(srv, ip, chan, rel, real, job):
         for entry in sorted(os.scandir(real), key=lambda e: e.name.lower()):
             if entry.is_symlink() or entry.name.lower().endswith(PART):
                 continue
-            _scp_send(srv, ip, chan, posixpath.join(rel, entry.name), entry.path, job)
+            child_rel = posixpath.join(rel, entry.name)
+            try:
+                child = resolve_path(srv.root, child_rel)   # a Windows junction is no symlink to scandir
+            except ValueError:
+                continue
+            _scp_send(srv, ip, chan, child_rel, child, job)
         chan.sendall(b"E\n")
         _scp_ack(chan)
         return
@@ -1009,7 +1019,12 @@ def _scp_receive(srv, ip, chan, rel, real, job):
             raise _ScpFail(f"scp: {name}: Permission denied")
         folder_rel, folder = stack[-1]
         if os.path.isdir(folder):
-            target_rel, target = posixpath.join(folder_rel, name), os.path.join(folder, name)
+            target_rel = posixpath.join(folder_rel, name)
+            try:
+                target = resolve_path(srv.root, target_rel)  # the whole path: a link in a subfolder that leaves the share is refused
+            except ValueError as e:
+                srv.emit(ip, "access", target_rel, 0, "denied", str(e))
+                raise _ScpFail(f"scp: {target_rel}: Permission denied")
         elif len(stack) == 1 and os.path.isdir(os.path.dirname(folder)):
             target_rel, target = folder_rel, folder              # `scp -t <newname>`: the file or folder takes that name, as OpenSSH does
         else:

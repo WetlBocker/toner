@@ -463,13 +463,16 @@ class SettingsTab(QWidget):
         """In an organization: on each page, the settings it changes from Global, each with a Reset to Global link."""
         inside = db.home() != db.GLOBAL
         for i, lab in self.own_lines.items():
-            keys = sorted(k for k in self.page_keys.get(i, ()) if inside and db.overridden(k)) if self.pages[i].title not in GLOBAL_PAGES else []
+            open_ = self.pages[i].title not in GLOBAL_PAGES and i not in self.locked    # a page the role may only view offers no reset
+            keys = sorted(k for k in self.page_keys.get(i, ()) if inside and db.overridden(k)) if open_ else []
             lab.setText("<br>".join(f"<b>{KEY_LABELS.get(k, k.replace('_', ' ').capitalize())}</b> is set for this organization. "
                                     f"<a href='{k}'>Reset to Global</a>" for k in keys))
             lab.setVisible(bool(keys))
 
     def reset_to_global(self, i, key):
         """Forget the organization's own value of one setting: it follows Global again (right away)."""
+        if self._role_locked(i):                            # the link is a change to the page, like Save
+            return
         db.follow_global(key)
         audit.log("setting reset to Global", KEY_LABELS.get(key, key))
         self._load_page(i)

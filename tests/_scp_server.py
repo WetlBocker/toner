@@ -20,8 +20,9 @@ def read_line(ch):
         out += c
 
 class ScpServer:
-    def __init__(self, root, pubkey=None, deny_exec=False, evil_name=None, slow=False):
+    def __init__(self, root, pubkey=None, deny_exec=False, evil_name=None, slow=False, extra_name=None):
         self.root, self.pubkey, self.deny_exec, self.evil_name, self.slow = os.path.realpath(root), pubkey, deny_exec, evil_name, slow
+        self.extra_name = extra_name
         self.key = paramiko.RSAKey.generate(2048); self.commands = []
         self.sock = socket.socket(); self.sock.bind(("127.0.0.1", 0)); self.sock.listen(8); self.port = self.sock.getsockname()[1]
         threading.Thread(target=self._accept, daemon=True).start()
@@ -100,5 +101,7 @@ class ScpServer:
                 recv_exact(ch, 1)
         if os.path.isdir(p) and "r" not in flags: ch.sendall(f"\x01scp: {path}: not a regular file\n".encode()); return
         send(p)
+        if self.extra_name:                                     # a device that adds a file nobody asked for
+            ch.sendall(f"C0644 4 {self.extra_name}\n".encode()); recv_exact(ch, 1); ch.sendall(b"EVIL\0"); recv_exact(ch, 1)
     def stop(self): self.sock.close()
 

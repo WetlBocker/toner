@@ -139,8 +139,8 @@ class TrapListener:
                 if self.on_trap:
                     self.on_trap({"time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "source": src,
                                   "device": device_for(src), "trap": snmp.name_of(trap_oid) if trap_oid else "",
-                                  "varbinds": rows,
-                                  "text": "; ".join(f"{n} = {t}" for _, n, t in rows)[:2000]})
+                                  # one line (as parse_syslog), and no second copy of the values: 5000 of these are kept
+                                  "text": " ".join("; ".join(f"{n} = {t}" for _, n, t in rows).split())[:2000]})
             ntfrcv.NotificationReceiver(eng, cb)
             eng.transport_dispatcher.job_started(1)
         except Exception as e:

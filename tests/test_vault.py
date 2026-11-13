@@ -49,6 +49,10 @@ bent = bytearray(data); bent[-5] ^= 1
 check("a changed file is refused (it is authenticated, not just encrypted)", raises(lambda: vault.read_bytes(bytes(bent), "a long enough password"), "damaged"))
 check("something else entirely is not a password file", raises(lambda: vault.read_bytes(b"hello", "x"), "not a toner password file") and raises(lambda: vault.read_bytes(b"", "x"), "not a toner password file"))
 check("a short password is refused", raises(lambda: vault.export_bytes("short"), "at least 8"))
+crafted, _ = vault.export_bytes("a long enough password", {"sw1": "pw", "~ext/onepassword/token": "T", "~ext/pending": "{}", "~toner/demarc-token": "D",
+                                                           "service:directory-d1": "S", "sso-refresh:bob@acme.com": "R"})
+check("a file can't carry Toner's own vault entries, only device and service passwords", vault.read_bytes(crafted, "a long enough password") == {"sw1": "pw"},
+      sorted(vault.read_bytes(crafted, "a long enough password")))
 check("an empty vault works", vault.read_bytes(vault.export_bytes("a long enough password", {})[0], "a long enough password") == {})
 
 print("== on another computer")

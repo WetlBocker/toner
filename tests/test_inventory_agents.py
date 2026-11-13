@@ -15,7 +15,8 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 app = QApplication([])
 import app as A
 A.apply_look(app)
-QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes)
+ASKED = []
+QMessageBox.question = staticmethod(lambda *a, **k: (ASKED.append(a), QMessageBox.StandardButton.Yes)[1])
 import ui.inventory as I
 ok = bad = 0
 def check(name, cond, extra=""):
@@ -71,6 +72,7 @@ print("== revoke and remove")
 tab.fleet.table.selectRow(silent_row)
 check("selecting enables the buttons", tab.fleet.revoke.isEnabled() and tab.fleet.remove.isEnabled())
 tab.fleet._revoke()
+check("the question says how to start again now that the package can't sign a revoked computer up", ASKED[-1][2].endswith("The device stays in the inventory. To start again, make a new script for it, or remove it and run the package on the computer again."), ASKED[-1][2])
 check("Revoke stops the agent being accepted, says so, and keeps the device", "revoked" in tab.fleet.table.item(silent_row, 7).text() and any(d["name"] == "pc-2" for d in db.list_devices())
       and agents.device_for_token("anything") == "" and ("netcheck", "pc-2:agent") not in STORE)
 changed = []; tab.changed.connect(lambda: changed.append(1))

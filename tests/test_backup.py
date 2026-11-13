@@ -210,5 +210,31 @@ s = backup.summary()
 check("summary has versions and last attempt", s["sw1"]["versions"] == 2 and s["sw3"]["status"] in ("changed", "unchanged", "new"), s.get("sw3"))
 check("recent changes lists real changes only", all(c["added"] + c["removed"] > 0 for c in backup.recent_changes(24)) and len(backup.recent_changes(24)) >= 1)
 backup.delete_versions("sw1", 1); check("delete older versions", len(backup.list_backups("sw1")) == 1)
+
+print("== masking: secrets in the middle of a line, and no slow lines")
+MID = {" neighbor 10.0.0.2 password 7 0822455D0A16": "0822455D0A16", "snmp-server host 10.9.9.9 version 2c DUMMYTRAPCOMM": "DUMMYTRAPCOMM",
+       " ip ospf message-digest-key 1 md5 DUMMYOSPFKEY": "DUMMYOSPFKEY", " standby 1 authentication md5 key-string DUMMYHSRPKEY": "DUMMYHSRPKEY",
+       '                    md5 1 key "$9$DUMMYJUNOSKEY"; ## SECRET-DATA': "DUMMYJUNOSKEY", "          <bind-password>-AQ==DUMMYBINDPW</bind-password>": "DUMMYBINDPW",
+       " key 7 DUMMYRADKEY": "DUMMYRADKEY", "radius-server host 10.1.1.1 auth-port 1812 acct-port 1813 key 7 DUMMYRADKEY2": "DUMMYRADKEY2",
+       " server-private 10.1.1.1 key 7 DUMMYPRIVKEY": "DUMMYPRIVKEY", " ip ospf authentication-key DUMMYOSPFSIMPLE": "DUMMYOSPFSIMPLE",
+       " standby 1 authentication DUMMYHSRPTEXT": "DUMMYHSRPTEXT", ' simple-password "$9$DUMMYJSIMPLE";': "DUMMYJSIMPLE"}
+for line, secret in MID.items():
+    check(f"masked: {line.strip()[:44]}", secret not in backup.mask_secrets(line), backup.mask_secrets(line))
+for line in (" key 1", "key chain KC", "   password minimum length 15", "    password {", "password maximum attempts 3", "            key 1 {",
+             " neighbor 10.0.0.2 remote-as 65001", "snmp-server host 10.9.9.9", " ip ospf authentication message-digest", " standby 1 ip 10.0.0.254",
+             "service password-encryption", "crypto key generate rsa modulus 2048"):
+    check(f"left as it is: {line.strip()}", backup.mask_secrets(line) == line, backup.mask_secrets(line))
+check("a line's ending ; is kept", backup.mask_secrets("    secret abc;") == "    secret <masked>;", backup.mask_secrets("    secret abc;"))
+for label, text in (("a secret line with 30,000 spaces", "hostname r1\nenable secret x" + " " * 30000 + "y\nend\n"),
+                    ("16,000 empty lines", "hostname r1\n" + "\n" * 16000 + "end\n")):
+    t0 = time.time(); backup.clean(text); took = time.time() - t0
+    check(f"masking {label} takes well under a second", took < 0.5, round(took, 2))
+check("and a secret after many spaces is still masked", backup.mask_secrets("enable secret x" + " " * 300 + "y") == "enable secret <masked>")
+from core import advisories
+check("the XML configuration is found inside what a firewall printed", backup._xml_config("admin@fw> show config\n<config version=\"11.1.0\"><a/></config>\nadmin@fw>") == "<config version=\"11.1.0\"><a/></config>"
+      and backup._xml_config("no xml here") is None and backup._xml_config("<configuration></configuration>") is None)
+check("and its version is still read", advisories.version_in("paloalto", "<config version=\"11.1.0\" urldb=\"x\">") == "11.1.0")
+t0 = time.time(); backup._xml_config("<config " * 20000); advisories.version_in("paloalto", "<config " * 20000); took = time.time() - t0
+check("an answer that repeats '<config' 20,000 times is no slower to read", took < 0.5, round(took, 2))
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

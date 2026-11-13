@@ -5,6 +5,7 @@ HPE have it on or one command away). Credentials, jump hosts and proxies work as
 Safety on download: a device chooses the names of the files it sends, so each name is checked. A name with a path
 separator, '.' or '..' is refused and nothing is written outside the folder you chose.
 """
+import fnmatch
 import os
 import re
 import time
@@ -36,6 +37,12 @@ def safe_name(name):
     if not name or name in (".", "..") or any(c in name for c in "/\\\x00\r\n") or (os.name == "nt" and ":" in name):
         raise ScpError(f"the device sent an unsafe file name ({name[:60]!r}); nothing was written")
     return name
+
+
+def wanted_name(remote):
+    """The last part of the path that was asked for; '' when it names no single object (flash:, ., ~)."""
+    last = re.split(r"[/\\:]", remote.rstrip("/\\"))[-1]
+    return "" if last in (".", "..", "~") else last
 
 
 def connect(host, port, user, password, dev=None, hostkey_mode="Trust on first use", timeout=15):
@@ -181,6 +188,14 @@ class Scp:
         if recursive:
             os.makedirs(local, exist_ok=True)
         stack, mtimes, first = [os.path.abspath(local)], None, True
+        want = wanted_name(remote)
+        one_file = bool(want) and not recursive and not any(c in want for c in "*?[")
+
+        def asked_for(name):
+            # only the top level is bound: inside a folder that was asked for, the device names its own contents
+            if into_dir and len(stack) == 1 and want and name != want and not fnmatch.fnmatchcase(name, want):
+                raise ScpError(f"the device sent {name[:60]!r}, which was not asked for; nothing was written")
+
         try:
             chan.sendall(b"\x00")
             while True:
@@ -204,7 +219,8 @@ class Scp:
                         raise ScpError(f"the device sent something unexpected ({line[:60]!r})")
                     if not recursive:
                         raise ScpError("the device sent a folder, but 'Include sub-folders' is not ticked")
-                    path = os.path.join(stack[-1], safe_name(m.group(3)))
+                    asked_for(safe_name(m.group(3)))
+                    path = os.path.join(stack[-1], m.group(3))
                     os.makedirs(path, exist_ok=True)
                     stack.append(path)
                     self.progress("dir", m.group(3), 0, 0)
@@ -218,6 +234,9 @@ class Scp:
                     if not m or int(m.group(2)) > MAX_SIZE:
                         raise ScpError(f"the device sent something unexpected ({line[:60]!r})")
                     size, name = int(m.group(2)), safe_name(m.group(3))
+                    if one_file and not first:
+                        raise ScpError("the device sent more files than were asked for; the extra file was not written")
+                    asked_for(name)
                     target = os.path.join(stack[-1], name) if (into_dir or not first) else os.path.abspath(local)
                     first = False
                     chan.sendall(b"\x00")

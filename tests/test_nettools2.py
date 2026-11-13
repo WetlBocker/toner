@@ -95,6 +95,21 @@ for _ in range(30):
     if traps: break
     time.sleep(0.1)
 check("a v2c trap is received with its OID and source", bool(traps) and traps[0]["source"] == "127.0.0.1" and traps[0]["device"] == "sw1" and "1.3.6.1.6.3.1.1.5.3" in traps[0]["text"], traps)
+async def send_text(text):
+    from pysnmp.hlapi.v3arch import asyncio as h
+    eng = h.SnmpEngine()
+    target = await h.UdpTransportTarget.create(("127.0.0.1", TP))
+    await h.send_notification(eng, h.CommunityData("trapcomm", mpModel=1), target, h.ContextData(), "trap",
+                              h.NotificationType(h.ObjectIdentity("1.3.6.1.6.3.1.1.5.3")).add_varbinds(
+                                  h.ObjectType(h.ObjectIdentity("1.3.6.1.2.1.1.5.0"), h.OctetString(text))))
+    eng.close_dispatcher()
+del traps[:]
+asyncio.run(send_text("x\r\n2026-01-01 00:00:00\tsyslog\t10.0.0.9\tsw1\temergency\tFORGED ENTRY"))
+for _ in range(30):
+    if traps: break
+    time.sleep(0.1)
+check("a trap's text is kept on one line, so it can't add rows to a saved file", bool(traps) and "FORGED ENTRY" in traps[0]["text"] and not set("\r\n\t") & set(traps[0]["text"]), traps)
+check("and a kept trap holds its text, not a second copy of every value", bool(traps) and "varbinds" not in traps[0], traps and sorted(traps[0]))
 tl.stop()
 
 print("== topology")

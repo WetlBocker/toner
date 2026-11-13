@@ -348,8 +348,31 @@ def build_inventory(devices):
     return inventory, ({"all": {"hosts": logins}} if logins else None), names
 
 
+class _Unsafe(str):
+    pass
+
+
+class _Dumper(yaml.SafeDumper):
+    pass
+
+
+_Dumper.add_representer(_Unsafe, lambda d, s: d.represent_scalar("!unsafe", str(s)))
+
+
+def _mark(v):
+    if isinstance(v, str):
+        return _Unsafe(v)
+    if isinstance(v, dict):
+        return {k: _mark(x) for k, x in v.items()}      # values only: host and group names stay plain keys
+    if isinstance(v, list):
+        return [_mark(x) for x in v]
+    return v
+
+
 def dump_yaml(data):
-    return yaml.safe_dump(data, sort_keys=False, default_flow_style=False, allow_unicode=True)
+    """Every text value is tagged !unsafe: Ansible uses it as it is and never runs a name, user name, location or password from
+    a device list as a template."""
+    return yaml.dump(_mark(data), Dumper=_Dumper, sort_keys=False, default_flow_style=False, allow_unicode=True)
 
 
 # ---------------------------------------------------------------- a run

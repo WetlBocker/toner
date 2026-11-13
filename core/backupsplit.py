@@ -38,7 +38,9 @@ def _unchecked(c):
         raise
 
 
-MASKER = 1                     # 1: SNMP community names for Junos, FortiOS, PAN-OS and RouterOS. Bump when backup.mask_secrets hides more.
+MASKER = 2                     # Bump when backup.mask_secrets hides more. 1: SNMP community names for Junos, FortiOS, PAN-OS and RouterOS.
+#                                2: secrets after other words (BGP neighbor, OSPF, HSRP/VRRP/GLBP, SNMP trap hosts, RADIUS/TACACS keys), Junos
+#                                key and simple-password, PAN-OS bind-password.
 _DONE = "backups_masked_with"  # the file's settings row: the MASKER its looked-at versions were masked with
 
 

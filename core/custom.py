@@ -71,6 +71,9 @@ def validate(chk):
     if kind in ("ssh", "snmp", "http") and not (chk.get("target") or "").strip():
         raise ValueError({"ssh": "Enter the command to run.", "snmp": "Enter the OID to read.",
                           "http": "Enter the URL."}[kind])
+    if kind == "ssh":                                   # it reaches the device like a Command Runner line
+        from core import cmdrun
+        cmdrun.need_push_line(chk["target"])
     if kind in ("tcp",) and not int(chk.get("port") or 0):
         raise ValueError("Enter the TCP port.")
     if kind == "iperf":
@@ -402,6 +405,8 @@ def test_check(chk, dev, opts=None):
     from core import profiles
     dev = profiles.resolve(dev)
     if chk["kind"] == "ssh":
+        from core import cmdrun
+        cmdrun.need_push_line(chk["target"])            # before connecting
         from drivers import DRIVERS
         drv = DRIVERS.get(dev["vendor"])
         if not drv or not hasattr(drv, "connect"):

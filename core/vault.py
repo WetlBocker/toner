@@ -78,8 +78,13 @@ def export_bytes(password, secrets=None):
     return MAGIC + salt + nonce + AESGCM(_key(password, salt)).encrypt(nonce, body, MAGIC), len(secrets)
 
 
+PRIVATE_NAMES = ("service:directory-", "sso-refresh:")     # the directory re-check's password and SSO refresh tokens
+
+
 def read_bytes(data, password):
-    """The {name: password} inside a file made by export_bytes."""
+    """The {name: password} inside a file made by export_bytes: never Toner's own entries, which no export holds (the password
+    manager's login and queue, Demarc's token, PRIVATE_NAMES)."""
+    from core import extstore
     if not data.startswith(MAGIC) or len(data) < len(MAGIC) + 16 + 12 + 16:
         raise ValueError("this is not a Toner password file")
     salt, nonce, sealed = data[len(MAGIC):len(MAGIC) + 16], data[len(MAGIC) + 16:len(MAGIC) + 28], data[len(MAGIC) + 28:]
@@ -88,7 +93,8 @@ def read_bytes(data, password):
         secrets = json.loads(body)["secrets"]
     except (InvalidTag, ValueError, KeyError):
         raise ValueError("wrong password, or the file is damaged") from None
-    return {str(k): str(v) for k, v in secrets.items() if k and v}
+    return {str(k): str(v) for k, v in secrets.items()
+            if k and v and not extstore.is_internal(str(k)) and not str(k).startswith(PRIVATE_NAMES)}
 
 
 def import_bytes(data, password, replace=True):

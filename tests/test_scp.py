@@ -114,6 +114,28 @@ for evil in ("../evil.txt", "a/b.txt", "..", "C:\\evil.txt"):
 check("nothing was written outside the chosen folder", not os.path.exists(os.path.join(base, "evil.txt")) and not os.path.exists(os.path.join(dl, "b.txt")) and not os.path.exists(os.path.join(os.path.dirname(dl), "evil.txt")))
 check("and no partial files remain", not [f for f in os.listdir(dl) if f.endswith(".toner-part")])
 
+print("== a device that sends files nobody asked for")
+check("the asked-for name is the last part of the path", scp.wanted_name("flash:/run.cfg") == "run.cfg" and scp.wanted_name("/var/log/") == "log" and scp.wanted_name("flash:run.cfg") == "run.cfg"
+      and scp.wanted_name("flash:") == "" and scp.wanted_name(".") == "" and scp.wanted_name("~") == "", [scp.wanted_name(x) for x in ("flash:/run.cfg", "/var/log/", "flash:", ".", "~")])
+other = os.path.join(base, "other"); os.makedirs(other)
+es = ScpServer(share, evil_name="other.txt"); c, s, _ = client(es)
+try: s.download("run.cfg", other); check("another name than the one asked for is refused", False)
+except scp.ScpError as e: check("another name than the one asked for is refused", str(e) == "the device sent 'other.txt', which was not asked for; nothing was written", str(e))
+try: s.download("logs", other, recursive=True); check("a folder under another name is refused too", False)
+except scp.ScpError as e: check("a folder under another name is refused too", "which was not asked for" in str(e), str(e))
+c.close(); es.stop()
+check("...and the folder is left as it was", os.listdir(other) == [], os.listdir(other))
+es = ScpServer(share, extra_name="extra.sh"); c, s, _ = client(es)
+try: s.download("run.cfg", other); check("a second file after the one asked for is refused", False)
+except scp.ScpError as e: check("a second file after the one asked for is refused", str(e) == "the device sent more files than were asked for; the extra file was not written", str(e))
+try: s.download("run.cfg", os.path.join(other, "mine.cfg")); check("...also when saving under a name you chose", False)
+except scp.ScpError as e: check("...also when saving under a name you chose", "more files than were asked for" in str(e), str(e))
+c.close(); es.stop()
+check("...the file asked for is there, the extra one is not", sorted(os.listdir(other)) == ["mine.cfg", "run.cfg"], os.listdir(other))
+put("r[u]n.cfg", b"hostname sw1\n")                                # the fake does not expand wildcards, so it serves this file as run.cfg
+es = ScpServer(share, evil_name="run.cfg"); c, s, _ = client(es); n = s.download("r[u]n.cfg", other, overwrite=True); c.close(); es.stop()
+check("a wildcard still brings the files it matches", n == (1, 13), n)
+
 print("== stopping, and devices without scp")
 cancel = threading.Event(); c, s, ev = client(cancel=cancel)
 s.progress = lambda kind, name, done, total: (cancel.set() if kind == "bytes" and done > 100000 else None)

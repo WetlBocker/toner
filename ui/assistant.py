@@ -5,7 +5,7 @@ import threading
 import math
 
 from PySide6.QtCore import QEasingCurve, QEvent, QPoint, QSize, Qt, QThread, Signal
-from PySide6.QtGui import QFont, QTextCursor, QTextDocumentFragment
+from PySide6.QtGui import QDesktopServices, QFont, QTextCursor, QTextDocumentFragment
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QMessageBox, QPlainTextEdit,
                                QPushButton, QSizePolicy, QTableWidget, QTableWidgetItem, QTextBrowser, QTextEdit, QToolButton, QVBoxLayout, QWidget)
 from urllib.parse import urlsplit
@@ -222,6 +222,8 @@ class AssistantPanel(QWidget):
         self.model_line.setWordWrap(True)
         self.view = QTextBrowser()                           # a browser, so the Sources links open in the system browser
         self.view.setOpenExternalLinks(True)
+        self.view.setOpenLinks(False)                        # nothing is followed by the widget itself: the text is the model's
+        self.view.anchorClicked.connect(lambda url: url.scheme() in ("http", "https") and QDesktopServices.openUrl(url))
         self.view.setReadOnly(True)
         self.view.setAcceptRichText(True)
         self.view.setFrameShape(QTextEdit.Shape.NoFrame)
