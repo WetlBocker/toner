@@ -437,12 +437,11 @@ def with_code(cfg):
 
 def effective(cfg):
     """What to connect to for this proxy. SOCKS5 to the SSH tunnel's port signs in to the tunnel first if it is not open;
-    an older 'tunnel' setting becomes SOCKS5 to that tunnel's port."""
+    an older 'tunnel' setting becomes SOCKS5 to that tunnel's port. Either way the tunnel's own port password is added."""
     from core import tunnel
-    if cfg.kind == "tunnel":
-        t = tunnel.get(cfg)
-        return Config("socks5", "127.0.0.1", t.port)
-    tunnel.ensure_for(cfg)
+    t = tunnel.get(cfg) if cfg.kind == "tunnel" else tunnel.ensure_for(cfg)
+    if t is not None:
+        return Config("socks5", "127.0.0.1", t.port, tunnel.USER, t.secret)
     return with_code(cfg)
 
 

@@ -3,12 +3,15 @@
 Toner signs in to an SSH server (a bastion that may ask for a password, a Duo option, a one-time code or a YubiKey touch),
 keeps that session open, and listens on a SOCKS5 port on this computer (1080 unless changed). The proxy settings, for every
 connection or for one device, then point at SOCKS5 127.0.0.1:1080, exactly as they would at PuTTY's port. A connection
-through that port while the tunnel is closed signs in first. Like PuTTY's, the port is on 127.0.0.1 only and asks for no
-sign-in of its own, so programs on this computer can use it while it is open.
+through that port while the tunnel is closed signs in first. The port is on 127.0.0.1 only. Unlike PuTTY's it asks for a
+password: one made for each open tunnel and kept in memory, which Toner's own connections add by themselves. A port on
+127.0.0.1 is open to every account and program on the computer, and through it they would have the bastion session.
 """
+import hmac
 import json
 import os
 import logging
+import secrets
 import socket
 import struct
 import threading
@@ -331,6 +334,7 @@ class Tunnel:
         self.client = self.listener = None
         self.port = 0
         self.since = None
+        self.secret = secrets.token_urlsafe(32)           # the local port's password: never saved, shown or logged
 
     # ------------------------------------------------------------ open and close
     def _listen(self):
@@ -431,24 +435,23 @@ class Tunnel:
             c.settimeout(15)
             ver, n = _recvn(c, 2)
             methods = _recvn(c, n)
-            if ver != 5 or not ({0, 2} & set(methods)):
+            if ver != 5 or 2 not in methods:                  # only with this tunnel's password (see the module text)
                 c.sendall(b"\x05\xff")
                 return
-            if 0 in methods:                                  # like PuTTY's dynamic port: no sign-in on this computer's own port
-                c.sendall(b"\x05\x00")
-            else:                                             # a client set up with a user name: any is fine
-                c.sendall(b"\x05\x02")
-                _recvn(c, 1)
-                _recvn(c, _recvn(c, 1)[0])
-                _recvn(c, _recvn(c, 1)[0])
-                c.sendall(b"\x01\x00")
+            c.sendall(b"\x05\x02")
+            _recvn(c, 1)
+            _recvn(c, _recvn(c, 1)[0])
+            if not hmac.compare_digest(_recvn(c, _recvn(c, 1)[0]), self.secret.encode()):
+                c.sendall(b"\x01\x01")
+                return
+            c.sendall(b"\x01\x00")
             _ver, cmd, _rsv, atyp = _recvn(c, 4)
             if atyp == 1:
                 host = socket.inet_ntoa(_recvn(c, 4))
             elif atyp == 4:
                 host = socket.inet_ntop(socket.AF_INET6, _recvn(c, 16))
-            else:
-                host = _recvn(c, _recvn(c, 1)[0]).decode("idna", "replace")
+            else:                                             # a name is ASCII on the wire; the SSH server looks it up
+                host = _recvn(c, _recvn(c, 1)[0]).decode("ascii", "replace")
             port = struct.unpack(">H", _recvn(c, 2))[0]
             if cmd != 1:
                 c.sendall(b"\x05\x07\x00\x01\x00\x00\x00\x00\x00\x00")
@@ -479,6 +482,7 @@ OTP_SECRET = "service:ssh-tunnel-otp"
 DEFAULTS = {"enabled": False, "host": "", "port": 22, "username": "", "key_file": "", "otp": "", "local_port": 1080,
             "autostart": False}
 LOOPBACK = ("127.0.0.1", "localhost", "::1")
+USER = "toner"                      # SOCKS5 wants a user name beside the password; only the password is checked
 
 
 def settings():
@@ -512,9 +516,8 @@ def serves(cfg):
 
 def ensure_for(cfg):
     """Before a connection through 127.0.0.1:<the tunnel's port>: sign in to the tunnel if it is set up but not open, the
-    way a connection through any other proxy would reach it."""
-    if serves(cfg) and not is_open():
-        get()
+    way a connection through any other proxy would reach it. Returns that tunnel, or None when cfg is another proxy."""
+    return get() if serves(cfg) else None
 
 
 def migrate():

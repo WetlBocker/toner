@@ -386,7 +386,7 @@ YubiKey touch, a box appears; the saved password answers its "Password:" questio
 protected and none is saved (a PuTTY `.ppk` key must be exported to OpenSSH format in PuTTYgen first). **Connect** and
 **Disconnect** open and close it, **Connect when Toner starts** opens it at start, and a connection through its port while it
 is closed signs in first. The status strip shows it as connected or disconnected; click it when it is disconnected to sign in.
-Like PuTTY's, the port is on this computer only and asks for no sign-in of its own. Each sign-in is written step by step to
+The port is on this computer only, and only Toner can use it. Each sign-in is written step by step to
 `ssh-tunnel.log` next to Toner's data (the algorithms agreed, the methods the server offered, the questions it asked; never a
 password, passphrase or code), and a failed sign-in says where it stopped. A tunnel signed in with a Duo push or a YubiKey
 cannot sign in again by itself, so checks that run by themselves use it while it is open.
