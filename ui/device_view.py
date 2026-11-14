@@ -4,8 +4,8 @@ from datetime import datetime
 
 from PySide6.QtCore import QEvent, QThread, QTimer, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import (QAbstractItemView, QAbstractScrollArea, QComboBox, QDialog, QFormLayout, QHBoxLayout, QLabel, QMessageBox,
-                               QPushButton, QScrollArea, QSizePolicy, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QAbstractItemView, QAbstractScrollArea, QComboBox, QDialog, QFormLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea,
+                               QSizePolicy, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
 from core import backup, db, display, perms, profiles, sessions, snmp, unifikids, vendors
 from core.chartkinds import over_time_kind, shown_name, stored_names
 from core.firmware import human_size
@@ -16,7 +16,7 @@ from ui.timerange import TimeRange
 from ui.vulntab import VulnTab
 from ui.widgets import FlowLayout, GroupPicker, StatusDelegate
 from ui import chartspec, status as st, theme
-from ui.webchart import ChartView
+from ui.webchart import ChartView, fit_text
 
 
 class _Job(QThread):
@@ -403,7 +403,7 @@ class DeviceView(QDialog):
                 g.setFixedWidth(210)
                 g.setAccessibleName(f"{title.splitlines()[0]} dial")
                 g.draw(lambda p, v=value, w=limits.get("warn"), f=limits.get("fail"), t=title:
-                       chartspec.gauge(p, v, warn=w or None, fail=f or None, title=t, unit="%", maximum=100))
+                       chartspec.gauge(p, v, warn=w or None, fail=f or None, title=fit_text(t, 198), unit="%", maximum=100, tip=t))
                 self.gauges_lay.addWidget(g)
                 self._gauges.append(g)
         self.gauges.setVisible(bool(self._gauges))

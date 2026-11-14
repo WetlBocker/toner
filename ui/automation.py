@@ -8,7 +8,7 @@ from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
                                QMessageBox, QPlainTextEdit, QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
-from core import ansible as AN, audit, db, perms, scope
+from core import ansible as AN, audit, db, perms
 from ui import status as st
 from ui.nav import PageStack
 from ui.widgets import EmptyHint, filling, flow, gate_push, remember_sizes

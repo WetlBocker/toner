@@ -190,6 +190,13 @@ def pick(role):
         self.accept()
         return 1
     return run
+from PySide6.QtTest import QTest as _QTest
+from PySide6.QtCore import Qt as _Qt
+_rd = RoleDialog("Tech"); _rd.show(); app.processEvents()
+_rd.role.setCurrentText("Engineer")
+_QTest.keyClick(_rd.role, _Qt.Key.Key_Return); app.processEvents()
+check("Change role: Enter presses its button", _rd.result() == 1 and not _rd.isVisible() and _rd.role.currentText() == "Engineer", (_rd.result(), _rd.isVisible()))
+_rd.close()
 A.RoleDialog.exec = pick("Engineer")
 n = acts().count("role changed")
 page.table.selectRow(rows().index("Tia"))

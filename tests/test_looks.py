@@ -120,5 +120,12 @@ check("Save or Discard: the look changes", len(asked) == 2 and db.get_setting("l
 del w.settings.unsaved_count, w.settings.confirm_leave
 w.set_look("Standard"); app.processEvents()
 
+print("== a line graph's frame has the look's corners")
+from ui.history import TrendChart
+for look, r in (("Sharp", 2), ("Soft", 14)):
+    db.set_setting("look", look); w.settings_applied(); app.processEvents()
+    tc = TrendChart()
+    check(f"{look}: {r} px", f"border-radius: {r}px" in tc.styleSheet(), tc.styleSheet())
+db.set_setting("look", "Standard"); w.settings_applied(); app.processEvents()
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

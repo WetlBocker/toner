@@ -11,7 +11,7 @@ import threading
 import time
 from datetime import datetime
 
-from PySide6.QtCore import QMimeData, QThread, Qt, QUrl, Signal
+from PySide6.QtCore import QMimeData, QThread, Qt, Signal
 from PySide6.QtGui import QDrag
 from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMessageBox,
                                QProgressBar, QPushButton, QSplitter, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)

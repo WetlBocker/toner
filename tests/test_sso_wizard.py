@@ -144,6 +144,19 @@ w.back_btn.click(); w.providers["google"].setChecked(True); nxt(w)
 check("...Google's groups claim is empty", w.claim.text() == "")
 w.reject()
 
+print("== Enter in a box presses Next (or Save on the last step)")
+from PySide6.QtTest import QTest as _QTest
+w = wizard([], None)
+to_connection(w, "okta")
+w.show(); app.processEvents()
+step = w.step
+_QTest.keyClick(w.client_id, Qt.Key.Key_Return); settle(w)
+check("Enter in a Connection box is Next: it tries to read the settings", w.step != step or bool(w.message.text()), (w.step, w.message.text()))
+w.back_btn.click() if w.step > step else None
+w._go(3); app.processEvents()
+_QTest.keyClick(w.filters["groups"], Qt.Key.Key_Return); settle(w)
+check("...but not in a list's search box", w.step == 3, w.step)
+w.reject()
 print("== a provider that can't be read")
 w = wizard([], None)
 to_connection(w, "okta")

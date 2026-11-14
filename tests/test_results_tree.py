@@ -124,5 +124,13 @@ check("it counts as healthy", "quiet" in [t.text(0) for t in tops()], [t.text(0)
 w.show_filter("problems"); w.repopulate()
 check("and not as a problem", [t.text(0) for t in tops()] == ["edge-fw"], [t.text(0) for t in tops()])
 w.show_filter("all")
+print("== a toolbar that wraps keeps the search box level with the funnel, on the first row")
+w.resize(560, 600); w.show(); app.processEvents(); app.processEvents()
+rows_y = {w.bar.itemAt(i).widget().y() for i in range(w.bar.count()) if w.bar.itemAt(i).widget().isVisible()}
+check("(the buttons wrap at this width)", len(rows_y) > 1, rows_y)
+check("the search box and the funnel are centred on each other", abs(w.find.geometry().center().y() - w.funnel.geometry().center().y()) <= 1,
+      (w.find.geometry(), w.funnel.geometry()))
+check("...and sit beside the first row of buttons", abs(w.funnel.geometry().center().y() - w.run_btn.geometry().center().y()) <= 3,
+      (w.funnel.geometry(), w.run_btn.geometry()))
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

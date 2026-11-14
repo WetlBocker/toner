@@ -2,8 +2,7 @@ import time
 
 from PySide6.QtCore import QSize, Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QFont, QKeySequence, QPalette, QShortcut
-from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QLabel, QMessageBox,
-                               QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import QAbstractItemView, QHBoxLayout, QLabel, QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget
 from core import db, display, reports, scope
 from core.alerts import base as device_of
 from core.runner import run_all
@@ -153,8 +152,11 @@ class ResultsTab(QWidget):
         self.bar = bar = flow(self.run_btn, *folds, self.schedule_note)      # wraps in a narrow window
         row = QHBoxLayout()
         row.addLayout(bar, 1)
-        row.addWidget(self.find, 1)                    # on the right, as on Inventory
-        row.addWidget(self.funnel, 0, Qt.AlignmentFlag.AlignTop)
+        side = QHBoxLayout()                           # the search box and the funnel, level with each other beside the first row of
+        side.addWidget(self.find, 1)                   # buttons when the buttons wrap (on the right, as on Inventory)
+        side.addWidget(self.funnel)
+        row.addLayout(side, 1)
+        row.setAlignment(side, Qt.AlignmentFlag.AlignTop)
         self.refresh_btn = RefreshButton(self.reload)
         self.header.add(self.refresh_btn)
         lay = QVBoxLayout(self)

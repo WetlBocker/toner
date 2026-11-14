@@ -1,11 +1,11 @@
 """A Windows computer's services in a window of their own: list them, search, and start, stop or restart the ones you choose."""
 from PySide6.QtCore import QThread, Qt, Signal
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import (QAbstractItemView, QApplication, QComboBox, QDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QMenu, QMessageBox,
-                               QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout)
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QComboBox, QDialog, QHBoxLayout, QLabel, QMenu, QMessageBox, QPushButton,
+                               QTableWidget, QTableWidgetItem, QVBoxLayout)
 from ui.signin import SignInDialog
 
-from core import audit, perms, profiles, winmon, winservices
+from core import audit, perms, profiles, winservices
 from ui import status as st
 from ui import theme
 from ui.widgets import filling, gate_push

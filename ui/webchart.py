@@ -12,6 +12,7 @@ import json
 import os
 
 from PySide6.QtCore import QObject, Qt, QUrl, Signal, Slot, QTimer
+from PySide6.QtGui import QFont, QFontMetrics, QGuiApplication
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from core import paths, quiet
@@ -40,6 +41,17 @@ def _web():
             quiet.ignored("QtWebEngine is not available: charts show a note instead")
             _WEB = False
     return _WEB
+
+
+def fit_text(text, width, size=12, bold=False):
+    """`text` with its first line (the name) cut in the middle to fit `width` pixels at `size`: a name on a small chart (a dial, a
+    ring) has nowhere to wrap, and its end says which one it is as much as its start does. A line under it (used and total) is left."""
+    font = QFont(QGuiApplication.font())
+    font.setPixelSize(size)
+    font.setBold(bold)
+    fm = QFontMetrics(font)
+    name, _, rest = str(text).partition("\n")
+    return fm.elidedText(name, Qt.TextElideMode.ElideMiddle, width) + ("\n" + rest if rest else "")
 
 
 def page_path():

@@ -7,10 +7,10 @@ from pathlib import Path
 import keyring
 from PySide6.QtCore import QObject, QProcess, QStandardPaths, QThread, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QFontDatabase
-from PySide6.QtWidgets import (QAbstractItemView, QApplication as _QApp, QCheckBox, QComboBox, QCompleter, QFileDialog, QGroupBox, QHBoxLayout, QLabel,
-                               QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QSpinBox, QSplitter,
-                               QTableWidget, QTableWidgetItem, QTabWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
-from core import db, jump, nettools, perms, profiles, reach, sealedfile, sessionlog, snmp, vendors
+from PySide6.QtWidgets import (QAbstractItemView, QApplication as _QApp, QCheckBox, QComboBox, QCompleter, QFileDialog, QGroupBox, QHBoxLayout,
+                               QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QSpinBox, QSplitter, QTableWidget, QTableWidgetItem,
+                               QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
+from core import db, nettools, perms, profiles, reach, sealedfile, sessionlog, snmp, vendors
 from ui import theme
 
 

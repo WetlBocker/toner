@@ -5,8 +5,7 @@ saved; the difference between that and the page as it is now is the list shown b
 import re
 
 from PySide6.QtWidgets import (QAbstractItemView, QAbstractButton, QAbstractSpinBox, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout,
-                               QLabel, QLineEdit, QPlainTextEdit, QPushButton, QTextEdit, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
-from PySide6.QtCore import Qt
+                               QLabel, QLineEdit, QPlainTextEdit, QTextEdit, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 from ui.widgets import layout_at, widget_at
 
 

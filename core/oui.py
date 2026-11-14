@@ -1,5 +1,4 @@
 """MAC address helpers: parsing, vendor lookup (OUI) and Wake-on-LAN."""
-import os
 import re
 import socket
 from pathlib import Path

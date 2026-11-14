@@ -1,8 +1,8 @@
 """Settings pages: General, Connections, Thresholds, and Checks (which holds the list of checks, their schedule and the custom ones)."""
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QHBoxLayout, QLabel, QLineEdit,
-                               QPushButton, QTableWidget, QTabWidget, QToolButton, QTreeWidget, QTreeWidgetItem, QWidget)
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QTableWidget, QTabWidget,
+                               QToolButton, QTreeWidget, QTreeWidgetItem, QWidget)
 from core import checks, custom, db, display
 from ui.widgets import GroupPicker
 from ui.settings_base import Page, TrimSpin, note, row_of, spin

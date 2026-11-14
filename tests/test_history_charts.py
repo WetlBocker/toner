@@ -171,7 +171,101 @@ check("the same device and checks: the panels are not rebuilt", w.panels.panels 
 w.find.setText("")
 app.processEvents()
 w.refresh()
-check("a refresh after a run draws them again (new readings)", w.panels.panels != kept)
+check("a refresh with nothing new stored keeps them too (an Inventory change, a playbook)", w.panels.panels == kept)
+
+print("== Over time after a run: drawn again, with what the person had zoomed, hidden, selected and scrolled to")
+from datetime import datetime as _dt, timedelta as _td
+def run_at(minutes_ago, n):
+    rid = db.save_run([Result("sv1", "cpu", "OK", f"{10 + n}%", numeric=10.0 + n), Result("sv1", "memory", "OK", f"{40 + n}%", numeric=40.0 + n),
+                       Result("sv1", "services", "FAIL" if n == 2 else "OK", "1 stopped" if n == 2 else "all running"),
+                       ])
+    with db.connect() as c:
+        c.execute("UPDATE runs SET started_at=? WHERE id=?", ((_dt.now() - _td(minutes=minutes_ago)).strftime("%Y-%m-%d %H:%M:%S"), rid))
+for n, m in enumerate((50, 40, 30, 20, 10)):
+    run_at(m, n)
+w.refresh(); app.processEvents()
+w.dev.setCurrentIndex(w.dev.findData("sv1"))
+w.chk.set_selected(["CPU", "Memory", "Services"]); w.chk._toggled(); app.processEvents()
+P = w.panels
+for p_ in P.panels:
+    if not p_.drawn: p_.draw()
+app.processEvents()
+lines = next(p_ for p_ in P.panels if p_.kind == "line")
+heat = next(p_ for p_ in P.panels if p_.kind == "heatmap")
+chart = lines.stack.charts[0]
+check("(the test's panels: CPU and Memory on one graph, then a heatmap)", len(chart.stamps) >= 5 and set(chart.curves) == {"cpu", "memory"}
+      and [p_.kind for p_ in P.panels] == ["line", "heatmap"], ([p_.kind for p_ in P.panels], chart.stamps))
+chart.plot.setXRange(1, 3, padding=0); app.processEvents()
+a, b = chart.stamps[1], chart.stamps[3]
+next(chart.legend_lay.itemAt(i).widget() for i in range(chart.legend_lay.count()) if chart.legend_lay.itemAt(i).widget().text() == "Memory").setChecked(False)
+failed = next(t for t, r in heat.rows if r["status"] == "FAIL")
+x, y = heat.grid.cell(failed)
+P._square(heat, {"kind": "series", "value": [x, y, 2]})
+check("(a square is selected: its readings are listed)", not heat.detail.isHidden() and heat.detail.model().rowCount() >= 1)
+bar = P.verticalScrollBar()
+bar.setValue(bar.maximum()); app.processEvents()
+top = bar.value()
+before = list(P.panels)
+run_at(1, 7)
+w.refresh(); app.processEvents()
+check("new readings: the panels are drawn again", P.panels != before and len(P.panels) == 2)
+lines2 = next(p_ for p_ in P.panels if p_.kind == "line")
+heat2 = next(p_ for p_ in P.panels if p_.kind == "heatmap")
+check("...those drawn before are drawn at once, and the page stays where it was scrolled to", all(p_.drawn for p_ in P.panels)
+      and top > 0 and bar.value() == top, (top, bar.value(), bar.maximum()))
+chart2 = lines2.stack.charts[0]
+(x0, x1), _yr = chart2.vb.viewRange()
+check("...a graph that was zoomed in shows the same stretch of time", chart2 is not chart and len(chart2.stamps) == len(chart.stamps) + 1
+      and chart2.stamps[round(x0)] == a and chart2.stamps[round(x1)] == b, (chart2.stamps, x0, x1, a, b))
+check("...a name hidden in the legend stays hidden", not chart2.curves["memory"].isVisible() and chart2.curves["cpu"].isVisible())
+check("...and the selected square still lists its readings", not heat2.detail.isHidden() and heat2.detail.model().rowCount() >= 1 and heat2.text.isHidden())
+w.dev.setCurrentIndex(w.dev.findData("sw0")); app.processEvents()
+w.dev.setCurrentIndex(w.dev.findData("sv1")); app.processEvents()
+for p_ in P.panels:
+    if not p_.drawn: p_.draw()
+(x0, x1), _yr = next(p_ for p_ in P.panels if p_.kind == "line").stack.charts[0].vb.viewRange()
+check("another device and back starts afresh: the whole stretch of time", x0 < 0 and x1 > len(chart2.stamps) - 1.5, (x0, x1))
+
+print("== Failures at 30 days: every date has a row tall enough to read, and the page scrolls")
+from PySide6.QtWidgets import QScrollArea as _QScrollArea
+w.chart_tabs.setCurrentIndex(2)
+w.fail_period.setCurrentIndex(w.fail_period.findData(30)); app.processEvents()
+rows30 = len(w._fail_grid.rows)
+check("the heatmap is as tall as its dates need (16 px a row)", rows30 >= 30 and w.fail_when.minimumHeight() >= 16 * rows30, (rows30, w.fail_when.minimumHeight()))
+check("...inside a scrolling page, so the window is not pushed taller", isinstance(w.chart_tabs.widget(2), _QScrollArea)
+      and w.chart_tabs.minimumSizeHint().height() < 500, w.chart_tabs.minimumSizeHint().height())
+w.fail_period.setCurrentIndex(w.fail_period.findData(7)); app.processEvents()
+check("7 days: short again", w.fail_when.minimumHeight() < 16 * rows30, w.fail_when.minimumHeight())
+scale = w.fail_when._builder(p)["visualMap"]
+check("the colour scale says what its ends mean: the most in one square, and none", scale.get("text") == [str(scale["max"]), "0"], scale.get("text"))
+
+print("== a long device name on a dial or a ring is cut in the middle to fit its tile, whole on hover")
+from PySide6.QtGui import QFont as _QFont, QFontMetrics as _QFontMetrics
+LONGNAME = "edge-switch-building-7-floor-3-rack-12.corp.example.com"
+db.save_device(dict(name=LONGNAME, vendor="cisco", host="10.0.9.9", port=0, platform="", username="u", site="default", verify_ssl=0,
+                    ha_expected=0, enabled=1, location="", details="", folder_id=None))
+db.save_run([Result(LONGNAME, "cpu", "OK", "33%", numeric=33.0), Result(LONGNAME, "interfaces", "WARN", "40/48")])
+w.refresh(); app.processEvents()
+def px(text, size, bold=False):
+    f = _QFont(app.font()); f.setPixelSize(size); f.setBold(bold)
+    return _QFontMetrics(f).horizontalAdvance(text)
+w.chart_tabs.setCurrentIndex(1)
+pick("CPU")
+g = next(g for g in w.compare_gauges if g.name.startswith(LONGNAME))
+opt = g.builder(p)
+short_opt = next(g for g in w.compare_gauges if g.name.startswith("sw0")).builder(p)
+shown = opt["series"][0]["data"][0]["name"]
+check("the dial's name fits its 210 px tile, keeping both ends", shown != LONGNAME and shown.startswith("edge-") and shown.endswith(".com")
+      and px(shown, 12) <= 210, (shown, px(shown, 12)))
+check("...and hovering the dial says the whole name", opt.get(chartspec.TIP) == LONGNAME and chartspec.TIP not in short_opt, opt.get(chartspec.TIP))
+short = short_opt
+check("a name that fits is left alone", short["series"][0]["data"][0]["name"] == "sw0")
+pick("Interfaces")
+r_ = next(r_ for r_ in w.compare_rings if r_.name == LONGNAME)
+opt = r_.builder(p)
+check("the ring's title fits its 240 px tile", opt["title"]["text"] != LONGNAME and opt["title"]["text"].endswith(".com")
+      and px(opt["title"]["text"], 13, True) <= 240, (opt["title"]["text"], px(opt["title"]["text"], 13, True)))
+check("...and hovering a segment names the device too", LONGNAME in opt["tooltip"]["formatter"] and "{b}" in opt["tooltip"]["formatter"], opt["tooltip"])
 
 print("== WAN usage is a percentage")
 check("is_percent", H.is_percent("wan usage") and H.is_percent("wan usage (Gi1)"))

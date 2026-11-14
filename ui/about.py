@@ -3,7 +3,6 @@ import os
 import platform
 import sys
 import threading
-from datetime import datetime
 from importlib import metadata
 
 from PySide6.QtCore import QThread, QTimer, QUrl, Qt, Signal

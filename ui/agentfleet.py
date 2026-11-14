@@ -3,7 +3,6 @@
 from datetime import datetime
 
 from PySide6.QtCore import QTimer, Qt, Signal
-from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QLabel, QMessageBox, QPushButton, QTableWidget, QTableWidgetItem,
                                QVBoxLayout, QWidget)
 from core import agents, audit, db

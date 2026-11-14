@@ -10,7 +10,6 @@ line ("assistant", "read core-sw1's history"; "ran on core-sw1: show interfaces"
 """
 import json
 import os
-import re
 from datetime import datetime
 
 from core import audit, backup, cmdrun, db, display, sealedfile, sessionlog

@@ -3,8 +3,8 @@ import os
 
 from PySide6.QtCore import QProcess, QThread, Signal
 from PySide6.QtGui import QFontDatabase
-from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
-                               QPlainTextEdit, QPushButton, QSpinBox, QTabWidget, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog, QLabel, QLineEdit, QPlainTextEdit, QPushButton, QSpinBox, QTabWidget,
+                               QVBoxLayout, QWidget)
 from core import audit, db, openssl
 from ui.tools import OutputBox, Runner, _row
 from ui.tools2 import _muted, _primary

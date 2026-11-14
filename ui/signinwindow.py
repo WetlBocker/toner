@@ -756,6 +756,8 @@ class SignInWindow(QDialog):
         def landed(a, e):
             if e is not None:
                 self._go(self.name_page, self.name)
+                if isinstance(e, oidc.Cancelled) and cancel.is_set():
+                    return say(self.name_error, "")       # Cancel was pressed: nothing failed (a wait that ran out still says so)
                 return self._fail(e, self.name_error, self.name_wait, self.name)
             self.attempt = a
             self._route()

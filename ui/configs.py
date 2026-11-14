@@ -1,13 +1,10 @@
 """Configs section: back devices up, browse versions, see what changed, search every stored configuration."""
-from datetime import datetime
 
-from PySide6.QtCore import QRegularExpression, Qt, QThread, Signal
+from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QSyntaxHighlighter, QTextCharFormat
-from PySide6.QtWidgets import (QAbstractItemView, QApplication, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
-                               QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QSizePolicy,
-                               QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
+                               QPlainTextEdit, QPushButton, QSizePolicy, QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 from core import audit, backup, db, display, scope
-from drivers.base import SEVERITY
 from ui import theme
 from ui.widgets import EmptyHint, FlowLayout, filling, remember_sizes
 from ui.panels import fit_rows

@@ -4,10 +4,12 @@ Each builder returns the option an ECharts chart takes (see ui/webchart.py, whic
 theme's text and muted colours, no chart background (the panel behind shows through), a tooltip, and the status colours
 Toner uses everywhere (Settings > Appearance > Status colours), so a FAIL is the same red on a pill, in a table and on a chart.
 Being plain data, every builder is tested without a window (tests/test_chartspec.py)."""
+import html
 from datetime import datetime
 
 STATUSES = ("OK", "WARN", "FAIL", "ERROR", "N/A")
 EMPTY = "__empty"                       # an option that is only this key tells the page to show the text instead of a chart
+TIP = "__tip"                           # an option's text for the whole chart's hover tip (a name cut short); the page takes it out
 
 # Series colours for things that are not statuses: distinct in both light and dark themes, colour-blind friendly order.
 SERIES = ["#2563eb", "#f59e0b", "#10b981", "#8b5cf6", "#ec4899", "#14b8a6", "#f97316", "#64748b", "#84cc16", "#06b6d4"]
@@ -208,7 +210,7 @@ def heatmap(p, xlabels, ylabels, cells, title="", unit="", worst=None):
     y["inverse"] = True
     opt["xAxis"], opt["yAxis"] = x, y
     opt["visualMap"] = {"min": 0, "max": top, "calculable": False, "orient": "vertical", "right": 0, "top": "center",
-                        "itemHeight": 100, "textStyle": _font(p, 10, p["muted"]),
+                        "itemHeight": 100, "textStyle": _font(p, 10, p["muted"]), "text": [str(top), "0"],      # what its ends mean
                         "inRange": {"color": [p["surface"] if not p["dark"] else "#2a2f3a", worst or status_color(p, "FAIL")]}}
     opt["series"] = [{"type": "heatmap", "data": [[xi, yi, v] for xi, yi, v in cells], "label": {"show": top <= 30, **_font(p, 10)},
                       "itemStyle": {"borderColor": p["surface"], "borderWidth": 1},
@@ -235,10 +237,18 @@ def status_heatmap(p, xlabels, ylabels, cells, title=""):
     return opt
 
 
-def ring(p, segments, center_text, title=""):
+def _said(text):
+    """A name as tooltip text: the page reads a tooltip as HTML and as a template, so its marks are made plain."""
+    return html.escape(str(text)).replace("{", "&#123;").replace("\n", "<br>")
+
+
+def ring(p, segments, center_text, title="", tip=""):
     """Segments as a ring: segments is [(name, value, colour)]. `center_text` sits in the middle; a click reports the name. With every
-    segment at zero the ring is a plain grey circle that cannot be selected, still with its centre text."""
+    segment at zero the ring is a plain grey circle that cannot be selected, still with its centre text. `tip`: the whole name when
+    `title` had to be cut short; a segment's tooltip starts with it."""
     opt = pie(p, segments, title)
+    if tip and opt.get("series"):
+        opt["tooltip"]["formatter"] = _said(tip) + "<br>" + opt["tooltip"]["formatter"]
     if not opt.get("series"):
         opt = pie(p, [("", 1, p["border"])], title)
         opt["legend"]["show"] = False
@@ -253,8 +263,9 @@ def ring(p, segments, center_text, title=""):
     return opt
 
 
-def gauge(p, value, warn=None, fail=None, title="", unit="%", maximum=100, lower_is_worse=False):
-    """One reading against its limits: a half ring, coloured by the band the value is in. `lower_is_worse` for uptime-like readings."""
+def gauge(p, value, warn=None, fail=None, title="", unit="%", maximum=100, lower_is_worse=False, tip=""):
+    """One reading against its limits: a half ring, coloured by the band the value is in. `lower_is_worse` for uptime-like readings.
+    `tip`: the whole name when `title` had to be cut short; the page shows it on hover (TIP)."""
     if value is None:
         return empty("No reading yet")
     ok, wa, fa = status_color(p, "OK"), status_color(p, "WARN"), status_color(p, "FAIL")
@@ -286,6 +297,8 @@ def gauge(p, value, warn=None, fail=None, title="", unit="%", maximum=100, lower
                       "title": {"show": bool(title), "offsetCenter": [0, "66%"], **_font(p, 12, p["muted"])},
                       "detail": {"valueAnimation": True, "offsetCenter": [0, "34%"], "formatter": "{value}" + unit, **_font(p, 20), "fontWeight": "bold"},
                       "data": [{"value": round(float(value), 1), "name": title}]}]
+    if tip and tip != title:
+        opt[TIP] = tip
     return opt
 
 

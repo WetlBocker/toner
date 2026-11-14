@@ -452,6 +452,16 @@ check("a jump forward past the limit (a sleep) locks", session.state() == "locke
 check("...and says so", lock.reason.text() == "Locked after 15 minutes without use.", lock.reason.text())
 lock._idle_minutes = 1; lock.show_locked()
 check("one minute is said as one", lock.reason.text() == "Locked after 1 minute without use.", lock.reason.text())
+_long = "sam.verylongfirstname.evenlongersurname@subsidiary.corporation.example.com"
+_user, session.user = session.user, lambda: _long
+lock.show_locked()
+check("a manual lock by a very long name: the sentence is cut in the middle to fit, whole in the tip",
+      lock.reason.text().startswith("Locked by sam") and chr(0x2026) in lock.reason.text() and lock.reason.text().endswith("example.com.")
+      and lock.reason.toolTip() == f"Locked by {_long}."
+      and lock.reason.fontMetrics().horizontalAdvance(lock.reason.text()) <= lock.who.parentWidget().width(), (lock.reason.text(), lock.reason.toolTip()))
+session.user = _user
+lock._idle_minutes = 1; lock.show_locked()
+check("...and the next reason has no tip left over", lock.reason.toolTip() == "" and lock.reason.text() == "Locked after 1 minute without use.")
 session.unlock(PW2); app.processEvents()
 check("unlocking (from anywhere) hides it again", not lock.isVisible())
 lock.last = now[0]

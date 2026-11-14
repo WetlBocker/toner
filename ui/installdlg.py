@@ -1,6 +1,6 @@
 """Install...: a missing tool installed from Toner on Linux (core/installer.py). The person picks apt, pip or npm (only those on
 this computer are offered); the install's output shows as it runs."""
-from PySide6.QtCore import QProcess, Qt
+from PySide6.QtCore import QProcess
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QDialog, QDialogButtonBox, QLabel, QPlainTextEdit, QPushButton,
                                QRadioButton, QVBoxLayout)
 

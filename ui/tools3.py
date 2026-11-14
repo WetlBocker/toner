@@ -1,19 +1,18 @@
 """File servers (TFTP, SFTP with SCP, FTP) and the iperf3 throughput test."""
 import os
 import re
-import subprocess
 import threading
 from datetime import datetime
 
 import pyqtgraph as pg
 from PySide6.QtCore import QThread, QTimer, Qt, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
-                               QProgressBar, QPushButton, QSpinBox, QStackedWidget, QTableWidgetItem, QVBoxLayout, QWidget, QFrame)
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QProgressBar, QPushButton, QSpinBox,
+                               QTableWidgetItem, QVBoxLayout, QWidget, QFrame)
 import paramiko
 from core import audit, db, fileserver, iperf, nettools, oui, perms, profiles, proxy, scp, vendors, wifi, xcopy
 from core import quiet
-from ui import plots, theme
+from ui import plots
 from ui.tools import DevicePicker, OutputBox, Runner, _row, reset_button
 from ui.widgets import gate_push
 from ui.tools2 import _muted, _primary, _table

@@ -252,6 +252,9 @@ class IdentityWizard(QDialog):
         outer.addWidget(self.stack, 1)
         outer.addWidget(self.message)
         outer.addLayout(buttons)
+        for box in self.stack.findChildren(QLineEdit):               # Enter in a box is the step's own button; a list's search box only searches
+            if box not in self.filters.values():
+                box.returnPressed.connect(lambda: (self.save_btn if self.save_btn.isVisible() else self.next_btn).click())
         self._go(0)
 
     def _form(self):

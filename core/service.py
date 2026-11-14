@@ -5,7 +5,7 @@ import threading
 import time
 from datetime import datetime, timedelta
 
-from core import alerts, audit, backup, db, notify, platforms
+from core import audit, backup, db, notify, platforms
 from core.runner import run_all
 from drivers.base import SEVERITY
 

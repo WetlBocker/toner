@@ -5,22 +5,16 @@ say so on the page; everything else waits for 'Save changes'."""
 import json
 import re
 import os
-from core.sqldb import sqlite3
 from datetime import datetime, timedelta
 
 import keyring
-from PySide6.QtCore import QDateTime, QRectF, QSize, QTime, QTimer, Qt, QUrl, Signal
-from PySide6.QtGui import QColor, QDesktopServices, QFont, QPainter
-from PySide6.QtWidgets import (QAbstractButton, QAbstractItemView, QAbstractSpinBox, QApplication, QCheckBox, QColorDialog, QComboBox, QDialog,
-                               QDateTimeEdit, QDialogButtonBox, QDoubleSpinBox, QFileDialog, QFontComboBox, QFormLayout,
-                               QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton,
-                               QPlainTextEdit, QScrollArea, QSpinBox, QStackedWidget, QStyledItemDelegate, QTableWidget, QTextEdit, QTableWidgetItem, QTimeEdit,
-                               QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
-import ipaddress
-from core import agents, alerts, audit, checks, custom, db, display, maintenance, nettools, notify, perms, profiles, proxy, reports, roles, sessionlog, trends, vault
-from ui import terminal, theme
-from ui.snmpfields import SnmpFields
-from ui.widgets import GroupPicker
+from PySide6.QtCore import QRectF, QSize, QTimer, Qt, Signal
+from PySide6.QtGui import QColor, QDesktopServices, QPainter
+from PySide6.QtWidgets import (QAbstractButton, QAbstractSpinBox, QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QHBoxLayout,
+                               QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton, QPlainTextEdit, QScrollArea,
+                               QSpinBox, QStackedWidget, QStyledItemDelegate, QTextEdit, QToolButton, QVBoxLayout, QWidget)
+from core import agents, audit, checks, custom, db, maintenance, notify, perms, proxy, reports, roles, vault
+from ui import theme
 from ui.nav import HEADING_HEIGHT, ITEM_HEIGHT
 from ui import settings_diff as SD
 from ui.toast import toast

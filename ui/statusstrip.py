@@ -8,7 +8,7 @@ from datetime import datetime
 
 from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QProgressBar, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QWidget
 
 from core import agents, db, display, notify, perms, proxy, tunnel
 from core import assistant as AI

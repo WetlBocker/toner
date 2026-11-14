@@ -1,7 +1,7 @@
 """Choose Windows services from the computer's own list instead of typing their names."""
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QDialog, QDialogButtonBox, QHBoxLayout, QLabel, QLineEdit, QTableWidget,
-                               QTableWidgetItem, QVBoxLayout)
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QDialog, QDialogButtonBox, QHBoxLayout, QLabel, QTableWidget, QTableWidgetItem,
+                               QVBoxLayout)
 
 NAME = Qt.ItemDataRole.UserRole
 

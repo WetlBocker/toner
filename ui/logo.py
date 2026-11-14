@@ -7,7 +7,7 @@ At 24 px and below the five thin pins become three thick ones and the strokes ar
 import os
 import struct
 
-from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QPointF, QRectF, Qt
+from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QRectF, Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 
 NAVY, TONE, PLUG = "#0b1b2b", "#22d3ee", "#ffffff"

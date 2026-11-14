@@ -88,7 +88,8 @@ class _Fitter(QObject):
         for r in range(min(m.rowCount(), 50)):
             w = self.view.indexWidget(m.index(r, c))
             if w is not None and w.isVisible():
-                return max(0, min(64, self.view.visualRect(m.index(r, c)).width() - w.width()))
+                cell = self.view.visualRect(m.index(r, c))            # a widget held at its minimum width fills more than its share: then
+                return max(0, min(64, max(cell.width() - w.width(), 2 * (w.x() - cell.x()))))     # twice what it starts in from the left
         return None
 
     def run(self):

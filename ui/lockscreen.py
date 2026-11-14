@@ -78,7 +78,7 @@ class LockScreen(QWidget):
         self._locks = 0                                  # counts the locks: a probe's answer belongs to the lock that asked
         self._jobs = set()                               # the directory probes running off this thread
         self.wait = Wait(self.error, self.unlock)
-        self.keyask, self._reason = KeyAsk(self), ""
+        self.keyask, self._reason = KeyAsk(self), ("", "")
         self.keyask.touching.connect(self._touching)
         # shortcut: no key-PIN step here yet, so a key that asks for its PIN at unlock ends as not touched; upgrade with that step
         self.keyask.pin_wanted.connect(lambda: self.keyask.give_pin(None))
@@ -148,13 +148,22 @@ class LockScreen(QWidget):
             self._idle_minutes = minutes
             session.lock()
 
+    def _reason_is(self, text, tip=""):
+        """The line under the title: a sentence (it wraps), with the tip of a name cut short when it was put aside with one."""
+        self.reason.setText(text)
+        self.reason.setToolTip(tip)
+        self.reason.setAccessibleName(tip)
+
     def show_locked(self):
         user = session.user() or ""
         self._locks += 1
         for w in (self.pw, self.unlock, self.other):
             w.setEnabled(True)
         minutes, self._idle_minutes = self._idle_minutes, None
-        self.reason.setText(f"Locked after {minutes} minute{'' if minutes == 1 else 's'} without use." if minutes else f"Locked by {user}.")
+        if minutes:
+            self._reason_is(f"Locked after {minutes} minute{'' if minutes == 1 else 's'} without use.")
+        else:                                            # a very long name has nowhere to wrap: cut in the middle, whole in the tip,
+            show_name(self.reason, f"Locked by {user}.")  # as the name under it is
         directory_user = session.kind() == "directory"
         show_name(self.who, user if directory_user else f"{user}, local account")
         self.avatar.setText("".join(w[0] for w in user.split()[:2]).upper())
@@ -187,7 +196,7 @@ class LockScreen(QWidget):
             self.wait.timer.stop()                       # (a PIN countdown doesn't go on over these screens)
             say(self.error, "")
             self.pw.setText("")
-            self.reason.setText(dirsignin.refused_text() if mode == "refused" else "Please sign in again.")
+            self._reason_is(dirsignin.refused_text() if mode == "refused" else "Please sign in again.")
 
     def _cover_all(self):
         """An opaque cover over every visible Toner window (dialogs included, which stay open underneath), then the lock on top
@@ -308,7 +317,7 @@ class LockScreen(QWidget):
             self._jobs.discard(job)
             if self.head.text() == KEY_TITLE:
                 self.head.setText(LOCKED)
-                self.reason.setText(self._reason)
+                self._reason_is(*self._reason)
             for w in (self.pw, self.unlock, self.other):
                 w.setEnabled(True)
             self.pw.setFocus()                           # (turning the field off moved the focus away)
@@ -342,9 +351,9 @@ class LockScreen(QWidget):
         """The password or PIN was right and the account has keys: say to touch one; the way out stays open meanwhile."""
         if not any(j.ask is not None and j.ask.asked and not j.ask.cancel.is_set() for j in self._jobs):
             return                                       # (a wait already cancelled)
-        self._reason = self.reason.text()
+        self._reason = (self.reason.text(), self.reason.toolTip())
         self.head.setText(KEY_TITLE)
-        self.reason.setText(KEY_TEXT)
+        self._reason_is(KEY_TEXT)
         self.other.setEnabled(True)
 
     def _end_jobs(self):

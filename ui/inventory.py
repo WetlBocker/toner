@@ -2,12 +2,11 @@ import json
 from core.sqldb import sqlite3
 
 import keyring
-from PySide6.QtCore import QPointF, QTimer, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QIcon, QKeySequence, QPainter, QPen, QPixmap, QPolygonF, QShortcut
-from PySide6.QtWidgets import (QFrame, QSplitter, QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog,
-                               QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout, QInputDialog, QLabel,
-                               QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSizePolicy, QSpinBox, QStyle, QTabWidget,
-                               QStackedWidget, QToolButton, QTreeWidget,
+from PySide6.QtCore import QTimer, Qt, Signal
+from PySide6.QtGui import QColor, QFont, QIcon, QKeySequence, QShortcut
+from PySide6.QtWidgets import (QFrame, QSplitter, QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
+                               QFormLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox,
+                               QPlainTextEdit, QPushButton, QSizePolicy, QSpinBox, QTabWidget, QStackedWidget, QToolButton, QTreeWidget,
                                QTreeWidgetItem, QVBoxLayout, QWidget, QWidgetAction)
 from core import agents, audit, bulk, db, display, importer, nettools, orgs, perms, profiles, proxy, scope, sessionimport, sessions, unifikids, vendors, winmon
 from ui import icons, theme
@@ -41,11 +40,12 @@ class DeviceDialog(QDialog):
         super().__init__(parent)
         self.dev = dev or {}
         self.setWindowTitle("Edit device" if dev else "Add device")
+        self._keep = "leave blank to keep the stored value" if dev else ""     # a new device has nothing stored yet
         self.setMinimumWidth(460)
         self.name, self.host, self.username = QLineEdit(), QLineEdit(), QLineEdit()
         self.ssh_pw = QLineEdit()                                  # a firewall's SSH password, for the Command Runner (its checks use the API key)
         self.ssh_pw.setEchoMode(QLineEdit.EchoMode.Password)
-        self.ssh_pw.setPlaceholderText("leave blank to keep the stored value")
+        self.ssh_pw.setPlaceholderText(self._keep)
         self.enable_pw = QLineEdit()                               # Cisco: enable mode's own password, when it differs from the login
         self.enable_pw.setEchoMode(QLineEdit.EchoMode.Password)
         self.enable_pw.setToolTip("Cisco devices: the password for enable mode, when it differs from the login password.")
@@ -56,7 +56,7 @@ class DeviceDialog(QDialog):
         self.secret.setEchoMode(QLineEdit.EchoMode.Password)
         from ui.linkitem import LinkRow
         self.link_row = LinkRow()                                    # Link... to a password manager item (when one is chosen)
-        self.secret.setPlaceholderText("leave blank to keep the stored value")
+        self.secret.setPlaceholderText(self._keep)
         self.get_key = QPushButton("Get API key from the firewall...")
         self.get_key.setToolTip("Sign in once with an administrator's user name and password: Toner asks the device for the key and fills it in.")
         self.get_key.setAutoDefault(False)
@@ -402,7 +402,7 @@ class DeviceDialog(QDialog):
         self.username.setToolTip(tip)
         self.ssh_pw.setToolTip(tip)
         if not self.ssh_pw.placeholderText().startswith("saved"):
-            self.ssh_pw.setPlaceholderText("blank = the password above" if shared else "leave blank to keep the stored value")
+            self.ssh_pw.setPlaceholderText("blank = the password above" if shared else self._keep)
         self.access.setRowVisible(self.site, bool(info["site"]))
         self.access.setRowVisible(self.sites, vendor == "unifi_cloud" and not self.dev)
         from ui.keydialog import KEYS
@@ -443,7 +443,7 @@ class DeviceDialog(QDialog):
         self._windows_rows()
         self._link_rows()
         other = self._other_secret()
-        self.secret.setPlaceholderText("leave blank to keep the stored value" if not other else
+        self.secret.setPlaceholderText(self._keep if not other else
                                        "enter the password for this login" if other[1] == "password" else f"enter the {other[1]}")
         if snmp_only:
             self.use_snmp.setChecked(True)

@@ -1,5 +1,5 @@
 """The SNMP version / community / v3 fields, shared by the device dialog and the credential-profile dialog."""
-from PySide6.QtWidgets import (QComboBox, QFormLayout, QLabel, QLineEdit, QSpinBox, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import QComboBox, QFormLayout, QLineEdit, QSpinBox, QVBoxLayout, QWidget
 from core import snmp
 
 

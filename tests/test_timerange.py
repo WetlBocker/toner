@@ -220,9 +220,11 @@ check("over the cap the table holds the newest rows only", len(table()) == db.HI
       and sorted(map(row_key, w.model.rows)) == sorted(map(row_key, everything[:db.HISTORY_CAP])), len(table()))
 check("...and says so above the checks table", w.capped.isVisible() and w.capped.text() ==
       f"Showing the newest {db.HISTORY_CAP:,} results. Narrow the time range to see older ones.", w.capped.text())
+check("...and a report made from it says so too", w.report_scope() == f"{w.range.describe()}, newest {db.HISTORY_CAP:,} results only", w.report_scope())
 db.HISTORY_CAP = 50_000
 w.show_rows(); app.processEvents()
 check("...and the line goes when the range fits again", not w.capped.isVisible())
+check("...and from the report", w.report_scope() == w.range.describe(), w.report_scope())
 
 print("== Hidden")
 reads = []

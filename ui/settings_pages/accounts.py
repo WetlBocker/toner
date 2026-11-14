@@ -148,6 +148,7 @@ class RoleDialog(_CardDialog):
         self.role.setCurrentText(current)
         self.lay.addSpacing(10)
         ok = primary("Change role")
+        ok.setDefault(True)                              # Enter on the role box presses it
         ok.clicked.connect(self.accept)
         self.lay.addWidget(ok)
 

@@ -1,10 +1,9 @@
 from core import proxy, tlsverify
 from core import quiet
 import requests
-from datetime import datetime, timezone
 
 from . import apichecks
-from .base import AuthRejected, Driver, OK, WARN, FAIL, grade, grade_low
+from .base import AuthRejected, Driver, OK, WARN, FAIL, grade_low
 
 class FortinetDriver(Driver):
     wan_in_run = True                    # its run reads wan usage from the interface list it already has

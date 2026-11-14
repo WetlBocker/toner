@@ -119,4 +119,12 @@ A.TwoFactorDialog.exec = lambda self: opened.append(self.cfg["name"]) or 1
 menu.actions()[1].trigger()
 check("menu opens the dialog for the selected identity", opened == ["Corp"], opened)
 
+print("== Enter presses Save")
+from PySide6.QtTest import QTest
+from PySide6.QtCore import Qt as _Qt
+d = open_dlg(1); d.show(); app.processEvents()
+d.second.setCurrentIndex(0)
+QTest.keyClick(d.second, _Qt.Key.Key_Return)
+pump(lambda: not d._jobs and not d.isVisible())
+check("Enter anywhere in the dialog saves it, as its one button does", d.result() == 1 and not d.isVisible(), (d.result(), d.isVisible()))
 print(f"\n{ok} passed, {bad} failed"); sys.exit(1 if bad else 0)

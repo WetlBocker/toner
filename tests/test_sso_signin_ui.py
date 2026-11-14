@@ -155,8 +155,8 @@ check("Open the page again opens the same page", len(OPENED) == 2 and OPENED[1] 
 started = time.time()
 w.sso_cancel.click()
 pump(lambda: w.pages.currentWidget() is w.name_page)
-check("Cancel: back to the name, with SSO_CANCELLED, within a second", w.pages.currentWidget() is w.name_page
-      and w.name_error.text() == S.SSO_CANCELLED and w.name.text() == "sam@acme.com" and time.time() - started < 2,
+check("Cancel: back to the name within a second, saying nothing (pressing it is not a failure)", w.pages.currentWidget() is w.name_page
+      and (w.name_error.text() == "" or w.name_error.isHidden()) and w.name.text() == "sam@acme.com" and time.time() - started < 2,
       (w.name_error.text(), time.time() - started))
 check("...and nothing left running", pump(lambda: not w._jobs))
 w.reject()
@@ -228,8 +228,9 @@ webbrowser.open = nowhere
 w.forgot.click()
 check("Forgot your PIN? goes through the browser again", w.pages.currentWidget() is w.sso_page)
 w.sso_cancel.click()
-pump(lambda: w.pages.currentWidget() is w.name_page and w.name_error.text())
-check("...Cancel: back to the name with SSO_CANCELLED", w.name_error.text() == S.SSO_CANCELLED)
+pump(lambda: w.pages.currentWidget() is w.name_page and not w._jobs)
+check("...Cancel: back to the name, saying nothing", w.pages.currentWidget() is w.name_page and (w.name_error.text() == "" or w.name_error.isHidden()),
+      w.name_error.text())
 webbrowser.open = browse
 w.next.click()
 pump(lambda: w.pages.currentWidget() in (w.pin_page, w.choose_page))

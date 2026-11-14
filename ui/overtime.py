@@ -15,7 +15,7 @@ from ui import chartspec
 from ui.configs import DiffHighlighter
 from ui.detaillist import DetailList
 from ui.history import ChartStack, restarts, scale_key
-from ui.webchart import ChartView
+from ui.webchart import ChartView, fit_text
 from ui.widgets import FlowLayout, GroupPicker
 
 EMPTY = "No readings in this time range"
@@ -149,6 +149,7 @@ class CheckPanels(QScrollArea):
         self.col.addStretch(1)
         self.setWidget(self.body)
         self.panels, self._series, self.th = [], {}, {}
+        self._kept, self._restore = {}, None                         # what was done in the panels drawn before; where they were scrolled to
         self.device, self.vendor, self._busy = "", "", False
         bar = self.verticalScrollBar()
         bar.valueChanged.connect(self._reveal)
@@ -158,6 +159,11 @@ class CheckPanels(QScrollArea):
     def show_checks(self, device, vendor, checks, start, end, th):
         """Panels for `checks` (stored names, in the picker's order) of `device` (a key) between start and end (datetimes); with no
         checks, the prompt to pick some."""
+        # the same device drawn again (new readings): each graph's zoom and hidden names and a heatmap's selected square are put back
+        # as the panels are drawn, those drawn before are drawn at once, and the page returns to where it was scrolled (_reveal)
+        self._kept = {tuple(p.checks): ([c.view_state() for c in p.stack.charts] if hasattr(p, "stack") else [], getattr(p, "slot", None))
+                      for p in self.panels if p.drawn} if device == self.device else {}
+        self._restore = self.verticalScrollBar().value() if self._kept else None
         self.device, self.vendor, self.th = device, (vendor or "").lower(), th or {}
         self.start, self.end, self.s, self.e = start, end, start.strftime(STAMP), end.strftime(STAMP)
         for p in self.panels:
@@ -208,9 +214,17 @@ class CheckPanels(QScrollArea):
             return
         self._busy = True
         try:
+            again, self._restore = self._restore, None
             while True:
+                if again is not None:                             # drawn again: the panels that were drawn before, all of them now
+                    for p in self.panels:
+                        if not p.drawn and tuple(p.checks) in self._kept:
+                            p.draw()
                 self.col.activate()                               # place the panels now, as the scroll area would at its next turn
                 self.body.resize(self.viewport().width(), max(self.viewport().height(), self.body.minimumSizeHint().height()))
+                if again is not None:
+                    self.verticalScrollBar().setValue(again)
+                    again = None
                 top = self.verticalScrollBar().value()
                 bottom = top + self.viewport().height()
                 todo = [p for p in self.panels if not p.drawn and p.y() < bottom and p.y() + p.height() > top]
@@ -250,6 +264,8 @@ class CheckPanels(QScrollArea):
         panel.stack = ChartStack()
         panel.stack.setMinimumHeight(300)
         panel.stack.set_series(series, self.th.get(panel.checks[0].split(" (")[0].replace(" ", "_")), marks=marks)   # "wan usage" -> "wan_usage"
+        for chart, state in zip(panel.stack.charts, self._kept.get(tuple(panel.checks), ((), None))[0]):
+            chart.restore(state)
         panel.lay.addWidget(panel.stack)
 
     def _heatmap(self, panel):
@@ -277,6 +293,9 @@ class CheckPanels(QScrollArea):
         panel.detail.setMinimumHeight(160)
         panel.detail.hide()
         panel.lay.addWidget(panel.detail)
+        slot = self._kept.get(tuple(panel.checks), ((), None))[1]
+        if slot and any(slot[0] <= t < slot[1] for t, _r in panel.rows):
+            self._show_slot(panel, *slot)
         if self.vendor == "truenas" and shown_name(check) == "disks":     # each drive's temperature under its SMART squares
             self._item_lines(panel, check, "drives")
 
@@ -286,9 +305,12 @@ class CheckPanels(QScrollArea):
         if not (isinstance(v, list) and len(v) >= 2):
             return
         try:
-            a, b = panel.grid.slot(int(v[0]), int(v[1]))
+            self._show_slot(panel, *panel.grid.slot(int(v[0]), int(v[1])))
         except IndexError:
             return
+
+    def _show_slot(self, panel, a, b):
+        panel.slot = (a, b)
         rows = [{"t": r["t"], "device": db.label_org(self.device), "status": r["status"], "value": display.value(r["value"]),
                  "message": r["message"] or ""} for t, r in reversed(panel.rows) if a <= t < b]
         panel.detail.show_rows(rows, DETAIL)
@@ -365,7 +387,8 @@ class CheckPanels(QScrollArea):
             g = ChartView(min_height=170)
             g.setFixedWidth(210)
             g.setAccessibleName(f"{name} dial")
-            g.draw(lambda p, v=value, t=title: chartspec.gauge(p, v, warn=limits.get("warn") or None, fail=limits.get("fail") or None, title=t))
+            g.draw(lambda p, v=value, t=title: chartspec.gauge(p, v, warn=limits.get("warn") or None, fail=limits.get("fail") or None,
+                                                             title=fit_text(t, 198), tip=t))
             flow.addWidget(g)
             panel.gauges.append(g)
         panel.lay.addWidget(box)

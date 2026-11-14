@@ -1,5 +1,4 @@
 """More Tools: discovery, topology, live ping and MTR, command runner, TLS certificates, listeners, MAC utilities."""
-import ipaddress
 import socket
 import threading
 import time
@@ -7,19 +6,17 @@ from collections import deque
 from datetime import datetime
 
 import pyqtgraph as pg
-from PySide6.QtCore import QThread, QTimer, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QFont, QFontDatabase, QPainter, QPen
-from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout,
-                               QGraphicsItem, QGraphicsLineItem, QGraphicsRectItem, QGraphicsScene,
-                               QGraphicsSimpleTextItem, QGraphicsView, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-                               QListWidgetItem, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QSpinBox,
-                               QSplitter, QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget, QFrame)
-from core import audit, cmdrun, custom, db, discovery, listeners, nettools, oui, perms, pinger, profiles, reach, reports, snmp
+from PySide6.QtCore import QThread, Qt, Signal
+from PySide6.QtGui import QFontDatabase
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
+                               QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QSpinBox, QSplitter,
+                               QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget, QFrame)
+from core import audit, cmdrun, custom, db, discovery, listeners, nettools, oui, perms, pinger, profiles, reach, snmp
 from core import proxy, topology, vendors
-from ui import plots, theme
-from ui.tools import DevicePicker, OutputBox, _row, reset_button
+from ui import plots
+from ui.tools import DevicePicker, _row, reset_button
 from ui.panels import fit_rows
-from ui.widgets import EmptyHint, GroupPicker
+from ui.widgets import EmptyHint
 from ui.finder import FilterButton, SearchBox, device_sections, shown_devices
 from ui.pingworker import PingWorker
 from ui.toast import toast

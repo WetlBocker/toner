@@ -533,6 +533,12 @@ T.profiles.secret = real_secret
 LoginSession.refuse = None
 check("the topology says the same", errs == {"con": "the console did not accept the user name and password (HTTP 403): Invalid username or password"}, errs)
 net_routes([GATEWAY] + NET)
+_new = I.DeviceDialog()
+check("a new device has nothing stored: its secret boxes do not say 'keep the stored value'", "stored" not in _new.secret.placeholderText()
+      and "stored" not in _new.ssh_pw.placeholderText(), (_new.secret.placeholderText(), _new.ssh_pw.placeholderText()))
+_new.vendor.setCurrentIndex(_new.vendor.findData("fortinet")); app.processEvents()
+check("...nor after another vendor is picked", "stored" not in _new.secret.placeholderText() and "stored" not in _new.ssh_pw.placeholderText(),
+      (_new.secret.placeholderText(), _new.ssh_pw.placeholderText()))
 keyed = add_dev(name="keyed", host="10.0.0.1", password="NETKEY")
 warned = []
 QMessageBox.warning = staticmethod(lambda *a, **k: warned.append(a[2]))

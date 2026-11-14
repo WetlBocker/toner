@@ -77,4 +77,13 @@ check("a width set from code does not pin the column", c.columnWidth(0) != 333, 
 drag(c, 0, 250); c.setItem(0, 0, QTableWidgetItem("changed")); app.processEvents(); app.processEvents()
 check("a press-drag-release on the header pins the column", c.columnWidth(0) == 250, c.columnWidth(0))
 
+from PySide6.QtWidgets import QLineEdit
+app.setStyleSheet("QTableView::item { padding: 6px 8px; }")          # as Toner's style pads a cell
+e = QTableWidget(1, 2); e.setHorizontalHeaderLabels(["Name", "Speed"]); e.setItem(0, 0, QTableWidgetItem("n" * 120))
+box = QLineEdit(); box.setMinimumWidth(box.sizeHint().width() + 60); e.setCellWidget(0, 1, box)       # wider than Qt would make its column
+e.resize(box.minimumWidth() + 260, 200); e.show(); fit(e); app.processEvents(); fit(e); app.processEvents()
+cell = e.visualRect(e.model().index(0, 1))
+check("a cell widget with a minimum width stays inside its cell (the padding is counted), not under the table's edge",
+      box.geometry().right() <= cell.right() and cell.right() <= e.viewport().width(), (box.geometry(), cell, e.viewport().width()))
+app.setStyleSheet("")
 print(f"\n{ok} passed, {bad} failed"); raise SystemExit(1 if bad else 0)

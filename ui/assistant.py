@@ -5,12 +5,12 @@ import threading
 import math
 
 from PySide6.QtCore import QEasingCurve, QEvent, QPoint, QSize, Qt, QThread, Signal
-from PySide6.QtGui import QDesktopServices, QFont, QTextCursor, QTextDocumentFragment
+from PySide6.QtGui import QDesktopServices, QTextCursor, QTextDocumentFragment
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QMessageBox, QPlainTextEdit,
-                               QPushButton, QSizePolicy, QTableWidget, QTableWidgetItem, QTextBrowser, QTextEdit, QToolButton, QVBoxLayout, QWidget)
+                               QPushButton, QTableWidget, QTableWidgetItem, QTextBrowser, QTextEdit, QToolButton, QVBoxLayout, QWidget)
 from urllib.parse import urlsplit
 
-from core import db, orgs
+from core import db
 from core import assistant as AI
 from core.assistant import agent, store, tools as T
 from ui import brandicons, motion, theme

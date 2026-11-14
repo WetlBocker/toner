@@ -45,6 +45,7 @@
     setOption: function (json) {
       var opt = typeof json === "string" ? JSON.parse(json) : json;
       pending = opt;
+      el.title = (opt && opt.__tip) || "";          // a name the chart had to cut short: whole, when the mouse rests on the chart
       if (opt && opt.__empty) {
         emptyEl.textContent = opt.__empty;
         emptyEl.style.display = "flex";
@@ -54,7 +55,9 @@
       emptyEl.style.display = "none";
       var c = ensure();
       c.clear();
-      c.setOption(opt, true);
+      var shown = Object.assign({}, opt);
+      delete shown.__tip;
+      c.setOption(shown, true);
     },
     resize: function () { if (chart) chart.resize(); },
     emitClick: function (payload) { if (bridge) bridge.clicked(JSON.stringify(payload)); },   // what a click does, for tests

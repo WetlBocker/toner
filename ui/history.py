@@ -1,5 +1,6 @@
 """History: every check result in a time range, charts of any checks over time, and the reports (CSV, HTML, PDF of the rows shown,
 and the trend report), which used to be a section of their own."""
+import bisect
 import math
 import os
 import re
@@ -9,9 +10,8 @@ import pyqtgraph as pg
 from PySide6.QtCore import QAbstractItemModel, QModelIndex, QPoint, Qt, QTimer, QUrl
 from PySide6.QtGui import QColor, QDesktopServices, QFont, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy,
-                               QSplitter, QTabWidget, QTableView, QTableWidget, QTreeView, QTableWidgetItem, QToolButton, QVBoxLayout,
-                               QWidget)
-from core import db, display, heatgrid, reports, scope, trends
+                               QSplitter, QTabWidget, QTableWidget, QTreeView, QTableWidgetItem, QToolButton, QVBoxLayout, QWidget)
+from core import backup, db, display, heatgrid, reports, scope, trends
 from core.chartkinds import across_kind, over_time_kind, shown_name, stored_names
 from core.firmware import human_size
 from core.reports import COLORS, fg_for
@@ -23,7 +23,7 @@ from ui.widgets import EmptyHint, FlowLayout, GroupPicker, StatusDelegate, flow,
 from ui.finder import FilterButton, SearchBox, device_sections, listed_devices, shown_devices, wants_archived
 from ui import chartspec
 from ui.timerange import TimeRange
-from ui.webchart import ChartView
+from ui.webchart import ChartView, fit_text
 from ui import status as st
 
 PCT_CHECKS = ("cpu", "memory")
@@ -204,7 +204,8 @@ class TrendChart(QFrame):
         tk = theme.current() or {}
         col = lambda k, d: QColor(tk.get(k, d))
         surface, border, muted, text = col("surface", "#ffffff"), col("border", "#dddddd"), col("muted", "#777777"), col("text", "#222222")
-        self.setStyleSheet(f"QFrame#trendChart {{ background: {surface.name()}; border: 1px solid {border.name()}; border-radius: 10px; }}")
+        self.setStyleSheet(f"QFrame#trendChart {{ background: {surface.name()}; border: 1px solid {border.name()}; "
+                           f"border-radius: {tk.get('r_card', 8)}px; }}")          # the look's corners, as the cards round it have
         self.plot.setBackground(surface)
         for name in ("left", "bottom"):
             ax = self.plot.getAxis(name)
@@ -294,8 +295,32 @@ class TrendChart(QFrame):
         p.drawEllipse(0, 0, 10, 10)
         p.end()
         b.setIcon(QIcon(dot))
+        b.setProperty("check", check)
         b.toggled.connect(lambda on, c=check: self._show(c, on))
         return b
+
+    def view_state(self):
+        """What the person changed here: (the stretch of time zoomed in on, or None for all of it; the names hidden). The stretch is
+        (first stamp, how far left of it, last stamp, how far right of it), so it is found again when readings are added."""
+        n = len(self.stamps)
+        (x0, x1), _y = self.vb.viewRange()
+        hidden = [c for c, curve in self.curves.items() if not curve.isVisible()]
+        if n < 2 or (x0 <= -0.2 and x1 >= n - 0.8):
+            return None, hidden
+        lo, hi = max(0, min(n - 1, round(x0))), max(0, min(n - 1, round(x1)))
+        return (self.stamps[lo], x0 - lo, self.stamps[hi], x1 - hi), hidden
+
+    def restore(self, state):
+        """Put back what view_state() gave, on the chart drawn again."""
+        span, hidden = state
+        for i in range(self.legend_lay.count()):
+            b = self.legend_lay.itemAt(i).widget()
+            if b is not None and b.property("check") in hidden:
+                b.setChecked(False)
+        if span:
+            lo, hi = bisect.bisect_left(self.stamps, span[0]), bisect.bisect_right(self.stamps, span[2]) - 1
+            if 0 <= lo <= hi < len(self.stamps):                    # (readings that left the time range take the zoom with them)
+                self.plot.setXRange(lo + span[1], hi + span[3], padding=0)
 
     def _show(self, check, on):
         """Hide or show one check (its name above the chart was clicked)."""
@@ -791,11 +816,15 @@ class HistoryTab(QWidget):
         fl.addLayout(flow("Period", self.fail_period))
         fl.addWidget(self.fail_when, 1)
         fl.addWidget(self.fail_where, 1)
+        fails_page = QScrollArea()                                         # 30 days is 31 rows of dates: the page scrolls, the window stays its size
+        fails_page.setWidgetResizable(True)
+        fails_page.setFrameShape(QScrollArea.Shape.NoFrame)
+        fails_page.setWidget(fails)
         self.chart_tabs = QTabWidget()
         self.chart_tabs.setDocumentMode(True)
         self.chart_tabs.addTab(over_time, "Over time")
         self.chart_tabs.addTab(across, "Across devices")
-        self.chart_tabs.addTab(fails, "Failures")
+        self.chart_tabs.addTab(fails_page, "Failures")
         self.chart_tabs.currentChanged.connect(self._chart_tab_shown)
         right = self.chart_tabs
         split = QSplitter()
@@ -1011,7 +1040,7 @@ class HistoryTab(QWidget):
             m = re.search(r"\d\s*([%a-zA-Z/]+)\s*$", text)               # a measurement's own unit: '12 ms'
             unit = "%" if pct else " °C" if base == "temperature" else f" {m.group(1)}" if m and len(m.group(1)) <= 4 else ""
             g = LazyChart(210, 170, f"{label} dial", lambda p, v=value, w=lim.get("warn"), f=lim.get("fail"), t=label, u=unit, m=top, lo=low(check):
-                          chartspec.gauge(p, v, warn=w or None, fail=f or None, title=t, unit=u, maximum=m, lower_is_worse=lo))
+                          chartspec.gauge(p, v, warn=w or None, fail=f or None, title=fit_text(t, 198), unit=u, maximum=m, lower_is_worse=lo, tip=t))
             grid.addWidget(g)
             self.compare_gauges.append(g)
         lay.addWidget(box)
@@ -1040,7 +1069,7 @@ class HistoryTab(QWidget):
                 listed = {s: [{"t": r["t"], "device": label, "status": i["status"], "value": i["name"], "message": i["text"] or ""}
                               for i in items if i["status"] == s] for _n, s in RING_SEGMENTS}
             ring = LazyChart(240, 220, label, lambda p, c=counts, n=total, t=label: chartspec.ring(
-                p, [(name, c.get(s, 0), chartspec.status_color(p, s)) for name, s in RING_SEGMENTS], n, title=t),
+                p, [(name, c.get(s, 0), chartspec.status_color(p, s)) for name, s in RING_SEGMENTS], n, title=fit_text(t, 228, 13, True), tip=t),
                 clicked=lambda hit, rows_=listed: self._ring_segment(rows_, hit, DETAIL))
             grid.addWidget(ring)
             self.compare_rings.append(ring)
@@ -1114,6 +1143,7 @@ class HistoryTab(QWidget):
             rows = [r for r in rows if self._base(r["device"]) in names]
         self._fail_rows, self._fail_worst = [], []
         if not rows:
+            self.fail_when.setMinimumHeight(200)
             self.fail_when.draw(lambda p: chartspec.empty(f"No failures or errors in the last {days} days"))
             self.fail_where.draw(lambda p: chartspec.empty(""))
             return
@@ -1133,6 +1163,7 @@ class HistoryTab(QWidget):
             self._fail_rows.append((t, r))
             per_device[r["device"]] = per_device.get(r["device"], 0) + 1
         squares = [(x, y, n) for (x, y), n in cells.items()]
+        self.fail_when.setMinimumHeight(max(200, 90 + 16 * len(grid.rows)))         # every date row tall enough to be labelled, as Over time's are
         self.fail_when.draw(lambda p: chartspec.heatmap(p, grid.cols, grid.rows, squares, title=f"When: FAIL and ERROR rows, last {days} days"))
         worst = sorted(per_device.items(), key=lambda kv: (-kv[1], kv[0].lower()))[:12]
         self._fail_worst = [d for d, _n in worst]
@@ -1241,6 +1272,12 @@ class HistoryTab(QWidget):
             parts.append(f"search: {self.find.text().strip()}")
         return ", ".join(p for p in parts if p)
 
+    def report_scope(self):
+        """What a report of the rows shown says it covers: the time range, that it is only the newest rows when the table stopped
+        at its cap, then the filter and the search."""
+        capped = "" if self.capped.isHidden() else f"newest {db.HISTORY_CAP:,} results only"
+        return ", ".join(p for p in (self.range.describe(), capped, self.scope_text()) if p)
+
     def _export(self, title, pattern, fn, open_after=False):
         rows = self.report_rows()
         if not rows:
@@ -1251,7 +1288,7 @@ class HistoryTab(QWidget):
         start = os.path.join(folder, f"Toner-{datetime.now():%Y-%m-%d_%H%M}{ext}") if folder and os.path.isdir(folder) else ""
         path, _ = QFileDialog.getSaveFileName(self, title, start, pattern)
         if path:
-            fn(rows, path, scope=", ".join(p for p in (self.range.describe(), self.scope_text()) if p), when=None)     # dated when made
+            fn(rows, path, scope=self.report_scope(), when=None)     # dated when made
             if open_after:
                 QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
@@ -1294,17 +1331,23 @@ class HistoryTab(QWidget):
         self.draw(fresh=fresh)
 
     def draw(self, *_, fresh=True):
-        """The Over time panels for the device and checks picked. Not `fresh` (nothing new was read): panels already showing them
-        are kept, with what was picked and zoomed in them."""
+        """The Over time panels for the device and checks picked. Not `fresh` (a search or funnel change), or with nothing new stored
+        since they were drawn: panels already showing them are kept as they are. Drawn again, they keep what was zoomed, hidden,
+        selected and scrolled to (ui.overtime)."""
         d = self.dev.currentData()
         stored = self.map.get(d or "", [])
         picked = [c for k in self.chk.selected() if k in self.check_keys for c in stored_names(self.check_keys[k], stored)]
-        if not fresh and (d, picked) == self._drawn:
+        if not fresh and self._drawn and (d, picked) == self._drawn[:2]:
             return
-        self._drawn = (d, picked)
         with db.within(db.split_key(d or "")[1]):                         # that organization's limits
             th = db.get_thresholds()
         vendor = self.vendors.get(self._base(d), "") if d else ""
+        run = db.last_run() or {}
+        copies = len(backup.list_backups(d)) if d and "config backup" in picked else 0
+        drawn = (d, picked, self.range.describe(), run.get("id"), run.get("started_at"), copies, repr(th), vendor)
+        if drawn == self._drawn:                                          # a refresh with nothing new stored (an Inventory change, a playbook)
+            return
+        self._drawn = drawn
         self.panels.show_checks(d or "", vendor, picked if d else [], *self.range.span(), th)
 
     def screen_context(self):

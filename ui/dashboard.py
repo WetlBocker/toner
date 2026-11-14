@@ -2,12 +2,12 @@
 from datetime import datetime
 
 from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QKeySequence, QPainter, QPalette, QPen, QPixmap, QShortcut
-from PySide6.QtWidgets import (QAbstractItemView, QApplication, QBoxLayout, QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu,
-                               QPushButton, QScrollArea, QTableWidget, QTableWidgetItem, QToolButton, QToolTip, QVBoxLayout, QWidget)
+from PySide6.QtGui import QColor, QFont, QKeySequence, QPainter, QPalette, QPixmap, QShortcut
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QBoxLayout, QCheckBox, QComboBox, QHBoxLayout, QLabel, QMenu, QPushButton,
+                               QScrollArea, QTableWidget, QTableWidgetItem, QToolButton, QToolTip, QVBoxLayout, QWidget)
 import html
 
-from core import acks, audit, backup, db, display, fleet, maintenance, notify, perms, reports, scope, vendors
+from core import acks, audit, backup, db, display, fleet, maintenance, notify, perms, scope, vendors
 from ui import icons, theme
 from ui.widgets import EmptyHint, FlowLayout, RefreshButton, StatusDelegate, add_tools_menu, can_connect, filling
 from ui import status as st

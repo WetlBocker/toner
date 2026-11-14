@@ -48,6 +48,7 @@ class TwoFactorDialog(QDialog):
                 form.addRow(under)
         self.message = error_label()                    # a save that failed, in the colour the other dialogs give a failure
         self.save_btn = primary("Save")
+        self.save_btn.setDefault(True)                  # the one button: Enter anywhere in the dialog presses it
         self.save_btn.clicked.connect(self._save)
         outer = QVBoxLayout(self)
         outer.addLayout(form)
