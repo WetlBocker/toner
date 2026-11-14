@@ -1,5 +1,6 @@
-"""The device page's Vulnerabilities tab: the device's advisories in its latest scan as a pie by CVSS severity; selecting a slice
-lists those advisories underneath. The Scanning page's pie uses the same bands (band_slices)."""
+"""The device page's Vulnerabilities tab: the device's advisories in its latest scan as a pie by CVSS severity, with all of them
+listed underneath; selecting a slice lists that severity's, and selecting it again lists them all. The Scanning page's pie uses
+the same bands (band_slices)."""
 import re
 
 from PySide6.QtCore import QUrl
@@ -49,7 +50,7 @@ def band_slices(p, scores):
 class VulnTab(QWidget):
     def __init__(self):
         super().__init__()
-        self.rows = []
+        self.rows, self.band = [], None                  # the advisories; the severity listed (None: all of them)
         self.empty = QLabel()
         self.empty.setProperty("muted", True)
         self.empty.setWordWrap(True)
@@ -87,14 +88,19 @@ class VulnTab(QWidget):
         if self.rows:
             scores = [r["cvss"] for r in self.rows]
             self.chart.draw(lambda p: chartspec.pie(p, band_slices(p, scores), counts=True))
+            self._list(None)                              # all of them until a slice is chosen: the list was hidden until then
+
+    def _list(self, band):
+        """The advisories of one severity, or all of them (None), highest score first."""
+        self.band = band
+        self.detail.show_rows(sorted((r for r in self.rows if band is None or band_of(r["cvss"]) == band), key=lambda r: -(r["cvss"] or 0)), COLUMNS)
+        self.detail.show()
 
     def _slice(self, hit):
-        """A severity was selected: its advisories, highest score first."""
+        """A severity was selected: its advisories; the one already listed: all of them again."""
         name = hit.get("name") if hit.get("kind") == "series" else None
-        if name not in BAND_STATUS:
-            return
-        self.detail.show_rows(sorted((r for r in self.rows if band_of(r["cvss"]) == name), key=lambda r: -(r["cvss"] or 0)), COLUMNS)
-        self.detail.show()
+        if name in BAND_STATUS:
+            self._list(None if name == self.band else name)
 
     def _open(self, index):
         r = self.detail.row_at(index)

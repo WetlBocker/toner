@@ -9,7 +9,7 @@ password or PIN is right, on the key page (and on Linux and macOS the key's own 
 import threading
 import webbrowser
 
-from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QEvent, QObject, Qt, QThread, QTimer, Signal
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QStackedWidget,
                                QVBoxLayout)
 
@@ -116,6 +116,18 @@ def heading(text=""):
     return lab
 
 
+def show_name(lab, name):
+    """A name on its own line of a card. An email address has nowhere to wrap, so one too long is cut in the middle, whole in the tip."""
+    lab.ensurePolished()                                  # (the font a style sheet gives the label)
+    box = lab.parentWidget()
+    m = box.layout().contentsMargins()
+    room = min(box.maximumWidth(), max(box.width(), lab.width())) - m.left() - m.right() - 2 * box.frameWidth()
+    shown = lab.fontMetrics().elidedText(name, Qt.TextElideMode.ElideMiddle, room)
+    lab.setText(shown)
+    lab.setToolTip("" if shown == name else name)
+    lab.setAccessibleName("" if shown == name else name)
+
+
 def words(text=""):
     lab = QLabel(text)
     lab.setProperty("muted", True)
@@ -151,8 +163,18 @@ def field(lay, text, secret=False, widget=None):
     return box
 
 
+class _Button(QPushButton):
+    """A card's button: Enter presses it while it has the focus. (None is a dialog's default button, so that Enter in a box presses
+    its own page's button and never a hidden one; without this, Enter on a focused button did nothing.)"""
+
+    def keyPressEvent(self, e):
+        if e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            return self.click()
+        super().keyPressEvent(e)
+
+
 def primary(text):
-    b = QPushButton(text)
+    b = _Button(text)
     b.setProperty("primary", True)
     b.setAutoDefault(False)                   # Enter in a box presses its own page's button (returnPressed), never a hidden one
     b.setMinimumHeight(34)
@@ -160,7 +182,7 @@ def primary(text):
 
 
 def link(text):
-    b = QPushButton(text)
+    b = _Button(text)
     b.setProperty("flat", True)
     b.setAutoDefault(False)
     b.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -371,7 +393,21 @@ class SignInWindow(QDialog):
         if text:
             lay.addWidget(words(text))
         self.pages.addWidget(frame)
+        frame.installEventFilter(self)                   # an error shown later makes its page taller (eventFilter)
         return frame, lay
+
+    def _fit(self):
+        """The card is as tall as the page showing, with what that page shows now."""
+        page = self.pages.currentWidget()
+        lay = page.layout()
+        height = lay.totalHeightForWidth(page.width()) if lay.hasHeightForWidth() else page.sizeHint().height()
+        if height != self.pages.height():
+            self.pages.setFixedHeight(height)
+
+    def eventFilter(self, obj, e):
+        if e.type() == QEvent.Type.LayoutRequest and obj is self.pages.currentWidget():
+            self._fit()
+        return super().eventFilter(obj, e)
 
     @staticmethod
     def _finish(lay, last_box, error, button, action, *links):
@@ -398,7 +434,7 @@ class SignInWindow(QDialog):
         for box in self._secrets:                        # no password, PIN or code outlives its page
             box.setText("")
         self.pages.setCurrentWidget(page)
-        self.pages.setFixedHeight(page.sizeHint().height())
+        self._fit()
         focus.setFocus()
 
     # ---------------------------------------------------------------- the steps
@@ -423,7 +459,7 @@ class SignInWindow(QDialog):
             say(self.name_error, dirsignin.CANNOT_APPROVE)
             return
         for lab in (self.who, self.code_who, self.pin_who):
-            lab.setText(name)
+            show_name(lab, name)
         self.pw.setText("")
         if self.sso:
             return self._sso()
@@ -620,7 +656,7 @@ class SignInWindow(QDialog):
             self.approve_text.setText(a.message)
         if a.name:                                       # the account's name as the directory or provider gives it, not as typed
             for lab in (self.code_who, self.pin_who):
-                lab.setText(a.name)
+                show_name(lab, a.name)
         page, focus = {"duo": (self.duo_page, self.duo_cancel), "pin": (self.pin_page, self.pin),
                        "choose-pin": (self.choose_page, self.pin1), "approve": (self.approve_page, self.admin)}[a.stage]
         self._go(page, focus)

@@ -20,6 +20,7 @@ from ui.widgets import FlowLayout, GroupPicker
 
 EMPTY = "No readings in this time range"
 HINT = "Select a square to see what happened then"
+LATEST = "The latest reading, from {t}. The time range does not apply."     # gauges, certificates and the wheel
 OLD_AGENT = "Not reported by this computer's agent yet"
 NOT_REPORTED = "Not reported by this computer"
 SEARCHED = "Windows last searched for updates on {date}"
@@ -248,7 +249,7 @@ class CheckPanels(QScrollArea):
             return panel.note(EMPTY)
         panel.stack = ChartStack()
         panel.stack.setMinimumHeight(300)
-        panel.stack.set_series(series, self.th.get(panel.checks[0].split(" (")[0]), marks=marks)
+        panel.stack.set_series(series, self.th.get(panel.checks[0].split(" (")[0].replace(" ", "_")), marks=marks)   # "wan usage" -> "wan_usage"
         panel.lay.addWidget(panel.stack)
 
     def _heatmap(self, panel):
@@ -354,6 +355,7 @@ class CheckPanels(QScrollArea):
         if not dials:
             return panel.note(EMPTY)
         limits = self.th.get("disk") or {}
+        panel.note(LATEST.format(t=str(last["t"])[:16]))
         box = QWidget()
         flow = FlowLayout(8, 8)
         box.setLayout(flow)
@@ -382,6 +384,7 @@ class CheckPanels(QScrollArea):
             sev = (it["data"] or {}).get("severity") or ""
             groups[sev if sev in groups else "Unrated"].append(it)
         panel.groups = groups
+        panel.note(LATEST.format(t=str(last["t"])[:16]))
         panel.chart = ChartView(min_height=240)
         panel.chart.setAccessibleName(display.check_name(check))
         panel.chart.draw(lambda p: chartspec.ring(p, [(s, len(groups[s]), _severity_colour(p, s)) for s in SEVERITIES], len(items)))
@@ -447,11 +450,13 @@ class CheckPanels(QScrollArea):
         panel.table.selectRow(0)
 
     def _certs(self, panel):
-        rows = []
+        rows, read = [], []
         for c in panel.checks:
             last, items = self._latest(c)
             if last is not None:
                 rows += cert_rows(c, last, items)
+                read.append(str(last["t"]))
         if not rows:
             return panel.note(EMPTY)
+        panel.note(LATEST.format(t=max(read)[:16]))
         self._add_table(panel, rows, CERTS)

@@ -11,8 +11,8 @@ from PySide6.QtWidgets import QDialog, QLabel, QStackedWidget, QVBoxLayout, QWid
 
 from core import datakey, directory, dirsignin, oidc, perms
 from ui import status
-from ui.signinwindow import (DAMAGED, DAMAGED_ERRORS, DUO_TEXT, DUO_TITLE, SAID, Job, Wait, field, heading, link, primary, say,
-                             words)
+from ui.signinwindow import (DAMAGED, DAMAGED_ERRORS, DUO_TEXT, DUO_TITLE, SAID, SSO_TEXT, SSO_TITLE, Job, Wait, field, heading, link,
+                             primary, say, words)
 
 
 class TestLoginDialog(QDialog):
@@ -50,6 +50,12 @@ class TestLoginDialog(QDialog):
         self._finish(lay, self.code_ok, self._duo_code, self.code_cancel)
         self.code_cancel.clicked.connect(self._duo_cancel)
         self.code.returnPressed.connect(self.code_ok.click)
+
+        self.sso_page, lay = self._page()               # the browser has it (up to five minutes): the sign-in window's words, and a way back
+        lay.addWidget(heading(SSO_TITLE))
+        lay.addWidget(words(SSO_TEXT.format(provider=cfg.get("name") or "")))
+        self.sso_cancel = primary("Cancel")
+        self._finish(lay, self.sso_cancel, self._duo_cancel)
 
         QVBoxLayout(self).addWidget(self.pages)
         self._go(self.form_page, self.user)
@@ -96,7 +102,8 @@ class TestLoginDialog(QDialog):
         say(self.result, "")
         self._turn += 1
         t, cancel = self.test, self._cancel = dirsignin.TestLogin(self.cfg), threading.Event()
-        self._run(lambda: t.check_sso(webbrowser.open, cancel), lambda _r, e: self._end(e))
+        self._go(self.sso_page, self.sso_cancel)
+        self._run(lambda: t.check_sso(webbrowser.open, cancel), lambda _r, e: self._end(e), block=False)
 
     def _push(self):
         t, cancel = self.test, threading.Event()
@@ -113,7 +120,7 @@ class TestLoginDialog(QDialog):
 
     def _duo_cancel(self):
         self._drop()
-        self._go(self.form_page, self.user)
+        self._go(self.form_page, self.test_btn if self.user.isHidden() else self.user)     # (SSO has no boxes)
 
     def _duo_code(self):
         t, box = self.test, [self.code.text()]

@@ -118,6 +118,21 @@ HELPER["state"] = "off"
 sw.setChecked(True)
 check("turned on, at once: the rules say so, with an audit row", roles.require_keys() and sw.isChecked() and audit.recent()[0]["action"] == "security keys required turned on")
 
+# both switches keep the window's thread for a while: a wait cursor shows it is working, and is gone before anything is said
+from PySide6.QtCore import Qt as _Qt
+seen, real_set = [], roles.set_require_keys
+busy = lambda: QApplication.overrideCursor() is not None and QApplication.overrideCursor().shape() == _Qt.CursorShape.WaitCursor
+roles.set_require_keys = lambda on: seen.append(busy()) or real_set(on)
+QMessageBox.warning = staticmethod(lambda *a, **k: (seen.append(("said", busy())), msgs.append(a[2]))[0] or QMessageBox.StandardButton.Ok)
+HELPER["state"] = "on"
+sw.setChecked(False); sw.setChecked(True)
+check("the require switch: a wait cursor while the rules are changed, none once it is refused or done",
+      seen == [True, True, ("said", False)] and QApplication.overrideCursor() is None, seen)
+HELPER["state"] = "off"
+roles.set_require_keys = real_set
+QMessageBox.warning = staticmethod(lambda *a, **k: msgs.append(a[2]) or QMessageBox.StandardButton.Ok)
+sw.setChecked(True)
+
 # the helper switch's refusals
 msgs.clear(); page.load()
 check("helper switch off, require on", not page.helper.isChecked() and page.require.isChecked())

@@ -87,6 +87,7 @@ class RecoveryDialog(_CardDialog):
         self.key.setFont(mono)
         self.key.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard)
         self.key.setAccessibleName("Recovery key")
+        self.key.setWordWrap(True)                       # a wider fixed font (GNOME, KDE) breaks it at a hyphen, not off the card's edge
         self.copy = link("Copy")
         self.copy.setAccessibleName("Copy the recovery key")
         self.copy.clicked.connect(lambda: QGuiApplication.clipboard().setText(key))

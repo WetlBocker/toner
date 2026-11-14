@@ -141,6 +141,15 @@ check("each bandwidth box sits inside its own row, every box as wide, and the po
 pk.hide()
 check("without wan there are no WAN columns", InterfacePicker(LIST, []).table.columnCount() == 3 and InterfacePicker(LIST, []).wan() == {})
 check("without the check-only tick the first column is hidden", InterfacePicker(LIST, [], wan={}, choose_checked=False).table.isColumnHidden(0))
+from PySide6.QtTest import QTest
+typed = InterfacePicker(LIST, [], wan={}, choose_checked=False)
+box = typed.table.cellWidget(0, 4)
+QTest.keyClicks(box, "500 Mbps")
+check("the bandwidth box takes a number only", box.text() == "500", box.text())
+check("...and typing one marks the interface as WAN", typed.wan() == {LIST[0][0]: 500.0}, typed.wan())
+check("with only WAN to choose, the count is of the WAN links", typed.count.text().startswith("1 chosen"), typed.count.text())
+typed.table.item(1, 3).setCheckState(Qt.CheckState.Checked)
+check("...and follows a tick", typed.count.text().startswith("2 chosen"), typed.count.text())
 
 print("== Edit device > Checks")
 from ui.devicechecks import DeviceChecks

@@ -247,6 +247,10 @@ check("every panel that follows the range says there were no readings", all(t ==
 eb = {O.shown_name(p.checks[0]): p for p in cp.panels}
 check("gauges, certificates and the wheel still show the latest reading", len(eb["disks"].gauges) == 2 and eb["certificates"].table.model().rowCount() == 2
       and eb["patches"].chart.opt["graphic"][0]["style"]["text"] == "4", texts)
+import re as _re
+said = [eb[k].findChildren(O.QLabel) for k in ("disks", "certificates", "patches")]
+check("...and each says so, with when it was read", all(any(_re.fullmatch(r"The latest reading, from \d{4}-\d\d-\d\d \d\d:\d\d\. The time range does not apply\.", l.text())
+                                                           for l in labels) for labels in said), [[l.text() for l in labels] for labels in said])
 
 print("== uptime words")
 check("days and hours, or hours and minutes under a day", display.uptime_words(12 * 24 + 4.2) == "12 days 4 hours" and display.uptime_words(5 + 20 / 60) == "5 hours 20 minutes"

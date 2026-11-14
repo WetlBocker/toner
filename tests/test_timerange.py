@@ -88,7 +88,8 @@ db.save_run([Result(f"sw{i}", "cpu", "FAIL" if i == 1 else "OK", f"{30 + i}%", "
 w = H.HistoryTab(); w.resize(1100, 600); w.show(); app.processEvents()
 check("with results the hint is gone", not w.empty.isVisible() and not w.capped.isVisible())
 w.range.set_dates(date(2020, 1, 1), date(2020, 1, 2)); app.processEvents()
-check("a range with nothing in it is simply empty, no hint", w.detail.model().rowCount() == 0 and not w.model.cells and not w.empty.isVisible())
+check("a range with nothing in it is empty and says so (not 'No runs yet')", w.detail.model().rowCount() == 0 and not w.model.cells
+      and w.empty.isVisible() and w.empty.head.text() == "No results in this time range", w.empty.head.text())
 w.range.set_hours(8); app.processEvents()
 check("the runs list is gone", not hasattr(w, "runs") and not hasattr(w, "show_run") and not hasattr(w, "run_ids"))
 check("the page has a time range, the last 8 hours", isinstance(w.range, TimeRange) and w.range.describe() == "Last 8 hours")

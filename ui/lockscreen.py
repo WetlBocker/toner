@@ -17,7 +17,7 @@ from ui import theme
 from ui.keyask import KeyAsk
 from ui.widgets import while_alive
 from ui.signinwindow import (DAMAGED, DAMAGED_ERRORS, KEY_TEXT, KEY_TITLE, Job, Wait, card, centred, error_label, heading, link, primary,
-                             say, words)
+                             say, show_name, words)
 
 _now = time.time                                         # wall-clock: it keeps counting while the computer sleeps (the tests move it)
 _INPUT = {QEvent.Type.KeyPress, QEvent.Type.MouseButtonPress, QEvent.Type.MouseMove, QEvent.Type.Wheel, QEvent.Type.TouchBegin}
@@ -154,9 +154,9 @@ class LockScreen(QWidget):
         for w in (self.pw, self.unlock, self.other):
             w.setEnabled(True)
         minutes, self._idle_minutes = self._idle_minutes, None
-        self.reason.setText(f"Locked after {minutes} minutes without use." if minutes else f"Locked by {user}.")
+        self.reason.setText(f"Locked after {minutes} minute{'' if minutes == 1 else 's'} without use." if minutes else f"Locked by {user}.")
         directory_user = session.kind() == "directory"
-        self.who.setText(user if directory_user else f"{user}, local account")
+        show_name(self.who, user if directory_user else f"{user}, local account")
         self.avatar.setText("".join(w[0] for w in user.split()[:2]).upper())
         t = theme.current()
         self.setStyleSheet(f"QWidget#lockScreen, QWidget#lockCover {{ background: {t.get('bg', '#081420')}; }}")

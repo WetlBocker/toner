@@ -140,6 +140,20 @@ for attr, title in w.HEADERS:
 w.update_headers()
 check("the Inventory's says how the devices are doing", w.headers["inventory"].context.text() == "5 devices, 2 failing, 1 with warnings", w.headers["inventory"].context.text())
 check("Results has one too, with its summary as the context", r.header.title.text() == "Global - Results" and r.header.context is r.summary)
+from PySide6.QtWidgets import QPushButton as _Button
+from ui.widgets import SectionHeader
+sh = SectionHeader("Global - Results", "Latest results for 13 devices, from 2026-11-14 01:28 (31 min ago). Run checks for fresh ones.")
+wide = _Button("x"); wide.setFixedWidth(420)
+sh.add(wide)
+sh.resize(1100, 60); sh.show(); app.processEvents()
+check("with room, the context is beside the title", sh.context.geometry().top() < sh.title.geometry().bottom(), (sh.context.geometry(), sh.title.geometry()))
+sh.resize(760, 60); app.processEvents()
+check("squeezed by the actions, the context goes under the line at full width, not into a column of single words",
+      sh.context.geometry().top() >= sh.title.geometry().bottom() and sh.context.width() > 600 and wide.geometry().right() <= sh.width(),
+      (sh.context.geometry(), sh.title.geometry()))
+sh.resize(1100, 60); app.processEvents()
+check("...and back beside it when the room returns", sh.context.geometry().top() < sh.title.geometry().bottom() and wide.geometry().right() >= sh.width() - 2)
+sh.close()
 
 print("== Inventory")
 inv = w.inventory; w.go("Inventory"); inv.refresh(); app.processEvents()

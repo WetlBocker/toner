@@ -15,7 +15,7 @@ from ui.overtime import EMPTY, CheckPanels, config_switch, config_text, config_t
 from ui.timerange import TimeRange
 from ui.vulntab import VulnTab
 from ui.widgets import FlowLayout, GroupPicker, StatusDelegate
-from ui import chartspec, status as st
+from ui import chartspec, status as st, theme
 from ui.webchart import ChartView
 
 
@@ -99,7 +99,7 @@ class DeviceSummary(QWidget):
             self.info.removeRow(0)
         d = self.dev
         if d.get("kid"):                                    # a console's device: a view, with no record of its own to describe
-            self.info.addRow(QLabel("<span style='color:gray'>Status</span>"), QLabel(f"{d['kid']['status']}  ({display.read_on(d['kid']['last_seen'])})"))
+            self.info.addRow(QLabel(theme.muted("Status")), QLabel(f"{d['kid']['status']}  ({display.read_on(d['kid']['last_seen'])})"))
             return
         prof = (profiles.get(d.get("profile_id")) or {}).get("name", "")
         try:
@@ -134,7 +134,7 @@ class DeviceSummary(QWidget):
                     lab.setStyleSheet(f"font-weight: 600; color: {st.ink(health['status'])};")
                 lab.setWordWrap(True)
                 lab.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-                self.info.addRow(QLabel(f"<span style='color:gray'>{k}</span>"), lab)
+                self.info.addRow(QLabel(theme.muted(f"{k}")), lab)
 
     @staticmethod
     def _own_settings(d):
@@ -449,7 +449,7 @@ class DeviceView(QDialog):
             self._trend_view().draw(lambda p: chartspec.empty(note))
             return
         for group in groups.values():
-            limits = th.get(group[0][0].split(" (")[0]) if len(group) == 1 else None
+            limits = th.get(group[0][0].split(" (")[0].replace(" ", "_")) if len(group) == 1 else None   # "wan usage" -> "wan_usage"
             self._draw_trend(self._trend_view(), [(display.check_name(c), pts) for c, pts in group], limits)
 
     def _trend_view(self):

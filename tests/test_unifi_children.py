@@ -318,7 +318,10 @@ d.vendor.setCurrentIndex(d.vendor.findData("unifi"))
 d.platform.setCurrentIndex(d.platform.findData("unifi_cloud"))
 d.name.setText("acct")
 CALLS.clear()
+listed = lambda dlg: [dlg.sites.item(i).text() for i in range(dlg.sites.count())]
+check("before a key is typed the Sites list says what it waits for", listed(d) == ["Enter the API key to list the account's sites"] and not d.ticked_sites(), listed(d))
 d.secret.setText("CLOUDKEY"); d.secret.editingFinished.emit()
+check("while the sites are read it says so", listed(d) == ["Reading the sites..."] and not d.ticked_sites(), listed(d))
 end = time.time() + 5
 while (d.sites.count() == 0 or (d._sites_job and d._sites_job.isRunning())) and time.time() < end:
     app.processEvents(); time.sleep(0.02)
@@ -328,6 +331,15 @@ check("it lists the account's sites with tick boxes", [d.sites.item(i).text() fo
       and all(d.sites.item(i).flags() & Qt.ItemFlag.ItemIsUserCheckable for i in range(d.sites.count())), [d.sites.item(i).text() for i in range(d.sites.count())])
 check("the sites were fetched off the UI thread, with the key typed", CALLS and all(c["path"] == "/sites" and c["key"] == "CLOUDKEY" and c["thread"] is not threading.main_thread() for c in CALLS),
       [(c["path"], c["thread"].name) for c in CALLS])
+none = I.DeviceDialog(); none.vendor.setCurrentIndex(none.vendor.findData("unifi")); none.platform.setCurrentIndex(none.platform.findData("unifi_cloud"))
+kept_sites, ROUTES["/sites"] = ROUTES["/sites"], {"data": []}
+none.secret.setText("CLOUDKEY"); none.secret.editingFinished.emit()
+end = time.time() + 5
+while none._sites_job and none._sites_job.isRunning() and time.time() < end:
+    app.processEvents(); time.sleep(0.02)
+app.processEvents()
+ROUTES["/sites"] = kept_sites
+check("an account with no sites says so", listed(none) == ["This account has no sites"] and not none.ticked_sites(), listed(none))
 other = I.DeviceDialog(); other.vendor.setCurrentIndex(other.vendor.findData("unifi")); other.platform.setCurrentIndex(other.platform.findData("unifi_network"))
 check("other kinds have no Sites list", not other.access.isRowVisible(other.sites))
 for i in range(d.sites.count()):

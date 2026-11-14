@@ -52,6 +52,11 @@ check("a session log still shows too", "show version" in tab.view.toPlainText())
 
 save = next((b for b in tab.findChildren(QPushButton) if b.text() == "Save a readable copy..."), None)
 check("there is a Save a readable copy... button", save is not None)
+check("the footer counts every log, not only the sessions", tab.note.text() == f"4 logs in {sessionlog.log_dir()}", tab.note.text())
+tab.table.clearSelection()
+check("with no log chosen the button is off", not save.isEnabled())
+tab.table.selectRow(0)
+check("...and on again with one chosen", save.isEnabled())
 picked = []
 out = Path(SP) / "readable.log"
 QFileDialog.getSaveFileName = staticmethod(lambda parent, title, default, *a: picked.append(default) or (str(out), ""))

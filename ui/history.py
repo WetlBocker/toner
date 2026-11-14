@@ -6,7 +6,7 @@ import re
 from datetime import datetime, timedelta
 
 import pyqtgraph as pg
-from PySide6.QtCore import QAbstractItemModel, QModelIndex, QPoint, Qt, QUrl
+from PySide6.QtCore import QAbstractItemModel, QModelIndex, QPoint, Qt, QTimer, QUrl
 from PySide6.QtGui import QColor, QDesktopServices, QFont, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy,
                                QSplitter, QTabWidget, QTableView, QTableWidget, QTreeView, QTableWidgetItem, QToolButton, QVBoxLayout,
@@ -38,7 +38,7 @@ SERIES_COLORS = ["#f59e0b", "#10b981", "#ef4444", "#8b5cf6", "#06b6d4", "#ec4899
 
 
 def is_percent(check):
-    return check.split(" (")[0] in PCT_CHECKS + ("sessions",) or check.startswith("channel util")
+    return check.split(" (")[0] in PCT_CHECKS + ("sessions", "wan usage") or check.startswith("channel util")
 
 
 def fmt_value(check, v):
@@ -467,8 +467,14 @@ class RowsModel(QAbstractItemModel):
         return SEVERITY.get(self._all_cells[i][3], 0)
 
     def _value(self, i, col):
-        """Row i's cell under column col, as it sorts (Status by severity)."""
-        return self._sev(i) if col == 3 else self._all_cells[i][self.CELL[col]]
+        """Row i's cell under column col, as it sorts (Status by severity, Value by its number: 9% before 100%)."""
+        if col == 3:
+            return self._sev(i)
+        text = self._all_cells[i][self.CELL[col]]
+        if col != 4:
+            return text
+        n = self._all_rows[i]["numeric"]
+        return (n is None, n or 0, text)
 
     def _order(self):
         col, order = self.key
@@ -684,9 +690,11 @@ class HistoryTab(QWidget):
         self.range = TimeRange()                                            # one range for the table, the exports and Over time
         self._read = None                                                   # (archived too?, the range's rows, their cells) from the last read
         self._stale = False                                                 # a re-read was asked for while the page was hidden
+        self._no_runs, self._drawn = False, None                            # nothing stored at all; the (device, checks) Over time shows
         self.range.changed.connect(self._range_changed)
         self.model = RowsModel()
         self.detail = QTreeView()                                           # a row per device, closed; its checks under it, their runs under those
+        self.detail.fit_keep = (0,)                                         # beside the charts it is narrow: the device's name is read first (ui.tablefit)
         self.detail.setAccessibleName("Checks by device")
         self.detail.setModel(self.model)
         self.detail.setUniformRowHeights(True)
@@ -836,8 +844,10 @@ class HistoryTab(QWidget):
         if cur in self.map:
             self.dev.setCurrentIndex(self.dev.findData(cur))
         self.dev.blockSignals(False)
-        self.fill_checks(self.dev.currentData())
+        self.fill_checks(self.dev.currentData(), fresh=reload_groups)       # a search or funnel change leaves the same panels alone
         self.show_rows(reread=reload_groups)                                # a search or funnel change only filters what was read
+        if self.chart_tabs.currentIndex() == 2:                             # Failures, while it is shown, counts the same devices
+            self.draw_failures()
 
     def showEvent(self, e):
         super().showEvent(e)
@@ -861,7 +871,7 @@ class HistoryTab(QWidget):
                 none_at_all = not rows and db.last_run() is None
             self.capped.setText(f"Showing the newest {db.HISTORY_CAP:,} results. Narrow the time range to see older ones.")
             self.capped.setVisible(len(rows) > db.HISTORY_CAP)
-            self.empty.setVisible(none_at_all)
+            self._no_runs = none_at_all
             rows = rows[:db.HISTORY_CAP]
             self._read = (archived, rows, RowsModel.cells_of(rows))
             self._stale = False
@@ -869,6 +879,10 @@ class HistoryTab(QWidget):
         _a, rows, cells = self._read
         keep = [i for i, r in enumerate(rows) if names is None or self._base(r["device"]) in names]
         self.model.set_rows([rows[i] for i in keep], [cells[i] for i in keep])
+        self.empty.set_text(*(("No runs yet", "Press Run checks (Results tab) to start the history") if self._no_runs else
+                              ("No results in this time range", "Choose a longer range to see older results") if not rows else
+                              ("Nothing matches", "Clear the search box or the filter to see every device")))    # as Inventory says it
+        self.empty.setVisible(not keep)
 
     # ---------- the charts beside the table
     def _chart_tab_shown(self, i):
@@ -954,8 +968,12 @@ class HistoryTab(QWidget):
         avg = db.average_per_device(stored, days) if days else {}
         cache, dials = {}, []                                         # (label, value, status, limits, check, value text)
 
-        def band(v, lim):
-            return "FAIL" if lim.get("fail") and v >= lim["fail"] else "WARN" if lim.get("warn") and v >= lim["warn"] else "OK"
+        def low(check):                                              # uptime, battery, signal, toner: the lower reading is the worse one
+            return check.split(" (")[0].replace(" ", "_") in db.LOWER_IS_WORSE
+
+        def band(v, lim, check):
+            past = (lambda limit: v <= limit) if low(check) else (lambda limit: v >= limit)
+            return "FAIL" if lim.get("fail") and past(lim["fail"]) else "WARN" if lim.get("warn") and past(lim["warn"]) else "OK"
 
         def per_item(device, check, items, averages):
             lim, name = self._limits(device, check, cache), db.label_org(device)
@@ -964,7 +982,7 @@ class HistoryTab(QWidget):
                 if v is not None:
                     d = it["data"] or {}
                     size = f"\n{human_size(d['used'])} of {human_size(d['total'])}" if d.get("used") is not None and d.get("total") else ""
-                    dials.append((f"{name} / {it['name']}{size}", v, band(v, lim), lim, check, ""))
+                    dials.append((f"{name} / {it['name']}{size}", v, band(v, lim, check), lim, check, ""))
             return bool(items)
 
         itemized = shown == "datasets"
@@ -976,13 +994,13 @@ class HistoryTab(QWidget):
             lim = self._limits(r["device"], r["check_name"], cache)
             v = avg.get(r["device"]) if days else r["numeric"]
             if v is not None:
-                dials.append((db.label_org(r["device"]), v, band(v, lim) if days else r["status"], lim, r["check_name"], r["value"] or ""))
+                dials.append((db.label_org(r["device"]), v, band(v, lim, r["check_name"]) if days else r["status"], lim, r["check_name"], r["value"] or ""))
         if shown == "temperature":                                    # TrueNAS drives: their "disks" items are temperatures
             drives = {k: v for k, v in db.latest_items_per_device(["disks"]).items() if self._vendor(k[0]) == "truenas" and mine(k[0])}
             drive_avg = db.average_items_per_device(["disks"], days) if days and drives else {}
             for (device, _c), (_t, items) in drives.items():
                 per_item(device, "temperature", items, drive_avg)
-        dials.sort(key=lambda d: (WORST.get(d[2], 3), -d[1]))
+        dials.sort(key=lambda d: (WORST.get(d[2], 3), d[1] if low(d[4]) else -d[1]))
         box = QWidget()
         grid = FlowLayout(8, 8)
         box.setLayout(grid)
@@ -992,8 +1010,8 @@ class HistoryTab(QWidget):
             top = 100 if pct else max(value * 1.25, float(lim.get("fail") or 0) * 1.1, 1)
             m = re.search(r"\d\s*([%a-zA-Z/]+)\s*$", text)               # a measurement's own unit: '12 ms'
             unit = "%" if pct else " °C" if base == "temperature" else f" {m.group(1)}" if m and len(m.group(1)) <= 4 else ""
-            g = LazyChart(210, 170, f"{label} dial", lambda p, v=value, w=lim.get("warn"), f=lim.get("fail"), t=label, u=unit, m=top:
-                          chartspec.gauge(p, v, warn=w or None, fail=f or None, title=t, unit=u, maximum=m))
+            g = LazyChart(210, 170, f"{label} dial", lambda p, v=value, w=lim.get("warn"), f=lim.get("fail"), t=label, u=unit, m=top, lo=low(check):
+                          chartspec.gauge(p, v, warn=w or None, fail=f or None, title=t, unit=u, maximum=m, lower_is_worse=lo))
             grid.addWidget(g)
             self.compare_gauges.append(g)
         lay.addWidget(box)
@@ -1038,6 +1056,8 @@ class HistoryTab(QWidget):
             return
         self.compare_detail.show_rows(listed.get(status, []), columns)
         self.compare_detail.show()
+        shown = self.compare_detail                       # under many rings it opens below the fold: once laid out, scroll to it
+        QTimer.singleShot(0, lambda: shown is self.compare_detail and self.compare_area.ensureWidgetVisible(shown))
 
     def _across_list(self, lay, rows, columns):
         self.compare_table = DetailList()
@@ -1259,7 +1279,7 @@ class HistoryTab(QWidget):
         if not low.endswith(".csv"):
             QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
-    def fill_checks(self, device):
+    def fill_checks(self, device, fresh=True):
         """List this device's checks, each once under its shown name, less those Over time never draws. Ticks that still apply are
         kept; a first visit ticks the first check."""
         checks = self.map.get(device or "", [])
@@ -1271,12 +1291,17 @@ class HistoryTab(QWidget):
         if not keep and self.check_keys:
             keep = [next(iter(self.check_keys))]
         self.chk.set_selected(keep)
-        self.draw()
+        self.draw(fresh=fresh)
 
-    def draw(self, *_):
+    def draw(self, *_, fresh=True):
+        """The Over time panels for the device and checks picked. Not `fresh` (nothing new was read): panels already showing them
+        are kept, with what was picked and zoomed in them."""
         d = self.dev.currentData()
         stored = self.map.get(d or "", [])
         picked = [c for k in self.chk.selected() if k in self.check_keys for c in stored_names(self.check_keys[k], stored)]
+        if not fresh and (d, picked) == self._drawn:
+            return
+        self._drawn = (d, picked)
         with db.within(db.split_key(d or "")[1]):                         # that organization's limits
             th = db.get_thresholds()
         vendor = self.vendors.get(self._base(d), "") if d else ""

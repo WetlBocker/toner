@@ -234,6 +234,7 @@ class ServicesDialog(QDialog):
             return None
         by_name = {r["name"]: r for r in self.rows}
         m = QMenu(self)
+        m.setToolTipsVisible(True)                           # a greyed action says why (a menu hides tooltips unless asked)
         for text, act, btn in (("Start", "start", self.start_btn), ("Stop", "stop", self.stop_btn), ("Restart", "restart", self.restart_btn)):
             a = m.addAction(text, lambda act=act: self.act(act))
             a.setEnabled(btn.isEnabled())

@@ -227,6 +227,10 @@ check("the page has API URL and API key, and the approved hint", "API URL" in [x
       and "API key" in [x.text() for x in (widget_at(cp.form, i, cp.form.ItemRole.LabelRole) for i in range(cp.form.rowCount())) if x]
       and any(HINT in w.text() for w in cp.findChildren(__import__("PySide6.QtWidgets", fromlist=["QLabel"]).QLabel)))
 check("it shows the saved URL", cp.api_url.text() == "https://geo.example.com/v1/{ip}?token={key}")
+url_row = cp.form.getWidgetPosition(cp.api_url)[0]
+head = cp.form.itemAt(url_row - 1, cp.form.ItemRole.SpanningRole)
+check("a heading over the two boxes says what they are for", head is not None and head.widget().text() == "<b>IP address look-up (Subnet Calculator, WHOIS Lookup)</b>",
+      head and head.widget().text())
 
 print("== changing the API URL removes the saved key")
 from PySide6.QtCore import QTimer

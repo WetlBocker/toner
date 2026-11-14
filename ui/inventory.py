@@ -74,6 +74,7 @@ class DeviceDialog(QDialog):
         self.sites = QListWidget()                               # Site Manager, when the account is added: tick the sites to add (_fetch_sites)
         self.sites.setMaximumHeight(140)
         self._sites_job, self._sites_for = None, None
+        self._sites_note("Enter the API key to list the account's sites")
         self.secret.editingFinished.connect(self._fetch_sites)
         self.location = QComboBox()
         self.location.setEditable(True)
@@ -652,6 +653,7 @@ class DeviceDialog(QDialog):
         from drivers.unifi_cloud import UnifiCloudDriver
         from ui.device_view import _Job
         self._sites_for = key
+        self._sites_note("Reading the sites...")
         dev = {**self.values(), "password": key}
         dev["proxy"] = json.dumps(dev["proxy"]) if dev["proxy"] else ""
         if self.proxy_pw.text():
@@ -663,15 +665,21 @@ class DeviceDialog(QDialog):
         job.done.connect(self._sites_done)
         job.start()
 
-    def _sites_done(self, res):
+    def _sites_note(self, text):
+        """The Sites list holding one line of words instead of sites: what it waits for, or what went wrong."""
         self.sites.clear()
+        note = QListWidgetItem(text)
+        note.setFlags(Qt.ItemFlag.NoItemFlags)
+        self.sites.addItem(note)
+
+    def _sites_done(self, res):
         if isinstance(res, Exception):
             self._sites_for = None                               # the same key can be tried again
             from drivers.base import Driver
-            note = QListWidgetItem(Driver.explain(res))
-            note.setFlags(Qt.ItemFlag.NoItemFlags)
-            self.sites.addItem(note)
-            return
+            return self._sites_note(Driver.explain(res))
+        if not res:
+            return self._sites_note("This account has no sites")
+        self.sites.clear()
         for name, sid in res:
             it = QListWidgetItem(str(name))
             it.setData(ROLE, sid)
@@ -1099,6 +1107,7 @@ class InventoryTab(QWidget):
         self._update_filter_btn()
 
         self.table = DeviceTree(self)           # (named 'table' for older callers)
+        self.table.fit_keep = (0,)              # ten headings would leave a narrow window no room for the names (ui.tablefit)
         self.table.setColumnCount(len(self.COLS))
         self.table.setHeaderLabels(self.COLS)
         self.table.header().setStretchLastSection(True)

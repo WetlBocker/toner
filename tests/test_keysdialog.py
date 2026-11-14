@@ -155,6 +155,10 @@ d = opened()
 check("the dialog is headed Security keys, with Add a key... and Remove", d.windowTitle() == "Security keys" and [d.add.text(), d.remove.text()] == ["Add a key...", "Remove"])
 check("empty, a local account", d.empty.text() == "No security keys. Add one to need it, with your password, every time you sign in."
       and d.empty.isVisible() and not d.remove.isEnabled() and d.add.isEnabled() and not d.note.isVisible() and not d.reason.isVisible())
+from PySide6.QtWidgets import QPushButton
+check("Enter never presses Remove or a Cancel: no button here is the dialog's default", not [b.text() for b in d.findChildren(QPushButton)
+      if b.autoDefault() or b.isDefault()], [b.text() for b in d.findChildren(QPushButton) if b.autoDefault() or b.isDefault()])
+check("it opens with the keyboard on Add a key...", d.focusWidget() is d.add, d.focusWidget())
 
 fake.calls.clear()
 before = datakey.my_keys()

@@ -173,6 +173,15 @@ for _ in range(100):
     if "GOGL" in dlg.registry.text():
         break
 check("a public address: the registry's rows, then the location when a key is saved", "GOGL" in dlg.registry.text() and "Google LLC" in dlg.registry.text() and "Mountain View" in dlg.where.text(), (dlg.registry.text()[:80], dlg.where.text()[:80]))
+from PySide6.QtWidgets import QScrollArea as _Scroll
+dlg.where.setText(WH._table([(f"field {i}", "a value") for i in range(80)]))        # a provider that answers with many fields
+area = dlg.findChild(_Scroll)
+for _ in range(100):                                                                 # (until the long text is laid out)
+    spin(20)
+    if area is None or area.verticalScrollBar().maximum() > 0:
+        break
+check("a long answer scrolls inside the window; Close stays in reach", area is not None and area.isAncestorOf(dlg.where) and not area.isAncestorOf(dlg.buttons)
+      and dlg.minimumSizeHint().height() < 400 and area.verticalScrollBar().maximum() > 0, (area, dlg.minimumSizeHint().height()))
 dlg.close()
 rdap.lookup, iplookup.lookup, iplookup.has_key = real
 

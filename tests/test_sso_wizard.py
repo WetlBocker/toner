@@ -310,8 +310,17 @@ w = wizard(dirs(), None)
 to_connection(w, "entra")
 fill(w, TENANT, domains="c.example")
 nxt(w)
+said_before = w.message.text()
 w.list_btn.click()
 pump(lambda: w._jobs)
+check("while the browser has it the button is Cancel, and can be pressed", w.list_btn.text() == "Cancel" and w.list_btn.isEnabled(), w.list_btn.text())
+w.list_btn.click()
+pump(lambda: not w._jobs)
+check("Cancel ends the wait within a second and says nothing: the button is as it was", not w._jobs and w.list_btn.text() == "Sign in to list groups"
+      and w.list_btn.isEnabled() and w.message.text() == said_before, (w.list_btn.text(), w.message.text()))
+w.list_btn.click()
+pump(lambda: w._jobs)
+check("...and it can be started again", w.list_btn.text() == "Cancel" and len(w._jobs) == 1)
 started = time.time()
 w.reject()
 check("closes within a second, the Job ended", time.time() - started < 2 and not w._jobs, time.time() - started)
@@ -375,6 +384,25 @@ pump(lambda: dlg._jobs)
 started = time.time()
 dlg.reject()
 check("closes within a second, no audit row", time.time() - started < 2 and not dlg._jobs and len(audit.recent(5000)) == n)
+
+print("== Test login: the browser wait can be cancelled without closing the dialog")
+from PySide6.QtWidgets import QLabel as _Label
+dlg = TL.TestLoginDialog(cfg)
+dlg.show()
+dlg.test_btn.click()
+pump(lambda: dlg._jobs)
+said = [l.text() for l in dlg.pages.currentWidget().findChildren(_Label)]
+check("while the browser has it: the sign-in window's own words, and a Cancel that can be pressed", dlg.pages.currentWidget() is dlg.sso_page
+      and said == ["Continue in your browser", S.SSO_TEXT.format(provider="Contoso")] and dlg.sso_cancel.text() == "Cancel"
+      and dlg.sso_cancel.isEnabled() and dlg.sso_page.isEnabled(), said)
+dlg.sso_cancel.click()
+check("Cancel: back at Test, ready again, nothing said", dlg.pages.currentWidget() is dlg.form_page and dlg.test_btn.isEnabled() and dlg.form_page.isEnabled()
+      and dlg.test is None and not dlg.result.text(), dlg.result.text())
+pump(lambda: not dlg._jobs)
+app.processEvents()
+check("...and the wait it left ends within a second, saying nothing, no audit row", not dlg._jobs and not dlg.result.text()
+      and len(audit.recent(5000)) == n, dlg.result.text())
+dlg.reject()
 webbrowser.open = browse
 
 print("== TestLogin.check_sso directly")

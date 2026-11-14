@@ -125,6 +125,10 @@ check("Tech: Security is locked, banner shown", st.pages[[p.title for p in st.pa
       and st.role_lines[[p.title for p in st.pages].index("Security")].isVisibleTo(st)
       and st.role_lines[[p.title for p in st.pages].index("Security")].text() == BANNER)
 check("Tech: Appearance is enabled", st.pages[[p.title for p in st.pages].index("Appearance")].isEnabled())
+cp = st.pages[[p.title for p in st.pages].index("Checks")]
+check("Tech: Checks is locked, yet its tabs can be opened to view them (each tab's own page is what is read-only)",
+      st.pages.index(cp) in st.locked and cp.tabs.tabBar().isEnabled() and not any(p.isEnabled() for p in cp.pages()),
+      (cp.tabs.tabBar().isEnabled(), [p.isEnabled() for p in cp.pages()]))
 check("Tech: Accounts is not in the list", "Accounts" not in st.page_titles())
 check("Tech: select_page refuses Accounts", st.select_page("Accounts") is False)
 st.search.setText("lock"); app.processEvents()
@@ -219,6 +223,27 @@ sub = next((a.menu() for a in captured["menu"].actions() if a.text() == "Open in
 check("ping off, SNMP on: no Ping, and Open in Tools lists SNMP",
       "Ping" not in captured["actions"] and sub is not None and "SNMP" in [a.text() for a in sub.actions()], captured["actions"])
 w.close()
+
+# ---------------------------------------------------------------- a jump to a tool the role may not use says so, and stays where it was
+import ui.toast as T
+JUMPS = {"tool:find-devices": False, "tool:playbook-editor": False, "tool:automation": False}
+session.sign_out(); session.sign_in("Admin2", PW)
+roles.set_permissions("Tech", JUMPS)
+session.sign_out(); session.sign_in("Tech1", PW2)
+w = build()
+said = []
+real_toast, T.toast = T.toast, lambda widget, text, problem=False: said.append(text)
+def jump(act):
+    said.clear(); w.go("Overview"); act(); app.processEvents()
+    return w.tabs.tabText(w.tabs.currentIndex()), list(said)
+check("Scan the network (Inventory) without the tool", jump(w.inventory.scan_requested.emit) == ("Overview", [perms.REASON]), jump(w.inventory.scan_requested.emit))
+check("Scan the network (getting started) without the tool", jump(lambda: w.dashboard_action("scan")) == ("Overview", [perms.REASON]))
+check("Edit a playbook without the editor", jump(lambda: w.edit_playbook("x")) == ("Overview", [perms.REASON]))
+check("Run a playbook without Automation", jump(lambda: w.run_playbook("x")) == ("Overview", [perms.REASON]))
+T.toast = real_toast
+w.close()
+session.sign_out(); session.sign_in("Admin2", PW)
+roles.set_permissions("Tech", {k: True for k in JUMPS})
 
 # ---------------------------------------------------------------- rules changed outside Toner: an Admin still sees the page and its banner
 import json

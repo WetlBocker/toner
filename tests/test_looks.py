@@ -107,5 +107,18 @@ check("and then offers the way back", "Look: Standard" in ents and "Look: Termin
 ents["Look: Standard"](); app.processEvents()
 check("which restores the standard look", not theme.is_terminal())
 
+print("== ...with unsaved settings it asks first (it reloads every page)")
+asked, answer = [], [False]
+w.settings.unsaved_count = lambda: 1
+w.settings.confirm_leave = lambda before="leaving Settings", reload=True: asked.append((before, reload)) or answer[0]
+w.set_look("Terminal"); app.processEvents()
+check("Stay in Settings: asked 'before changing the look', and nothing changes", asked == [("changing the look", True)] and db.get_setting("look") == "Standard"
+      and not theme.is_terminal(), asked)
+answer[0] = True
+w.set_look("Terminal"); app.processEvents()
+check("Save or Discard: the look changes", len(asked) == 2 and db.get_setting("look") == "Terminal" and theme.is_terminal())
+del w.settings.unsaved_count, w.settings.confirm_leave
+w.set_look("Standard"); app.processEvents()
+
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

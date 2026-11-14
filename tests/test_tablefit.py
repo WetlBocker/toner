@@ -56,6 +56,15 @@ tr.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
 tr.addTopLevelItem(QTreeWidgetItem(["a" * 60, "b"])); tr.resize(1500, 200); tr.show(); fit(tr); app.processEvents()
 check("a tree's Stretch column is Interactive and fits its text", tr.header().sectionResizeMode(0) == QHeaderView.ResizeMode.Interactive and tr.columnWidth(0) >= tr.fontMetrics().horizontalAdvance("a" * 60))
 
+k = QTableWidget(1, 4); k.setHorizontalHeaderLabels(["Device", "Check", "Time", "Message"])
+for j, text in enumerate(("core-switch-01", "2 checks", "2026-11-14 01:11:19", "m" * 300)):
+    k.setItem(0, j, QTableWidgetItem(text))
+k.fit_keep = (0,)                                               # the column that names the row
+k.resize(480, 200); k.show(); fit(k); app.processEvents()
+check("a kept column shows its text when the others must share", k.columnWidth(0) >= k.sizeHintForColumn(0), (k.columnWidth(0), k.sizeHintForColumn(0)))
+k.item(0, 0).setText("n" * 200); app.processEvents(); app.processEvents()
+check("...but never more than two fifths of the width", k.columnWidth(0) <= k.viewport().width() * 2 // 5 + 1, (k.columnWidth(0), k.viewport().width()))
+
 install_everywhere(app)
 p = QTableWidget(1, 1); p.setHorizontalHeaderLabels(["H"]); p.setItem(0, 0, QTableWidgetItem("q" * 80)); p.resize(1500, 200); p.show(); app.processEvents(); app.processEvents()
 check("install_everywhere fits a table nobody called fit() on", p.horizontalHeader().sectionResizeMode(0) == QHeaderView.ResizeMode.Interactive and p.columnWidth(0) >= p.fontMetrics().horizontalAdvance("q" * 80))

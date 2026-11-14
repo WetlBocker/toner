@@ -99,6 +99,13 @@ def confirm(parent, text, more=""):
     return box.clickedButton() is go
 
 
+def plain(text):
+    """A second button. Like primary(), Enter never presses it: left as Qt makes it, Remove would be the dialog's default button."""
+    b = QPushButton(text)
+    b.setAutoDefault(False)
+    return b
+
+
 def _added(at):
     """The day a key was added, on this computer's calendar."""
     try:
@@ -127,7 +134,7 @@ class KeysDialog(QDialog):
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setAccessibleName(TITLE)
-        self.error, self.add, self.remove = error_label(), primary("Add a key..."), QPushButton("Remove")
+        self.error, self.add, self.remove = error_label(), primary("Add a key..."), plain("Remove")
         row = QHBoxLayout()
         row.addWidget(self.add)
         row.addWidget(self.remove)
@@ -148,7 +155,7 @@ class KeysDialog(QDialog):
 
         self.touch_page, lay = self._page(TOUCH)
         lay.addWidget(words(KEY_TEXT))
-        self.touch_cancel = QPushButton("Cancel")
+        self.touch_cancel = plain("Cancel")
         lay.addSpacing(10)
         lay.addWidget(self.touch_cancel)
         self.touch_cancel.clicked.connect(self._back)
@@ -196,7 +203,7 @@ class KeysDialog(QDialog):
 
     def _buttons(self, lay, box, text, action):
         """The page's error, its button and Cancel (back to the list)."""
-        error, ok, cancel = error_label(), primary(text), QPushButton("Cancel")
+        error, ok, cancel = error_label(), primary(text), plain("Cancel")
         row = QHBoxLayout()
         row.addWidget(ok)
         row.addWidget(cancel)
@@ -232,6 +239,8 @@ class KeysDialog(QDialog):
     def _allowed(self, allowed, e):
         allowed = e is None and allowed is True          # (an error: not offered, as the helper check fails closed)
         self.add.setEnabled(allowed)
+        if allowed and self.focusWidget() is None:       # the keyboard was on Add a key... before the check greyed it
+            self.add.setFocus()
         self.note.setVisible(not allowed and self.kind == "directory")
 
     # ---------------------------------------------------------------- Jobs

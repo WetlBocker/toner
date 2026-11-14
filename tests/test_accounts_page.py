@@ -44,7 +44,20 @@ acts = lambda: [r["action"] for r in audit.recent()]
 check("lists the account", rows() == ["Admin"], rows())
 check("columns: Keys is last, after Unlocks with; a local account unlocks with its Password",
       [page.table.horizontalHeaderItem(j).text() for j in range(page.table.columnCount())] == ["Username", "Type", "Created", "Role", "Unlocks with", "Keys"]
-      and page.table.item(0, 1).text() == "local" and page.table.item(0, 4).text() == "Password")
+      and page.table.item(0, 1).text() == "Local" and page.table.item(0, 4).text() == "Password")
+import re as _re
+from datetime import datetime as _dt
+made = datakey.accounts()[0]["created"]
+check("Created is the local date and time to the minute, not the stored stamp",
+      _re.fullmatch(r"\d{4}-\d\d-\d\d \d\d:\d\d", page.table.item(0, 2).text())
+      and page.table.item(0, 2).text() == _dt.fromisoformat(str(made)).astimezone().strftime("%Y-%m-%d %H:%M"), (page.table.item(0, 2).text(), made))
+page.table.clearSelection()
+check("no account chosen: Change role, Reset password, Remove and Remove keys are off",
+      not any(b.isEnabled() for b in (page.change, page.reset, page.remove, page.remove_keys)),
+      [b.isEnabled() for b in (page.change, page.reset, page.remove, page.remove_keys)])
+page.table.selectRow(0)
+check("...a local account chosen: the three are on", page.change.isEnabled() and page.reset.isEnabled() and page.remove.isEnabled())
+page.table.clearSelection()
 check("the External Identities section (tests/test_identitywizard.py covers it): empty, Add on", page.idents.rowCount() == 0 and page.add_ident.isEnabled()
       and not page.edit_ident.isEnabled() and not page.remove_ident.isEnabled())
 
@@ -273,6 +286,10 @@ check("idle default loads 15", (page.load(), page.idle.value())[1] == 15)
 page.idle.setValue(30); page.save()
 check("idle saves", db.get_setting("signin_idle_minutes") == 30)
 check("idle range 1-240", (page.idle.minimum(), page.idle.maximum()) == (1, 240))
+page.idle.setValue(1)
+check("one minute reads '1 minute without use'", page.idle.text() == "1 minute without use", page.idle.text())
+page.idle.setValue(30)
+check("...and thirty read '30 minutes without use'", page.idle.text() == "30 minutes without use", page.idle.text())
 
 check("session length loads 12", (page.load(), page.session.value())[1] == 12)
 page.session.setValue(8); page.save()
@@ -376,5 +393,24 @@ check("Add account, Reset password, Add, Edit and Set up 2FA delete their window
       gone == ["AccountDialog", "AccountDialog", "IdentityWizard", "IdentityWizard", "TwoFactorDialog"], gone)
 roles.set_directories([]); page.refresh()
 check("page is listed", "Accounts" in dict(settings.GROUPS)["Security and data"] and "Accounts" in settings.GLOBAL_PAGES)
+
+# the Roles table has no selection and the theme draws no focus outline: the tick box the keys act on is ringed
+from PySide6.QtCore import QRect
+from PySide6.QtGui import QColor, QImage, QPainter
+from PySide6.QtWidgets import QStyle, QStyleOptionViewItem
+from ui import theme
+theme.apply(app)
+def painted(focus):
+    img = QImage(80, 32, QImage.Format.Format_ARGB32); img.fill(0)
+    o = QStyleOptionViewItem(); o.rect = QRect(0, 0, 80, 32); o.widget = page.perm_table
+    o.state = QStyle.StateFlag.State_Enabled | (QStyle.StateFlag.State_HasFocus if focus else QStyle.StateFlag.State_None)
+    p = QPainter(img); page.perm_table.itemDelegateForColumn(1).paint(p, o, page.perm_table.model().index(0, 1)); p.end()
+    return img
+with_focus, without = painted(True), painted(False)
+ring = QColor(theme.current()["ring"])
+near = lambda c: abs(c.red() - ring.red()) + abs(c.green() - ring.green()) + abs(c.blue() - ring.blue()) < 90
+drawn = [(x, y) for x in range(80) for y in range(32) if with_focus.pixel(x, y) != without.pixel(x, y)]
+check("the tick box with the keyboard focus is ringed, in the theme's ring colour", len(drawn) > 40
+      and sum(1 for x, y in drawn if near(with_focus.pixelColor(x, y))) > 30, (len(drawn), sum(1 for x, y in drawn if near(with_focus.pixelColor(x, y)))))
 
 print(f"\n{ok} passed, {bad} failed"); sys.exit(1 if bad else 0)

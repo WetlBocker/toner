@@ -100,9 +100,10 @@ class ConnectionsPage(Page):
         self.http_note = note("This URL uses http, so the address and key travel unencrypted.")
         for label, w in (("SSH timeout (switches, routers)", self.ssh), ("Web API timeout (firewalls, controllers)", self.http),
                          ("Retries after a timeout", self.retries), ("Wait between retries", self.delay),
+                         (None, QLabel("<b>IP address look-up (Subnet Calculator, WHOIS Lookup)</b>")),
                          ("API URL", self.api_url), ("", self.http_note), ("", note(IPLOOKUP_HINT)),
                          ("API key", row_of(self.ipstack, self.test_ipstack, self.forget_ipstack)), ("", self.ipstack_result)):
-            self.form.addRow(label, w)
+            self.form.addRow(w) if label is None else self.form.addRow(label, w)
         self.api_url.textChanged.connect(lambda t: self.form.setRowVisible(self.http_note, t.strip().lower().startswith("http://")))
         self.form.setRowVisible(self.http_note, False)
         self.lay.insertWidget(1, note(

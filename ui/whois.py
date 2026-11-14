@@ -1,9 +1,10 @@
 """WHOIS Lookup: who an address belongs to (the registry's RDAP record) and, when an API key is saved, where it is. Opened
 from the right-click menu on any selected IP address (ui/ipmenu.py)."""
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QDialog, QDialogButtonBox, QLabel, QVBoxLayout
+from PySide6.QtWidgets import QDialog, QDialogButtonBox, QFrame, QLabel, QScrollArea, QVBoxLayout, QWidget
 
 from core import iplookup, rdap, subnets
+from ui import theme
 from ui.tools import Call
 
 
@@ -49,7 +50,9 @@ class WhoisDialog(QDialog):
         self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         self.buttons.rejected.connect(self.reject)
         self.buttons.accepted.connect(self.accept)
-        lay = QVBoxLayout(self)
+        body = QWidget()                                     # scrolls: a provider may answer with more fields than the screen is tall
+        lay = QVBoxLayout(body)
+        lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self.head)
         lay.addWidget(QLabel("<b>Registry</b>"))
         lay.addWidget(self.registry)
@@ -57,7 +60,13 @@ class WhoisDialog(QDialog):
         lay.addWidget(self.where_title)
         lay.addWidget(self.where)
         lay.addStretch(1)
-        lay.addWidget(self.buttons)
+        area = QScrollArea()
+        area.setWidgetResizable(True)
+        area.setFrameShape(QFrame.Shape.NoFrame)
+        area.setWidget(body)
+        outer = QVBoxLayout(self)
+        outer.addWidget(area, 1)
+        outer.addWidget(self.buttons)
         self.worker = None
         try:
             public = subnets.is_public(subnets.parse(self.ip).ip)
@@ -69,7 +78,7 @@ class WhoisDialog(QDialog):
             self.where.hide()
             return
         if not iplookup.has_key():
-            self.where.setText("<span style='color:gray'>Add an API key under Settings &gt; Connections to see where it is.</span>")
+            self.where.setText(theme.muted("Add an API key under Settings &gt; Connections to see where it is."))
         else:
             self.where.setText(f"Asking {_esc(iplookup.host())}...")
         self.worker = Call(lambda: gather(self.ip))
@@ -78,15 +87,15 @@ class WhoisDialog(QDialog):
 
     def _show(self, res):
         if isinstance(res, Exception):
-            self.registry.setText(f"<span style='color:gray'>{_esc(res)}</span>")
+            self.registry.setText(theme.muted(f"{_esc(res)}"))
             return
         r = res.get("rdap")
-        self.registry.setText(_table(r) if isinstance(r, list) else f"<span style='color:gray'>{_esc(r)}</span>")
+        self.registry.setText(_table(r) if isinstance(r, list) else theme.muted(f"{_esc(r)}"))
         w = res.get("ipstack")
         if isinstance(w, list):
             self.where.setText(_table(w))
         elif w:
-            self.where.setText(f"<span style='color:gray'>{_esc(w)}</span>")
+            self.where.setText(theme.muted(f"{_esc(w)}"))
 
     def closeEvent(self, e):
         if self.worker is not None:

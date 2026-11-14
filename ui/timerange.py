@@ -42,14 +42,19 @@ class TimeRange(QWidget):
             lay.addWidget(w)
         self.mode.currentIndexChanged.connect(self._mode)
         self.hours.valueChanged.connect(self._edited)
+        self.hours.valueChanged.connect(self._unit)
         self._mode(emit=False)
 
     def _mode(self, *_, emit=True):
         dates = self.mode.currentIndex() == 1
         self.hours.setVisible(not dates)
         self.dates.setVisible(dates)
+        self._unit()                                          # (set_hours sets the box quietly)
         if emit:
             self._edited()
+
+    def _unit(self, *_):
+        self.hours.setSuffix(" hour" if self.hours.value() == 1 else " hours")
 
     def _edited(self, *_):
         self.settle.start()                                   # (not connected straight: start(int) would take the value as the wait)
@@ -88,6 +93,6 @@ class TimeRange(QWidget):
     def describe(self):
         """'Last 8 hours' or 'From 2026-11-01 to 2026-11-08', for exports and the Assistant."""
         if self.mode.currentIndex() == 0:
-            return f"Last {self.hours.value()} hours"
+            return self.hours.text()                          # 'Last 1 hour', 'Last 8 hours'
         a, b = self._days()
         return f"From {a:%Y-%m-%d} to {b:%Y-%m-%d}"

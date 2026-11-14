@@ -1,6 +1,7 @@
 """Settings page: Accounts. Account actions apply at once, and so does sign-in without approval (through its own confirmation);
 the idle-lock minutes and the session length follow Save."""
 import sys
+from datetime import datetime
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QLabel, QMenu, QMessageBox, QPushButton, QTableWidget,
@@ -8,7 +9,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QLabel, 
 
 from core import audit, datakey, db, helperclient, osstore, passvault, passwords, perms, quiet, roles, session
 from ui.directorydlg import service_key
-from ui.widgets import CentredCheck
+from ui.widgets import CentredCheck, waiting
 from ui.identitywizard import IdentityWizard
 from ui.settings_base import Page, compact_row, note, spin
 from ui.setupdlg import RecoveryDialog, _CardDialog
@@ -52,8 +53,16 @@ HELPER_NOTES = {"portable": OFF_PORTABLE, "other_user": OFF_OTHER_USER, "not_run
 def type_of(a):
     """The Type column: a local account's kind as Part 2 showed it, a directory account's directory."""
     if a["kind"] != "directory":
-        return a["kind"]
+        return a["kind"].capitalize()
     return KIND_NAMES.get(a.get("directory_kind"), "")
+
+
+def created(a):
+    """The Created column: the stored UTC stamp as the local date and time, to the minute."""
+    try:
+        return datetime.fromisoformat(str(a["created"])).astimezone().strftime("%Y-%m-%d %H:%M")
+    except ValueError:
+        return str(a["created"])
 
 
 def unlocks_with(a):
@@ -88,12 +97,9 @@ class AccountDialog(_CardDialog):
         self.confirm = field(self.lay, "Confirm password", secret=True)
         self.role = None
         if not name:
-            self.role = QComboBox()
+            self.role = field(self.lay, "Role", widget=QComboBox())    # labelled and spaced as the boxes above it
             self.role.addItems(roles.ROLES)
             self.role.setCurrentText("Tech")
-            self.role.setAccessibleName("Role")
-            self.lay.addWidget(QLabel("Role"))
-            self.lay.addWidget(self.role)
         self.error = error_label()
         self.ok = primary("Reset password" if name else "Add account")
         self.lay.addWidget(self.error)
@@ -137,12 +143,9 @@ class RoleDialog(_CardDialog):
 
     def __init__(self, current, parent=None):
         super().__init__("Change role", "", parent)
-        self.role = QComboBox()
+        self.role = field(self.lay, "Role", widget=QComboBox())
         self.role.addItems(roles.ROLES)
         self.role.setCurrentText(current)
-        self.role.setAccessibleName("Role")
-        self.lay.addWidget(QLabel("Role"))
-        self.lay.addWidget(self.role)
         self.lay.addSpacing(10)
         ok = primary("Change role")
         ok.clicked.connect(self.accept)
@@ -207,7 +210,8 @@ class AccountsPage(Page):
         self.save_roles = QPushButton("Save roles")
         self.save_roles.clicked.connect(self._save_roles)
         self._shown = {}
-        self.idle = spin(1, 240, " minutes without use")
+        self.idle = spin(1, 240, " minute without use")                  # (it starts at 1)
+        self.idle.valueChanged.connect(lambda n: self.idle.setSuffix(" minute without use" if n == 1 else " minutes without use"))
         self.form.addRow("Lock after", self.idle)
         self.session = spin(1, 72, "")
         self.form.addRow("Session length (hours)", self.session)
@@ -251,7 +255,7 @@ class AccountsPage(Page):
             if a.get("directory_kind") in ("ad", "ldap") and a["keys"] and a["name"].casefold() != me:    # your own: "Security keys..."
                 self._keyed.add(a["name"])
             keys = "" if a.get("directory_kind") == "oidc" else str(a["keys"])     # an SSO account never has keys: its cell is blank
-            for j, v in enumerate((a["name"], type_of(a), str(a["created"]), a["role"], unlocks_with(a), keys)):
+            for j, v in enumerate((a["name"], type_of(a), created(a), a["role"], unlocks_with(a), keys)):
                 self.table.setItem(self.table.rowCount() - 1, j, QTableWidgetItem(v))
             if a["kind"] == "directory":
                 self._directory_rows.add(a["name"])
@@ -289,10 +293,12 @@ class AccountsPage(Page):
 
     def _selection(self):
         """A directory account's role comes from its groups and its password from its directory."""
-        local = self._selected() not in self._directory_rows
+        chosen = self._selected()
+        local = chosen is not None and chosen not in self._directory_rows
         self.change.setEnabled(local)
         self.reset.setEnabled(local)
-        self.remove_keys.setEnabled(self._selected() in self._keyed)
+        self.remove.setEnabled(chosen is not None)
+        self.remove_keys.setEnabled(chosen in self._keyed)
 
     def _add(self):
         dlg = AccountDialog(parent=self)
@@ -362,7 +368,8 @@ class AccountsPage(Page):
         self.refresh()
 
     def _recovery(self):
-        if QMessageBox.question(self, self.title, NEW_KEY_ASK) != QMessageBox.StandardButton.Yes:
+        buttons = QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        if QMessageBox.question(self, self.title, NEW_KEY_ASK, buttons, QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:   # Enter keeps the old key
             return
         try:
             key = datakey.new_recovery()
@@ -404,14 +411,16 @@ class AccountsPage(Page):
             if on and (why := self._helper_refused()):  # before the warning, and before anything is installed or enrolled
                 QMessageBox.warning(self, self.title, why)
             elif on and self._helper_warned():
-                if self._helper_state in ("absent", "outdated"):
-                    # shortcut: the window waits while the administrator prompt is up (up to 2 minutes); a Job if it matters
-                    helperclient.install_elevated()
-                helperclient.enroll()
+                with waiting():
+                    if self._helper_state in ("absent", "outdated"):
+                        # shortcut: the window waits while the administrator prompt is up (up to 2 minutes); a Job if it matters
+                        helperclient.install_elevated()
+                    helperclient.enroll()
                 audit.log("sign-in without approval turned on", f"by {audit.actor()}")
             elif not on:
                 try:
-                    helperclient.forget()
+                    with waiting():
+                        helperclient.forget()
                 except helperclient.NotRunning:
                     QMessageBox.warning(self, self.title, OFF_FAILED)
                     return
@@ -431,7 +440,8 @@ class AccountsPage(Page):
     def _require_toggled(self, on):
         """At once, as the switch below: the rules say, and the switch is put back to what they say after a refusal."""
         try:
-            roles.set_require_keys(on)                  # shortcut: up to 20 s on the window's thread (it asks the service manager), as the helper calls here; a Job if it matters
+            with waiting():
+                roles.set_require_keys(on)              # shortcut: up to 20 s on the window's thread (it asks the service manager), as the helper calls here; a Job if it matters
         except (ValueError, datakey.Locked, perms.Denied) as e:        # the helper switch is on, "Sign in first.", the role
             QMessageBox.warning(self, self.title, str(e))
         finally:

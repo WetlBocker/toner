@@ -1,7 +1,8 @@
 """One rule for every table and tree: when there is room each column is as wide as its longest text (heading included); when there
 isn't, the columns share the width (none narrower than its heading, the widest give way first, cut-off text shows in full on hover).
 Every column can always be dragged, and a column the person dragged keeps its width until the view closes. Qt cannot drag a section set
-to ResizeToContents or Stretch, so sections are Interactive and the fitting is done here."""
+to ResizeToContents or Stretch, so sections are Interactive and the fitting is done here. A view can name the columns that say which row
+is which (view.fit_keep = (0,)): those keep their text, up to two fifths of the width, and the others share what is left."""
 import weakref
 
 from PySide6.QtCore import QEvent, QObject, Qt, QTimer
@@ -112,7 +113,10 @@ class _Fitter(QObject):
         content = [view.sizeHintForColumn(c) + (p or 0) for c, p in zip(cols, pads)]
         heads = [head.sectionSizeFromContents(c).width() for c in cols]
         heads = [h if p is None else max(h, w) for h, w, p in zip(heads, content, pads)]      # widgets cannot be cut short as text can: the text columns give way
-        widths = fit_widths(content, heads, max(0, view.viewport().width() - taken))
+        room = max(0, view.viewport().width() - taken)
+        keep = getattr(view, "fit_keep", ())                        # the column that names the row (a view says which): its text stays, up to
+        heads = [max(h, min(w, room * 2 // 5)) if c in keep else h for c, h, w in zip(cols, heads, content)]    # two fifths of the width
+        widths = fit_widths(content, heads, room)
         self.busy = True
         try:
             for c, w in zip(cols, widths):

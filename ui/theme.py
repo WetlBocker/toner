@@ -451,3 +451,9 @@ def apply(app: QApplication, look=None, font_size=0, style=None, ctx=None):
 def current():
     """The colour tokens in use (for widgets that paint themselves)."""
     return dict(_current)
+
+
+def muted(html):
+    """`html` in the muted ink, for part of a rich-text label (a style sheet colours a whole label only). It keeps the colour it
+    was written in: text set once stays that way through a change of theme."""
+    return f"<span style='color:{_current.get('muted', 'gray')}'>{html}</span>"

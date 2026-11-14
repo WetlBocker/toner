@@ -96,8 +96,10 @@ def apply_look(app):
 def plain_look(app):
     """The look before anyone signs in: the theme defaults, but for the theme's name, kept in plain beside netcheck.keys (nothing is
     read from the database, which stays encrypted until then)."""
+    global _look
     from datetime import datetime
     from ui import themes
+    _look = None                                         # what is shown is not the saved look any more: the next sign-in applies it again
     try:
         dark = app.styleHints().colorScheme() == Qt.ColorScheme.Dark
     except Exception:
@@ -184,7 +186,7 @@ class Main(QMainWindow):
         self.results.open_device.connect(self.open_device_by_name)
         self.dashboard.open_device.connect(self.open_device_by_name)
         self.dashboard.goto.connect(self.go)
-        self.inventory.scan_requested.connect(lambda: (self.go("Tools"), self.tools.tabs.setCurrentWidget(self.tools.discovery)))
+        self.inventory.scan_requested.connect(lambda: self.show_tool(self.tools.discovery))
         self.dashboard.device_action.connect(self.on_device_action)
         self.dashboard.show_results.connect(lambda what: (self.go("Results"), self.results.show_filter(what)))
         self.dashboard.action.connect(self.dashboard_action)
@@ -325,6 +327,8 @@ class Main(QMainWindow):
         if not ai:
             self.show_assistant(False)
             self.ai_button.hide()
+        else:                                              # allowed again while signed in: the button is back without a new check
+            self.ai_button.setVisible(bool(AI.state().get("connected")))
         self.strip.show_ai()
 
     # ---------- signing in (core/session.py)
@@ -417,7 +421,7 @@ class Main(QMainWindow):
         least = self.assistant.minimumWidth()
         margins = self.tabs.contentsMargins()
         if on:
-            width = min(width, max(least, total - 300))                 # the page keeps at least 300 px (a remembered width may not fit)
+            width = min(width, max(least, total - self.tabs.minimumWidth()))    # the page keeps its least width (a remembered width may not fit)
         else:
             width = self.assistant.width()
 
@@ -626,13 +630,26 @@ class Main(QMainWindow):
             log.exception("could not save the window layout")
 
     # ---------- Ansible: the editor (Tools) and the runner (Automation) hand over to each other
-    def edit_playbook(self, name):
+    def show_tool(self, tool):
+        """Tools, at this tool. A role that may not use it is told so and stays where it is."""
+        if not self.tools.tool_allowed(tool):
+            self._not_allowed()
+            return False
         self.go("Tools")
-        self.tools.edit_playbook(name)
+        self.tools.tabs.setCurrentWidget(tool)
+        return True
+
+    def _not_allowed(self):
+        from ui.toast import toast
+        toast(self, perms.REASON, problem=True)
+
+    def edit_playbook(self, name):
+        if self.show_tool(self.tools.playbooks):
+            self.tools.edit_playbook(name)
 
     def run_playbook(self, name):
         if not perms.allowed("tool:automation"):
-            return
+            return self._not_allowed()
         self.go("Automation")
         self.automation.select_playbook(name)
 
@@ -775,8 +792,7 @@ class Main(QMainWindow):
             self.go("Inventory")
             self.inventory.add()
         elif name == "scan":
-            self.go("Tools")
-            self.tools.tabs.setCurrentWidget(self.tools.discovery)
+            self.show_tool(self.tools.discovery)
         elif name == "notify":
             self.go("Settings")
             self.settings.select_page("Notifications")
@@ -837,7 +853,7 @@ class Main(QMainWindow):
                             lambda i=i: (self.go("Tools"), self.tools.tabs.setCurrentIndex(i))))
         from ui import themes
         for other in themes.LOOKS:                        # the other looks (Soft, Sharp, Terminal...), as Settings > Appearance > Look
-            if other != db.get_setting("look"):
+            if other != db.get_setting("look") and can("settings:Appearance"):
                 entries.append((f"Look: {other}", "Settings > Appearance", lambda o=other: self.set_look(o)))
         if can("tool:playbook-editor"):
             entries.append(("New playbook", "Tools > Playbook Editor", lambda: (self.go("Tools"), self.tools.playbooks.new_playbook())))
@@ -975,7 +991,10 @@ class Main(QMainWindow):
             log.exception("housekeeping failed")
 
     def set_look(self, look):
-        """Switch the Look (Standard, Soft, Sharp, Terminal) from Ctrl+K; the same setting as Settings > Appearance."""
+        """Switch the Look (Standard, Soft, Sharp, Terminal) from Ctrl+K; the same setting as Settings > Appearance. Every Settings
+        page is read again, so unsaved edits are asked about first, as on leaving Settings."""
+        if not self.settings.confirm_leave("changing the look"):
+            return
         db.set_setting("look", look)
         self.settings.reload()
         self.settings_applied()

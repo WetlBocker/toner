@@ -243,12 +243,18 @@ class NavStack(QWidget):
         self.user.setMenu(menu)
         self.user.setToolTip(name)
         self.user.setAccessibleName(name)
-        self.user.setText("" if self._icons_only() else name)
+        self.user.setText("" if self._icons_only() else self._user_text())
         self.user.show()
         for r in range(self.list.count()):
             if self.list.itemWidget(self.list.item(r)) is self.user:
                 self.list.setRowHidden(r, False)
         self._place_spacer()
+
+    def _user_text(self):
+        """The account's name as its row shows it: a button does not shorten its own text, so a long one (an email address) is cut
+        with "..." here. The tip has the whole name."""
+        room = SIDE_WIDTH - 20 - 20 - self.user.iconSize().width() - 12        # the list's margins, the button's padding, its icon and gap
+        return self.user.fontMetrics().elidedText(self._user_name, Qt.TextElideMode.ElideRight, room)
 
     # ---------- what the sidebar shows
     def collapsed(self):
@@ -360,7 +366,7 @@ class NavStack(QWidget):
         self.head.itemAt(3).changeSize(FOLD + 4 if on else 0, 0)       # where the fold button sits while the names show
         self.head.invalidate()
         self.quick.setText("Search" if on else "")
-        self.user.setText(self._user_name if on else "")
+        self.user.setText(self._user_text() if on else "")
         for b in (self.quick, self.user):                              # the icon alone, in the middle of the button
             b.setProperty("folded", not on)
             b.style().unpolish(b)
@@ -389,7 +395,7 @@ class NavStack(QWidget):
             return
         used = sum(self.list.sizeHintForRow(r) for r in range(self.list.count()) if r != self._spacer and not self.list.isRowHidden(r))
         free = self.list.viewport().height() - used - 2
-        self.list.item(self._spacer).setSizeHint(QSize(0, max(6, free)))
+        self.list.item(self._spacer).setSizeHint(QSize(0, max(1, free)))      # (a taller least gap made a 700-high window scroll for a few pixels)
 
     def _fit(self):
         """A window too narrow for the names folds the sidebar to icons by itself; it unfolds again when there is room."""

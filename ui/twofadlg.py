@@ -10,7 +10,7 @@ from PySide6.QtWidgets import QComboBox, QDialog, QFormLayout, QLabel, QLineEdit
 from core import datakey, osstore, perms, roles
 from ui.directorydlg import NO_STORE
 from ui.settings_base import note
-from ui.signinwindow import Job, primary, say
+from ui.signinwindow import Job, error_label, primary, say
 
 HOST = re.compile(r"[A-Za-z0-9.-]+")
 
@@ -27,6 +27,7 @@ class TwoFactorDialog(QDialog):
     def __init__(self, dirs, cfg, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Set up 2FA")
+        self.setMinimumWidth(420)                       # a Duo API hostname fits its box
         self.dirs, self.cfg = list(dirs), cfg
         self.store = self.has_secret = None             # read on a Job: a Secret Service nobody unlocks takes 3 seconds to say no
         self._closed, self._jobs = False, set()
@@ -45,9 +46,7 @@ class TwoFactorDialog(QDialog):
             form.addRow(lab, w)
             if under is not None:
                 form.addRow(under)
-        self.message = QLabel()
-        self.message.setWordWrap(True)
-        self.message.hide()
+        self.message = error_label()                    # a save that failed, in the colour the other dialogs give a failure
         self.save_btn = primary("Save")
         self.save_btn.clicked.connect(self._save)
         outer = QVBoxLayout(self)

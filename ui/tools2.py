@@ -1228,6 +1228,7 @@ class MacLookupTab(QWidget):
             return
         from ui.tools import Call
         self.update_btn.setEnabled(False)                     # the download runs off the window thread (about 6 MB)
+        self.oui_info.setText("Downloading the manufacturer list...")
         self.worker = Call(oui.update_from_ieee)
         self.worker.done.connect(self._updated)
         self.worker.start()

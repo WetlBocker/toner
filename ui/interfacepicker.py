@@ -1,9 +1,11 @@
 """Choose which of a device's interfaces Toner checks, from the device's own list."""
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QRegularExpression, Qt
+from PySide6.QtGui import QRegularExpressionValidator
 from PySide6.QtWidgets import (QAbstractItemView, QDialog, QDialogButtonBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QTableWidget,
                                QTableWidgetItem, QVBoxLayout)
 
 NAME = Qt.ItemDataRole.UserRole
+NUMBER = QRegularExpressionValidator(QRegularExpression(r"\d{0,7}(\.\d{0,2})?"))     # a circuit speed in Mbps: digits, with a decimal point or not
 WAN_HINT = "Tick the interfaces that connect to the internet. Available bandwidth starts at the port speed; type your circuit speed in Mbps if it is lower."
 WAN_HINT_TYPED = ("Tick the interfaces that connect to the internet and type each one's circuit speed in Mbps. "      # no port speeds read: no traffic source yet
                   "Toner reads their traffic by SNMP once it is set up on the SNMP tab.")
@@ -59,6 +61,8 @@ class InterfacePicker(QDialog):
                 self.table.setItem(i, 3, tick)
                 edit = QLineEdit("" if wanted.get(name.lower()) is None else f"{wanted[name.lower()]:g}")
                 edit.setPlaceholderText(f"{speed_text(speed)} (port speed)" if speed else "")
+                edit.setValidator(NUMBER)                            # "500 Mbps" or "1,000" would be read as no speed at all
+                edit.textEdited.connect(lambda text, tick=tick: text and tick.setCheckState(Qt.CheckState.Checked))   # a speed is a WAN link's
                 self.table.setCellWidget(i, 4, edit)
         edits = [self.table.cellWidget(i, 4) for i in range(len(self.rows))] if self.has_wan else []
         if edits:                                                    # every box as wide as the longest port speed, rows tall enough for one
@@ -75,6 +79,7 @@ class InterfacePicker(QDialog):
             hh.setSectionResizeMode(3, hh.ResizeMode.ResizeToContents)
             hh.setSectionResizeMode(4, hh.ResizeMode.ResizeToContents)
         self.table.setColumnHidden(0, not choose_checked)
+        self.choose_checked = choose_checked
         self.count = QLabel("")
         self.count.setProperty("muted", True)
         self.up_btn, self.shown_btn, self.none_btn = QPushButton("Tick the ones that are up"), QPushButton("Tick all shown"), QPushButton("Clear all")
@@ -102,7 +107,7 @@ class InterfacePicker(QDialog):
         lay.addWidget(self.count)
         lay.addWidget(buttons)
         self.search.textChanged.connect(self._filter)
-        self.table.itemChanged.connect(lambda it: self._summary() if it.column() == 0 else None)
+        self.table.itemChanged.connect(lambda it: self._summary() if it.column() in (0, 3) else None)
         self._filter()
 
     def wan_hint(self):
@@ -132,7 +137,8 @@ class InterfacePicker(QDialog):
 
     def _summary(self):
         shown = sum(1 for i in range(self.table.rowCount()) if not self.table.isRowHidden(i))
-        self.count.setText(f"{len(self.selected())} chosen   |   {shown} of {len(self.rows)} interfaces shown")
+        chosen = len(self.selected()) if self.choose_checked else len(self.wan())      # with only WAN to choose, the WAN links
+        self.count.setText(f"{chosen} chosen   |   {shown} of {len(self.rows)} interfaces shown")
 
     def wan(self):
         """{name: circuit speed in Mbps, or None for the port speed} for the interfaces ticked as WAN."""

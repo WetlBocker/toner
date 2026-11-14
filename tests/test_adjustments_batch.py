@@ -70,6 +70,7 @@ where = []
 real_update = oui.update_from_ieee
 oui.update_from_ieee = lambda *a, **k: (where.append(threading.current_thread()), time.sleep(0.2), 5)[2]
 mac_tab.update_db()
+check("while it downloads the line says so", mac_tab.oui_info.text() == "Downloading the manufacturer list...", mac_tab.oui_info.text())
 end = time.time() + 5
 while time.time() < end and not mac_tab.oui_info.text().startswith("Updated"):
     app.processEvents(); time.sleep(0.02)

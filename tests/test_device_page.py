@@ -6,6 +6,7 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 _os.environ.setdefault("TONER_NO_WEBCHARTS", "1")
+import re
 import os, sys, time
 SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = os.path.join(SP, "dp%d.db" % int(time.time() * 1000)); os.environ["APPDATA"] = SP
 import keyring
@@ -83,9 +84,13 @@ def facts(form):
     out = []
     for i in range(form.rowCount()):
         lab, val = widget_at(form, i, form.ItemRole.LabelRole), widget_at(form, i, form.ItemRole.FieldRole)
-        out.append((lab.text().replace("<span style='color:gray'>", "").replace("</span>", ""), val))
+        out.append((re.sub("<[^>]+>", "", lab.text()), val))
     return out
 f = facts(V.info)
+from ui import theme as _theme
+first = widget_at(V.info, 0, V.info.ItemRole.LabelRole).text()
+check("a fact's name is in the theme's muted ink, not a fixed grey", first == f"<span style='color:{_theme.current()['muted']}'>Status</span>"
+      and _theme.current()["muted"] != "gray", first)
 keys = [k for k, _w in f]
 check("Uptime comes right after Status", keys[:2] == ["Status", "Uptime"], keys)
 check("written by uptime_words", dict(f)["Uptime"].text() == display.uptime_words(100.5), dict(f)["Uptime"].text())
@@ -183,6 +188,8 @@ V.reload(); spin(30)
 pie = vt.chart.opt["series"][0]["data"]
 check("a slice per severity: Critical 1, High 1, Medium 1, Low 0; hardening rules not counted",
       [(d["name"], d["value"]) for d in pie] == [("Low", 0), ("Medium", 1), ("High", 1), ("Critical", 1)] and not vt.empty.isVisibleTo(vt), pie)
+check("before a slice is chosen the list holds every advisory, highest score first", vt.detail.isVisibleTo(vt)
+      and [r["id"] for r in vt.detail.rows] == ["CVE-2024-0001", "CVE-2024-0002", "CVE-2024-0003"], getattr(vt.detail, "rows", None))
 vt.chart.clicked.emit({"kind": "series", "name": "High"})
 m = vt.detail.model()
 heads = [m.headerData(j, Qt.Orientation.Horizontal) for j in range(m.columnCount())]
@@ -192,6 +199,8 @@ check("High lists the 7.5 advisory: id, title, score, exploited, link", m.rowCou
       advisories.advisory_url("CVE-2024-0002", "fortinet")] and vt.detail.isVisibleTo(vt), row)
 vt.chart.clicked.emit({"kind": "series", "name": "Critical"})
 check("a CVE is matched whole: CVE-2024-0001 is not exploited because CVE-2024-00011 is", [m.index(0, j).data() for j in range(m.columnCount())][3] == "No")
+vt.chart.clicked.emit({"kind": "series", "name": "Critical"})
+check("the same slice again: every advisory is back", [r["id"] for r in vt.detail.rows] == ["CVE-2024-0001", "CVE-2024-0002", "CVE-2024-0003"])
 from ui.vulntab import VulnTab
 other = VulnTab()
 other.show_device(db.find_device("rtr"))

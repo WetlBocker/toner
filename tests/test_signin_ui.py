@@ -157,6 +157,25 @@ check("an empty name is refused", w.name_error.text() == "Enter a username." and
 w.name.setText("nobody here"); w.next.click()
 check("Next with a name that doesn't exist still asks for a password (names aren't revealed)",
       w.pages.currentWidget() is w.password_page and w.who.text() == "nobody here")
+import ui.signinwindow as SW
+def fits(lab):
+    """The label has the height its words need at its width, and sits inside its page."""
+    app.processEvents()
+    return lab.height() >= lab.heightForWidth(lab.width()) and lab.geometry().bottom() <= lab.parentWidget().height()
+SW.say(w.error, "Too many tries. Wait 125 seconds, then try again.")
+check("an error of two lines is shown whole", fits(w.error), (w.error.height(), w.error.heightForWidth(w.error.width())))
+SW.say(w.error, "")
+app.processEvents()
+check("...and the page is its own height again when the error goes", w.pages.height() == w.password_page.layout().totalHeightForWidth(w.pages.width()),
+      (w.pages.height(), w.password_page.layout().totalHeightForWidth(w.pages.width())))
+LONG = "alexandria.montgomery-fitzgerald@contoso-engineering.example"
+w2 = SignInWindow(); w2.show(); w2.name.setText(LONG); w2.next.click(); app.processEvents()
+check("a name too long for the card is cut in the middle, whole in the tip, and fits its line",
+      w2.who.text() != LONG and w2.who.text().startswith("alex") and w2.who.text().endswith("example") and w2.who.toolTip() == LONG
+      and w2.who.fontMetrics().horizontalAdvance(w2.who.text()) <= w2.who.width(),
+      (w2.who.text(), w2.who.toolTip(), w2.who.fontMetrics().horizontalAdvance(w2.who.text()), w2.who.width()))
+check("...a short one is as typed, with no tip", w.who.text() == "nobody here" and not w.who.toolTip())
+w2.close()
 w.pw.setText("wrong password 123"); w.sign_in.click(); settle(w)
 check("a wrong password shows the agreed message", w.error.text() == datakey.WRONG and session.state() == "signed_out", w.error.text())
 check("...and the password box is emptied", w.pw.text() == "")
@@ -431,6 +450,8 @@ check("...from then", session.state() == "open")
 now[0] += 3 * 3600; lock.check_idle()
 check("a jump forward past the limit (a sleep) locks", session.state() == "locked" and lock.isVisible())
 check("...and says so", lock.reason.text() == "Locked after 15 minutes without use.", lock.reason.text())
+lock._idle_minutes = 1; lock.show_locked()
+check("one minute is said as one", lock.reason.text() == "Locked after 1 minute without use.", lock.reason.text())
 session.unlock(PW2); app.processEvents()
 check("unlocking (from anywhere) hides it again", not lock.isVisible())
 lock.last = now[0]
@@ -505,6 +526,18 @@ SW.remember("")
 SW.remembered_path().write_bytes(b"x" * 5000)
 check("a file that is not ours is ignored", SW.remembered() == "")
 SW.remember("")
+
+print("== Enter presses the card's button that has the focus")
+from PySide6.QtGui import QKeyEvent as _Key
+from PySide6.QtCore import QEvent as _Ev
+for make, key in ((SW.primary, Qt.Key.Key_Return), (SW.link, Qt.Key.Key_Enter)):
+    b, hits = make("Go"), []
+    b.clicked.connect(lambda *_a, h=hits: h.append(1))
+    QApplication.sendEvent(b, _Key(_Ev.Type.KeyPress, key, Qt.KeyboardModifier.NoModifier))
+    check(f"{make.__name__}: once", hits == [1] and not b.autoDefault(), hits)
+    b.setEnabled(False)
+    QApplication.sendEvent(b, _Key(_Ev.Type.KeyPress, key, Qt.KeyboardModifier.NoModifier))
+    check(f"{make.__name__}: not while it is off", hits == [1], hits)
 
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

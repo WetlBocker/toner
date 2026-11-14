@@ -4,6 +4,7 @@ from PySide6.QtWidgets import (QAbstractButton, QAbstractSpinBox, QApplication, 
                                QAbstractItemView, QFormLayout, QMenu, QPushButton, QSizePolicy, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QToolButton,
                                QVBoxLayout, QWidget, QWidgetAction)
 import types
+from contextlib import contextmanager
 
 from shiboken6 import Shiboken
 from core import db, perms, quiet, reports
@@ -320,6 +321,17 @@ class FilterButton(FunnelButton):
         self.changed.emit()
 
 
+@contextmanager
+def waiting():
+    """A wait cursor while a call keeps the window's thread (one not moved to a Job yet): the window shows it is working. Gone
+    again before anything is said about how it went."""
+    QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+    try:
+        yield
+    finally:
+        QApplication.restoreOverrideCursor()
+
+
 class CentredCheck(QStyledItemDelegate):
     """A tick box in the middle of its cell, under its column's name, drawn as the theme draws the lists' boxes. A click anywhere in
     the cell, or Space, ticks or unticks it."""
@@ -336,6 +348,14 @@ class CentredCheck(QStyledItemDelegate):
         box.rect = QRect(o.rect.center().x() - side // 2 + 1, o.rect.center().y() - side // 2 + 1, side, side)
         box.state = (o.state & ~QStyle.StateFlag.State_HasFocus) | (QStyle.StateFlag.State_On if checked else QStyle.StateFlag.State_Off)
         style.drawPrimitive(QStyle.PrimitiveElement.PE_IndicatorItemViewItemCheck, box, p, o.widget)
+        ring = (theme.current() or {}).get("ring")
+        if ring and o.state & QStyle.StateFlag.State_HasFocus:   # the theme draws no focus outline, and such a table selects nothing:
+            p.save()                                              # the box the arrow keys and Space act on is ringed
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            p.setPen(QPen(QColor(ring), 1.5))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRoundedRect(box.rect.adjusted(-4, -4, 3, 3), 5, 5)
+            p.restore()
 
     def editorEvent(self, event, model, opt, index):
         flags = index.flags()
@@ -425,6 +445,7 @@ class StatChips(QWidget):
             lab.setCursor(Qt.CursorShape.PointingHandCursor)
             lab.clicked.connect(lambda k=key: self.pick(k))
             lay.addWidget(lab)
+        self.setFixedHeight(34)                               # the height of the header line: beside a context that wraps they grew into boxes
         self.set_counts({})
 
     def pick(self, key):
@@ -493,11 +514,15 @@ class SectionHeader(QWidget):
         self.context.setProperty("muted", True)
         self.context.setWordWrap(True)                     # a long line wraps under itself instead of pushing the actions off
         self.context.setMinimumWidth(80)
-        self.lay = QHBoxLayout(self)
-        self.lay.setContentsMargins(0, 0, 0, 4)
+        self.outer = QVBoxLayout(self)
+        self.outer.setContentsMargins(0, 0, 0, 4)
+        self.outer.setSpacing(2)
+        self.lay = QHBoxLayout()                           # the line: the title, the context, the actions
         self.lay.setSpacing(10)
+        self.outer.addLayout(self.lay)
         self.lay.addWidget(self.title)
         self.lay.addWidget(self.context, 1)
+        self._under = False
 
     def set_context(self, text):
         self.context.setText(text)
@@ -506,6 +531,31 @@ class SectionHeader(QWidget):
         for w in widgets:
             self.lay.addWidget(w)
         return self
+
+    ROOM = 240                                             # with less than this beside the title, the context goes under the line
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._place()
+
+    def _place(self):
+        """The context beside the title while it has room to read there. When the actions leave it a narrow strip (it wrapped into a
+        column of single words and made the header as tall as a panel), it goes under the line, at full width."""
+        line = [self.lay.itemAt(i).widget() for i in range(self.lay.count())]
+        taken = sum(min(max(w.sizeHint().width(), w.minimumWidth()), w.maximumWidth()) + self.lay.spacing()
+                    for w in line if w is not None and w is not self.context and not w.isHidden())
+        under = bool(self.context.text()) and self.width() - taken < self.ROOM
+        if under == self._under:
+            return
+        self._under = under
+        if under:
+            self.lay.removeWidget(self.context)
+            self.lay.insertStretch(1, 1)
+            self.outer.addWidget(self.context)
+        else:
+            self.outer.removeWidget(self.context)
+            self.lay.takeAt(1)                             # the stretch that stood in for it
+            self.lay.insertWidget(1, self.context, 1)
 
 
 class filling:

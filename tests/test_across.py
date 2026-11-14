@@ -249,5 +249,17 @@ QApplication.processEvents()
 pick("cpu")
 check("only the devices the search leaves", gauges() == [("w2", 95.0)], gauges())
 check("...and only their checks are listed", w.compare_check.findData("datasets") < 0)
+
+print("== a reading where lower is worse (WAN uptime): the bands and the order the other way round")
+w.find.setText("")
+dev("u1", "unifi"); dev("u2", "unifi")
+save(db.GLOBAL, [Result("u1", "wan uptime", "OK", "99.98%", numeric=99.98), Result("u2", "wan uptime", "FAIL", "90%", numeric=90.0)], timedelta(minutes=30))
+w.refresh()
+QApplication.processEvents()
+pick("wan uptime", 1)                                    # 7-day averages: the band comes from the limits (warn 99, fail 95)
+check("the lowest uptime is first", [n for n, _v in gauges()] == ["u2", "u1"], gauges())
+bands = w.compare_gauges[0].view.opt["series"][0]["axisLine"]["lineStyle"]["color"]
+check("red under 95, amber to 99, green above", bands == [[0.95, chartspec.status_color(P, "FAIL")], [0.99, chartspec.status_color(P, "WARN")],
+                                                           [1, chartspec.status_color(P, "OK")]], bands)
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

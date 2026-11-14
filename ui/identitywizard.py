@@ -211,6 +211,7 @@ class IdentityWizard(QDialog):
         self.typed_text, self.typed = note(""), QPlainTextEdit()
         self.typed_text.setTextFormat(Qt.TextFormat.PlainText)
         self.typed.setAccessibleName(TYPE_GROUPS_TEXT)
+        self.typed.setTabChangesFocus(True)                          # Tab goes on to Back and Save, not into the text
         self.everyone_label, self.everyone = QLabel(EVERYONE), QComboBox()
         self.everyone.addItems(ROLES)
         self.everyone.setCurrentText(saved.get("everyone") or "Tech")
@@ -342,6 +343,7 @@ class IdentityWizard(QDialog):
         return bool(path)
 
     def _connect(self):
+        self._say("")                                        # a retry: the last try's error goes while this one runs
         cfg, pw = self._cfg(), self._password()
         refill = self._loaded and self._target is not None and self._servers(cfg) != self._target[0]   # another server: read anew
         # Edit, with the CA file not chosen again here: it must still be the one signed (else CA_CHANGED); choosing it is trusting it
@@ -407,6 +409,7 @@ class IdentityWizard(QDialog):
 
     def _discover(self):
         """SSO step 3: the provider's sign-in settings read, and the connection's values checked, on a Job."""
+        self._say("")
         cfg = self._sso_cfg()
 
         def run():
@@ -509,7 +512,10 @@ class IdentityWizard(QDialog):
         self._narrow("groups")
 
     def _list_groups(self):
-        """Entra: an admin's browser sign-in (fresh, nonce checked), then the first page of groups. The access token stays here."""
+        """Entra: an admin's browser sign-in (fresh, nonce checked), then the first page of groups. The access token stays here.
+        While the browser has it (up to five minutes) the button is Cancel, which ends the wait and says nothing."""
+        if self._cancel is not None:
+            return self._cancel.set()
         cfg, cancel, got = self._sso_cfg(), threading.Event(), {}
         self._cancel = cancel
 
@@ -521,12 +527,15 @@ class IdentityWizard(QDialog):
             finally:
                 b.close()
             got["groups"] = oidc.search_groups(got["token"], "")
-        self.list_btn.setEnabled(False)
-        self._run(run, lambda _r, e: self._listed(got, e), block=False)
+        self.list_btn.setText("Cancel")
+        self._run(run, lambda _r, e: self._listed(got, e, cancel.is_set()), block=False)
 
-    def _listed(self, got, error):
-        self.list_btn.setEnabled(True)
+    def _listed(self, got, error, cancelled=False):
+        self.list_btn.setText(LIST_GROUPS)
+        self._cancel = None
         self._token = got.get("token") or self._token
+        if cancelled:
+            return
         if error is not None:
             return self._say(self._sso_words(error))
         self._say("")

@@ -422,6 +422,15 @@ class SettingsTab(QWidget):
         is for Admins. Safe to call again."""
         self.apply_org()
 
+    @staticmethod
+    def _set_changeable(page, on):
+        """A page that can be viewed but not changed is disabled. One with tabs of its own (Checks) stays enabled and each tab's page is
+        disabled instead, so the other tabs can still be opened and read."""
+        parts = page.pages() if hasattr(page, "tabs") and hasattr(page, "pages") else None
+        page.setEnabled(on or parts is not None)
+        for p in parts or ():
+            p.setEnabled(on)
+
     def apply_org(self):
         """Global or an organization: the line at the top, read-only pages managed by Global, and the Organizations page."""
         inside = db.home() != db.GLOBAL
@@ -429,10 +438,10 @@ class SettingsTab(QWidget):
         self.locked = {i for i in range(len(self.pages)) if self._role_locked(i)}
         for i, lab in self.role_lines.items():
             lab.setVisible(i in self.locked)
-            self.pages[i].setEnabled(i not in self.locked)
+            self._set_changeable(self.pages[i], i not in self.locked)
         for i, lab in self.managed.items():
             lab.setVisible(inside and i not in self.locked)
-            self.pages[i].setEnabled(not inside and i not in self.locked)
+            self._set_changeable(self.pages[i], not inside and i not in self.locked)
         for p in self.pages:                                  # single settings about this computer on an organization's pages
             for w in p.findChildren(QWidget):
                 if w.property("globalOnly"):

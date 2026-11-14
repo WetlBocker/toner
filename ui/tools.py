@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication as _QApp, QCheckB
                                QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QSpinBox, QSplitter,
                                QTableWidget, QTableWidgetItem, QTabWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 from core import db, jump, nettools, perms, profiles, reach, sealedfile, sessionlog, snmp, vendors
+from ui import theme
 
 
 class OutputBox(QPlainTextEdit):
@@ -137,6 +138,8 @@ class LogsTab(QWidget):
         self.view = OutputBox()
         refresh, folder = QPushButton("Refresh"), QPushButton("Open log folder")
         save = QPushButton("Save a readable copy...")      # the files in the folder are sealed: this is how to read one elsewhere
+        save.setEnabled(False)                             # until a log is chosen: with none it did nothing
+        self.table.itemSelectionChanged.connect(lambda: save.setEnabled(self.current_id() is not None))
         refresh.clicked.connect(self.refresh)
         folder.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(sessionlog.log_dir()))))
         save.clicked.connect(self.save_copy)
@@ -193,7 +196,8 @@ class LogsTab(QWidget):
                 self.table.selectRow(i)
         self.table.resizeColumnsToContents()
         self.table.blockSignals(False)
-        self.note.setText(f"{len(self.sessions)} session(s) logged in {sessionlog.log_dir()}")
+        n = len(self.sessions)                                # sessions, and the backup, Command Runner and firmware logs
+        self.note.setText(f"{n} log{'' if n == 1 else 's'} in {sessionlog.log_dir()}")
         self.show_log()
 
     def current_id(self):
@@ -565,7 +569,7 @@ class SubnetTab(QWidget):
             iface = self.subnets.parse(text)
         except ValueError as e:
             self.iface = None
-            self.facts.setText(f"<span style='color:gray'>Not a valid address: {self._esc(e)}</span>")
+            self.facts.setText(theme.muted(f"Not a valid address: {self._esc(e)}"))
             self.lookup_box.hide()
             self.tree.clear()
             self._buttons()
@@ -600,11 +604,11 @@ class SubnetTab(QWidget):
         if not self.iface or (self.worker and self.worker.isRunning()):
             return
         if not self.iplookup.has_key():
-            self.lookup_out.setText("<span style='color:gray'>Add your API key under Settings > Connections first.</span>")
+            self.lookup_out.setText(theme.muted("Add your API key under Settings > Connections first."))
             return
         ip = self.iface.ip
         self.lookup_btn.setEnabled(False)
-        self.lookup_out.setText(f"<span style='color:gray'>Asking {self._esc(self.iplookup.host())}...</span>")
+        self.lookup_out.setText(theme.muted(f"Asking {self._esc(self.iplookup.host())}..."))
         self.worker = Call(lambda: self.iplookup.lookup(ip))
         self.worker.done.connect(self._looked_up)
         self.worker.start()
@@ -612,7 +616,7 @@ class SubnetTab(QWidget):
     def _looked_up(self, res):
         self.lookup_btn.setEnabled(True)
         if isinstance(res, Exception):
-            self.lookup_out.setText(f"<span style='color:gray'>{self._esc(self.iplookup.host())}: {self._esc(res)}</span>")
+            self.lookup_out.setText(theme.muted(f"{self._esc(self.iplookup.host())}: {self._esc(res)}"))
             return
         self.lookup_out.setText(self._table(self.iplookup.fields(res)))
 

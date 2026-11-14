@@ -8,7 +8,7 @@ import os as _os, sys as _sys, tempfile as _tmp
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-import json, os, sys, time
+import json, os, re, sys, time
 import xml.etree.ElementTree as ET
 SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = os.path.join(SP, "ver%d.db" % int(time.time() * 1000)); os.environ["APPDATA"] = SP
 import keyring
@@ -263,7 +263,7 @@ def page_rows(view):
     for i in range(view.info.rowCount()):
         lab, field = widget_at(view.info, i, QFormLayout.ItemRole.LabelRole), widget_at(view.info, i, QFormLayout.ItemRole.FieldRole)
         if lab and field:
-            out[lab.text().replace("<span style='color:gray'>", "").replace("</span>", "")] = field.text()
+            out[re.sub("<[^>]+>", "", lab.text())] = field.text()
     return out
 view = DV.DeviceView(db.get_device(sw1["id"]))
 rows_shown = page_rows(view)
