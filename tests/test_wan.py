@@ -125,6 +125,10 @@ print("== the picker")
 LIST = [("wan1", "Up", 1e9), ("lan", "Up", 100e6), ("old", "Down")]
 pk = InterfacePicker(LIST, [], wan={"wan1": 300})
 t = pk.table
+big = InterfacePicker(LIST, [], wan={"wan1": 1234567.25, "lan": 0.5})
+check("a circuit speed is shown as it was typed, however large or small (never 1.23457e+06)",
+      big.table.cellWidget(0, 4).text() == "1234567.25" and big.table.cellWidget(1, 4).text() == "0.5" and big.wan() == {"wan1": 1234567.25, "lan": 0.5},
+      (big.table.cellWidget(0, 4).text(), big.table.cellWidget(1, 4).text(), big.wan()))
 check("the WAN columns are named", [t.horizontalHeaderItem(c).text() for c in (3, 4)] == ["WAN", "Available bandwidth"])
 check("wan1 is ticked WAN with 300; the others show the port speed",
       pk.wan() == {"wan1": 300} and t.cellWidget(0, 4).text() == "300" and t.cellWidget(1, 4).placeholderText() == "100 Mbps (port speed)"

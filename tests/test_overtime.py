@@ -252,6 +252,26 @@ said = [eb[k].findChildren(O.QLabel) for k in ("disks", "certificates", "patches
 check("...and each says so, with when it was read", all(any(_re.fullmatch(r"The latest reading, from \d{4}-\d\d-\d\d \d\d:\d\d\. The time range does not apply\.", l.text())
                                                            for l in labels) for labels in said), [[l.text() for l in labels] for labels in said])
 
+print("== drawn again for the same device (new readings): a per-interface graph keeps its interfaces and its zoom")
+cp.show_checks("w1", "windows", ["interface errors"], START, END, th)
+ie = cp.panels[0]
+if not ie.drawn: ie.draw()
+ie.picker.set_selected(["Gi1", "Gi2"]); ie.picker._toggled()
+ie.lines.charts[0].plot.setXRange(0.6, 1.2, padding=0); app.processEvents()
+want = ie.lines.charts[0].vb.viewRange()[0]                     # (the graph never shows less than one run's width)
+cp.show_checks("w1", "windows", ["interface errors"], START, END, th)
+ie2 = cp.panels[0]
+if not ie2.drawn: ie2.draw()
+check("the interfaces chosen are still chosen", ie2 is not ie and ie2.picker.selected() == ["Gi1", "Gi2"]
+      and [c for c, _p in ie2.lines.series] == ["Gi1", "Gi2"], ie2.picker.selected())
+(x0, x1), _yr = ie2.lines.charts[0].vb.viewRange()
+check("...and the graph shows the stretch of time it was zoomed to", want[0] > 0 and abs(x0 - want[0]) < 0.05 and abs(x1 - want[1]) < 0.05, (x0, x1, want))
+cp.show_checks("w2", "windows", ["interface errors"], START, END, th)
+cp.show_checks("w1", "windows", ["interface errors"], START, END, th)
+ie3 = cp.panels[0]
+if not ie3.drawn: ie3.draw()
+check("another device and back starts afresh: those that had errors, the whole stretch", ie3.picker.selected() == ["Gi2"]
+      and ie3.lines.charts[0].vb.viewRange()[0][0] < 0, (ie3.picker.selected(), ie3.lines.charts[0].vb.viewRange()[0]))
 print("== uptime words")
 check("days and hours, or hours and minutes under a day", display.uptime_words(12 * 24 + 4.2) == "12 days 4 hours" and display.uptime_words(5 + 20 / 60) == "5 hours 20 minutes"
       and display.uptime_words(25) == "1 day 1 hour", [display.uptime_words(12 * 24 + 4.2), display.uptime_words(5 + 20 / 60), display.uptime_words(25)])

@@ -260,6 +260,11 @@ check("the dial's name fits its 210 px tile, keeping both ends", shown != LONGNA
 check("...and hovering the dial says the whole name", opt.get(chartspec.TIP) == LONGNAME and chartspec.TIP not in short_opt, opt.get(chartspec.TIP))
 short = short_opt
 check("a name that fits is left alone", short["series"][0]["data"][0]["name"] == "sw0")
+from PySide6.QtCore import Qt as _Qt2
+_label = "nas-01 (Acme Corporation of North America) / tank/backups"            # as Global names another organization's dataset
+_cut = webchart.fit_text(_label, px(_label, 12) * 2 // 3)
+check("a dial named 'device (organization) / item' keeps the device's start and the item's end when cut",
+      _cut != _label and _cut.startswith("nas-01 (") and _cut.endswith("tank/backups") and px(_cut, 12) <= px(_label, 12) * 2 // 3, _cut)
 pick("Interfaces")
 r_ = next(r_ for r_ in w.compare_rings if r_.name == LONGNAME)
 opt = r_.builder(p)

@@ -159,9 +159,11 @@ class CheckPanels(QScrollArea):
     def show_checks(self, device, vendor, checks, start, end, th):
         """Panels for `checks` (stored names, in the picker's order) of `device` (a key) between start and end (datetimes); with no
         checks, the prompt to pick some."""
-        # the same device drawn again (new readings): each graph's zoom and hidden names and a heatmap's selected square are put back
-        # as the panels are drawn, those drawn before are drawn at once, and the page returns to where it was scrolled (_reveal)
-        self._kept = {tuple(p.checks): ([c.view_state() for c in p.stack.charts] if hasattr(p, "stack") else [], getattr(p, "slot", None))
+        # the same device drawn again (new readings): each graph's zoom and hidden names, a heatmap's selected square and the items
+        # picked for a per-item graph are put back as the panels are drawn, those drawn before are drawn at once, and the page returns
+        # to where it was scrolled (_reveal)
+        self._kept = {tuple(p.checks): ([c.view_state() for c in p.stack.charts] if hasattr(p, "stack") else [], getattr(p, "slot", None),
+                                        (p.picker.selected(), [c.view_state() for c in p.lines.charts]) if hasattr(p, "lines") else None)
                       for p in self.panels if p.drawn} if device == self.device else {}
         self._restore = self.verticalScrollBar().value() if self._kept else None
         self.device, self.vendor, self.th = device, (vendor or "").lower(), th or {}
@@ -264,7 +266,7 @@ class CheckPanels(QScrollArea):
         panel.stack = ChartStack()
         panel.stack.setMinimumHeight(300)
         panel.stack.set_series(series, self.th.get(panel.checks[0].split(" (")[0].replace(" ", "_")), marks=marks)   # "wan usage" -> "wan_usage"
-        for chart, state in zip(panel.stack.charts, self._kept.get(tuple(panel.checks), ((), None))[0]):
+        for chart, state in zip(panel.stack.charts, self._kept.get(tuple(panel.checks), ((), None, None))[0]):
             chart.restore(state)
         panel.lay.addWidget(panel.stack)
 
@@ -293,7 +295,7 @@ class CheckPanels(QScrollArea):
         panel.detail.setMinimumHeight(160)
         panel.detail.hide()
         panel.lay.addWidget(panel.detail)
-        slot = self._kept.get(tuple(panel.checks), ((), None))[1]
+        slot = self._kept.get(tuple(panel.checks), ((), None, None))[1]
         if slot and any(slot[0] <= t < slot[1] for t, _r in panel.rows):
             self._show_slot(panel, *slot)
         if self.vendor == "truenas" and shown_name(check) == "disks":     # each drive's temperature under its SMART squares
@@ -335,7 +337,10 @@ class CheckPanels(QScrollArea):
             return False
         panel.picker = GroupPicker(all_text=f"Choose {noun}", noun=noun, clear_text="Clear selection")
         panel.picker.set_labels(sorted(lines))
-        if noun == "interfaces":
+        was = self._kept.get(tuple(panel.checks), ((), None, None))[2]     # drawn again: the items picked then, and each graph's zoom
+        if was:
+            panel.picker.set_selected([n for n in was[0] if n in lines])
+        elif noun == "interfaces":
             panel.picker.set_selected([n for n, pts in lines.items() if any(v for _t, v in pts)])
         panel.lines = ChartStack()
         panel.lines.setMinimumHeight(300)
@@ -343,6 +348,8 @@ class CheckPanels(QScrollArea):
         draw = lambda: panel.lines.set_series([(named(n), lines[n]) for n in panel.picker.selected() or sorted(lines)])
         panel.picker.changed.connect(draw)
         draw()
+        for chart, state in zip(panel.lines.charts, was[1] if was else ()):
+            chart.restore(state)
         row = QHBoxLayout()
         row.addWidget(panel.picker)
         row.addStretch(1)

@@ -59,7 +59,7 @@ class InterfacePicker(QDialog):
                 tick.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
                 tick.setCheckState(Qt.CheckState.Checked if name.lower() in wanted else Qt.CheckState.Unchecked)
                 self.table.setItem(i, 3, tick)
-                edit = QLineEdit("" if wanted.get(name.lower()) is None else f"{wanted[name.lower()]:g}")
+                edit = QLineEdit("" if wanted.get(name.lower()) is None else f"{wanted[name.lower()]:.2f}".rstrip("0").rstrip("."))   # as typed: never 1.2e+06
                 edit.setPlaceholderText(f"{speed_text(speed)} (port speed)" if speed else "")
                 edit.setValidator(NUMBER)                            # "500 Mbps" or "1,000" would be read as no speed at all
                 edit.textEdited.connect(lambda text, tick=tick: text and tick.setCheckState(Qt.CheckState.Checked))   # a speed is a WAN link's
