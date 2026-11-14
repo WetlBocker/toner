@@ -20,6 +20,7 @@ import base64
 import hashlib
 import http.server
 import json
+import re
 import threading
 import time
 import urllib.parse
@@ -28,6 +29,16 @@ import jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from jwt.algorithms import ECAlgorithm, RSAAlgorithm
+
+
+def leaks(texts, tokens):
+    """The texts that hold one of the tokens as a whole value. The stand-ins ("at-1", "rt-1") are four characters, and a random state,
+    nonce or challenge in a logged URL holds those by chance about once in several thousand runs."""
+    found = [re.compile(r"(?<![\w-])" + re.escape(t) + r"(?![\w-])") for t in tokens]
+    return [x for x in texts if any(f.search(x) for f in found)]
+
+
+assert leaks(["access_token=at-1&x=1", "Bearer at-1", "'at-1'", "state=Qm9at-1xYz"], ["at-1"]) == ["access_token=at-1&x=1", "Bearer at-1", "'at-1'"]
 
 
 class FakeProvider:

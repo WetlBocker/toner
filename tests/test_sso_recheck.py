@@ -20,7 +20,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from core import audit, datakey, db, directory, dirpin, oidc, osstore, passvault, pinslot, roles, session, tpm_windows
 from core import dirsignin as S
-from fake_oidc import FakeProvider
+from fake_oidc import FakeProvider, leaks
 
 ok = bad = 0
 def check(name, cond, extra=""):
@@ -204,6 +204,7 @@ passvault.remove("sso-refresh:" + ANN)
 check("no refresh token: skipped", dircheck.run_once() == "skipped" and session.state() == "open")
 
 # ---------------------------------------------------------------- no secret anywhere
-check("no token in the log or the audit", not any(t in x for x in LOG + [str(r) for r in audit.recent(5000)] for t in ("rt-1", "rt-2", "at-1", "at-2")))
+FOUND = leaks(LOG + [str(r) for r in audit.recent(5000)], ("rt-1", "rt-2", "at-1", "at-2"))
+check("no token in the log or the audit", not FOUND, FOUND)
 
 print(f"\n{ok} passed, {bad} failed"); sys.exit(1 if bad else 0)

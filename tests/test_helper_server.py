@@ -21,7 +21,7 @@ import ldap3
 from core import datakey, db, directory, duo, envelope, oidc, osstore, roles, session
 from core.helper import protocol, server, store
 from core.version import VERSION
-from fake_oidc import FakeProvider
+from fake_oidc import FakeProvider, leaks
 
 ok = bad = 0
 def check(name, cond, extra=""):
@@ -479,10 +479,10 @@ check("forget from the owner: ok, the store cleared", ask("forget") == {"ok": Tr
 check("after forget: another peer may enroll", enroll(OTHER) == {"ok": True} and ask("status", OTHER)["owner"])
 
 # ---------------------------------------------------------------- no secret in an answer or the log
-SECRETS = ["pw-bob", "wrong-pw", "135790", "000000", "at-1", SKEY, b64(SKEY.encode()), b64(DATA_KEY), b64(RULES), PW]
+SECRETS = ["pw-bob", "wrong-pw", "135790", "000000", SKEY, b64(SKEY.encode()), b64(DATA_KEY), b64(RULES), PW]
 seen = json.dumps(ANSWERS) + "\n".join(LOG)
-check("no password, code, Duo key or spare key in an answer or the log", not [s for s in SECRETS if s in seen],
-      [s for s in SECRETS if s in seen])
+FOUND = [s for s in SECRETS if s in seen] + [t for t in ["at-1"] if leaks([seen], [t])]    # "at-1" as a whole value: a released key is random
+check("no password, code, Duo key or spare key in an answer or the log", not FOUND, FOUND)
 check("released keys not in the log", not any(r["data_key"] in "\n".join(LOG) for r in RELEASED) and len(RELEASED) == 3)
 check("no ID token in an answer or the log", len(TOKENS) > 10 and not any(t in seen for t in TOKENS))
 

@@ -22,7 +22,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from core import audit, datakey, db, directory, dirpin, oidc, osstore, passvault, pinslot, roles, session, tpm_windows
 from core import dirsignin as S
-from fake_oidc import FakeProvider
+from fake_oidc import FakeProvider, leaks
 
 ok = bad = 0
 def check(name, cond, extra=""):
@@ -223,7 +223,7 @@ check("reachable: True when it answers", S.reachable(SSO) is True)
 session.sign_in("Admin1", PW)
 rows = json.dumps(audit.recent(5000))
 check("the audit holds no token", not any(t in rows for t in TOKENS))
-check("the log holds no token", not any(t in line for line in LOG for t in TOKENS))
+check("the log holds no token", not leaks(LOG, TOKENS), leaks(LOG, TOKENS))
 session.sign_out()
 
 P.stop()
