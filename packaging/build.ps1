@@ -39,6 +39,9 @@ $prune = @("Qt6VirtualKeyboard.dll", "Qt6Test.dll", "Qt6Pdf.dll", "Qt6PdfWidgets
            "QtTest.pyd", "QtPdf.pyd", "QtPdfWidgets.pyd",
            "plugins\virtualkeyboard", "plugins\platforminputcontexts\qtvirtualkeyboardplugin.dll", "translations")
 foreach ($rel in $prune) { $path = Join-Path $qt $rel; if (Test-Path $path) { Remove-Item -Recurse -Force $path } }
+# The Qt modules that are GPL only, which PyInstaller collects with the QML plugins and Toner never loads: packaging\strip_gpl.py.
+python packaging\strip_gpl.py build\dist\Toner
+if ($LASTEXITCODE) { throw "strip_gpl failed" }
 # The toner-agent binaries (agent/build.sh, or the CI artifact) ride along in agent\, so Toner can hand them to computers
 # and update the agents it already has. Without them the package Toner makes is the PowerShell one.
 if (Test-Path "$root\agent\dist") {

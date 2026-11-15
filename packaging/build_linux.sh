@@ -28,6 +28,9 @@ for rel in Qt/lib/libQt6VirtualKeyboard.so.6 Qt/lib/libQt6Test.so.6 Qt/lib/libQt
            Qt/plugins/virtualkeyboard Qt/plugins/platforminputcontexts/libqtvirtualkeyboardplugin.so Qt/translations; do
     rm -rf "$qt/$rel"
 done
+# The pieces that are GPL only (Qt modules PyInstaller collects with the QML plugins, GNU readline): packaging/strip_gpl.py.
+python packaging/strip_gpl.py build/dist/Toner
+python packaging/strip_gpl.py build/dist/toner-helper
 if [ -d "$root/agent/dist" ]; then                       # the toner-agent binaries (agent/build.sh): see build.ps1
     mkdir -p build/dist/Toner/agent
     cp "$root"/agent/dist/toner-agent-* build/dist/Toner/agent/
