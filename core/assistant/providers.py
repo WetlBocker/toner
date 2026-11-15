@@ -362,9 +362,13 @@ class Gemini(Provider):
     LEVEL = {"quick": "LOW", "normal": "MEDIUM", "thorough": "HIGH"}
 
     def _client(self, timeout=TIMEOUT):
+        import httpx
         from google import genai
         from google.genai import types
-        opts = {"timeout": timeout * 1000}
+        # google-genai 3 changed two defaults; both are held where Toner's requests were written and tested: the v1beta API
+        # (thinking levels, Google Search, thought signatures), and the certificate list httpx gives the other providers
+        # (3 would trust whatever this computer does, a TLS-inspecting proxy's own authority included).
+        opts = {"timeout": timeout * 1000, "api_version": "v1beta", "client_args": {"verify": httpx.create_ssl_context()}}
         if self.base_url:
             opts["base_url"] = self.base_url
         return genai.Client(api_key=self.key, http_options=types.HttpOptions(**opts))

@@ -432,6 +432,23 @@ exercise("gemini", gem, "gemini-3.8-flash", "Gemini 3.8 Flash", ["gemini-3.8-fla
               check_first=gem_first, check_second=gem_second, history_len=4,
               carries_all=lambda b: len(b["contents"]) == 5 and camel(b)["contents"][1]["parts"][0].get("thoughtSignature") == SIG and b["contents"][4]["parts"][0]["text"].endswith("\nAnd now?")))
 
+check("Gemini: every request goes to the v1beta API Toner's requests were written for (google-genai 3 made v1 the default)",
+      gem.requests and all(q["path"].startswith("/v1beta/") for q in gem.requests), sorted({q["path"].split("/models")[0] for q in gem.requests}))
+import ssl as _ssl, httpx as _httpx
+from google import genai as _genai
+from core.assistant import providers as _providers
+_made, _real = [], _genai.Client
+_genai.Client = lambda **kw: _made.append(kw) or _real(**kw)
+try:
+    _providers.Gemini("k")._client()
+finally:
+    _genai.Client = _real
+_ho = _made[0]["http_options"]
+check("Gemini: the v1beta API is asked for by name", _ho.api_version == "v1beta", _ho.api_version)
+_ctx = (_ho.client_args or {}).get("verify")
+check("Gemini: certificates are checked against the list the other providers use, not whatever the computer trusts (google-genai 3's default)",
+      type(_ctx) is _ssl.SSLContext and _ctx.verify_mode == _ssl.CERT_REQUIRED and _ctx.check_hostname
+      and _ctx.cert_store_stats() == _httpx.create_ssl_context().cert_store_stats(), (type(_ctx), _ho.client_args))
 gem.refuse_mix = True
 gem.script[:] = [("text", "From what I know, yes.")]
 _cid, events, done = run("gemini", "Affected by CVE-2026-0235?")
