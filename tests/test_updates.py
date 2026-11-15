@@ -350,9 +350,10 @@ check("before sign-in, every older kept version is listed", [i["version"] for i 
 real_exists = datakey.exists
 datakey.exists = lambda: True
 check("after: only versions after 1.14.1 (the last release without sign-in)", [i["version"] for i in updates.earlier(current="1.16.0")] == ["1.15.0"])
+os.remove(olds.pop())                      # 1.15.0 is older than the real version since 2.0.0, so the About page would rightly offer it
 sys.frozen = True; sys.executable = os.path.join(fake_dir, "Toner.exe")
 ab3.load()
-BEFORE = "Versions before sign-in can't open this data, so they aren't listed."
+BEFORE ="Versions before sign-in can't open this data, so they aren't listed."
 check("the About page lists none of them and says why", not ab3.revert_btns and BEFORE in ab3.earlier_note.text(), (list(ab3.revert_btns), ab3.earlier_note.text()))
 datakey.exists = real_exists; del sys.frozen; sys.executable = saved_exe
 for p in olds:
