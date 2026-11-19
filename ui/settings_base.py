@@ -1,7 +1,9 @@
 """What every Settings page shares: the page base class and a few small helpers."""
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QDoubleSpinBox, QFormLayout, QHBoxLayout, QLabel, QSpinBox, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtCore import QEvent, QObject, Qt
+from PySide6.QtWidgets import QDoubleSpinBox, QFormLayout, QHBoxLayout, QLabel, QMenu, QSpinBox, QToolButton, QVBoxLayout, QWidget
+
+CHOICE_ARROW = 24                     # the drop-down arrow of a number box with common values, as wide as a drop-down's (ui/theme.py)
 
 
 class TrimSpin(QDoubleSpinBox):
@@ -17,12 +19,59 @@ class TrimSpin(QDoubleSpinBox):
 
 
 
-def spin(lo, hi, suffix=""):
+class Choices(QObject):
+    """Common values for a number box (offer): its two small arrows become one drop-down arrow that lists them, in the box's own
+    words ("30 days"). Any other number can still be typed, and the arrow keys still step."""
+
+    def __init__(self, box, values):
+        super().__init__(box)
+        self.box, self.values = box, [v for v in values if box.minimum() <= v <= box.maximum()]
+        box.setProperty("choices", True)                      # the theme draws the one arrow
+        box.installEventFilter(self)
+
+    def text(self, value):
+        b = self.box
+        if value == b.minimum() and b.specialValueText():
+            return b.specialValueText()
+        return b.prefix() + b.textFromValue(value) + b.suffix()
+
+    def menu(self):
+        m = QMenu(self.box)
+        for v in self.values:
+            m.addAction(self.text(v), lambda v=v: self.box.setValue(v))
+        m.setMinimumWidth(self.box.width())
+        return m
+
+    def open(self):
+        self.menu().exec(self.box.mapToGlobal(self.box.rect().bottomLeft()))
+
+    def eventFilter(self, obj, e):
+        kind = e.type()
+        on_arrow = kind in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonDblClick) and e.position().x() >= obj.width() - CHOICE_ARROW
+        by_key = kind == QEvent.Type.KeyPress and (e.key() == Qt.Key.Key_F4 or (e.key() == Qt.Key.Key_Down and e.modifiers() & Qt.KeyboardModifier.AltModifier))
+        if on_arrow or by_key:                                # (F4 and Alt+Down: as on a drop-down)
+            self.open()
+            return True
+        return False
+
+
+def offer(box, values):
+    """Give a number box a list of common values to pick from. Returns the box."""
+    Choices(box, values)
+    return box
+
+
+def choices_menu(box):
+    """The list a box made with offer() opens."""
+    return box.findChild(Choices).menu()
+
+
+def spin(lo, hi, suffix="", choices=()):
     s = QSpinBox()
     s.setRange(lo, hi)
     if suffix:
         s.setSuffix(suffix)
-    return s
+    return offer(s, choices) if choices else s
 
 
 

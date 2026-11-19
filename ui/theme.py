@@ -218,6 +218,12 @@ QSpinBox::down-button, QDoubleSpinBox::down-button { subcontrol-origin: border; 
 QSpinBox::up-arrow, QDoubleSpinBox::up-arrow { image: url(%(chev_up)s); width: 10px; height: 10px; }
 QSpinBox::down-arrow, QDoubleSpinBox::down-arrow { image: url(%(chev_down)s); width: 10px; height: 10px; }
 QSpinBox::up-button:hover, QSpinBox::down-button:hover, QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover { background: %(hover)s; border-radius: 5px; }
+/* a number box with common values to pick from (ui/settings_base.py offer): one arrow, as a drop-down has */
+QSpinBox[choices="true"]::up-button, QDoubleSpinBox[choices="true"]::up-button { width: 0; height: 0; margin: 0; }
+QSpinBox[choices="true"]::up-arrow, QDoubleSpinBox[choices="true"]::up-arrow { image: none; width: 0; height: 0; }
+QSpinBox[choices="true"]::down-button, QDoubleSpinBox[choices="true"]::down-button { subcontrol-origin: padding; subcontrol-position: center right; width: 24px; margin: 0; }
+QSpinBox[choices="true"]::down-button:hover, QDoubleSpinBox[choices="true"]::down-button:hover { background: transparent; }
+QSpinBox[choices="true"]::down-arrow, QDoubleSpinBox[choices="true"]::down-arrow { width: 12px; height: 12px; }
 QPlainTextEdit, QTextEdit { padding: %(pad_text)s; }
 
 /* ---- check boxes ---- */
