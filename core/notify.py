@@ -5,6 +5,8 @@ Secrets (webhook URLs, passwords, tokens) are kept in Toner's vault (core/passva
 or in exported settings, and are scrubbed from any error text that is shown or logged.
 """
 import json
+import mimetypes
+import os
 import smtplib
 import ssl
 import time
@@ -130,9 +132,7 @@ def validate(ch, secrets):
                 probs.append(f"{label} must be a number from {lo} to {hi}.")
     if ch["type"] == "email":
         for field in ("from_addr", "to_addrs"):
-            for a in str(ch.get(field, "")).replace(";", ",").split(","):
-                if a.strip() and ("@" not in a or " " in a.strip() or "\n" in a):
-                    probs.append(f"'{a.strip()}' is not a valid email address.")
+            probs += [f"'{a}' is not a valid email address." for a in bad_addresses(ch.get(field, ""))]
     return probs
 
 
@@ -237,12 +237,29 @@ def _teams_card(msg):
                     "version": "1.4", "body": body}}]}
 
 
+def addresses(text):
+    """The addresses in a "To" box: separated by commas or semicolons."""
+    return [a.strip() for a in str(text).replace(";", ",").split(",") if a.strip()]
+
+
+def bad_addresses(text):
+    return [a for a in addresses(text) if "@" not in a or " " in a or "\n" in a]
+
+
 def _send_email(ch, secrets, msg):
-    to = [a.strip() for a in str(ch["to_addrs"]).replace(";", ",").split(",") if a.strip()]
+    return _mail(ch, secrets, msg.title, msg.plain())
+
+
+def _mail(ch, secrets, subject, body, files=()):
+    to = addresses(ch["to_addrs"])
     em = EmailMessage()
-    em["Subject"] = f"{ch.get('subject_prefix', '').strip()} {msg.title}".strip()
+    em["Subject"] = f"{ch.get('subject_prefix', '').strip()} {subject}".strip()
     em["From"], em["To"] = ch["from_addr"].strip(), ", ".join(to)
-    em.set_content(msg.plain())
+    em.set_content(body)
+    for path in files:
+        kind = mimetypes.guess_type(path)[0] or "application/octet-stream"
+        with open(path, "rb") as f:
+            em.add_attachment(f.read(), maintype=kind.split("/")[0], subtype=kind.split("/")[1], filename=os.path.basename(path))
     port, mode = int(ch.get("smtp_port") or 587), ch.get("security", "STARTTLS")
     ctx = ssl.create_default_context()
     if mode == "SSL/TLS":
@@ -315,6 +332,24 @@ def deliver(ch, msg, desktop=None, secrets=None, retry_delay=2):
         except Exception as e:
             return False, _scrub(f"{type(e).__name__}: {e}", secrets)
     return False, "unknown error"
+
+
+def email_channel():
+    """The first Email channel in Settings > Notifications: a scheduled report is mailed through its server."""
+    return next((c for c in channels() if c["type"] == "email"), None)
+
+
+def mail_files(to, subject, body, files):
+    """Mail files through the first Email channel's server, to `to` and not to the channel's own addresses. Returns (ok, detail).
+    shortcut: one attempt, no retry; add one if a report lost to a mail server's bad minute turns out to matter."""
+    ch = email_channel()
+    if not ch:
+        return False, "there is no Email channel"
+    secrets = get_secrets(ch)
+    try:
+        return True, _mail(dict(ch, to_addrs=to), secrets, subject, body, files)
+    except Exception as e:
+        return False, _scrub(f"{type(e).__name__}: {e}", secrets)
 
 
 def snoozed(now=None):

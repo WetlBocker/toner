@@ -197,6 +197,7 @@ def generate_scheduled(now=None):
         pdf = False
     path = stem + (".pdf" if pdf else ".html")
     (save_pdf if pdf else save_html)(data, path)
+    made = [path]
     if db.get_setting("trend_per_org") and db.everything():            # Global: and one report per organization, from its own file
         for o in db.org_rows():
             if o["archived"]:
@@ -205,6 +206,14 @@ def generate_scheduled(now=None):
                 part = compute(7 if db.get_setting("trend_schedule") == "weekly" else 30, now)
             if part["runs"]:
                 name = o["code"] or str(o["id"])                      # (codes are letters, digits, - and _: safe in a file name)
-                (save_pdf if pdf else save_html)(part, os.path.join(folder, f"Toner-trend-{name}-{now:%Y-%m-%d}") + (".pdf" if pdf else ".html"))
-    db.set_setting("trend_last", now.strftime(FMT))
+                made.append(os.path.join(folder, f"Toner-trend-{name}-{now:%Y-%m-%d}") + (".pdf" if pdf else ".html"))
+                (save_pdf if pdf else save_html)(part, made[-1])
+    db.set_setting("trend_last", now.strftime(FMT))             # (before the mail: a server that refuses must not make it again each minute)
+    to = db.get_setting("trend_email")
+    if to:                                                      # Settings > Reports, "Email it to": its own list of addresses
+        from core import audit, notify
+        kind = db.get_setting("trend_schedule")
+        sent, detail = notify.mail_files(to, f"Trend report, {now - timedelta(days=7 if kind == 'weekly' else 30):%Y-%m-%d} to {now:%Y-%m-%d}",
+                                         f"The {kind} trend report from Toner is attached.", made)
+        audit.log("trend report emailed" if sent else "trend report not emailed", detail)
     return path

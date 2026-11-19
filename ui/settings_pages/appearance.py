@@ -284,6 +284,10 @@ class ReportsPage(Page):
         self.form.addRow("Default folder", row_of(self.folder, browse))
         self.form.addRow("", self.include_all)
         self.form.addRow("Trend report", self.trend)
+        self.trend_email = QLineEdit()
+        self.trend_email.setPlaceholderText("a@example.com, b@example.com")
+        self.form.addRow("Email it to", self.trend_email)
+        self.form.addRow("", note("Sent through the first Email channel in Settings > Notifications, to these addresses only."))
         self.per_org = QCheckBox("Also one report per organization")      # Global, with organizations: one file each beside it
         self.form.addRow("", self.per_org)
 
@@ -298,6 +302,7 @@ class ReportsPage(Page):
         self.folder.setText(db.get_setting("report_folder"))
         self.include_all.setChecked(bool(db.get_setting("report_include_all")))
         self.trend.setCurrentIndex(max(0, self.trend.findData(db.get_setting("trend_schedule"))))
+        self.trend_email.setText(db.get_setting("trend_email"))
         self.per_org.setChecked(bool(db.get_setting("trend_per_org")))
         self.per_org.setVisible(db.home() == db.GLOBAL and bool(db.org_rows()))
 
@@ -307,6 +312,13 @@ class ReportsPage(Page):
             return [f"Reports: the folder '{f}' does not exist."]
         if self.trend.currentData() and not f:
             return ["Reports: choose a default folder to save the scheduled trend report into."]
+        if self.trend_email.text().strip():
+            from core import notify
+            wrong = notify.bad_addresses(self.trend_email.text())
+            if wrong:
+                return [f"Reports: '{a}' is not a valid email address." for a in wrong]
+            if not notify.email_channel():
+                return ["Reports: add an Email channel in Settings > Notifications before emailing the trend report."]
         return []
 
     def save(self):
@@ -315,4 +327,5 @@ class ReportsPage(Page):
         db.set_setting("report_folder", self.folder.text().strip())
         db.set_setting("report_include_all", self.include_all.isChecked())
         db.set_setting("trend_schedule", self.trend.currentData())
+        db.set_setting("trend_email", self.trend_email.text().strip())
         db.set_setting("trend_per_org", self.per_org.isChecked())

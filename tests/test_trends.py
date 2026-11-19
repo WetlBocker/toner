@@ -106,6 +106,47 @@ check("...each from that organization's own runs (its one run, not Global's)", "
 db.set_setting("trend_per_org", False)
 orgs.remove(west); orgs.remove(quiet)
 
+print("== emailed to its own list of addresses")
+from core import audit, notify
+sent = []
+class FakeSMTP:
+    boom = None
+    def __init__(self, host, port, timeout=None, **k): self.host = host
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+    def ehlo(self): pass
+    def starttls(self, context=None): pass
+    def login(self, user, password): pass
+    def send_message(self, em):
+        if FakeSMTP.boom: raise FakeSMTP.boom
+        sent.append((self.host, em))
+notify._SMTP = notify._SMTP_SSL = FakeSMTP
+def last_audit(): return ([(r["action"], r["detail"]) for r in audit.recent(1)] or [("", "")])[0]
+db.set_setting("trend_schedule", "weekly"); db.set_setting("trend_last", ""); db.set_setting("trend_email", "boss@example.com; ops@example.com")
+path = trends.generate_scheduled(now_real)
+check("with no Email channel the report is still saved and nothing is sent", os.path.exists(path) and not sent and not trends.due(now_real))
+check("...and the audit log says it was not emailed", last_audit()[0] == "trend report not emailed", last_audit())
+ch = notify.new_channel("email"); ch.update(smtp_host="mail.example.com", from_addr="toner@example.com", to_addrs="alerts@example.com", username="mailer")
+notify.save_channels([ch]); notify.set_secrets(ch, {"password": "hunter2-secret"})
+db.set_setting("trend_last", ""); path = trends.generate_scheduled(now_real)
+host, em = sent[-1] if sent else ("", {})
+check("it goes through the Email channel's server, to its own addresses and not the channel's", host == "mail.example.com" and em.get("To") == "boss@example.com, ops@example.com" and em.get("From") == "toner@example.com", (host, em.get("To")))
+check("the subject names the period, after the channel's prefix", em.get("Subject") == f"[Toner] Trend report, {now_real - timedelta(days=7):%Y-%m-%d} to {now_real:%Y-%m-%d}", em.get("Subject"))
+check("the text says what is attached", sent and em.get_body(("plain",)).get_content().strip() == "The weekly trend report from Toner is attached.")
+atts = list(em.iter_attachments()) if sent else []
+check("the saved report is attached under its own name", [a.get_filename() for a in atts] == [os.path.basename(path)] and atts[0].get_payload(decode=True) == open(path, "rb").read())
+check("and the audit log says it was emailed", last_audit() == ("trend report emailed", "sent to 2 recipient(s)"), last_audit())
+db.set_setting("trend_schedule", "monthly"); db.set_setting("trend_last", ""); trends.generate_scheduled(now_real); em = sent[-1][1]
+check("a monthly report says monthly, over its 30 days", em.get_body(("plain",)).get_content().strip() == "The monthly trend report from Toner is attached."
+      and em["Subject"].endswith(f"{now_real - timedelta(days=30):%Y-%m-%d} to {now_real:%Y-%m-%d}"), em["Subject"])
+FakeSMTP.boom = RuntimeError("535 bad login for hunter2-secret"); n = len(sent); db.set_setting("trend_last", "")
+path = trends.generate_scheduled(now_real)
+check("a mail server that refuses does not lose the report, or make it again every minute", os.path.exists(path) and len(sent) == n and not trends.due(now_real))
+check("...the audit log says why, without the password", last_audit()[0] == "trend report not emailed" and "535" in last_audit()[1] and "hunter2" not in last_audit()[1], last_audit())
+FakeSMTP.boom = None; db.set_setting("trend_email", ""); db.set_setting("trend_last", ""); trends.generate_scheduled(now_real)
+check("with no addresses nothing is emailed", len(sent) == n)
+db.set_setting("trend_schedule", "weekly")
+
 print("== in the program")
 from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
 app = QApplication([])
@@ -137,6 +178,16 @@ page.folder.setText(""); page.trend.setCurrentIndex(page.trend.findData("monthly
 check("a schedule needs a folder to save into", page.validate() and "folder" in page.validate()[0])
 page.folder.setText(folder); check("with one it is fine", page.validate() == [])
 page.save(); check("and is saved", db.get_setting("trend_schedule") == "monthly")
+
+check("under Trend report there is a box for who it is emailed to", page.form.labelForField(page.trend_email).text() == "Email it to" and page.trend_email.placeholderText() == "a@example.com, b@example.com")
+check("with a note on how it is sent", any(w.text() == "Sent through the first Email channel in Settings > Notifications, to these addresses only." for w in page.findChildren(type(page.form.labelForField(page.trend_email)))))
+page.trend_email.setText("boss@example.com, not an address")
+check("an address that is not one stops the save", page.validate() == ["Reports: 'not an address' is not a valid email address."], page.validate())
+page.trend_email.setText("boss@example.com"); check("with an Email channel it is fine", page.validate() == [], page.validate())
+notify.save_channels([])
+check("without one it says to add it first", page.validate() == ["Reports: add an Email channel in Settings > Notifications before emailing the trend report."], page.validate())
+notify.save_channels([ch]); page.save(); check("the addresses are saved", db.get_setting("trend_email") == "boss@example.com")
+page = S.ReportsPage(); page.load(); check("and shown again", page.trend_email.text() == "boss@example.com")
 
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)
