@@ -1,9 +1,11 @@
-"""The lock screen (layout B of the sign-in mockups): while the session is locked it sits over Toner's window and asks the
+"""The lock screen (layout B of the sign-in mockups): while the session is locked it fills Toner's window and asks the
 signed-in account's password again. It also runs the idle lock: no mouse or key input for Settings' signin_idle_minutes locks.
 
-It is its own application-modal window, so it is the newest modal even when a dialog was open (that dialog's exec() goes on,
-blocked, and keeps what was typed), and every Toner window, Main included, gets an opaque cover over its contents until unlock.
-A window that opens while locked is covered too, and the lock takes the top of the modal stack again.
+It is a page inside Toner's window, so it cannot end up anywhere else and the window can still be minimised, resized and closed.
+Only while a modal dialog is open is it an application-modal window of its own, the newest modal (that dialog's exec() goes on,
+blocked, and keeps what was typed): a page of the window underneath would get no keys or clicks. Every Toner window, Main
+included, gets an opaque cover over its contents until unlock, the charts are blanked (ui/webchart.py), and keys and clicks meant
+for anything under a cover are dropped. A window that opens while locked is covered too.
 
 Locking keeps the data key open (core/session.py), so scheduled checks and backups go on underneath; only the windows are hidden.
 An account with security keys touches one after its password or PIN (ui/keyask.py): the unlock runs on a Job meanwhile."""
@@ -13,7 +15,7 @@ from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QVBoxLayout, QWidget
 
 from core import datakey, db, dirpin, dirsignin, fidokey, pinslot, session
-from ui import theme
+from ui import theme, webchart
 from ui.keyask import KeyAsk
 from ui.widgets import while_alive
 from ui.signinwindow import (DAMAGED, DAMAGED_ERRORS, KEY_TEXT, KEY_TITLE, Job, Wait, card, centred, error_label, heading, link, primary,
@@ -21,6 +23,9 @@ from ui.signinwindow import (DAMAGED, DAMAGED_ERRORS, KEY_TEXT, KEY_TITLE, Job, 
 
 _now = time.time                                         # wall-clock: it keeps counting while the computer sleeps (the tests move it)
 _INPUT = {QEvent.Type.KeyPress, QEvent.Type.MouseButtonPress, QEvent.Type.MouseMove, QEvent.Type.Wheel, QEvent.Type.TouchBegin}
+_HELD = _INPUT | {QEvent.Type.KeyRelease, QEvent.Type.ShortcutOverride, QEvent.Type.MouseButtonRelease, QEvent.Type.MouseButtonDblClick,
+                  QEvent.Type.ContextMenu, QEvent.Type.InputMethod, QEvent.Type.DragEnter, QEvent.Type.Drop,
+                  QEvent.Type.TouchUpdate, QEvent.Type.TouchEnd}     # what a covered window doesn't get while locked
 _NOT_WINDOWS = (Qt.WindowType.Popup, Qt.WindowType.ToolTip, Qt.WindowType.Desktop)    # menus, drop-downs and tips are not covered
 LOCKED = "Toner is locked"
 NOT_TOUCHED = "The key wasn't touched. Try again."
@@ -30,10 +35,10 @@ class LockScreen(QWidget):
     changed = Signal()                                   # the session changed (on any thread): followed on the window's thread
 
     def __init__(self, main):
-        super().__init__(main, Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
+        super().__init__(main)                           # a page of Toner's window (see _place)
+        self.hide()                                      # (or it would show with the window)
         self.main = main
         self.setWindowTitle("Toner")
-        self.setWindowModality(Qt.WindowModality.ApplicationModal)
         self.setObjectName("lockScreen")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         frame, lay = card()
@@ -107,14 +112,41 @@ class LockScreen(QWidget):
                     self.last = now
                     return True                          # the key or click that woke it doesn't reach the window underneath
             self.last = now
-        elif self.locked and not self._passing:
-            if kind == QEvent.Type.Show and isinstance(obj, QWidget) and obj.isWindow() and obj is not self:
-                QTimer.singleShot(0, self._cover_all)        # a window that opened (or came back) while locked
-            elif kind in (QEvent.Type.Resize, QEvent.Type.Move) and obj in self.covers:
-                self.covers[obj].setGeometry(obj.rect())
-                if obj is self.main:
-                    self.setGeometry(self.main.geometry())
+        if not self.locked or self._passing:
+            return False
+        if kind == QEvent.Type.Shortcut:
+            return True                                  # the lock has none of its own
+        if not isinstance(obj, QWidget):
+            return False
+        if kind in (QEvent.Type.Show, QEvent.Type.Hide) and obj.isWindow() and obj is not self:
+            QTimer.singleShot(0, self._cover_all)        # a window that opened, came back or went while locked
+        elif kind in (QEvent.Type.Resize, QEvent.Type.Move) and obj in self.covers:
+            self.covers[obj].setGeometry(obj.rect())
+            if obj is self.main:
+                self._fit()
+        elif (kind in _HELD or kind == QEvent.Type.FocusIn) and obj is not self and not self.isAncestorOf(obj) \
+                and obj.window().windowType() not in _NOT_WINDOWS:
+            if kind != QEvent.Type.FocusIn:
+                return True                              # under a cover: nothing typed or clicked arrives
+            if obj.window() is self.window():
+                QTimer.singleShot(0, self._focus)        # Tab left the lock, or something under it took the focus
         return False
+
+    def _focus(self):
+        if self.locked and not self._passing and self.isVisible():
+            (self.pw if self.pw.isVisible() and self.pw.isEnabled() else self).setFocus()
+
+    def _place(self):
+        """A page of Toner's window; a modal window of its own only while a modal dialog is open, which would otherwise keep
+        every key and click from it."""
+        modal = any(w.isModal() and w.isVisible() for w in QApplication.topLevelWidgets() if w is not self)
+        if modal != self.isWindow():                     # (setParent hides it; _cover_all shows it again)
+            self.setParent(self.main, Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint if modal else Qt.WindowType.Widget)
+            self.setWindowModality(Qt.WindowModality.ApplicationModal if modal else Qt.WindowModality.NonModal)
+        self._fit()
+
+    def _fit(self):
+        self.setGeometry(self.main.geometry() if self.isWindow() else self.main.rect())
 
     def closeEvent(self, event):
         if self.locked:
@@ -199,10 +231,11 @@ class LockScreen(QWidget):
             self._reason_is(dirsignin.refused_text() if mode == "refused" else "Please sign in again.")
 
     def _cover_all(self):
-        """An opaque cover over every visible Toner window (dialogs included, which stay open underneath), then the lock on top
-        of Main as the newest modal, with the focus in its password box."""
+        """An opaque cover over every visible Toner window (dialogs included, which stay open underneath) and the charts
+        blanked, then the lock over Main (see _place), with the focus in its password box."""
         if not self.locked or self._passing:
             return
+        webchart.blank(True)
         bg = theme.current().get("bg", "#081420")
         for w in QApplication.topLevelWidgets():
             if isinstance(w, LockScreen) or w in self.covers or not w.isVisible() or w.windowType() in _NOT_WINDOWS:
@@ -224,18 +257,20 @@ class LockScreen(QWidget):
         if not any(w.isVisible() for w in self.covers):
             self.hide()                                  # every Toner window is in the tray: the lock waits for one to show
             return
-        if self.isVisible() and QApplication.activeModalWidget() is not self:
+        self._place()
+        if self.isWindow() and self.isVisible() and QApplication.activeModalWidget() is not self:
             self.hide()                                  # a modal opened since: showing again makes the lock the newest one
-        self.setGeometry(self.main.geometry())
         self.show()
         self.raise_()
-        self.activateWindow()
-        self.pw.setFocus()
+        self.window().activateWindow()
+        self._focus()
 
     def keep_covered(self):
-        """Something in a covered window raised itself (the Assistant's button): the cover goes back on top."""
+        """Something in a covered window raised itself (the Assistant's button): the cover goes back on top, and the lock on it."""
         for cover in self.covers.values():
             cover.raise_()
+        if not self.isWindow():
+            self.raise_()
 
     def _uncover(self):
         self.locked = False
@@ -252,6 +287,7 @@ class LockScreen(QWidget):
             except (RuntimeError, AttributeError):
                 pass                                     # closed meanwhile
         self.covers, self._on_top = {}, []
+        webchart.blank(False)
 
     def ask_unlock(self, reason, pending=False):
         say(self.error, f"Unlock to close Toner: {reason}")

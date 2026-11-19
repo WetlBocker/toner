@@ -10,6 +10,7 @@ libraries) the widget shows a line saying so and the rest of the page works as b
 Nothing here is reached by cli.py, so the headless service never loads it."""
 import json
 import os
+import weakref
 
 from PySide6.QtCore import QObject, Qt, QUrl, Signal, Slot, QTimer
 from PySide6.QtGui import QFont, QFontMetrics, QGuiApplication
@@ -19,6 +20,20 @@ from core import paths, quiet
 from ui import chartspec, status as st, theme
 
 _WEB = None                           # (QWebEngineView, QWebEnginePage, QWebChannel) once imported, False when it cannot be
+_views = weakref.WeakSet()            # every chart's web view, for blank()
+_blank = False
+
+
+def blank(on):
+    """Hide every chart, and those made meanwhile (the lock screen). A web view with a see-through page is drawn above every other
+    widget in its window, so a cover laid over the window does not hide it."""
+    global _blank
+    _blank = bool(on)
+    for v in list(_views):
+        try:
+            v.setVisible(not _blank)
+        except RuntimeError:
+            pass                      # its window has gone
 
 
 def available():
@@ -125,6 +140,12 @@ class ChartView(QWidget):
         page.setWebChannel(self._channel)
         self._view.loadFinished.connect(self._on_loaded)
         lay.addWidget(self._view)
+        keep = self._view.sizePolicy()
+        keep.setRetainSizeWhenHidden(True)                # blank(): the page keeps its shape under the lock
+        self._view.setSizePolicy(keep)
+        _views.add(self._view)
+        if _blank:
+            self._view.hide()
         self._view.setUrl(QUrl.fromLocalFile(page_path()))
 
     # ---- what to show

@@ -28,8 +28,8 @@ class KeyAsk(QObject):
         self._wait, self._given, self._pin = Wait(), threading.Event(), None
 
     def arm(self):
-        if sys.platform == "win32" and self.window is None:
-            self.window = int(self.parent().winId())            # (on the window's thread, once it is shown: not at build time)
+        if sys.platform == "win32":                             # (on the window's thread, once it is shown: not at build time; read
+            self.window = int(self.parent().window().winId())   # each time: the lock is a page of Toner's window or a window itself)
         with self._mutex:
             self._wait = Wait()
             return self._wait

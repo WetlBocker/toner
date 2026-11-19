@@ -360,12 +360,30 @@ check("open: no lock screen, the idle timer runs", not lock.isVisible() and lock
 check("the user menu names who is signed in, then Lock, Security keys... and Sign out",
       [a.text() for a in win.user_menu.actions() if not a.isSeparator()] == ["Jordan", "Lock (Ctrl+Shift+L)", "Security keys...", "Sign out"])
 win.lock_shortcut.activated.emit(); app.processEvents()
-check("Ctrl+Shift+L locks the session and the lock sits over the window", session.state() == "locked" and lock.isVisible()
-      and lock.geometry() == win.geometry())
+check("Ctrl+Shift+L locks the session and the lock fills Toner's window, as a page inside it", session.state() == "locked" and lock.isVisible()
+      and not lock.isWindow() and lock.parentWidget() is win and lock.geometry() == win.rect(), (lock.isWindow(), lock.geometry(), win.rect()))
 check("the window is covered underneath too", lock.covers[win].isVisible() and lock.covers[win].geometry() == win.rect())
 check("the lock screen's words", lock.reason.text() == "Locked by Jordan." and lock.who.text() == "Jordan, local account" and lock.unlock.text() == "Unlock")
 check("the idle timer stops while locked", not lock.idle.isActive())
-check("what's under it can't be reached: the lock is the newest modal", QApplication.activeModalWidget() is lock)
+check("nothing modal blocks Toner's window, so it can still be minimised, resized and closed", QApplication.activeModalWidget() is None)
+win.resize(900, 640); app.processEvents()
+check("...and the lock follows its size", lock.geometry() == win.rect() and lock.covers[win].geometry() == win.rect(), (lock.geometry(), win.rect()))
+win.resize(1024, 700); app.processEvents()
+from PySide6.QtCore import QEvent
+from PySide6.QtWidgets import QLineEdit
+from PySide6.QtTest import QTest
+from ui import webchart
+under = next(e for e in win.findChildren(QLineEdit) if e.isVisibleTo(win) and e.isEnabled() and not lock.isAncestorOf(e))
+before = under.text()
+QTest.keyClicks(under, "typed under the lock"); QTest.mouseClick(under, Qt.MouseButton.LeftButton)
+check("what's under it can't be reached: keys and clicks meant for the page are dropped", under.text() == before, under.text())
+check("...the window's shortcuts don't fire", lock.eventFilter(win.lock_shortcut, QEvent(QEvent.Type.Shortcut)) is True)
+win.activateWindow(); under.setFocus(); app.processEvents(); app.processEvents()
+check("...and the focus comes back to the lock's box when something under it takes it", win.focusWidget() is lock.pw, win.focusWidget())
+check("the charts are blanked too (they are drawn above everything else in a window, the cover included)", webchart._blank is True)
+lock.keyask.arm()
+check("a security key's prompt sits over Toner's window: the lock gets no window of its own for it",
+      not lock.testAttribute(Qt.WidgetAttribute.WA_NativeWindow) and (sys.platform != "win32" or lock.keyask.window == int(win.winId())))
 win.hide(); win.show_window(); app.processEvents()
 check("the tray's Open Toner shows the lock screen", win.isVisible() and lock.isVisible())
 lock.pw.setText("wrong password 123"); lock.unlock.click(); settle(lock)
@@ -373,6 +391,9 @@ check("a wrong password says so", lock.error.text() == datakey.WRONG and session
 lock.pw.setText(PW2); lock.unlock.click(); settle(lock)
 check("the right password uncovers the window", session.state() == "open" and not lock.isVisible() and not lock.covers
       and QApplication.activeModalWidget() is None)
+QTest.keyClicks(under, "ab")
+check("...and the page and its charts are back", under.text() == before + "ab" and webchart._blank is False, (under.text(), webchart._blank))
+under.setText(before)
 check("...and undo can't bring the password back into the lock's box", undone(lock.pw) == "")
 
 print("== a dialog that was open when Toner locked")
@@ -383,8 +404,8 @@ for parent, kind in ((win, "inside the window"), (None, "on its own")):
     d = QDialog(parent); d.setWindowModality(Qt.WindowModality.ApplicationModal); typed = QLineEdit(d); d.resize(400, 200); d.show(); app.processEvents()
     typed.setText("half typed")
     win.lock(); app.processEvents()
-    check(f"a modal dialog {kind}: the lock is above it and takes input", QApplication.activeModalWidget() is lock
-          and QApplication.focusWidget() is lock.pw, (QApplication.activeModalWidget(), QApplication.focusWidget()))
+    check(f"a modal dialog {kind}: the lock is a window above it and takes input", lock.isWindow() and QApplication.activeModalWidget() is lock
+          and QApplication.focusWidget() is lock.pw and lock.geometry() == win.geometry(), (QApplication.activeModalWidget(), QApplication.focusWidget()))
     check("...the dialog stays open, covered", d.isVisible() and lock.covers[d].isVisible() and lock.covers[d].geometry() == d.rect())
     QTest.keyClicks(lock.pw, PW2); QTest.keyClick(lock.pw, Qt.Key.Key_Return); settle(lock)
     check("...unlock gives it back with what was typed", session.state() == "open" and d.isVisible() and typed.text() == "half typed"
@@ -393,11 +414,12 @@ for parent, kind in ((win, "inside the window"), (None, "on its own")):
 
 print("== what appears while locked")
 win.lock(); app.processEvents()
+check("with no dialog open the lock is a page inside Toner's window again", lock.isVisible() and not lock.isWindow() and lock.geometry() == win.rect())
 check("a toast doesn't show over the lock", toast(win.inventory, "Saved") is None
       and not any(t.isVisible() for t in win.findChildren(Toast)))
 late = QDialog(win); late.setWindowModality(Qt.WindowModality.ApplicationModal); QLineEdit("a device's details", late); late.show(); app.processEvents()
-check("a window opened while locked is covered, and the lock stays on top", late in lock.covers and lock.covers[late].isVisible()
-      and QApplication.activeModalWidget() is lock)
+check("a modal window opened while locked is covered, and the lock goes on top of it", late in lock.covers and lock.covers[late].isVisible()
+      and lock.isWindow() and QApplication.activeModalWidget() is lock)
 session.unlock(PW2); app.processEvents()
 check("...and is there after unlocking", late.isVisible() and QApplication.activeModalWidget() is late)
 late.close(); late.deleteLater(); app.processEvents()
@@ -427,6 +449,8 @@ check("...is covered, and the lock stays the active modal with the focus", seen_
 check("...doesn't stay on top of the lock while covered", seen_otp.get("on_top") is False)
 check("...and what is typed goes to the lock's box, not the prompt", seen_otp.get("prompt_text") == "" and lock.pw.text() == "typed at the lock")
 lock.pw.clear()
+app.processEvents(); app.processEvents()
+check("when the prompt has gone the lock is back inside Toner's window", lock.isVisible() and not lock.isWindow() and QApplication.activeModalWidget() is None)
 session.unlock(PW2); app.processEvents()
 
 print("== the idle timer")

@@ -56,6 +56,15 @@ else:
     v.restyle()
     check("restyling keeps the chart", pump(lambda: v._builder is not None) and v._loaded)
 
+    print("== blanking (the lock): a see-through page is drawn above every other widget in its window, the lock's cover included")
+    webchart.blank(True)
+    late = webchart.ChartView(); late.resize(320, 240); late.show(); app.processEvents()
+    check("every chart is hidden, one made meanwhile too", v._view.isHidden() and late._view.isHidden())
+    check("...each keeps its room, so the page under the lock doesn't move", v.isVisible() and v._view.sizePolicy().retainSizeWhenHidden())
+    webchart.blank(False)
+    check("...and all are back afterwards", not v._view.isHidden() and not late._view.isHidden())
+    late.deleteLater()
+
 print()
 print(f"{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)
