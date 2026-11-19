@@ -255,8 +255,9 @@ class ThresholdsPage(Page):
         self.lay.insertWidget(1, reset, 0, Qt.AlignmentFlag.AlignLeft)
 
         ov = QLabel("<b>Overrides</b>  (a vendor, location, folder or device can use different limits; "
-                                        "device beats folder beats location beats vendor). A device can also carry its own limits "
-                                        "(Inventory > Edit device > Checks); they beat everything here.")
+                                        "device beats folder beats location beats vendor). A monitoring profile "
+                                        "(Settings > Monitoring profiles) can set limits for its devices; they beat these overrides. "
+                                        "A device can also carry its own limits (Inventory > Edit device > Checks); they beat everything.")
         ov.setWordWrap(True)
         self.lay.insertWidget(2, ov)
         self.table = QTableWidget(0, 4)
@@ -374,7 +375,8 @@ class ChecksListPage(Page):
         super().__init__()
         self.lay.insertWidget(0, note("Untick a check to stop running it. This saves time on devices that "
                                       "do not have the feature (for example BGP on a switch). A single device can have its own list: "
-                                      "Inventory > Edit device > Checks. Devices without one use this list."))
+                                      "Inventory > Edit device > Checks. A monitoring profile gives a group of devices its own list: "
+                                      "Settings > Monitoring profiles. Devices with neither use this list."))
         self.tree = QTreeWidget()
         self.tree.setHeaderHidden(True)
         self.collapse_all, self.expand_all = QPushButton("Collapse all"), QPushButton("Expand all")

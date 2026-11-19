@@ -165,5 +165,14 @@ new = I.DeviceDialog(); new.show(); app.processEvents()
 check("nor has a new device", not new.checks_tab.follows.isVisibleTo(new.checks_tab))
 new.close()
 
+print("== the notes that point to it")
+check("Settings > Checks says a profile gives a group of devices its own list", any(
+    "A monitoring profile gives a group of devices its own list: Settings > Monitoring profiles. Devices with neither use this list." in t
+    for t in texts(next(p for p in S.pages if p.title == "Checks"))))
+check("Settings > Thresholds says where a profile's limits sit", any(
+    "A monitoring profile (Settings > Monitoring profiles) can set limits for its devices; they beat these overrides. "
+    "A device can also carry its own limits (Inventory > Edit device > Checks); they beat everything." in t
+    for t in texts(next(p for p in S.pages if p.title == "Thresholds"))))
+
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)
