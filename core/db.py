@@ -135,7 +135,7 @@ DEFAULT_SETTINGS = {
     "ssh_tunnel": {"enabled": False, "host": "", "port": 22, "username": "", "key_file": "", "otp": "", "local_port": 1080,
                    "autostart": False},
     # Windows agents (see core/agents.py): Toner listens for their reports while this is on
-    "agent_cert_warned": "", "trend_schedule": "", "trend_per_org": False, "trend_last": "", "trend_email": "", "tls_sweep": False, "tls_sweep_ports": "443", "agent_enabled": False, "agent_enroll": False, "agent_token_days": 0, "agent_port": 8750, "agent_minutes": 5, "agent_push_minutes": False, "agent_bind": "0.0.0.0", "agent_address": "",
+    "agent_cert_warned": "", "trend_schedule": "", "trend_per_org": False, "trend_last": "", "trend_email": "", "monitoring_profiles": [], "tls_sweep": False, "tls_sweep_ports": "443", "agent_enabled": False, "agent_enroll": False, "agent_token_days": 0, "agent_port": 8750, "agent_minutes": 5, "agent_push_minutes": False, "agent_bind": "0.0.0.0", "agent_address": "",
     "vault_provider": "toner", "vault_config": {}, "vault_collections_migrated": {}, "vault_direct": False, "update_direct": False, "vault_keep_copies": True,   # (the last two: ignore the proxy)             # where passwords are kept: Toner's vault, or a password manager (core/extstore.py)
     # Demarc (see core/demarc.py): this install's permanent ID, and the Demarc it sends to (its token is in the vault)
     "install_uid": "", "demarc": {"address": "", "pin": "", "trusted": False, "enabled": False, "history": "all"},
@@ -1360,10 +1360,35 @@ def normalize_checkopts(raw):
     return out
 
 
-def disabled_for(dev, disabled):
-    """Which checks are switched off for this device: the global list, unless the device picked its own list of checks."""
+def in_scope(dev, scope):
+    """True when the device is in a scope that a threshold override or a monitoring profile names: All devices, a group, or one device."""
+    if scope.startswith("Device: "):
+        return dev.get("name") == scope[len("Device: "):]
+    return (scope == ALL_DEVICES or scope.split(":")[0] in OVERRIDE_RANK) and in_group(dev, scope)
+
+
+def profile_for(dev, profiles=None):
+    """The monitoring profile that applies to this device, or None: one made for its vendor and assigned to a group it is in.
+    A profile is {'name', 'vendor', 'checks': [the keys that run], 'thresholds': {key: {'warn', 'fail'}}, 'scopes': [where it is assigned]}.
+    When several apply the most specific assignment wins, ranked as threshold overrides are, with All devices below them all."""
+    best, best_rank = None, None
+    for p in (get_setting("monitoring_profiles") if profiles is None else profiles) if dev else ():
+        if not (isinstance(p, dict) and p.get("vendor") and p["vendor"] == dev.get("vendor") and isinstance(p.get("scopes"), list) and isinstance(p.get("checks"), list)):
+            continue
+        ranks = [(OVERRIDE_RANK.get(s.split(":")[0], -1), s.count("/")) for s in map(str, p["scopes"]) if in_scope(dev, s)]
+        if ranks and (best_rank is None or max(ranks) > best_rank):
+            best, best_rank = p, max(ranks)
+    return best
+
+
+def disabled_for(dev, disabled, profiles=None):
+    """Which checks are switched off for this device: the global list, unless a monitoring profile applies to it, or (above that)
+    the device picked its own list of checks."""
     from core import checks
     own = normalize_checkopts((dev or {}).get("checkopts")).get("checks")
+    if own is None:
+        profile = profile_for(dev, profiles)
+        own = [str(k) for k in profile["checks"]] if profile else None
     if own is None:
         return set(disabled)
     vendor = (dev or {}).get("vendor", "")
@@ -1372,9 +1397,10 @@ def disabled_for(dev, disabled):
     return (set(disabled) - keys) | (keys - on)
 
 
-def thresholds_for(dev, base=None, overrides=None):
+def thresholds_for(dev, base=None, overrides=None, profiles=None):
     """Global thresholds with any matching overrides applied: vendor, then location, then folder, then device (the table in
-    Settings), and finally the limits set on the device itself, which beat everything."""
+    Settings), then the limits of the monitoring profile that applies to the device, and finally the limits set on the device
+    itself, which beat everything."""
     th = json.loads(json.dumps(base or get_thresholds()))
     rules = get_setting("threshold_overrides") if overrides is None else overrides
     def applies(scope):
@@ -1387,6 +1413,8 @@ def thresholds_for(dev, base=None, overrides=None):
                        key=lambda r: (OVERRIDE_RANK.get(str(r["scope"]).split(":")[0], 0), str(r["scope"]).count("/"))):
         if rule["check"] in th:
             th[rule["check"]] = {"warn": rule["warn"], "fail": rule["fail"]}
+    profile = profile_for(dev, profiles) or {}
+    th.update(normalize_checkopts({"thresholds": profile.get("thresholds")}).get("thresholds", {}))      # (cleaned as a device's own are)
     for key, pair in normalize_checkopts(dev.get("checkopts")).get("thresholds", {}).items():
         if key in th:
             th[key] = dict(pair)
@@ -1396,7 +1424,7 @@ def runtime_options():
     """Everything a run needs besides thresholds. Read once in the GUI thread, then handed to workers."""
     return {"custom": custom_checks(), "ssh_timeout": int(get_setting("ssh_timeout")), "http_timeout": int(get_setting("http_timeout")),
             "retries": int(get_setting("retries")), "retry_delay": int(get_setting("retry_delay")),
-            "disabled": set(get_setting("disabled_checks")), "counter_mode": get_setting("counter_mode"),
+            "disabled": set(get_setting("disabled_checks")), "profiles": get_setting("monitoring_profiles"), "counter_mode": get_setting("counter_mode"),
             "firmware_severity": get_setting("firmware_severity"),
             "tls_sweep": bool(get_setting("tls_sweep")), "tls_sweep_ports": get_setting("tls_sweep_ports")}
 

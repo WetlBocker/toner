@@ -113,7 +113,7 @@ def _no_login(dev, opts):
 def run_one(dev, thresholds, opts=None, on_check=None):
     """One device's results. on_check(device name, check) is called as each check's row is made (a progress line)."""
     opts = opts or db.runtime_options()
-    opts = {**opts, "disabled": db.disabled_for(dev, opts.get("disabled", ()))}      # the device's own list of checks, if it has one
+    opts = {**opts, "disabled": db.disabled_for(dev, opts.get("disabled", ()), opts.get("profiles"))}      # its monitoring profile's list of checks, or its own
     pre = reachability(dev, opts) + stored_copy_note(dev)
     if not dev.get("vendor"):                # imported without one: nothing knows how to sign in, so only what needs no sign-in
         return pre + [Result(dev["name"], "vendor", NA, "", NO_VENDOR)] + _no_login(dev, opts)
