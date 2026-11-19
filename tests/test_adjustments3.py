@@ -188,8 +188,13 @@ rdap.lookup, iplookup.lookup, iplookup.has_key = real
 print("== the Assistant panel slides as a snapshot")
 motion.force("Lively")
 from PySide6.QtWidgets import QLabel as _QL
-w.show_assistant(True); spin(60)
+def until(cond, ms=3000):
+    t0 = time.time()
+    while not cond() and time.time() - t0 < ms / 1000:
+        app.processEvents(); time.sleep(0.005)
 cover = lambda: [c for c in w.findChildren(_QL) if c.objectName() == "assistantSlide"]
+# waits for the slide's first frame, not a fixed time: on a loaded machine one pass of the event loop outlasts a short wait
+w.show_assistant(True); until(lambda: w.tabs.contentsMargins().right() > 0)
 from PySide6.QtWidgets import QWidget as _QW
 check("while it opens, a picture of the panel slides in beside the real page, which narrows with it",
       len(cover()) == 1 and not cover()[0].pixmap().isNull() and w.tabs.contentsMargins().right() > 0)

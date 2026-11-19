@@ -30,6 +30,9 @@ def check(name, cond, extra=""):
 def spin(ms):
     end = time.time() + ms / 1000
     while time.time() < end: QCoreApplication.processEvents(); time.sleep(0.005)
+def until(cond, ms=3000):
+    end = time.time() + ms / 1000
+    while not cond() and time.time() < end: QCoreApplication.processEvents(); time.sleep(0.005)
 
 db.set_home(db.GLOBAL)
 w = A.Main(); w.resize(1900, 820); w.show(); spin(100)
@@ -58,7 +61,7 @@ def page_edge(): return w.tabs.mapTo(w, QPoint(w.tabs.contentsRect().right() + 1
 def page_w(): return w.tabs.contentsRect().width()
 def ghosts(): return [c for c in w.findChildren(QWidget) if c.objectName() == "assistantPage"]
 total = sum(w.body.sizes())
-run(True, 40)
+run(True, 0); until(lambda: page_w() < total)       # the slide's first frame: on a loaded machine one pass of the event loop outlasts a short fixed wait
 first = page_w()
 check("opening: the panel's picture slides in and the real page's right edge meets it, mid-way",
       len(overlays()) == 1 and total - overlays()[0].width() < first < total and abs(page_edge() - overlays()[0].x()) <= 2,
