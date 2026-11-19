@@ -58,5 +58,37 @@ check("Keep run history offers 7, 30, 60 and 90 days", [a.text() for a in SB.cho
 g.retention.setValue(45); g.save()
 check("and a number typed in is saved as before", db.get_setting("retention_days") == 45, db.get_setting("retention_days"))
 
+print("== the values offered across Settings")
+def offered(box):
+    return [a.text() for a in SB.choices_menu(box).actions()] if box.findChild(SB.Choices) else None
+from ui.settings_pages import general as G, checks as C, network as N, notifications as NO, accounts as AC, appearance as AP
+from ui.timerange import TimeRange
+conn, auto, backups, agents, notes, accounts, term, span = G.ConnectionsPage(), G.AutomationPage(), C.BackupsPage(), N.AgentsPage(), NO.NotificationsPage(), AC.AccountsPage(), AP.TerminalPage(), TimeRange()
+for name, box, want in (
+        ("Keep SSH session logs", g.ssh_logs, ["30 days", "90 days", "180 days", "365 days"]),
+        ("Devices checked in parallel", g.workers, ["5", "10", "25", "50"]),
+        ("Confirm scans larger than", g.scan_over, ["never ask", "256 addresses", "1024 addresses", "4096 addresses", "65536 addresses"]),
+        ("Health checks every", auto.minutes, ["5 minutes", "10 minutes", "15 minutes", "30 minutes", "60 minutes"]),
+        ("SSH timeout", conn.ssh, ["10 s", "15 s", "30 s", "60 s"]),
+        ("HTTP timeout", conn.http, ["10 s", "15 s", "30 s", "60 s"]),
+        ("Retries", conn.retries, ["0", "1", "2", "3"]),
+        ("Retry delay", conn.delay, ["0 s", "2 s", "5 s", "10 s"]),
+        ("Backups every", backups.hours, ["6 hours", "12 hours", "24 hours", "168 hours"]),
+        ("Backup versions kept", backups.keep, ["keep everything", "5 versions", "10 versions", "30 versions", "90 versions"]),
+        ("Alert after", notes.consecutive, ["1 run(s) in a row", "2 run(s) in a row", "3 run(s) in a row", "5 run(s) in a row"]),
+        ("Reminders", notes.remind, ["never", "4 hours", "8 hours", "24 hours"]),
+        ("Agent report interval", agents.minutes, ["1 minutes", "5 minutes", "15 minutes", "30 minutes", "60 minutes"]),
+        ("Agent token renewal", agents.token_days, ["never", "30 days", "90 days", "180 days", "365 days"]),
+        ("Session length", accounts.session, ["8", "12", "24", "72"]),
+        ("Terminal scrollback", term.scrollback, ["1000 lines", "5000 lines", "10000 lines", "50000 lines"])):
+    check(name + " offers its common values", offered(box) == want, offered(box))
+accounts.idle.setValue(1)                                   # the box reads "1 minute without use" here
+check("Lock after offers its values in the plural, whatever the box holds", offered(accounts.idle) == ["%d minutes without use" % n for n in (5, 10, 15, 30, 60)], offered(accounts.idle))
+span.hours.setValue(1)
+check("History offers its values in the plural too", offered(span.hours) == ["Last %d hours" % n for n in (4, 8, 24, 48, 168)], offered(span.hours))
+SB.choices_menu(span.hours).actions()[2].trigger()
+check("and picking one sets the hours", span.hours.value() == 24 and span.hours.text() == "Last 24 hours", span.hours.text())
+check("ports and font sizes stay plain number boxes", offered(g.ssh_port) is None and offered(term.size) is None)
+
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

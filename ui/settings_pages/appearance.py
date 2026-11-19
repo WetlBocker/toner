@@ -223,7 +223,7 @@ class TerminalPage(Page):
         self.family = QFontComboBox()
         self.family.setFontFilters(QFontComboBox.FontFilter.MonospacedFonts)
         self.size = spin(6, 32, " pt")
-        self.scrollback = spin(100, 100_000, " lines")
+        self.scrollback = spin(100, 100_000, " lines", choices=(1000, 5000, 10000, 50000))
         self.scheme = QComboBox()
         self.scheme.addItems(terminal.SCHEMES)
         self.syntax = QCheckBox("Colour command output by vendor")

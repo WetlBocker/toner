@@ -400,7 +400,7 @@ class AgentsPage(Page):
         self.key.setReadOnly(True)
         self.key.setEchoMode(QLineEdit.EchoMode.Password)
         self.newkey = QPushButton("New key...")
-        self.minutes = spin(1, 60, " minutes")
+        self.minutes = spin(1, 60, " minutes", choices=(1, 5, 15, 30, 60))
         self.minutes.setValue(5)
         self.push = QCheckBox("Also change computers that already have the agent")
         self.push.setToolTip("Toner tells each installed agent this interval in its next report, and the agent changes its own schedule. "
@@ -431,7 +431,7 @@ class AgentsPage(Page):
         self.computers = QLabel("")
         self.computers.setWordWrap(True)
         self.computers.setProperty("muted", True)
-        self.token_days = spin(0, 3650, " days")
+        self.token_days = spin(0, 3650, " days", choices=(0, 30, 90, 180, 365))
         self.token_days.setSpecialValueText("never")
         self.token_days.setToolTip("Computers that installed the package are given a new token this often. The old one still works for a week.")
         self.cert_note = QLabel("")

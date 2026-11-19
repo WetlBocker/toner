@@ -23,14 +23,17 @@ class Choices(QObject):
     """Common values for a number box (offer): its two small arrows become one drop-down arrow that lists them, in the box's own
     words ("30 days"). Any other number can still be typed, and the arrow keys still step."""
 
-    def __init__(self, box, values):
+    def __init__(self, box, values, text=None):
         super().__init__(box)
+        self.words = text                                     # for a box whose own words change with its number ("1 minute", "5 minutes")
         self.box, self.values = box, [v for v in values if box.minimum() <= v <= box.maximum()]
         box.setProperty("choices", True)                      # the theme draws the one arrow
         box.installEventFilter(self)
 
     def text(self, value):
         b = self.box
+        if self.words:
+            return self.words(value)
         if value == b.minimum() and b.specialValueText():
             return b.specialValueText()
         return b.prefix() + b.textFromValue(value) + b.suffix()
@@ -55,9 +58,9 @@ class Choices(QObject):
         return False
 
 
-def offer(box, values):
+def offer(box, values, text=None):
     """Give a number box a list of common values to pick from. Returns the box."""
-    Choices(box, values)
+    Choices(box, values, text)
     return box
 
 

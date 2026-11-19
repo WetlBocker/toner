@@ -11,7 +11,7 @@ from core import audit, datakey, db, helperclient, osstore, passvault, passwords
 from ui.directorydlg import service_key
 from ui.widgets import CentredCheck, waiting
 from ui.identitywizard import IdentityWizard
-from ui.settings_base import Page, compact_row, note, spin
+from ui.settings_base import Page, compact_row, note, offer, spin
 from ui.setupdlg import RecoveryDialog, _CardDialog
 from ui.signinwindow import MISMATCH, error_label, field, primary, say
 from ui.testlogindlg import TestLoginDialog
@@ -211,10 +211,10 @@ class AccountsPage(Page):
         self.save_roles = QPushButton("Save roles")
         self.save_roles.clicked.connect(self._save_roles)
         self._shown = {}
-        self.idle = spin(1, 240, " minute without use")                  # (it starts at 1)
+        self.idle = offer(spin(1, 240, " minute without use"), (5, 10, 15, 30, 60), lambda n: f"{n} minutes without use")     # (it starts at 1)
         self.idle.valueChanged.connect(lambda n: self.idle.setSuffix(" minute without use" if n == 1 else " minutes without use"))
         self.form.addRow("Lock after", self.idle)
-        self.session = spin(1, 72, "")
+        self.session = spin(1, 72, "", choices=(8, 12, 24, 72))
         self.form.addRow("Session length (hours)", self.session)
         self.helper = QCheckBox(SWITCH)
         self.helper.setToolTip(SWITCH_TIP)

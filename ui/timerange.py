@@ -4,6 +4,8 @@ from datetime import datetime, time, timedelta
 from PySide6.QtCore import QDate, QTimer, Signal
 from PySide6.QtWidgets import QComboBox, QDateEdit, QHBoxLayout, QLabel, QSpinBox, QWidget
 
+from ui.settings_base import offer
+
 
 class TimeRange(QWidget):
     """Last [n] hours (8 to start with) or From [date] to [date]. `changed` fires once for each change; a person's edits are
@@ -23,6 +25,7 @@ class TimeRange(QWidget):
         self.hours.setPrefix("Last ")
         self.hours.setSuffix(" hours")
         self.hours.setValue(8)
+        offer(self.hours, (4, 8, 24, 48, 168), lambda n: f"Last {n} hours")
         self.hours.setKeyboardTracking(False)                 # one change when typing stops, not one per digit
         self.d1, self.d2 = QDateEdit(QDate.currentDate()), QDateEdit(QDate.currentDate())
         self.dates = QWidget()

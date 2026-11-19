@@ -124,8 +124,8 @@ class NotificationsPage(Page):
     def __init__(self):
         super().__init__()
         self.enabled = QCheckBox("Send notifications")
-        self.consecutive = spin(1, 10, " run(s) in a row")
-        self.remind = spin(0, 168, " hours")
+        self.consecutive = spin(1, 10, " run(s) in a row", choices=(1, 2, 3, 5))
+        self.remind = spin(0, 168, " hours", choices=(0, 4, 8, 24))
         self.remind.setSpecialValueText("never")
         self.manual = QCheckBox("Also notify after runs I start by hand")
         self.snooze_label = QLabel("")

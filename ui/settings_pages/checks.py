@@ -309,11 +309,11 @@ class BackupsPage(Page):
     def __init__(self):
         super().__init__()
         self.enabled = QCheckBox("Back up configurations automatically (while Toner is open, or with the background service)")
-        self.hours = spin(1, 720, " hours")
+        self.hours = spin(1, 720, " hours", choices=(6, 12, 24, 168))
         self.on_start = QCheckBox("Also back up shortly after Toner starts")
         self.groups = GroupPicker()
         self.groups.set_labels(db.group_labels()[1:])
-        self.keep = spin(0, 1000, " versions")
+        self.keep = spin(0, 1000, " versions", choices=(0, 5, 10, 30, 90))
         self.keep.setSpecialValueText("keep everything")
         self.mask = QCheckBox("Mask passwords, keys and SNMP communities in stored copies")
         self.form.addRow("", self.enabled)

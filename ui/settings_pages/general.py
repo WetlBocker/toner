@@ -14,8 +14,8 @@ class GeneralPage(Page):
 
     def __init__(self):
         super().__init__()
-        self.retention, self.ssh_logs = spin(1, 3650, " days", choices=(7, 30, 60, 90)), spin(1, 3650, " days")
-        self.workers = spin(1, 100)
+        self.retention, self.ssh_logs = spin(1, 3650, " days", choices=(7, 30, 60, 90)), spin(1, 3650, " days", choices=(30, 90, 180, 365))
+        self.workers = spin(1, 100, choices=(5, 10, 25, 50))
         self.ssh_port = spin(1, 65535)
         self.verify = QCheckBox("Verify SSL certificates on new devices by default")
         self.background = QCheckBox("Keep running in the system tray when the window is closed")
@@ -23,7 +23,7 @@ class GeneralPage(Page):
         from core.platforms import LINUX
         self.linux = LINUX                                  # (Windows' installer offers this; an AppImage has no installer)
         self.at_login = QCheckBox("Start Toner when I sign in (waits in the tray if background running is turned on)")
-        self.scan_over = spin(0, 10_000_000, " addresses")
+        self.scan_over = spin(0, 10_000_000, " addresses", choices=(0, 256, 1024, 4096, 65536))
         self.scan_over.setSpecialValueText("never ask")
         for w in (self.ssh_logs, self.background, self.at_login):   # about this computer: an organization cannot change them
             w.setProperty("globalOnly", True)
@@ -83,8 +83,8 @@ class ConnectionsPage(Page):
 
     def __init__(self):
         super().__init__()
-        self.ssh, self.http = spin(5, 300, " s"), spin(5, 300, " s")
-        self.retries, self.delay = spin(0, 5), spin(0, 60, " s")
+        self.ssh, self.http = spin(5, 300, " s", choices=(10, 15, 30, 60)), spin(5, 300, " s", choices=(10, 15, 30, 60))
+        self.retries, self.delay = spin(0, 5, choices=(0, 1, 2, 3)), spin(0, 60, " s", choices=(0, 2, 5, 10))
         from PySide6.QtWidgets import QLineEdit, QPushButton
         self.ipstack = QLineEdit()                                     # kept in the vault, never shown back
         self.ipstack.setEchoMode(QLineEdit.EchoMode.Password)
@@ -432,7 +432,7 @@ class AutomationPage(Page):
     def __init__(self):
         super().__init__()
         self.enabled = QCheckBox("Run health checks automatically")
-        self.minutes = spin(1, 1440, " minutes")
+        self.minutes = spin(1, 1440, " minutes", choices=(5, 10, 15, 30, 60))
         self.groups = GroupPicker()
         self.on_start = QCheckBox("Also run once when Toner starts")
         self.sweep = QCheckBox("Also check the HTTPS certificate of every device, and warn before it expires")
