@@ -486,6 +486,11 @@ win.settings.confirm_leave = lambda *a, **k: False
 win.sign_out()
 check("a refused question cancels it", win.isVisible() and session.state() == "open" and not win._signing_out and not win._quitting)
 del win.settings.unsaved_count, win.settings.confirm_leave
+db.set_setting("schedule_enabled", True); db.set_setting("backup_enabled", True)      # both schedules are armed when the person signs out
+win.scheduler.apply(); win.backup_scheduler.apply()
+timers = [win.scheduler.timer, win.backup_scheduler.timer, QTimer(win.scheduler)]
+win.scheduler.others["another organization"] = timers[2]; timers[2].start(3_600_000)
+check("(both schedules and another organization's are armed)", all(t.isActive() for t in timers))
 win.lock_shortcut.activated.emit()
 applied = []
 win.about.apply_on_exit = lambda: applied.append(1)
@@ -497,10 +502,13 @@ check("...and installs no waiting update (Toner stays open)", applied == [])
 
 print("== Toner stays open: the window goes, the next sign-in gets a new one")
 win.deleteLater(); app.sendPostedEvents(None, QEvent.Type.DeferredDelete); app.processEvents()
+check("the old window's schedules are no longer armed (they would fire on a window that has gone)",
+      not any(t.isActive() for t in timers), [t.isActive() for t in timers])
 gone = (len(session._callbacks), len(roles._callbacks), len(AIm._listeners))
 check("the old window's listeners went with it (sign-in changes, roles, the assistant)",
       gone[0] < alive[0] and gone[1] < alive[1] and gone[2] < alive[2], (alive, gone))
 session.sign_in("Jordan", PW2)                       # what the sign-in page does next
+db.set_setting("schedule_enabled", False); db.set_setting("backup_enabled", False)
 check("...and a sign-in after it tells no dead window (nothing raised)", session.state() == "open")
 win = A.Main(); win.show(); app.processEvents()
 check("the new window is built for whoever signed in", win.isVisible()

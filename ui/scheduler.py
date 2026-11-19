@@ -143,6 +143,8 @@ class _OrgTimers(QObject):
             t.start(every)
 
     def shutdown(self):
+        for t in (self.timer, *self.others.values()):
+            t.stop()                                  # Sign out leaves Toner open: a timer still armed fires on the window that has gone
         for j in list(self.jobs):
             j.wait(30000)
 
