@@ -196,10 +196,10 @@ are recorded and count in the numbers. Each one is in the audit log.
 | Cisco (IOS, IOS XE, NX-OS, ASA) | SSH | CPU, memory, uptime, interfaces and error counters, BGP, OSPF, EIGRP, fans / power / temperature, NTP, unsaved configuration, flash, switch stack, HSRP / VRRP, port-channels, ASA failover |
 | Juniper (Junos) | SSH | CPU, memory, uptime, chassis alarms, interfaces, BGP, OSPF, fans / power / temperature, NTP, uncommitted changes, core dumps, BFD, storage, virtual chassis |
 | Arista (EOS) | SSH | CPU, memory, uptime, temperature, interfaces, BGP, OSPF, fans and power, MLAG, NTP, flash |
-| HPE Aruba (AOS-CX, AOS-S) | SSH | CPU, memory, uptime, interfaces, fans / power / temperature, NTP |
-| MikroTik (RouterOS) | SSH | CPU, memory, uptime, version, interfaces, OSPF, temperature and voltage, flash, RouterBOARD firmware, NTP |
-| Fortinet (FortiGate) | REST API token | CPU, memory, firmware, WAN links, HA, IPsec, FortiCare / FortiGuard subscriptions, certificates, interfaces and errors, HA sync, FortiAPs and FortiSwitches, log disk |
-| Palo Alto (PAN-OS) | XML API key | CPU, memory, uptime, version, sessions, HA, interfaces, subscriptions, content update age, disk, Panorama connection, last commit |
+| HPE Aruba (AOS-CX, AOS-S) | SSH | CPU, memory, uptime, interfaces, BGP, OSPF, fans / power / temperature, NTP |
+| MikroTik (RouterOS) | SSH | CPU, memory, uptime, version, interfaces, BGP, OSPF, temperature and voltage, flash, RouterBOARD firmware, NTP |
+| Fortinet (FortiGate) | REST API token | CPU, memory, firmware, WAN links, HA, IPsec, FortiCare / FortiGuard subscriptions, certificates, interfaces and errors, HA sync, FortiAPs and FortiSwitches, log disk, BGP, OSPF |
+| Palo Alto (PAN-OS) | XML API key | CPU, memory, uptime, version, sessions, HA, interfaces, BGP, OSPF, subscriptions, content update age, disk, Panorama connection, last commit |
 | Cisco Meraki | Dashboard API key | device status, appliance uplinks, licenses, alerts, configuration changes, site-to-site VPN, uplink loss and latency |
 | Proxmox VE | API token | cluster quorum and nodes, node CPU / memory / uptime, storage, VMs and containers, failed tasks, backup jobs |
 | TrueNAS (CORE, SCALE) | API key | pool health, errors and space, active alerts, load, uptime, disks (SMART and temperature), dataset space, services |
@@ -211,9 +211,9 @@ are recorded and count in the numbers. Each one is in the audit log.
 | Dell PowerSwitch (OS10, OS9, OS6) | SSH | CPU, memory, uptime, interfaces, fans and power supplies |
 | Sophos Firewall (SFOS) | SNMP | CPU, memory, storage, uptime, interfaces, errors, utilisation, firmware version, disk, services, HA, licences |
 | SonicWall (SonicOS 6.5, 7) | SonicOS API user and password | firmware, uptime, CPU and memory, interfaces, HA, licences |
-| Extreme Networks (Switch Engine / EXOS, Fabric Engine / VOSS) | SSH | CPU, memory, uptime, ports, fans and power supplies |
+| Extreme Networks (Switch Engine / EXOS, Fabric Engine / VOSS) | SSH | CPU, memory, uptime, ports, BGP, OSPF, fans and power supplies |
 | Juniper Mist | API token and organization ID | devices connected with version and uptime, open alarms, CPU and memory on switches and gateways |
-| OPNsense | API key and secret | updates waiting, memory, disk, uptime, each gateway's state, delay and loss |
+| OPNsense | API key and secret | updates waiting, memory, disk, uptime, each gateway's state, delay and loss, BGP and OSPF (with the FRR plugin) |
 | UniFi | console login, or API key (see [UniFi](#unifi)) | per type: site health, device state, uptime, CPU, memory, firmware, Wi-Fi retries, Protect cameras and sensors, WAN and ISP health |
 | Windows | agent, WinRM or this computer | CPU, memory, disks, uptime, reboots, services, event errors, certificates, update age, disk health, BitLocker, antivirus, firewall, clock, sign-in failures, activation, RDP sessions, scheduled tasks, Active Directory, Hyper-V, backup age, changes |
 | Generic SNMP (anything else) | SNMP v1/v2c/v3 | reachability, CPU, memory, storage, uptime, temperature, interfaces, errors, utilisation, fans / power / sensors, load, UPS battery and load, printer toner and paper, Synology and QNAP disks |

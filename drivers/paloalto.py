@@ -1,5 +1,6 @@
 from core import proxy, display, tlsverify
 from core import quiet
+import json
 import re
 import xml.etree.ElementTree as ET
 
@@ -8,6 +9,50 @@ import requests
 from . import apichecks
 from .base import AuthRejected, Driver, OK, WARN, FAIL, grade, grade_low
 from .sshbase import worse
+
+# check: (protocol, the states that are up, (neighbours, summary) on the legacy routing engine, the same on the Advanced Routing Engine of PAN-OS 10.2 and later)
+ROUTING = {
+    "bgp": ("BGP", ("established",),
+            ("<show><routing><protocol><bgp><peer></peer></bgp></protocol></routing></show>", "<show><routing><protocol><bgp><summary></summary></bgp></protocol></routing></show>"),
+            ("<show><advanced-routing><bgp><peer><status></status></peer></bgp></advanced-routing></show>", "<show><advanced-routing><bgp><summary></summary></bgp></advanced-routing></show>")),
+    "ospf": ("OSPF", ("full", "2way", "twoway"),             # 2-Way is where two non-designated routers on a shared segment stay
+             ("<show><routing><protocol><ospf><neighbor></neighbor></ospf></protocol></routing></show>", "<show><routing><protocol><ospf><summary></summary></ospf></protocol></routing></show>"),
+             ("<show><advanced-routing><ospf><neighbor></neighbor></ospf></advanced-routing></show>", "<show><advanced-routing><ospf><summary></summary></ospf></advanced-routing></show>")),
+}
+
+
+def pan_neighbors(res):
+    """[(name, state)] of the BGP peers or OSPF neighbours in a reply, from either routing engine.
+    Legacy: one <entry> each with a <status>; BGP's is published (pan.dev, pan-os-upgrade-assurance get_bgp_peers: entry peer="..", <status>), OSPF's is
+    INFERRED from the command's printed labels (neighbor-router-id, neighbor-address, status). Advanced Routing: JSON as text in <json>, keyed by logical
+    router (published for `show advanced-routing route` only); the fields are INFERRED to be the routing daemon's own (FRRouting: bgpState, nbrState "Full/DR")."""
+    if res is None:
+        return []
+    if res.find("json") is None:
+        return [(e.get("peer") or e.findtext("neighbor-router-id") or e.findtext("neighbor-address") or "?", e.findtext("status").strip())
+                for e in res.iter("entry") if e.findtext("status")]         # (the entry inside a peer's <prefix-counter> has no status)
+    found = []
+
+    def walk(node, name="?"):
+        if isinstance(node, dict):
+            state = next((node[k] for k in ("bgpState", "nbrState", "state") if isinstance(node.get(k), str)), None)
+            if state is not None:
+                found.append((name, state))                  # named by the key it sits under: the peer's name, the neighbour's router ID
+            else:
+                for k, v in node.items():
+                    walk(v, k)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v, name)
+
+    walk(json.loads((res.findtext("json") or "").strip() or "{}"))
+    return found
+
+
+def pan_routing_runs(res):
+    """Whether a `bgp summary` / `ospf summary` reply (either engine) names a router ID, which is to say the protocol is configured.
+    INFERRED (<router-id>, "routerId"): no summary reply is published. A wrong guess reads as 'not configured', never as a false warning."""
+    return res is not None and (res.find(".//router-id") is not None or '"routerId"' in (res.findtext("json") or ""))
 
 
 class PaloAltoDriver(Driver):
@@ -31,7 +76,9 @@ class PaloAltoDriver(Driver):
         root = ET.fromstring(r.content)
         if root.get("status") != "success":
             msg = root.findtext(".//msg") or root.findtext(".//line") or "request failed"
-            raise ValueError(f"PAN-OS API: {msg.strip()}")
+            e = ValueError(f"PAN-OS API: {msg.strip()}")
+            e.code = root.get("code")                        # the API's error number: _neighbors tells 'no such command' by it
+            raise e
         return root.find("result")
 
     def run(self):
@@ -44,7 +91,7 @@ class PaloAltoDriver(Driver):
         except Exception:
             quiet.ignored("anything else: each check reports its own reason")
         for name, fn in (("resources", self.resources), ("uptime", self.uptime), ("firmware", self.firmware),
-                         ("sessions", self.sessions), ("ha", self.ha), ("interfaces", self.interfaces), ("licenses", self.licenses),
+                         ("sessions", self.sessions), ("ha", self.ha), ("interfaces", self.interfaces), ("bgp", self.bgp), ("ospf", self.ospf), ("licenses", self.licenses),
                          ("content", self.content), ("disk", self.disk), ("panorama", self.panorama), ("last commit", self.last_commit)):
             if self.enabled(name):
                 self.safe(out, name, fn)
@@ -179,3 +226,25 @@ class PaloAltoDriver(Driver):
 
     def interfaces(self):
         return self.interfaces_row(self._if_states())
+
+    def _neighbors(self, check):
+        """BGP peers or OSPF neighbours from the routing engine this firewall runs; the other one's command is tried when the first is not there."""
+        protocol, up, legacy, advanced = ROUTING[check]
+        on = (self._system().findtext("advanced-routing") or "").lower() == "on"     # `show system info` says which engine, from PAN-OS 10.2
+        for neighbors, summary in ((advanced, legacy) if on else (legacy, advanced)):
+            try:
+                found = pan_neighbors(self._op(neighbors))
+                running = bool(found) or pan_routing_runs(self._op(summary))
+            except ValueError as e:
+                if getattr(e, "code", None) not in ("1", "14", "17"):      # unknown command, not possible here, invalid command: not this engine's
+                    raise
+                continue
+            down = [n if check == "bgp" else f"{n} ({s})" for n, s in found if re.sub(r"[^a-z0-9]", "", s.split("/")[0].lower()) not in up]
+            return self.neighbors_row(check, protocol, running, len(found), down, value=f"{len(found) - len(down)}/{len(found)} established")
+        return self.neighbors_row(check, protocol, False, 0, [])
+
+    def bgp(self):
+        return self._neighbors("bgp")
+
+    def ospf(self):
+        return self._neighbors("ospf")

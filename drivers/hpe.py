@@ -4,6 +4,39 @@ from .sshbase import SshDriver, uptime_hours
 from .clirows import CliRows
 from . import clichecks
 
+_IP = r"\d+\.\d+\.\d+\.\d+"
+
+
+def cx_bgp_peers(text):
+    """`show bgp all summary` (AOS-CX; every VRF and address family): [(neighbor, state)], a neighbor once per VRF however many
+    address families list it. Columns: Neighbor Remote-AS MsgRcvd MsgSent Up/Down-Time State AdminStatus; a * marks a dynamic one."""
+    peers, vrf = {}, ""
+    for line in (text or "").splitlines():
+        m = re.match(r"\s*VRF\s*:\s*(\S+)", line)
+        if m:
+            vrf = m.group(1)
+        m = re.match(r"\s*\*?\s*(\S+)\s+[\d.]+\s+\d+\s+\d+\s+\S+\s+(\w+)\s+(\w+)\s*$", line)
+        if m and m.group(3).lower() == "up":             # inferred: the guide shows AdminStatus 'Up' only; anything else is taken as shut down by an admin
+            peers[(vrf, m.group(1))] = m.group(2)
+    return [(n, s) for (_vrf, n), s in peers.items()]
+
+
+def cx_ospf_neighbors(text):
+    """`show ip ospf neighbors all-vrfs` (AOS-CX): [(router ID, state)]; 'FULL/DR' gives FULL."""
+    return re.findall(rf"(?m)^\s*({_IP})\s+\d+\s+([^\s/]+)(?:/\S*)?\s+{_IP}\s", text or "")
+
+
+def aoss_bgp_peers(text):
+    """`show ip bgp summary` (AOS-S): [(address, state)]. Columns: Remote-Address Remote-AS Local-AS State Admin-Status."""
+    rows = re.findall(rf"(?m)^\s*({_IP})\s+[\d.]+\s+[\d.]+\s+(\w+)\s+(\w+)\s*$", text or "")
+    return [(a, s) for a, s, admin in rows if admin.lower() != "stop"]      # inferred: the guide shows 'Start' only; 'Stop' is a peer an admin stopped
+
+
+def aoss_ospf_neighbors(text):
+    """`show ip ospf neighbor` (AOS-S): [(router ID, state)]. NbIfState (DR, BDR) is blank for a neighbor that is neither."""
+    return re.findall(rf"(?m)^\s*({_IP})\s+\d+\s+{_IP}\s+(?:B?DR\s+)?(\w+)\s+\d+\s+\d+", text or "")
+
+
 
 class HpeDriver(CliRows, SshDriver):
     """Aruba / HPE switches: AOS-CX (aruba_aoscx) and AOS-S, formerly ProCurve (aruba_osswitch)."""
@@ -15,7 +48,30 @@ class HpeDriver(CliRows, SshDriver):
 
     def checks(self):
         return [("cpu", self.cpu), ("memory", self.memory), ("uptime", self.uptime),
-                ("interfaces", self.interfaces), ("environment", self.environment), ("ntp", self.ntp)]
+                ("interfaces", self.interfaces), ("bgp", self.bgp), ("ospf", self.ospf), ("environment", self.environment), ("ntp", self.ntp)]
+
+    def bgp(self, c):
+        """A switch without BGP (not configured, not licensed, no such command) prints no neighbor rows and no local AS: not configured."""
+        if self.cx:
+            out = self.cmd(c, "show bgp all summary")
+            peers = cx_bgp_peers(out)
+        else:
+            peers = aoss_bgp_peers(self.cmd(c, "show ip bgp summary"))
+            # inferred: the AOS-S guide prints no sample of `show ip bgp general`; 'Local AS : n' is how its `show ip bgp` screen names the AS
+            out = "" if peers else self.cmd(c, "show ip bgp general")
+        running = bool(peers) or bool(re.search(r"Local AS\s*:\s*[1-9]", out))
+        down = [n for n, s in peers if s.lower() != "established"]
+        return self.peers_row("bgp", len(peers) - len(down), len(peers), down, protocol="BGP", running=running)
+
+    def ospf(self, c):
+        if self.cx:
+            nbrs = cx_ospf_neighbors(self.cmd(c, "show ip ospf neighbors all-vrfs"))
+            running = bool(nbrs) or bool(re.search(r"OSPFv2\s*:\s*Enabled", self.cmd(c, "show ip ospf all-vrfs")))
+        else:
+            nbrs = aoss_ospf_neighbors(self.cmd(c, "show ip ospf neighbor"))
+            running = bool(nbrs) or bool(re.search(r"OSPF protocol\s*:\s*enabled", self.cmd(c, "show ip ospf general")))
+        bad = [f"{r} ({s})" for r, s in nbrs if not clichecks.adjacent(s)]
+        return self.peers_row("ospf", len(nbrs) - len(bad), len(nbrs), bad, protocol="OSPF", running=running)
 
     def environment(self, c):
         if self.cx:

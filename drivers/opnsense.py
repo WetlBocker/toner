@@ -22,6 +22,28 @@ def _uptime_hours(text):
     return total if (days or clock or hours or mins) else None
 
 
+def bgp_neighbors(reply):
+    """(total, down) from the FRR plugin's diagnostics/bgpsummary: FRR's 'show bgp summary json' under 'response', a block per address family."""
+    resp = (reply or {}).get("response")
+    state = {}
+    for family in (resp.values() if isinstance(resp, dict) else ()):                    # no BGP, or no neighbors: an empty list
+        peers = family.get("peers") if isinstance(family, dict) else None
+        state.update({addr: (p or {}).get("state") for addr, p in (peers or {}).items()})
+    return len(state), [a for a, s in state.items() if s != "Established"]
+
+
+def ospf_neighbors(reply):
+    """(total, down) from diagnostics/searchOspfneighbor (rows: FRR's neighbors, the router ID added as 'neighborid') or the plugin up to
+    22.7's diagnostics/ospfneighbor (FRR's 'show ip ospf neighbor json' under 'response'). 2-Way is where two routers that are neither DR nor BDR stay."""
+    reply = reply or {}
+    rows = reply.get("rows")
+    if rows is None:
+        resp = reply.get("response")
+        rows = [{**n, "neighborid": rid} for rid, found in ((resp.get("neighbors") if isinstance(resp, dict) else None) or {}).items() for n in found]
+    states = [(r.get("neighborid", "?"), str(r.get("converged") or r.get("nbrState") or r.get("state") or "").split("/")[0]) for r in rows]   # 'state': inferred, the key before FRR had nbrState
+    return len(states), [f"{rid} ({s})" for rid, s in states if s.lower() not in ("full", "2-way")]
+
+
 class OpnsenseDriver(RestApi):
     NAME = "OPNsense"
 
@@ -37,7 +59,7 @@ class OpnsenseDriver(RestApi):
             out.append(self.result("reachability", OK, f"OPNsense {fw.get('product_version', '')}".strip(), ""))
         if self.enabled("firmware"):
             self.safe(out, "firmware", lambda: self.firmware(fw))
-        for key, fn in (("memory", self.memory), ("disk", self.disk), ("uptime", self.uptime), ("gateways", self.gateways)):
+        for key, fn in (("memory", self.memory), ("disk", self.disk), ("uptime", self.uptime), ("gateways", self.gateways), ("bgp", self.bgp), ("ospf", self.ospf)):
             if self.enabled(key):
                 self.safe(out, key, fn)
         return out
@@ -101,3 +123,20 @@ class OpnsenseDriver(RestApi):
             r.device = f"{self.name} / {g.get('name', 'gateway')}"
             out.append(r)
         return out
+
+    def _frr_on(self, controller, model):
+        """FRR itself and this protocol are both ticked in the plugin's settings (asked only when there are no neighbors to show it runs)."""
+        on = lambda c, m: str(((self.get(f"/api/quagga/{c}/get", optional=True) or {}).get(m) or {}).get("enabled")) == "1"
+        return on("general", "general") and on(controller, model)
+
+    def bgp(self):
+        res = self.get("/api/quagga/diagnostics/bgpsummary", optional=True)                # None: the FRR plugin (os-frr) is not installed
+        total, down = bgp_neighbors(res)
+        return self.neighbors_row("bgp", "BGP", bool(total) or (res is not None and self._frr_on("bgp", "bgp")), total, down, value=f"{total - len(down)}/{total} established")
+
+    def ospf(self):
+        res = self.get("/api/quagga/diagnostics/searchOspfneighbor", optional=True)
+        if res is None:
+            res = self.get("/api/quagga/diagnostics/ospfneighbor", optional=True)          # the plugin up to 22.7
+        total, down = ospf_neighbors(res)
+        return self.neighbors_row("ospf", "OSPF", bool(total) or (res is not None and self._frr_on("ospfsettings", "ospf")), total, down, value=f"{total - len(down)}/{total} established")

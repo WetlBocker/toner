@@ -13,12 +13,32 @@ def _bytes(text):
     return float(m.group(1)) * _SIZE.get(m.group(2).lower(), 1) if m else None
 
 
+def _items(out):
+    """[(flags, text)] for each numbered item of a RouterOS 'print', whether an item is one line (terse) or several; ';;;' starts its comment."""
+    return re.findall(r"(?ms)^\s*\d+\s+([A-Z]*)\s*((?:;;;|\S+=).*?)(?=^\s*\d+\s+[A-Z]*\s*(?:;;;|\S+=)|\Z)", out)
+
+
+def bgp_neighbors(peers, connections=""):
+    """(total, down) from '/routing bgp session print' (v7) or '/routing bgp peer print status' (v6): flag E = established, X = disabled.
+    v7 makes no session for a peer that never came up, so a connection to one address that has no session is a neighbor down."""
+    up = {}
+    for flags, text in _items(peers):
+        m = re.search(r"\bremote[.-]address=(\S+)", text) or re.search(r'\bname="?([^"\s]+)', text)      # remote-address and state= are v6 (its manual is retired: not re-read)
+        if m and "X" not in flags:
+            up[m.group(1)] = up.get(m.group(1)) or "E" in flags or "state=established" in text            # v7 keeps a stopped session cached beside the live one
+    for flags, text in _items(connections):
+        m = re.search(r"\bremote\.address=((?:\d+\.){3}\d+|[\dA-Fa-f]*:[\dA-Fa-f:.]*)(?:/(?:32|128))?(?=\s|$)", text)   # a range to listen on or a host name is no single peer
+        if m and "X" not in flags:
+            up.setdefault(m.group(1), False)                                                              # inferred: the manual does not say a session shows the connection's address as written
+    return len(up), [a for a, e in up.items() if not e]
+
+
 class MikrotikDriver(CliRows, SshDriver):
     DEFAULT_PLATFORM = "mikrotik_routeros"
 
     def checks(self):
         return [("cpu", self.cpu), ("memory", self.memory), ("uptime", self.uptime),
-                ("firmware", self.firmware), ("interfaces", self.interfaces), ("ospf", self.ospf),
+                ("firmware", self.firmware), ("interfaces", self.interfaces), ("bgp", self.bgp), ("ospf", self.ospf),
                 ("health", self.health), ("disk", self.disk), ("routerboard", self.routerboard), ("ntp", self.ntp)]
 
     def software(self, c):
@@ -93,6 +113,15 @@ class MikrotikDriver(CliRows, SshDriver):
         if not rows:
             raise self.unreadable("interfaces", cmd)
         return [(n, "off" if "X" in f else "up" if "R" in f else "down") for f, n in rows]      # X = switched off by an admin, R = running
+
+    def bgp(self, c):
+        out, conns = self.cmd(c, "/routing bgp session print"), ""
+        if "bad command" in out.lower() or "no such" in out.lower():
+            out = self.cmd(c, "/routing bgp peer print status")               # v6: every peer set up is listed, with its state
+        else:
+            conns = self.cmd(c, "/routing bgp connection print")
+        total, down = bgp_neighbors(out, conns)
+        return self.peers_row("bgp", total - len(down), total, down, protocol="BGP", running=any("X" not in f for f, _t in _items(conns)))
 
     def ospf(self, c):
         out = self.cmd(c, "/routing ospf neighbor print terse")

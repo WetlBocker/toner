@@ -190,6 +190,9 @@ print("== the catalog and limits")
 check("the new checks are listed", {"licenses", "certificates", "ha sync", "fortiaps", "log disk"} <= {k for k, _ in checks.CATALOG["fortinet"]} and {"licenses", "content", "disk", "panorama", "last commit"} <= {k for k, _ in checks.CATALOG["paloalto"]}
       and {"alerts", "config changes", "vpn", "uplink quality"} <= {k for k, _ in checks.CATALOG["meraki"]})
 check("Palo Alto content age has its limit", "content_age" in db.DEFAULT_THRESHOLDS)
+routed = {v: [pair for pair in checks.CATALOG[v] if pair[0] in ("bgp", "ospf")] for v in ("arista", "cisco", "extreme", "fortinet", "hpe", "juniper", "mikrotik", "opnsense", "paloalto")}
+check("every vendor with routing checks lists BGP and OSPF, under the same names, so each can be switched off",
+      all(pairs == [("bgp", "BGP peers"), ("ospf", "OSPF adjacencies")] for pairs in routed.values()), {v: p for v, p in routed.items() if len(p) != 2})
 
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

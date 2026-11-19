@@ -308,6 +308,11 @@ def ospf_running(text):
     return bool(re.search(r"Routing Process\b.*\bwith ID", text or "", re.I))
 
 
+def adjacent(state):
+    """Full, or 2-Way (normal between two routers that are neither DR nor BDR), however the platform spells it."""
+    return re.sub(r"[^a-z0-9]", "", state.lower()) in ("full", "2way", "twoway")
+
+
 def eigrp_neighbors(text):
     """`show ip eigrp neighbors` (IOS, NX-OS) / `show eigrp neighbors` (ASA): (running, [(address, interface)]). A configured
     process prints its heading ('EIGRP-IPv4 Neighbors for AS(100)', 'IP-EIGRP neighbors for process 100') even with no neighbors;

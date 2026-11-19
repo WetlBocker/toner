@@ -1,3 +1,5 @@
+import re
+
 from core import proxy, tlsverify
 from core import quiet
 import requests
@@ -5,13 +7,39 @@ import requests
 from . import apichecks
 from .base import AuthRejected, Driver, OK, WARN, FAIL, grade_low
 
+# The monitor paths are Fortinet's (its Ansible collection's fortios_monitor_fact lists them); the reply fields are published only on its
+# developer network, so neighbor_ip, state and router_id are as seen in replies captured from FortiOS 7.0 (not confirmed in the documentation).
+def bgp_neighbors(rows):
+    """(how many peers, the ones not Established) from router/bgp/neighbors and neighbors6 joined."""
+    peers = {str(r["neighbor_ip"]): str(r.get("state", "")) for r in (rows if isinstance(rows, list) else []) if isinstance(r, dict) and r.get("neighbor_ip")}
+    return len(peers), [ip for ip, state in peers.items() if state.lower() != "established"]
+
+def ospf_neighbors(rows):
+    """(how many neighbours, the ones neither Full nor Two way) from router/ospf/neighbors; a DROTHER stays Two way with another DROTHER."""
+    nbrs = [r for r in (rows if isinstance(rows, list) else []) if isinstance(r, dict) and r.get("state")]
+    return len(nbrs), [f"{r.get('router_id') or r.get('neighbor_ip') or '?'} ({r['state']})" for r in nbrs
+                       if re.sub(r"[^a-z0-9]", "", str(r["state"]).lower().split("/")[0]) not in ("full", "twoway", "2way")]
+
+def _one(cfg):
+    cfg = cfg[0] if isinstance(cfg, list) and cfg else cfg          # results is taken to be the one object; a list of one reads the same
+    return cfg if isinstance(cfg, dict) else {}
+
+def bgp_running(cfg):
+    """From cmdb router/bgp ("config router bgp"): AS 0 switches BGP off."""
+    return str(_one(cfg).get("as") or "0").strip() != "0"
+
+def ospf_running(cfg):
+    """From cmdb router/ospf ("config router ospf"): a router ID (0.0.0.0 when unset), an area or a network."""
+    cfg = _one(cfg)
+    return str(cfg.get("router-id") or "0.0.0.0") != "0.0.0.0" or bool(cfg.get("area") or cfg.get("network"))
+
 class FortinetDriver(Driver):
     wan_in_run = True                    # its run reads wan usage from the interface list it already has
 
-    def _get(self, path, whole=False):
+    def _get(self, path, whole=False, api="monitor"):
         d = self.dev
         port = d.get("port") or 443
-        r = requests.get(f"https://{d['host']}:{port}/api/v2/monitor/{path}",
+        r = requests.get(f"https://{d['host']}:{port}/api/v2/{api}/{path}",
                          headers={"Authorization": f"Bearer {self.password}"},
                          verify=tlsverify.verify(d), timeout=self.opts["http_timeout"], **proxy.requests_kwargs(d))
         r.raise_for_status()
@@ -24,10 +52,10 @@ class FortinetDriver(Driver):
             return ""
         return reply.get("version") or (reply.get("results") or {}).get("version") or ""
 
-    def _optional(self, path):
+    def _optional(self, path, api="monitor"):
         """Some of these exist only when the feature is licensed or switched on; the firewall answers 400, 404 or 424 when it is not."""
         try:
-            return self._get(path)
+            return self._get(path, api=api)
         except requests.HTTPError as e:
             if e.response is not None and e.response.status_code in (400, 403, 404, 405, 424):
                 return None
@@ -50,7 +78,7 @@ class FortinetDriver(Driver):
         for name, fn in (("resources", self.resources), ("firmware", self.firmware),
                          ("wan links", self.wan), ("ha", self.ha), ("vpn", self.vpn), ("licenses", self.licenses), ("certificates", self.certificates),
                          ("interfaces", self.interfaces), ("ha sync", self.ha_sync), ("fortiaps", self.fortiaps), ("fortiswitches", self.fortiswitches),
-                         ("log disk", self.log_disk), ("wan usage", self.wan_usage)):
+                         ("log disk", self.log_disk), ("wan usage", self.wan_usage), ("bgp", self.bgp), ("ospf", self.ospf)):
             if self.enabled(name):
                 self.safe(out, name, fn)
         return out
@@ -171,3 +199,29 @@ class FortinetDriver(Driver):
         up = len(tunnels) - len(down)
         return self.result("ipsec tunnels", WARN if down else OK, f"{up}/{len(tunnels)} up",
                            "down: " + ", ".join(down[:5]) if down else "", numeric=float(up))
+
+    def _routing(self, check, protocol, paths, read, running):
+        """The token's own VDOM, as the other calls here."""
+        rows, missing = [], 0
+        for path in paths:
+            try:
+                got = self._optional(path)
+            except requests.HTTPError as e:
+                if getattr(e.response, "status_code", None) != 500:     # shortcut: any 500 reads as an empty list (FortiOS 7.4.9 and later answer it when there are no neighbours), tell them apart if a real unit shows another cause
+                    raise
+                got = []
+            missing += got is None
+            rows += got if isinstance(got, list) else []
+        total, down = read(rows)
+        if total:
+            return self.neighbors_row(check, protocol, True, total, down, value=f"{total - len(down)}/{total} established")
+        on = running(self._optional(f"router/{check}", api="cmdb"))
+        if on and missing == len(paths):
+            self._get(paths[0])                                          # configured, and this FortiOS (before 7.0) has no such list: the row says the API's answer
+        return self.neighbors_row(check, protocol, on, 0, [])
+
+    def bgp(self):
+        return self._routing("bgp", "BGP", ("router/bgp/neighbors", "router/bgp/neighbors6"), bgp_neighbors, bgp_running)
+
+    def ospf(self):
+        return self._routing("ospf", "OSPF", ("router/ospf/neighbors",), ospf_neighbors, ospf_running)

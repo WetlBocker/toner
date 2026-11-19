@@ -2,17 +2,64 @@
 Version, uptime, CPU, memory, ports that are down, fans and power supplies."""
 import re
 
+from . import clichecks
 from .base import OK, WARN, FAIL
 from .clirows import CliRows
 from .sshbase import SshDriver, uptime_hours
 from core import quiet
+
+_IP = r"\d+\.\d+\.\d+\.\d+"
+
+
+def exos_bgp_peers(text):
+    """`show bgp neighbor` (EXOS, the current virtual router): [(address, state)] of the enabled peers. Each row starts with flags:
+    I or E (internal, external), then d or e (disabled, enabled); then Peer AS Weight State."""
+    return re.findall(r"(?m)^\s*[IE]e\S*\s+(\S+)\s+\S+\s+\d+\s+([A-Za-z]+)\s", text or "")
+
+
+def exos_ospf_neighbors(text):
+    """`show ospf neighbor` (EXOS): [(router ID, state)]; 'FULL      /BDR' gives FULL."""
+    return re.findall(rf"(?m)^\s*({_IP})\s+\d+\s+([^\s/]+)\s*/", text or "")
+
+
+def voss_bgp_peers(text):
+    """`show ip bgp summary` (VOSS, the GlobalRouter): [(address, state)]. Columns: NEIGHBOR RMTAS STATE HLDTM KPALV ..."""
+    return re.findall(rf"(?m)^\s*({_IP})\s+[\d.]+\s+([A-Za-z]+)\s+\d+\s+\d+\s", text or "")
+
+
+def voss_ospf_neighbors(text):
+    """`show ip ospf neighbor` (VOSS): [(router ID, state)]. Columns: INTERFACE NBRROUTERID NBRIPADDR PRIO STATE RTXQLEN PERM TTL."""
+    return re.findall(rf"(?m)^\s*{_IP}\s+({_IP})\s+{_IP}\s+\d+\s+(.+?)\s+\d+\s+\S+\s+\d+", text or "")
+
 
 
 class ExtremeDriver(CliRows, SshDriver):
     DEFAULT_PLATFORM = "extreme_exos"
 
     def checks(self):
-        return [("cpu", self.cpu), ("memory", self.memory), ("uptime", self.uptime), ("interfaces", self.interfaces), ("environment", self.environment)]
+        return [("cpu", self.cpu), ("memory", self.memory), ("uptime", self.uptime), ("interfaces", self.interfaces),
+                ("bgp", self.bgp), ("ospf", self.ospf), ("environment", self.environment)]
+
+    def bgp(self, c):
+        """A switch without BGP (not configured, not licensed, no such command) lists no peers and does not say BGP is on: not configured."""
+        if self.voss():
+            peers = voss_bgp_peers(self.cmd(c, "show ip bgp summary"))
+            running = bool(peers) or bool(re.search(r"BGP on/off\s*-\s*ON\b", self.cmd(c, "show ip bgp conf")))
+        else:
+            peers = exos_bgp_peers(self.cmd(c, "show bgp neighbor"))
+            running = bool(peers) or bool(re.search(r"(?m)^\s*Enabled\s*:\s*Yes", self.cmd(c, "show bgp")))
+        down = [a for a, s in peers if not s.upper().startswith("ESTAB")]      # the EXOS guide prints both ESTABLISHED and 'ESTABLISEHD'
+        return self.peers_row("bgp", len(peers) - len(down), len(peers), down, protocol="BGP", running=running)
+
+    def ospf(self, c):
+        if self.voss():
+            nbrs = voss_ospf_neighbors(self.cmd(c, "show ip ospf neighbor"))
+            running = bool(nbrs) or bool(re.search(r"AdminStat\s*:\s*enabled", self.cmd(c, "show ip ospf")))
+        else:
+            nbrs = exos_ospf_neighbors(self.cmd(c, "show ospf neighbor"))
+            running = bool(nbrs) or bool(re.search(r"(?m)^\s*OSPF\s*:\s*Enabled", self.cmd(c, "show ospf")))
+        bad = [f"{r} ({s})" for r, s in nbrs if not clichecks.adjacent(s)]
+        return self.peers_row("ospf", len(nbrs) - len(bad), len(nbrs), bad, protocol="OSPF", running=running)
 
     def voss(self):
         return self.plat in ("extreme_vsp", "extreme_voss")
