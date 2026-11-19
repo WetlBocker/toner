@@ -172,7 +172,7 @@ ser = opt["series"][0]
 check("each slice shows its count, inside it", ser["label"]["show"] and ser["label"]["position"] == "inside" and ser["label"]["formatter"] == "{c}")
 check("a slice too thin for its count shows none", ser["minShowLabelAngle"] > 0)
 check("the count is white or near-black, whichever reads on the slice", {d["label"]["color"] for d in ser["data"]} <= {"#ffffff", "#111111"})
-check("the middle shows the total, with 'total' under it", opt["title"][1]["text"] == "6" and opt["title"][1]["subtext"] == "total" and opt["title"][0]["text"] == "CVSS scores")
+check("the middle shows the total, with 'total' under it", [c["style"]["text"] for c in opt["graphic"][0]["children"]] == ["6", "total"] and opt["title"]["text"] == "CVSS scores")
 
 print(f"\n{ok} passed, {bad} failed")
 sys_exit = __import__("sys").exit

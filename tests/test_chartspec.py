@@ -32,7 +32,20 @@ print("== donut")
 d = js(cs.donut(p, {"OK": 12, "WARN": 3, "FAIL": 1, "N/A": 0}, title="Devices"))
 check("one slice per status that has devices, worst statuses in Toner's order, coloured by status", [x["name"] for x in d["series"][0]["data"]] == ["OK", "WARN", "FAIL"]
       and d["series"][0]["data"][2]["itemStyle"]["color"] == p["status"]["FAIL"])
-check("the total sits in the middle", d["graphic"][0]["style"]["text"] == "16")
+check("the total sits in the middle", d["graphic"][0]["children"][0]["style"]["text"] == "16")
+def centred(opt):
+    """The centre text is placed by its own middle on the ring's centre, so it is centred at any size."""
+    g = opt["graphic"][0]
+    return (g["type"] == "group" and g["bounding"] == "raw" and [g["left"], g["top"]] == opt["series"][0]["center"]
+            and all(c["style"]["align"] == "center" and c["style"]["verticalAlign"] == "middle" and c["style"]["x"] == 0 for c in g["children"]))
+check("...by its own middle on the ring's centre, at any size", centred(d), d["graphic"])
+r = js(cs.ring(p, [("OK", 3, "#00ff00")], "75%"))
+rt = js(cs.ring(p, [("OK", 3, "#00ff00")], "75%", title="sw1"))
+check("a ring's centre text too, with a title or without", centred(r) and centred(rt) and r["series"][0]["center"] != rt["series"][0]["center"], (r["graphic"], rt["graphic"]))
+pc = js(cs.pie(p, [("Low", 1, "#00ff00"), ("High", 5, "#ff0000")], counts=True))
+ys = [c["style"]["y"] for c in pc["graphic"][0]["children"]]
+check("a ring of counts: the total and 'total' under it are centred as a pair", centred(pc) and [c["style"]["text"] for c in pc["graphic"][0]["children"]] == ["6", "total"]
+      and ys[0] < 0 < ys[1] and not isinstance(pc["title"], list), pc["graphic"])
 check("nothing to count gives the empty note, not a chart", cs.donut(p, {"OK": 0}) == cs.empty("Nothing to show yet"))
 
 print("== bars")

@@ -203,11 +203,11 @@ check("interfaces: a ring per device", sorted(r.name for r in w.compare_rings) =
 old_ring = next(r for r in w.compare_rings if r.name == "sw2").view
 segs = {d["name"]: d["value"] for d in old_ring.opt["series"][0]["data"]}
 check("a row stored before items: its ring from the row's own 3/4 up", segs == {"Up": 3, "Err-disabled": 0, "Down": 1}
-      and old_ring.opt["graphic"][0]["style"]["text"] == "4", segs)
+      and old_ring.opt["graphic"][0]["children"][0]["style"]["text"] == "4", segs)
 ring = next(r for r in w.compare_rings if r.name == "sw1").view
 segs = {d["name"]: d["value"] for d in ring.opt["series"][0]["data"]}
 check("up, err-disabled and down counts, the total in the middle", segs == {"Up": 2, "Err-disabled": 1, "Down": 1}
-      and ring.opt["graphic"][0]["style"]["text"] == "4" and ring.opt["title"]["text"] == "sw1", (segs, ring.opt.get("graphic"), ring.opt.get("title")))
+      and ring.opt["graphic"][0]["children"][0]["style"]["text"] == "4" and ring.opt["title"]["text"] == "sw1", (segs, ring.opt.get("graphic"), ring.opt.get("title")))
 check("the detail list waits for a selection", not w.compare_detail.isVisibleTo(w))
 ring.clicked.emit({"kind": "series", "name": "Up"})
 QApplication.processEvents()

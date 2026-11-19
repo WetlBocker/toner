@@ -130,7 +130,7 @@ check("with used and total under it", "250.0 GB of 500.0 GB" in by["disks"].gaug
 print("== the patches wheel")
 ring = by["patches"].chart.opt
 names = [d["name"] for d in ring["series"][0]["data"]]
-check("the centre is the pending count", ring["graphic"][0]["style"]["text"] == "4", ring["graphic"][0]["style"]["text"])
+check("the centre is the pending count", ring["graphic"][0]["children"][0]["style"]["text"] == "4", ring["graphic"][0]["children"][0]["style"]["text"])
 check("segments by Microsoft severity, with Unrated for none", names == list(O.SEVERITIES) and ring["series"][0]["data"][4]["value"] == 1, ring["series"][0]["data"])
 check("the date Windows last searched", by["patches"].text.text().startswith("Windows last searched for updates on ") and "2026" in by["patches"].text.text(), by["patches"].text.text())
 by["patches"].chart.clicked.emit({"kind": "series", "name": "Critical"})
@@ -192,7 +192,7 @@ cp.show_checks("w3", "windows", ["patches"], START, END, th)
 for p in cp.panels:
     p.drawn or p.draw()
 ring = cp.panels[0].chart.opt
-check("nothing pending: a grey ring with 0 in the middle", ring["graphic"][0]["style"]["text"] == "0" and ring["series"][0].get("silent")
+check("nothing pending: a grey ring with 0 in the middle", ring["graphic"][0]["children"][0]["style"]["text"] == "0" and ring["series"][0].get("silent")
       and ring["series"][0]["data"][0]["itemStyle"]["color"] == P["border"], ring["series"][0]["data"])
 dev("w4", "windows")
 db.save_run([Result("w4", "patches", "OK", "1 days", numeric=1.0, items=[item("", updates_error=True)])])
@@ -246,7 +246,7 @@ latest = {"certificate :443", "disks", "patches"}                # gauges, certi
 check("every panel that follows the range says there were no readings", all(t == O.EMPTY for c, t in texts.items() if c not in latest), texts)
 eb = {O.shown_name(p.checks[0]): p for p in cp.panels}
 check("gauges, certificates and the wheel still show the latest reading", len(eb["disks"].gauges) == 2 and eb["certificates"].table.model().rowCount() == 2
-      and eb["patches"].chart.opt["graphic"][0]["style"]["text"] == "4", texts)
+      and eb["patches"].chart.opt["graphic"][0]["children"][0]["style"]["text"] == "4", texts)
 import re as _re
 said = [eb[k].findChildren(O.QLabel) for k in ("disks", "certificates", "patches")]
 check("...and each says so, with when it was read", all(any(_re.fullmatch(r"The latest reading, from \d{4}-\d\d-\d\d \d\d:\d\d\. The time range does not apply\.", l.text())

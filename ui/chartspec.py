@@ -89,6 +89,17 @@ def _base(p, title="", sub="", legend=False, grid=None, animate=True):
     return opt
 
 
+def _middle(p, opt, text, sub=""):
+    """`text` in the middle of the ring that is opt's first series, `sub` small under it. The group is placed by its own origin
+    (bounding raw) on the ring's centre and the text is centred on that, so it stays in the middle at any size."""
+    def line(words, y, size, color, bold):
+        return {"type": "text", "silent": True, "style": {"text": str(words), "x": 0, "y": y, "align": "center", "verticalAlign": "middle", "fill": color,
+                                                          "fontSize": size, "fontWeight": "bold" if bold else "normal", "fontFamily": _font(p)["fontFamily"]}}
+    left, top = opt["series"][0]["center"]
+    rows = [line(text, -7, 22, p["text"], True), line(sub, 14, 11, p["muted"], False)] if sub else [line(text, 2, 22, p["text"], True)]     # (2: digits sit a little above the line's middle)
+    opt["graphic"] = [{"type": "group", "bounding": "raw", "left": left, "top": top, "silent": True, "children": rows}]
+
+
 def status_color(p, status):
     return p["status"].get(status, p["status"]["N/A"])
 
@@ -108,9 +119,7 @@ def donut(p, counts, title="", center_text=None, order=STATUSES):
                       "itemStyle": {"borderColor": p["surface"], "borderWidth": 2, "borderRadius": 4},
                       "label": {"show": False}, "emphasis": {"scale": True, "scaleSize": 4, "label": {"show": False}},
                       "data": data}]
-    opt["graphic"] = [{"type": "text", "left": "center", "top": "50%", "style": {"text": str(center_text if center_text is not None else total),
-                                                                                "fill": p["text"], "fontSize": 22, "fontWeight": "bold",
-                                                                                "fontFamily": _font(p)["fontFamily"], "textAlign": "center"}}]
+    _middle(p, opt, center_text if center_text is not None else total)
     return opt
 
 
@@ -134,9 +143,7 @@ def pie(p, slices, title="", counts=False):
         for d in s["data"]:
             c = d["itemStyle"]["color"]
             d["label"] = {"color": "#ffffff" if contrast("#ffffff", c) >= contrast("#111111", c) else "#111111"}
-        opt["title"] = [opt["title"], {"text": str(sum(v for _n, v, _c in slices)), "subtext": "total", "left": "50%", "top": "58%", "itemGap": 0,
-                                       "textAlign": "center", "textVerticalAlign": "middle", "textStyle": {**_font(p, 22), "fontWeight": "bold"},
-                                       "subtextStyle": _font(p, 11, p["muted"])}]
+        _middle(p, opt, sum(v for _n, v, _c in slices), "total")
     return opt
 
 
@@ -257,9 +264,7 @@ def ring(p, segments, center_text, title="", tip=""):
     # with a title the legend sits lower (see _base): a smaller, lower ring keeps clear of it
     opt["series"][0]["radius"] = ["50%", "72%"] if title else ["58%", "82%"]
     opt["series"][0]["center"] = ["50%", "60%"] if title else ["50%", "56%"]
-    opt["graphic"] = [{"type": "text", "left": "center", "top": "55%" if title else "50%",            # in the ring's middle
-                       "style": {"text": str(center_text), "fill": p["text"], "fontSize": 22, "fontWeight": "bold", "fontFamily": _font(p)["fontFamily"],
-                                 "textAlign": "center"}}]
+    _middle(p, opt, center_text)
     return opt
 
 

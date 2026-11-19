@@ -51,7 +51,7 @@ cols = [d["itemStyle"]["color"] for d in opt["series"][0]["data"]]
 check("status heatmap: own colours, no visualMap", cols == [chartspec.status_color(p, "OK"), chartspec.status_color(p, "FAIL")] and "visualMap" not in opt, cols)
 check("status heatmap: click value is [x, y, ...]", opt["series"][0]["data"][1]["value"][:2] == [1, 0])
 opt = chartspec.ring(p, [("OK", 3, "#0a0"), ("FAIL", 1, "#a00")], "75%")
-check("ring: centre text in graphic", opt["graphic"][0]["style"]["text"] == "75%" and opt["series"][0]["data"][0]["name"] == "OK")
+check("ring: centre text in graphic", opt["graphic"][0]["children"][0]["style"]["text"] == "75%" and opt["series"][0]["data"][0]["name"] == "OK")
 
 db.save_device(dict(name="sw0", vendor="cisco", host="10.0.0.1", port=0, platform="", username="u", site="default", verify_ssl=0,
                     ha_expected=0, enabled=1, location="", details="", folder_id=None))
