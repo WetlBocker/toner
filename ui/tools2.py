@@ -21,6 +21,7 @@ from ui.finder import FilterButton, SearchBox, device_sections, shown_devices
 from ui.pingworker import PingWorker
 from ui.toast import toast
 from ui import status as st
+from ui.settings_base import offer
 
 
 def _table(cols, stretch_last=True):
@@ -340,6 +341,8 @@ class LivePingTab(QWidget):
         self.timeout.setRange(100, 10000)
         self.timeout.setValue(1000)
         self.timeout.setSuffix(" ms")
+        offer(self.interval, (1, 2, 5, 10, 30))
+        offer(self.timeout, (500, 1000, 2000, 5000))
         self.go, self.stop, self.clear = _primary("Start"), QPushButton("Stop"), QPushButton("Reset")
         self.stop.setEnabled(False)
         self.via_proxy = QCheckBox("Through the proxy (TCP)")

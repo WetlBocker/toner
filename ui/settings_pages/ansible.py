@@ -74,7 +74,7 @@ class AnsiblePage(Page):
         self.browse_folder, self.open_folder = QPushButton("Browse..."), QPushButton("Open folder")
         self.check_default = QCheckBox("Start every run as a check (nothing is changed)")
         self.check_default.setToolTip("A check runs the playbook with --check --diff: it shows what would change. You can switch it off for a single run.")
-        self.keep = spin(10, 5000)
+        self.keep = spin(10, 5000, choices=(50, 100, 500, 1000))
         self.test_btn = QPushButton("Test")
         from ui import installdlg
         self.install_btn = installdlg.button("ansible", self, done=lambda: self.test())

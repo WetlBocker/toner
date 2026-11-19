@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication as _QApp, QCheckB
                                QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 from core import db, nettools, perms, profiles, reach, sealedfile, sessionlog, snmp, vendors
 from ui import theme
+from ui.settings_base import offer
 
 
 class OutputBox(QPlainTextEdit):
@@ -781,6 +782,9 @@ class SnmpTab(QWidget):
         self.retries.setRange(0, 5)
         self.retries.setValue(1)
         self.max_rows.setRange(1, snmp.MAX_ROWS)
+        offer(self.timeout, (1, 3, 5, 10))
+        offer(self.retries, (0, 1, 2, 3))
+        offer(self.max_rows, (500, 2000, 10000, 50000))
         self.max_rows.setValue(2000)
         self.max_rows.setToolTip("A walk stops after this many rows")
         self.go, self.stop = QPushButton("Run"), QPushButton("Stop")

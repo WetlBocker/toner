@@ -3,6 +3,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QDialog, QFileDialog, QF
                                QMessageBox, QPlainTextEdit, QPushButton, QSpinBox, QVBoxLayout)
 from PySide6.QtGui import QFontDatabase
 from core import agents, audit, db
+from ui.settings_base import offer
 
 
 class AgentScriptDialog(QDialog):
@@ -21,6 +22,7 @@ class AgentScriptDialog(QDialog):
         self.minutes.setRange(1, 60)
         self.minutes.setValue(5)
         self.minutes.setSuffix(" minutes")
+        offer(self.minutes, (1, 5, 15, 30, 60))
         self.rotate = QCheckBox("Make a new token (the agent already installed on this computer stops working)")
         self.status = QLabel("")
         self.status.setWordWrap(True)

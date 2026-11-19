@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComb
 
 from core import apitool as A, db, perms, profiles
 from ui import status as st, theme
+from ui.settings_base import offer
 from ui.orgfield import SHARED_CHOICE, choice_file, org_choices, show_row
 from ui.tools2 import _muted, _primary, _table
 from ui.widgets import EmptyHint, flow, gate_push, remember_sizes
@@ -367,6 +368,7 @@ class ApiTesterTab(QWidget):
 
         self.keep = QSpinBox()
         self.keep.setRange(1, 10000)
+        offer(self.keep, (50, 100, 500, 1000))
         self.keep.setValue(A.history_keep())
         self.clear_btn = QPushButton("Clear history")
         self.history = _table(["When", "Method", "URL", "Status", "Time"])
@@ -403,6 +405,7 @@ class ApiTesterTab(QWidget):
         self.timeout.setRange(1, 600)
         self.timeout.setValue(A.DEFAULT_TIMEOUT)
         self.timeout.setSuffix(" s")
+        offer(self.timeout, (5, 10, 30, 60, 120))
         self.verify = QCheckBox("Verify certificate")
         self.verify.setChecked(True)
         self.verify.setToolTip("Untick for devices with a self-signed certificate.")

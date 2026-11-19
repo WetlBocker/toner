@@ -31,7 +31,7 @@ class CheckDialog(QDialog):
         self.direction.addItem("A lower value is worse (days left, free space)", 0)
         self.port = spin(0, 65535)
         self.port.setSpecialValueText("default")
-        self.seconds, self.streams = spin(1, 3600, " s"), spin(1, 128)
+        self.seconds, self.streams = spin(1, 3600, " s", choices=(10, 30, 60, 300)), spin(1, 128, choices=(1, 2, 4, 8))
         self.seconds.setValue(10)
         self.reverse, self.udp = QCheckBox("Download (the server sends)"), QCheckBox("UDP instead of TCP")
         self.via_proxy = QCheckBox("Through the proxy (TCP)")

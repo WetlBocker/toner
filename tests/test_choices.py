@@ -90,5 +90,33 @@ SB.choices_menu(span.hours).actions()[2].trigger()
 check("and picking one sets the hours", span.hours.value() == 24 and span.hours.text() == "Last 24 hours", span.hours.text())
 check("ports and font sizes stay plain number boxes", offered(g.ssh_port) is None and offered(term.size) is None)
 
+print("== the values offered in Tools")
+from ui import apitool, opensslui, tools as T1, tools2 as T2, tools3 as T3, winagent
+from ui.settings_pages.ansible import AnsiblePage
+api, snmp_tab, ping, files, iperf, cert, rand = apitool.ApiTesterTab(), T1.SnmpTab(), T2.LivePingTab(), T3.FileServerTab("tftp"), T3.IperfTab(), opensslui.GenerateTab(), opensslui.HashTab()
+win = winagent.AgentScriptDialog("srv-1")
+custom = C.CheckDialog(); ansible = AnsiblePage()
+for name, box, want in (
+        ("API Tester timeout", api.timeout, ["5 s", "10 s", "30 s", "60 s", "120 s"]),
+        ("API Tester history kept", api.keep, ["50", "100", "500", "1000"]),
+        ("SNMP timeout", snmp_tab.timeout, ["1 s", "3 s", "5 s", "10 s"]),
+        ("SNMP retries", snmp_tab.retries, ["0", "1", "2", "3"]),
+        ("SNMP walk rows", snmp_tab.max_rows, ["500", "2000", "10000", "50000"]),
+        ("Live Ping interval", ping.interval, ["1 s", "2 s", "5 s", "10 s", "30 s"]),
+        ("Live Ping timeout", ping.timeout, ["500 ms", "1000 ms", "2000 ms", "5000 ms"]),
+        ("File server stops after", files.minutes, ["never", "15 minutes", "30 minutes", "60 minutes", "240 minutes"]),
+        ("iPerf duration", iperf.seconds, ["10 s", "30 s", "60 s", "300 s"]),
+        ("iPerf streams", iperf.streams, ["1", "2", "4", "8"]),
+        ("Certificate valid for", cert.days, ["90 days", "365 days", "397 days", "730 days", "3650 days"]),
+        ("Random bytes", rand.count, ["16 bytes", "32 bytes", "64 bytes", "128 bytes"]),
+        ("Windows agent interval", win.minutes, ["1 minutes", "5 minutes", "15 minutes", "30 minutes", "60 minutes"]),
+        ("Ansible runs kept", ansible.keep, ["50", "100", "500", "1000"]),
+        ("a custom iPerf check's duration", custom.seconds, ["10 s", "30 s", "60 s", "300 s"]),
+        ("a custom iPerf check's streams", custom.streams, ["1", "2", "4", "8"])):
+    check(name + " offers its common values", offered(box) == want, offered(box))
+SB.choices_menu(snmp_tab.max_rows).actions()[3].trigger(); snmp_tab.timeout.setValue(7)
+check("picking one sets the box, and any other number can still be typed", snmp_tab.max_rows.value() == 50000 and snmp_tab.timeout.value() == 7)
+check("ports stay plain number boxes", all(offered(b) is None for b in (snmp_tab.port, files.port, iperf.port, win.port, ansible.port)))
+
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

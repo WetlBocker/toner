@@ -17,6 +17,7 @@ from ui.tools import DevicePicker, OutputBox, Runner, _row, reset_button
 from ui.widgets import gate_push
 from ui.tools2 import _muted, _primary, _table
 from ui import status as st
+from ui.settings_base import offer
 
 SECRETS = {"sftp": "service:sftp-server", "ftp": "service:ftp-server"}       # the servers' passwords, in the vault
 AUDITED = {"write", "delete", "mkdir", "rename", "login"}              # plain reads stay out of the audit log
@@ -72,6 +73,7 @@ class FileServerTab(QWidget):
         self.minutes.setValue(60)
         self.minutes.setSpecialValueText("never")
         self.minutes.setSuffix(" minutes")
+        offer(self.minutes, (0, 15, 30, 60, 240))
         self.go = _primary(f"Start {self.label} server")
         self.status = _muted("")
         self.clear, self.save = QPushButton("Clear"), QPushButton("Save...")
@@ -395,6 +397,8 @@ class IperfTab(QWidget):
         self.seconds.setValue(10)
         self.seconds.setSuffix(" s")
         self.streams.setRange(1, 128)
+        offer(self.seconds, (10, 30, 60, 300))
+        offer(self.streams, (1, 2, 4, 8))
         self.reverse = QCheckBox("Download (the server sends)")
         self.udp = QCheckBox("UDP")
         self.bandwidth = QLineEdit()

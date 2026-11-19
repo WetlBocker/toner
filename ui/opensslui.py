@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog, 
 from core import audit, db, openssl
 from ui.tools import OutputBox, Runner, _row
 from ui.tools2 import _muted, _primary
+from ui.settings_base import offer
 
 
 class _Work(QThread):
@@ -103,6 +104,7 @@ class GenerateTab(_Base):
         self.days.setRange(1, 36500)
         self.days.setValue(365)
         self.days.setSuffix(" days")
+        offer(self.days, (90, 365, 397, 730, 3650))
         self.ca = QCheckBox("Make it a certificate authority (can sign other certificates)")
         self.pass_ = _secret("passphrase for the key (optional)")
         self.existing = _text("Optional: paste an existing private key (PEM) to use it instead of making a new one", 60)
@@ -382,6 +384,7 @@ class HashTab(_Base):
         self.count.setRange(1, 1_000_000)
         self.count.setValue(32)
         self.count.setSuffix(" bytes")
+        offer(self.count, (16, 32, 64, 128))
         self.fmt = QComboBox()
         self.fmt.addItems(["hex", "base64"])
         self.rand = QPushButton("Random")
