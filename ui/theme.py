@@ -48,21 +48,21 @@ class RoundedMenus(QProxyStyle):
 _LOOKS = {
     "Standard": dict(r_btn=6, r_input=6, r_card=8, r_list=8, r_menu=8, r_item=4, r_check=5, r_nav=8, r_chip=11, r_bar=4,
                      pad_btn="6px 14px", min_btn=20, pad_input="5px 9px", min_input=20, pad_text="8px", pad_row="6px 8px", pad_cell="5px 6px",
-                     pad_header="8px 10px", header_font="", pad_menu="7px 24px 7px 14px", pad_tab="9px 16px", pad_nav="9px 12px", margin_nav="1px 6px",
+                     pad_header="8px 10px", header_font="", pad_menu="7px 24px 7px 14px", pad_tab="9px 16px",
                      title_pt=16, brand_pt=13, check_px=16, radio_px=16, data_font="", row_line="%(border)s", btn_bg="transparent", point_delta=0),
     "Soft":     dict(r_btn=12, r_input=12, r_card=14, r_list=12, r_menu=12, r_item=8, r_check=7, r_nav=12, r_chip=12, r_bar=6,
                      pad_btn="6px 16px", min_btn=20, pad_input="5px 11px", min_input=20, pad_text="9px", pad_row="6px 8px", pad_cell="5px 6px",
-                     pad_header="8px 10px", header_font="", pad_menu="7px 24px 7px 14px", pad_tab="9px 16px", pad_nav="9px 12px", margin_nav="1px 6px",
+                     pad_header="8px 10px", header_font="", pad_menu="7px 24px 7px 14px", pad_tab="9px 16px",
                      title_pt=16, brand_pt=13, check_px=16, radio_px=16, data_font="", row_line="%(border)s", btn_bg="transparent", point_delta=0),
     "Sharp":    dict(r_btn=2, r_input=2, r_card=2, r_list=2, r_menu=2, r_item=2, r_check=2, r_nav=2, r_chip=3, r_bar=2,
                      pad_btn="6px 14px", min_btn=20, pad_input="5px 9px", min_input=20, pad_text="8px", pad_row="6px 8px", pad_cell="5px 6px",
-                     pad_header="8px 10px", header_font="", pad_menu="7px 24px 7px 14px", pad_tab="9px 16px", pad_nav="9px 12px", margin_nav="1px 6px",
+                     pad_header="8px 10px", header_font="", pad_menu="7px 24px 7px 14px", pad_tab="9px 16px",
                      title_pt=16, brand_pt=13, check_px=16, radio_px=16, data_font="", row_line="%(border)s", btn_bg="transparent", point_delta=0),
     # Terminal: the former Ops console. Rows are 22 px, data is monospace, corners are square, headers are small capitals.
     "Terminal": dict(r_btn=0, r_input=0, r_card=0, r_list=0, r_menu=0, r_item=0, r_check=0, r_nav=0, r_chip=2, r_bar=0,
                      pad_btn="3px 10px", min_btn=16, pad_input="2px 7px", min_input=16, pad_text="6px", pad_row="1px 6px", pad_cell="2px 6px",
                      pad_header="4px 8px", header_font='font-size: 8pt; font-family: "Segoe UI Variable Text", "Segoe UI";',
-                     pad_menu="4px 20px 4px 12px", pad_tab="6px 12px", pad_nav="5px 10px", margin_nav="0 6px",
+                     pad_menu="4px 20px 4px 12px", pad_tab="6px 12px",
                      title_pt=13, brand_pt=13, check_px=13, radio_px=13, data_font='font-family: "Cascadia Mono", Consolas, "Courier New";',
                      row_line="%(bg)s", btn_bg="%(surface2)s", point_delta=-1),
 }
@@ -317,27 +317,21 @@ QPushButton#navUser::menu-indicator { image: none; width: 0px; }
 QPushButton#navFold { padding: 0; background: %(surface)s; border: 1px solid %(border)s; border-radius: %(r_btn)spx; }
 QPushButton#refresh { padding: 0; }
 QPushButton#navFold:hover { background: %(hover)s; }
-QListWidget#nav { background: transparent; border: 0; border-radius: 0; %(nav_font)s }
-QListWidget#nav::item { padding: 0 10px; margin: 0; border: 0; border-left: 3px solid transparent; border-radius: %(r_nav)spx; color: %(text)s; background: transparent; }
-QListWidget#nav::item:hover { background: %(hover)s; }
-QListWidget#nav::item:selected { background: %(accent_soft)s; color: %(accent_ink)s; border-left: 3px solid %(accent)s; font-weight: 600; }
-QListWidget#nav::item:selected:focus { border: 1px solid %(ring)s; border-left: 3px solid %(accent)s; padding: 0 9px; }
-QListWidget#nav::item:!enabled { color: %(muted)s; background: transparent; border: 0; }
-QListWidget#settingsNav { background: transparent; border: 0; border-right: 1px solid %(border)s; border-radius: 0; }
-QListWidget#settingsNav::item { padding: %(pad_nav)s; margin: %(margin_nav)s; border-radius: %(r_nav)spx; color: %(muted)s; }
-QListWidget#settingsNav::item:selected { background: %(accent_soft)s; color: %(accent_ink)s; font-weight: 600; }
-QListWidget#settingsNav::item:selected:focus { border: 1px solid %(ring)s; }
-QListWidget#settingsNav::item:hover { background: %(hover)s; color: %(text)s; }
+QListWidget#nav, QListWidget#settingsNav { background: transparent; border: 0; border-radius: 0; %(nav_font)s }
+QListWidget#nav::item, QListWidget#settingsNav::item { padding: 0 10px; margin: 0; border: 0; border-left: 3px solid transparent; border-radius: %(r_nav)spx; color: %(text)s; background: transparent; }
+QListWidget#nav::item:hover, QListWidget#settingsNav::item:hover { background: %(hover)s; }
+QListWidget#nav::item:selected, QListWidget#settingsNav::item:selected { background: %(accent_soft)s; color: %(accent_ink)s; border-left: 3px solid %(accent)s; font-weight: 600; }
+QListWidget#nav::item:selected:focus, QListWidget#settingsNav::item:selected:focus { border: 1px solid %(ring)s; border-left: 3px solid %(accent)s; padding: 0 9px; }
+QListWidget#nav::item:!enabled, QListWidget#settingsNav::item:!enabled { color: %(muted)s; background: transparent; border: 0; }
+QListWidget#settingsNav { border-right: 1px solid %(border)s; }
 QFrame#statusChip { border-radius: %(r_chip)spx; }
 """ % t + (TERMINAL_QSS % t if t.get("terminal") else "")
 
 
-# What only the Terminal look has: the section names in the UI font over monospace lists, a left bar on the chosen Settings page.
+# What only the Terminal look has (its section and page names are in the UI font over monospace lists: nav_font).
 TERMINAL_QSS = """
 QPushButton:hover, QToolButton:hover { border-color: %(muted)s; }
 QPushButton[primary="true"] { font-weight: 700; }
-QListWidget#settingsNav { font-family: "Segoe UI Variable Text", "Segoe UI"; }
-QListWidget#settingsNav::item:selected { background: %(select)s; border-left: 2px solid %(accent)s; }
 """
 
 

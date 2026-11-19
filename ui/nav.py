@@ -11,11 +11,9 @@ from ui import icons, theme
 from ui import status as st
 
 
-ITEM_HEIGHT = 36            # a row in a page list; Qt does not take the style sheet's padding into account by itself
-HEADING_HEIGHT = 44        # a group heading: the room is above it, so the heading sits close to its own items
-NAV_HEADING = 36            # a group name in the sidebar (less above the first)
+NAV_HEADING = 36            # a group name in the sidebar or a page list (less above the first): the room is above it, so it sits close to its own rows
 NAV_BREAK = 18              # folded to icons, a group name becomes a short rule between the groups
-NAV_ITEM = 34               # a section row in the sidebar
+NAV_ITEM = 34               # a row in the sidebar or a page list
 NAV_ITEM_FOLDED = 32        # and folded to its icon
 SIDE_WIDTH = 236            # the sidebar with names
 SIDE_FOLDED = 68            # and folded to icons
@@ -40,6 +38,46 @@ def see_through(widget):
             area.widget().setAutoFillBackground(False)
 
 
+def heading_item(title):
+    """A group name, in the sidebar or a page list: bold, at the bottom of its row beside its own rows, and not to be chosen."""
+    item = QListWidgetItem(title)
+    item.setFlags(Qt.ItemFlag.NoItemFlags)
+    f = item.font()
+    f.setBold(True)
+    f.setPointSizeF(max(8.5, f.pointSizeF() - 0.5))                    # a group name reads as a heading, not a footnote
+    f.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 108)
+    item.setFont(f)
+    item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom)
+    return item
+
+
+def add_heading(listing, title):
+    """A group name in a page list (Settings, Tools, Automation/AI), at the sidebar's heights."""
+    item = heading_item(title)
+    item.setSizeHint(QSize(0, NAV_HEADING if listing.count() else NAV_HEADING - 12))
+    listing.addItem(item)
+
+
+def draw_break(p, rect):
+    """The short rule between two groups, at the top of the later group's name."""
+    from PySide6.QtGui import QPen
+    y = rect.top() + NAV_BREAK // 2                                    # the same height from the row's top folded or open, so it never jumps
+    p.save()
+    p.setPen(QPen(QColor((theme.current() or {}).get("border", "#444444")), 1))
+    p.drawLine(rect.left() + 14, y, rect.right() - 14, y)
+    p.restore()
+
+
+class PageDelegate(QStyledItemDelegate):
+    """A page list's rows, with the sidebar's rule above each group name that has rows showing above it."""
+
+    def paint(self, p, opt, index):
+        super().paint(p, opt, index)
+        view = self.parent()
+        if not index.flags() & Qt.ItemFlag.ItemIsSelectable and any(not view.isRowHidden(r) for r in range(index.row())):
+            draw_break(p, opt.rect)
+
+
 class NavDelegate(QStyledItemDelegate):
     """Draws the sidebar's rows, and a count after a section's name (on its icon's corner when only icons show)."""
 
@@ -50,16 +88,10 @@ class NavDelegate(QStyledItemDelegate):
     def paint(self, p, opt, index):
         super().paint(p, opt, index)
         from PySide6.QtCore import QRectF
-        from PySide6.QtGui import QFont, QFontMetrics, QPainter, QPen
+        from PySide6.QtGui import QFont, QFontMetrics, QPainter
         row = index.row()
         if self.nav.is_break(row):                                     # a short rule between the groups: in place of the name when folded, above it when open
-            t = theme.current() or {}
-            r = opt.rect
-            y = r.top() + NAV_BREAK // 2                               # the same height from the row's top either way, so it never jumps
-            p.save()
-            p.setPen(QPen(QColor(t.get("border", "#444444")), 1))
-            p.drawLine(r.left() + 14, y, r.right() - 14, y)
-            p.restore()
+            draw_break(p, opt.rect)
             return
         n = self.nav.count_for_row(row)
         if not n:
@@ -472,15 +504,8 @@ class NavStack(QWidget):
             self.list.setItemWidget(row, self.user)
             self.list.setRowHidden(self.list.count() - 1, True)
             return self.list.count() - 1
-        item = QListWidgetItem(group)
+        item = heading_item(group)
         item.setData(Qt.ItemDataRole.UserRole, group)
-        item.setFlags(Qt.ItemFlag.NoItemFlags)
-        f = item.font()
-        f.setBold(True)
-        f.setPointSizeF(max(8.5, f.pointSizeF() - 0.5))                # a group name reads as a heading, not a footnote
-        f.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 108)
-        item.setFont(f)
-        item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom)
         self._insert(row, item)
         self._headings.append(row)
         return row
@@ -661,6 +686,7 @@ class PageStack(QWidget):
         self.list.setAccessibleName("Pages")
         self.list.setFixedWidth(width)
         self.list.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self.list.setItemDelegate(PageDelegate(self.list))
         self.fold = fold_button()
         self.side = QWidget()
         side = QVBoxLayout(self.side)
@@ -700,15 +726,7 @@ class PageStack(QWidget):
             db.set_setting(self.key, not on)
 
     def addSection(self, title):
-        item = QListWidgetItem(title)                                  # (sentence case, a step smaller: no tracked capitals)
-        item.setFlags(Qt.ItemFlag.NoItemFlags)
-        f = item.font()
-        f.setBold(True)
-        f.setPointSizeF(max(8.5, f.pointSizeF() - 1))
-        item.setFont(f)
-        item.setSizeHint(QSize(0, HEADING_HEIGHT if self.list.count() else HEADING_HEIGHT - 10))    # air above each group, none above the first
-        item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom)
-        self.list.addItem(item)
+        add_heading(self.list, title)
 
     def addTab(self, widget, label):
         """Each page sits in a scroll area, so a window smaller than the page needs scrolls instead of squeezing the
@@ -721,7 +739,7 @@ class PageStack(QWidget):
         self.stack.addWidget(area)
         self._pages.append(widget)
         item = QListWidgetItem(label)
-        item.setSizeHint(QSize(0, ITEM_HEIGHT))
+        item.setSizeHint(QSize(0, NAV_ITEM))
         item.setToolTip(label)
         self.list.addItem(item)
         self._rows.append(self.list.count() - 1)

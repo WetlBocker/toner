@@ -42,7 +42,7 @@ ys = {round(b.mapTo(r, b.rect().topLeft()).y() / 10) for b in (r.snip_save, r.sn
 check("narrow, the row of controls wraps onto more lines, and none is on top of another", len(ys) >= 2 and not any(a is not b and a.geometry().intersects(b.geometry()) and a.parent() is b.parent() for a in (r.snip_save, r.snip_del, r.go, r.stop) for b in (r.snip_save, r.snip_del, r.go, r.stop)), ys)
 
 print("== 2. lists with headings: room above each heading")
-from ui.nav import PageStack, ITEM_HEIGHT, HEADING_HEIGHT
+from ui.nav import PageStack, NAV_ITEM as ITEM_HEIGHT, NAV_HEADING as HEADING_HEIGHT
 ps = tools.tabs
 heads = [i for i in range(ps.list.count()) if not (ps.list.item(i).flags() & Qt.ItemFlag.ItemIsSelectable)]
 items = [i for i in range(ps.list.count()) if i not in heads]
@@ -89,6 +89,36 @@ warned = []; QMessageBox.warning = staticmethod(lambda *a, **k: warned.append(a[
 st.search.setText("proxy"); st.save()
 check("a save that finds a problem clears the search and shows the page with it", st.current_title() == "Thresholds" and not st.search.text() and warned)
 st.reload()
+
+print("== 3b. the page lists look like the sidebar, without icons")
+from PySide6.QtGui import QColor
+from PySide6.QtWidgets import QWidget
+from ui import automation as AU, theme as TH
+from ui.nav import NavStack, NAV_ITEM, NAV_HEADING, NAV_BREAK
+side = NavStack(); side.addTab(QWidget(), "One", None, "Group"); side.addTab(QWidget(), "Two", None, "Next")
+side_head = side.list.item(side._headings[0]).font()
+au = AU.AutomationTab(); au.resize(1100, 700); au.show()
+st.select_page("General"); settle()
+tk = TH.current()
+def far(a, b): return abs(a.red() - b.red()) + abs(a.green() - b.green()) + abs(a.blue() - b.blue())
+def ink(img, r):
+    """The colour in a row furthest from the row's own background: its text."""
+    ground = img.pixelColor(r.right() - 3, r.center().y())
+    return max((img.pixelColor(x, y) for x in range(r.left(), r.right() - 20) for y in range(r.top() + 2, r.bottom() - 1)), key=lambda c: far(c, ground))
+for name, lst in (("Tools", ps.list), ("Settings", st.nav), ("Automation/AI", au.pages.list)):
+    heads = [i for i in range(lst.count()) if not (lst.item(i).flags() & Qt.ItemFlag.ItemIsSelectable)]
+    pages = [i for i in range(lst.count()) if i not in heads]
+    check(f"{name}: a group name is set like the sidebar's", all(lst.item(h).font() == side_head for h in heads), lst.item(heads[0]).font().toString())
+    check(f"{name}: rows and group names are the sidebar's heights", all(lst.item(i).sizeHint().height() == NAV_ITEM for i in pages)
+          and all(lst.item(h).sizeHint().height() == NAV_HEADING for h in heads[1:]) and lst.item(heads[0]).sizeHint().height() == NAV_HEADING - 12)
+    img = lst.viewport().grab().toImage()
+    sel, other, head = lst.visualItemRect(lst.currentItem()), lst.visualItemRect(lst.item(next(i for i in pages if i != lst.currentRow()))), lst.visualItemRect(lst.item(heads[1]))
+    bar = img.pixelColor(sel.left() + 1, sel.center().y())
+    check(f"{name}: the chosen page has the accent bar on its left", far(bar, QColor(tk["accent"])) < 40, bar.name())
+    text = ink(img, other)
+    check(f"{name}: the other pages are in the text colour, not the quiet one", far(text, QColor(tk["text"])) < far(text, QColor(tk["muted"])), text.name())
+    check(f"{name}: a rule sits above each later group", img.pixelColor(head.left() + 20, head.top() + NAV_BREAK // 2) != img.pixelColor(head.left() + 20, head.top() + 2))
+au.close()
 
 print("== 4. Thresholds: labelled boxes, no trailing zeros")
 from ui.settings_pages.general import ThresholdsPage

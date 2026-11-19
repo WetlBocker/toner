@@ -12,10 +12,10 @@ from PySide6.QtCore import QRectF, QSize, QTimer, Qt, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QPainter
 from PySide6.QtWidgets import (QAbstractButton, QAbstractSpinBox, QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QHBoxLayout,
                                QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton, QPlainTextEdit, QScrollArea,
-                               QSpinBox, QStackedWidget, QStyledItemDelegate, QTextEdit, QToolButton, QVBoxLayout, QWidget)
+                               QSpinBox, QStackedWidget, QTextEdit, QToolButton, QVBoxLayout, QWidget)
 from core import agents, audit, checks, custom, db, maintenance, notify, perms, proxy, reports, roles, vault
 from ui import theme
-from ui.nav import HEADING_HEIGHT, ITEM_HEIGHT
+from ui.nav import NAV_ITEM, PageDelegate, add_heading
 from ui import settings_diff as SD
 from ui.toast import toast
 from ui.settings_base import Page, TrimSpin, note, row_of, spin, tidy  # noqa: F401  (re-exported: other modules and the tests use them)
@@ -69,7 +69,7 @@ KEY_LABELS = {"retention_days": "Keep run history", "workers": "Devices checked 
               "agent_push_minutes": "Change computers that already have the agent"}
 
 
-class _NavDelegate(QStyledItemDelegate):
+class _NavDelegate(PageDelegate):
     """The list entries, plus a small dot at the right edge of a page with unsaved edits."""
 
     def paint(self, painter, option, index):
@@ -283,19 +283,11 @@ class SettingsTab(QWidget):
             names = [n for n in names if n in by_title]
             if not names:
                 continue
-            h = QListWidgetItem(heading)
-            h.setFlags(Qt.ItemFlag.NoItemFlags)
-            f = h.font()
-            f.setBold(True)
-            f.setPointSizeF(max(8.5, f.pointSizeF() - 1))
-            h.setFont(f)
-            h.setSizeHint(QSize(0, HEADING_HEIGHT if self.nav.count() else HEADING_HEIGHT - 10))
-            h.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom)
-            self.nav.addItem(h)
+            add_heading(self.nav, heading)
             for n in names:
                 it = QListWidgetItem(n)
                 it.setData(Qt.ItemDataRole.UserRole, by_title[n])
-                it.setSizeHint(QSize(0, ITEM_HEIGHT))
+                it.setSizeHint(QSize(0, NAV_ITEM))
                 self.nav.addItem(it)
 
     def _index_of(self, row):
