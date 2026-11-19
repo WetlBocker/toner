@@ -31,7 +31,7 @@ check("tech: every tool and ai on", t["ai"] is True and all(v is True for k, v i
 check("engineer: all on", all(v is True for v in e.values()))
 check("defaults cover exactly PERMISSIONS", set(t) == keys and set(e) == keys)
 check("no duplicate keys", len(keys) == len(P.PERMISSIONS))
-check("21 settings pages", len(P.SETTINGS_PAGES) == 21)
+check("22 settings pages", len(P.SETTINGS_PAGES) == 22)
 titles = {n for _, ns in GROUPS for n in ns}
 check("each page title is in GROUPS", all(p in titles for p in P.SETTINGS_PAGES) and "Accounts" not in P.SETTINGS_PAGES)
 check("28 tools", len(P.TOOLS) == 28, len(P.TOOLS))

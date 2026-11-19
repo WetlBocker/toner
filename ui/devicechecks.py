@@ -1,5 +1,6 @@
 """Edit device > Checks: this device's own list of checks and its own thresholds. Anything left alone follows Settings > Checks and
-Settings > Thresholds, so a device with nothing set here behaves exactly as before."""
+Settings > Thresholds, so a device with nothing set here behaves exactly as before. A monitoring profile's dialog uses the same list
+and table for the profile's checks and limits (for_profile)."""
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton,
                                QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
@@ -12,8 +13,10 @@ KEY = Qt.ItemDataRole.UserRole
 
 
 class DeviceChecks(QWidget):
-    def __init__(self):
+    def __init__(self, for_profile=False):
         super().__init__()
+        self.for_profile = for_profile                     # a monitoring profile's checks and limits: nothing that belongs to one device
+        self._profile = None                               # the monitoring profile this device follows, if any
         self.vendor = ""
         self._own = None                                   # the device's own list of check keys, or None to follow the global one
         self._limits = {}                                  # threshold key -> {'warn', 'fail'} this device overrides
@@ -75,14 +78,25 @@ class DeviceChecks(QWidget):
         reset = QPushButton("Use the global settings for everything")
         reset.setAutoDefault(False)
         reset.clicked.connect(self.reset)
+        self.follows = note("")
+        self.follows.hide()
         lay = QVBoxLayout(self)
-        lay.addWidget(note("A device with nothing chosen here uses the global checks and thresholds (Settings > Checks and "
-                           "Settings > Thresholds). What you set here applies to this device only."))
+        if for_profile:
+            lay.setContentsMargins(0, 0, 0, 0)
+            self.own.setChecked(True)                      # a profile always has its own list
+            for w in (self.own, self.if_box, reset):
+                w.hide()
+            lay.addWidget(QLabel("<b>Checks that run</b>"))
+        else:
+            lay.addWidget(note("A device with nothing chosen here uses the global checks and thresholds (Settings > Checks and "
+                               "Settings > Thresholds). What you set here applies to this device only."))
+            lay.addWidget(self.follows)
         lay.addWidget(self.own)
-        lay.addWidget(self.listing)
+        lay.addWidget(self.listing, 1 if for_profile else 0)      # in a profile's dialog the list is the main thing: it takes the room
         lay.addWidget(self.state)
         lay.addWidget(self.if_box)
-        lay.addWidget(QLabel("<b>Thresholds</b>  (tick a row to give this device its own limits; the others stay global)"))
+        lay.addWidget(QLabel("<b>Limits</b>" if for_profile else
+                             "<b>Thresholds</b>  (tick a row to give this device its own limits; the others stay global)"))
         lay.addWidget(self.limits, 1)
         bar = QHBoxLayout()
         bar.addWidget(reset)
@@ -98,6 +112,7 @@ class DeviceChecks(QWidget):
     def _refresh_globals(self):
         """Untouched rows show the global limits, so it is clear what 'follow the global setting' means."""
         base = db.get_thresholds()
+        base.update(db.normalize_checkopts({"thresholds": (self._applies() or {}).get("thresholds")}).get("thresholds", {}))
         for key, (warn, fail) in self.spins.items():
             if key not in self._limits:
                 warn.setValue(base[key]["warn"])
@@ -105,13 +120,30 @@ class DeviceChecks(QWidget):
 
     def set_vendor(self, vendor):
         self.vendor = vendor
-        self._fill_list()
+        self._show_profile()
         self._show_ifs()
+
+    # ---------- the monitoring profile the device follows
+    def set_profile(self, profile):
+        """The profile that applies to this device (db.profile_for), or None. What the device has not set itself then shows the
+        profile's checks and limits, which is what it runs with."""
+        self._profile = profile
+        self._show_profile()
+
+    def _applies(self):
+        return self._profile if self._profile and self._profile.get("vendor") == self.vendor else None      # (a profile is for one vendor)
+
+    def _show_profile(self):
+        p = self._applies()
+        self.follows.setText(f"This device follows the monitoring profile '{p.get('name', '')}'." if p else "")
+        self.follows.setVisible(bool(p))
+        self._fill_list()
+        self._refresh_globals()
 
     # ---------- which interfaces
     def _show_ifs(self):
         """The interface choice, for the kinds of device that have an interfaces check."""
-        self.if_box.setVisible(ifaces.available(self.vendor))
+        self.if_box.setVisible(not self.for_profile and ifaces.available(self.vendor))
         self.if_choose.setEnabled(self.pick_ifs.isChecked() or ifaces.wan_capable(self.vendor))
         n = len(self._ifs)
         self.if_summary.setText(
@@ -149,7 +181,7 @@ class DeviceChecks(QWidget):
             self._show_ifs()
 
     def _fill_list(self):
-        off = set(db.get_setting("disabled_checks"))
+        base = self._global_list()
         items = checks.CATALOG.get(self.vendor, [])
         self.listing.clear()
         own = self.own.isChecked()
@@ -157,7 +189,7 @@ class DeviceChecks(QWidget):
             it = QListWidgetItem(label)
             # until 'Choose which checks run' is ticked the rows are greyed and can't be ticked, but the list still scrolls
             it.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled if own else Qt.ItemFlag.NoItemFlags)
-            on = (key in self._own) if (self.own.isChecked() and self._own is not None) else checks.key(self.vendor, key) not in off   # else today's global state
+            on = key in (self._own if own and self._own is not None else base)       # else what it follows today
             it.setCheckState(Qt.CheckState.Checked if on else Qt.CheckState.Unchecked)
             it.setData(KEY, key)
             self.listing.addItem(it)
@@ -172,6 +204,9 @@ class DeviceChecks(QWidget):
         self._fill_list()
 
     def _global_list(self):
+        """What runs when the device has no list of its own: its monitoring profile's checks, else the global list."""
+        if self._applies():
+            return [str(k) for k in self._applies()["checks"]]
         off = set(db.get_setting("disabled_checks"))
         return [k for k, _l in checks.CATALOG.get(self.vendor, []) if checks.key(self.vendor, k) not in off]
 
@@ -210,7 +245,7 @@ class DeviceChecks(QWidget):
         self.pick_ifs.blockSignals(False)
         self._show_ifs()
         self.own.blockSignals(True)
-        self.own.setChecked(self._own is not None)
+        self.own.setChecked(self.for_profile or self._own is not None)
         self.own.blockSignals(False)
         self._refresh_globals()
         self.limits.blockSignals(True)

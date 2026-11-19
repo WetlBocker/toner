@@ -32,11 +32,12 @@ from ui.settings_pages.demarc import DemarcPage  # noqa: F401
 from ui.settings_pages.accounts import AccountsPage  # noqa: F401
 from ui.settings_pages.ai import AiPage  # noqa: F401
 from ui.settings_pages.scanning import ScanningPage  # noqa: F401
+from ui.settings_pages.monitoring import MonitoringProfileDialog, MonitoringProfilesPage  # noqa: F401
 
 
 
 # The order and grouping of the list on the left. A page that is not named here still appears, under "Other".
-GROUPS = [("Monitoring", ["General", "Thresholds", "Checks", "Scanning", "Maintenance"]),
+GROUPS = [("Monitoring", ["General", "Thresholds", "Checks", "Monitoring profiles", "Scanning", "Maintenance"]),
           ("Connections", ["Connections", "Proxy", "Credentials", "Agents", "Demarc"]),
           ("Alerts and reports", ["Notifications", "Reports", "Config backups"]),
           ("Automation", ["Ansible", "AI"]),
@@ -52,7 +53,7 @@ GLOBAL_PAGES = {"Proxy", "Ansible", "AI", "Scanning", "Appearance", "Terminal", 
 GLOBAL_ONLY_PAGES = {"Organizations"}               # shown in Global only
 
 # What an organization's own value of a setting is called on its page's "Reset to Global" line.
-KEY_LABELS = {"retention_days": "Keep run history", "workers": "Devices checked in parallel", "default_ssh_port": "Default SSH port",
+KEY_LABELS = {"monitoring_profiles": "Monitoring profiles", "retention_days": "Keep run history", "workers": "Devices checked in parallel", "default_ssh_port": "Default SSH port",
               "default_verify_ssl": "Verify SSL certificates on new devices", "scan_confirm_over": "Confirm scans larger than",
               "ssh_timeout": "SSH timeout", "http_timeout": "HTTP timeout", "retries": "Retries", "retry_delay": "Retry delay",
               "disabled_checks": "Checks that run", "counter_mode": "Port error counting", "firmware_severity": "Firmware update severity",
@@ -128,7 +129,7 @@ class SettingsTab(QWidget):
 
     def __init__(self):
         super().__init__()
-        self.pages = [GeneralPage(), ThresholdsPage(), ChecksPage(), ConnectionsPage(), ProxyPage(), AgentsPage(), DemarcPage(),
+        self.pages = [GeneralPage(), ThresholdsPage(), ChecksPage(), MonitoringProfilesPage(), ConnectionsPage(), ProxyPage(), AgentsPage(), DemarcPage(),
                       BackupsPage(), ScanningPage(), MaintenancePage(), NotificationsPage(), ProfilesPage(), AnsiblePage(), AiPage(), AppearancePage(), TerminalPage(), ReportsPage(), SecurityPage(), AccountsPage(),
                       AuditPage(), DataPage(self.reload), OrganizationsPage()]
         self.pages[-1].changed_orgs.connect(self.orgs_changed)

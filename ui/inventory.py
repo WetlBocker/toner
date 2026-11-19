@@ -277,6 +277,7 @@ class DeviceDialog(QDialog):
             if keyring.get_password(db.SERVICE, db.secret_name(dev["name"], "proxy_otp")):
                 self.proxy_otp_key.setPlaceholderText("saved; leave blank to keep")
             self.checks_tab.load(dev.get("checkopts"))
+            self.checks_tab.set_profile(db.profile_for(dev))
             wo = winmon.options(dev)
             self.win_auth.setCurrentIndex(max(0, self.win_auth.findData(wo["auth"])))
             self.win_https.setChecked(wo["https"])
