@@ -250,6 +250,21 @@ FB.hold = None
 AN.backend = nobackend; pg.start()
 check("with no way to run Ansible it says what is wrong and where to fix it", wait(lambda: pg.go.isEnabled()) and "WSL is not installed" in pg.status.text() and "Ansible settings" in pg.status.text(), pg.status.text())
 AN.backend = lambda: FB
+print("-- right-click on a playbook")
+pg.listing.clearSelection(); pg.listing.setCurrentItem(None)
+at = pg.listing.visualItemRect(pg.listing.item(0)).center()
+m = pg._menu(at)
+check("right-clicking a playbook selects it and offers Run check and Edit", m is not None and pg.selected() == "site/other.yml" and [a.text() for a in m.actions()] == ["Run check", "Edit"], m and [a.text() for a in m.actions()])
+check("each entry is on exactly when its button is", all(a.isEnabled() == b.isEnabled() for a, b in zip(m.actions(), (pg.go, pg.edit_btn))))
+pg.check.setChecked(False)
+check("with check mode off the first entry says Run playbook", pg._menu(at).actions()[0].text() == "Run playbook")
+pg.check.setChecked(True)
+asked, edits = [], []
+pg.start = lambda *a: asked.append(1); pg.edit_requested.connect(edits.append)
+m = pg._menu(at); m.actions()[0].trigger(); m.actions()[1].trigger()
+del pg.start
+check("Run check starts the run and Edit opens the playbook in the editor", asked == [1] and edits == ["site/other.yml"], (asked, edits))
+check("right-clicking empty space opens no menu", pg._menu(pg.listing.viewport().rect().bottomRight()) is None)
 print("-- who and what is offered")
 from core import orgs as ORGS
 o = ORGS.create("Acme", "ACME")

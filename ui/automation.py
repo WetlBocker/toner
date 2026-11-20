@@ -6,7 +6,7 @@ from datetime import datetime
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-                               QMessageBox, QPlainTextEdit, QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+                               QMenu, QMessageBox, QPlainTextEdit, QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from core import ansible as AN, audit, db, perms
 from ui import status as st
@@ -163,6 +163,8 @@ class PlaybooksPage(QWidget):
         self.edit_btn.clicked.connect(lambda: self.selected() and self.edit_requested.emit(self.selected()))
         self.settings_btn.clicked.connect(self.settings_requested.emit)
         self.listing.itemSelectionChanged.connect(self._buttons)
+        self.listing.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.listing.customContextMenuRequested.connect(lambda pos: (m := self._menu(pos)) and m.exec(self.listing.viewport().mapToGlobal(pos)))
         self.copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(self.output.toPlainText()))
         self.save_btn.clicked.connect(self.save_output)
         self.recap.model().rowsInserted.connect(self._sync_hint)
@@ -239,6 +241,17 @@ class PlaybooksPage(QWidget):
         self.go.setText("Run check" if on else "Run playbook")
         self.go._base_tip = "Show what would change, and change nothing" if on else "Run the playbook for real: it can change the devices (asks first)"
         self._buttons()
+
+    def _menu(self, pos):
+        """The right-click menu of the playbook under pos (not shown); None over empty space."""
+        it = self.listing.itemAt(pos)
+        if it is None:
+            return None
+        self.listing.setCurrentItem(it)
+        m = QMenu(self.listing)
+        for b in (self.go, self.edit_btn):
+            m.addAction(b.text(), b.click).setEnabled(b.isEnabled())
+        return m
 
     def _buttons(self):
         busy = self.running()
