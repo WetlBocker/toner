@@ -193,7 +193,11 @@ def limits_fit(w, label, top=None, width=640):
     # at 640 every label fits; at 560 the long Windows/UniFi ones cannot (two boxes with arrows take most of the width), so the ones people read most are named
     named = ["CPU %", "Memory %", "Channel utilization %", "Temperature C", "Port errors (count)", "Uptime below (hours)", "Session table used %", "Disk used %"]
     wrapped = [t.item(r, 1).text() for r in range(t.rowCount()) if (width >= 640 or t.item(r, 1).text() in named) and fm.horizontalAdvance(t.item(r, 1).text()) > h.sectionSize(1) - 12]
-    check(label + ": no Check label wraps", not wrapped, (wrapped, h.sectionSize(1)))
+    if sys.platform == "win32":                 # these widths are the Windows font's; other fonts are wider and a name may wrap
+        check(label + ": no Check label wraps", not wrapped, (wrapped, h.sectionSize(1)))
+    cut = [(t.item(r, 1).text(), t.rowHeight(r)) for r in range(t.rowCount())
+           if fm.boundingRect(0, 0, h.sectionSize(1) - 12, 10000, int(Qt.TextFlag.TextWordWrap), t.item(r, 1).text()).height() > t.rowHeight(r)]
+    check(label + ": a Check label that wraps still fits its row", not cut, (cut[:3], h.sectionSize(1)))
     check(label + ": the Check column takes the slack", h.sectionResizeMode(1) == h.ResizeMode.Stretch and h.sectionSize(1) > 0)
 pd = M.MonitoringProfileDialog(); pd.show(); app.processEvents()
 limits_fit(pd.checks, "profile window", pd)

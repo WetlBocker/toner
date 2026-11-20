@@ -188,7 +188,10 @@ class ChannelDialog(QDialog):
         (the Sign in button lost its bottom edge)."""
         if self.layout():
             w = max(self.width(), self.minimumWidth()) if self.isVisible() else self.minimumWidth()
-            self.resize(w, self.layout().totalHeightForWidth(w))
+            h = self.layout().totalHeightForWidth(w)
+            if h < self.height():
+                self.layout().activate()     # the window's minimum is still the old layout's, and would stop it getting smaller
+            self.resize(w, h)
 
     # ---------- an Email channel's way of signing in
     def _email_form(self, lay):
@@ -211,6 +214,7 @@ class ChannelDialog(QDialog):
 
     def _method(self):
         auth = self.inputs["auth"][1].currentData()
+        self.layout().setEnabled(False)      # one change of size: row by row, Qt grows a shown window to every in-between minimum
         for key in ("tenant", "client_id", "client_secret", "username", "password"):
             self.form.setRowVisible(self.inputs[key][1], key in METHOD_FIELDS[auth])
         self.form.setRowVisible(self.sign_row, mailauth.needs_sign_in(auth))
@@ -219,6 +223,7 @@ class ChannelDialog(QDialog):
         self.inputs["username"][1].setPlaceholderText(self._user_hint if auth == "password" else "")
         self.inputs["client_secret"][1].setPlaceholderText(     # Google's app may have none; Microsoft's must
             SAVED if self.stored.get("client_secret") else self._secret_hint if auth == "google_account" else "")
+        self.layout().setEnabled(True)
         self._fit()
 
     def _say(self, text=None):

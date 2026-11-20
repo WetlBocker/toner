@@ -122,7 +122,9 @@ class DeviceChecks(QWidget):
         QApplication.sendEvent(box, QResizeEvent(box.size(), box.size()))
         chrome = box.width() - box.lineEdit().width()                     # padding, border and arrows: what the theme puts round the number
         widest = box.fontMetrics().horizontalAdvance(f"{box.maximum():.{box.decimals()}f}")      # the largest value it allows, in full
-        self.limits.verticalHeader().setDefaultSectionSize(box.sizeHint().height() + 2 * pad + 1)      # (+1: the grid line)
+        v = self.limits.verticalHeader()
+        v.setMinimumSectionSize(box.sizeHint().height() + 2 * pad + 1)    # (+1: the grid line)
+        v.setSectionResizeMode(v.ResizeMode.ResizeToContents)            # a name that wraps (wider fonts, a narrow window) gets the lines it needs
         self.limits.resizeColumnsToContents()
         h = self.limits.horizontalHeader()
         h.setSectionResizeMode(1, h.ResizeMode.Stretch)

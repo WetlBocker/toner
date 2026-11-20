@@ -509,4 +509,20 @@ r = subprocess.run([sys.executable, "-u", os.path.abspath(__file__), "quit"], ca
 check("the app quits cleanly (exit code 0) and without waiting for them", r.returncode == 0 and "running at quit: ['sign-in', 'test']" in r.stdout
       and time.time() - t0 < 7, (r.returncode, round(time.time() - t0, 1), r.stdout[-200:], r.stderr[-300:]))
 
+print("== picking a sign-in method changes the window's size once")
+# row by row, Qt grew the window to each in-between minimum; on some monitors every step printed "Unable to set geometry"
+from PySide6.QtCore import QEvent, QObject
+dz = _NT.ChannelDialog(notify.new_channel("email"), None); dz.show(); QEventLoop().processEvents()
+seen = []
+class _Sizes(QObject):
+    def eventFilter(self, o, e):
+        if o is dz and e.type() == QEvent.Type.Resize: seen.append(e.size().height())
+        return False
+spy = _Sizes(); dz.installEventFilter(spy); steps = {}
+for m in ("ms_account", "ms_app", "google_account", "password"):
+    seen.clear(); bx = dz.inputs["auth"][1]; bx.setCurrentIndex(bx.findData(m)); QEventLoop().processEvents(); steps[m] = list(seen)
+    check(f"{m}: the window ends as tall as its form needs", dz.height() == dz.layout().totalHeightForWidth(dz.width()), (dz.height(), dz.layout().totalHeightForWidth(dz.width())))
+check("each change is one resize at most, never one per row", all(len(v) <= 1 for v in steps.values()), steps)
+dz.reject()
+
 print(f"\n{PASS} passed, {FAIL} failed")
