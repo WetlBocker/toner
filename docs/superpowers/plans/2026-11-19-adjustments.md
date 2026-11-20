@@ -172,9 +172,9 @@ Today's catalogue has no `uptime` for: `fortinet`, `meraki`, `cloud`, `wifi`, `p
 
 ---
 
-## Part 2 (waits for the owner to approve the wording below)
+## Part 2
 
-Not approved yet; do not build until the owner says so.
+Wording approved by the owner on 2026-11-19 (it counts as approved wording for the Global Constraints):
 
 **Item 12, Settings > Security:** row "Keep passwords from the password manager for" with the approved options, and the note "How long Toner's vault keeps a copy of each password it reads from the password manager. When the time is up Toner reads the password again; if the password manager can't be reached then, checks that need it fail. Off keeps passwords in memory only." Not an admin: the drop-down is disabled with the existing "Your role doesn't allow this. Ask an admin." Existing installs: copies off becomes Off, copies on becomes 24 Hours.
 
@@ -182,9 +182,77 @@ Not approved yet; do not build until the owner says so.
 
 **Item 7, Settings > Reports:** rows "Trend report", "Vulnerability report" and "Hardening report", each with its drop-down, "Email it to" and "Send now"; the note "Each report is saved to the default folder and emailed to its addresses through the first Email channel in Settings > Notifications. The vulnerability and hardening reports use the latest scan."; results "Sent to {n} addresses.", "Couldn't send the report: {reason}" and "No scan yet. Scan on the Scanning page first."
 
-### Task 8: Credential cache time (item 12) — to be detailed after approval
-### Task 9: Scheduled scans (item 8) — to be detailed after approval
-### Task 10: Scheduled and sent reports (item 7) — to be detailed after approval
+### Task 8: Credential cache time (item 12)
+
+**Files:** `core/extstore.py` (`keep_copies`, `memory_only`, `set_keep_copies`, the sync round `_sync_once`, `_loop`, `start`), `core/db.py` (the setting's default beside `vault_keep_copies`, lines 139 and 1230), `ui/vaultsettings.py` (`VaultSection`: `self.copies`, `_copies`, `copies_note`), `ui/settings.py` (`KEY_LABELS`).
+**Test:** `tests/test_extvault.py` and the vault settings UI test (`grep -ln "VaultSection\|set_keep_copies" tests/`).
+
+**Interfaces (produces):**
+- Setting `vault_cache_hours`: `0` (Off), `1`, `4`, `8`, `12` or `24`. It replaces `vault_keep_copies`. While it has never been set: `vault_keep_copies` False reads as `0`, anything else as `24`.
+- `extstore.CACHE_CHOICES = [("Off", 0), ("1 Hour", 1), ("4 Hours", 4), ("8 Hours", 8), ("12 Hours", 12), ("24 Hours", 24)]`, `extstore.cache_hours() -> int`, `extstore.set_cache_hours(hours)` (raises `CannotSwitch` as `set_keep_copies` does).
+- `keep_copies()` is `active() == "toner" or cache_hours() > 0`; `memory_only()` stays its opposite. Toner's own vault as the store is unaffected by all of this.
+
+**Behaviour:**
+- **Off** is today's "copies off": passwords are read from the manager when Toner starts and kept in memory only.
+- **N hours:** Toner's vault keeps copies, as "copies on" does today. Toner remembers when it last completed a round with the manager (persisted, so it survives a restart). When a manager is the store and that was N hours ago or more (checked when Toner starts and on every pass of the 5-minute loop), the copies are removed from Toner's vault: every password name that is not internal (`~ext/`), not local (`~toner/`) and not waiting in the unsent queue. The next round that reaches the manager reads them back and restarts the clock. Until then those passwords are unavailable and checks that need them fail, as they do today when a password is missing.
+- **Never lost:** a change still waiting in the queue keeps its value until it is sent (removing it would lose the person's edit). Toner's own login for the manager and the `~toner/` entries are never removed.
+- Changing between two hour values only stores the number. Off to N and N to Off go through what `set_keep_copies(True/False)` does today, with its existing refusal message.
+- No password, and no password name, goes into a log, exception or audit line. The audit says only that copies were removed because the manager was not reached for N hours, in the style the module's other audit lines use (if the module writes none today, write none and say so in the report).
+
+**UI:** the drop-down "Keep passwords from the password manager for" replaces the tick box, with the approved note under it. It appears where the tick box does (only with a manager chosen). When `perms.is_admin()` is false it is disabled and its tooltip is `perms.REASON`; the handler also refuses a change from a non-admin (the UI is not the only guard). `KEY_LABELS["vault_cache_hours"]` is the row label.
+
+- [ ] **Step 1: Write the failing tests** (a fake manager and an injected clock; no real time, no real manager):
+  - never set + `vault_keep_copies` False reads 0; never set + True or unset reads 24;
+  - with 4 hours: 3 h 59 min after the last round the copies are still in the vault; at 4 h they are gone, the queue and its waiting values are intact, `~toner/` entries and the manager's login are intact;
+  - after the removal, a round that reaches the manager puts the passwords back and a further 3 h 59 min keeps them;
+  - a restart 5 hours after the last round removes them before anything reads a password;
+  - Off behaves as copies off does today (the existing copies-off tests pass when driven through `set_cache_hours(0)`);
+  - 4 to 12 changes nothing in the vault; N to Off while the manager is unreachable raises `CannotSwitch` with the existing message;
+  - the drop-down has the six approved options in order, shows the stored one, is disabled for a non-admin with `perms.REASON` as tooltip, and a non-admin call to the handler changes nothing;
+  - the page's change tracking lists the new setting under its row label.
+- [ ] **Step 2:** Run and see them fail. **Step 3:** Implement. Update every reader of `vault_keep_copies` (`grep -rn "vault_keep_copies\|keep_copies\|set_keep_copies" core ui tests`); settings export/import (`core/db.py:1230`) carries the new key instead.
+- [ ] **Step 4:** Run `tests/test_extvault.py`, every test that mentions the vault settings or `passvault`, and `tests/test_perms.py`. **Step 5:** Commit "Password manager: choose how long Toner keeps its copies".
+
+### Task 9: Scheduled scans (item 8)
+
+**Files:** new `core/periods.py`; `core/advisories.py` (or a small new `core/scansched.py` if that file is already too long); `core/trends.py` (`due`); `ui/settings_pages/scanning.py`; the one-minute hooks that call `trends.due()` at `app.py:983` and `core/service.py:193`; `ui/scanning.py` / `ui/results.py` (`start_scheduled`); `ui/settings.py` (`KEY_LABELS`).
+**Test:** new `tests/test_scan_schedule.py`; the Scanning settings page test.
+
+**Interfaces (produces, Task 10 uses them):**
+- `core/periods.py`: `DAYS = {"daily": 1, "weekly": 7, "biweekly": 14, "monthly": 28, "quarterly": 91}`, `LABELS = {"": "Off", "daily": "Daily", "weekly": "Weekly", "biweekly": "Bi-Weekly", "monthly": "Monthly", "quarterly": "Quarterly"}`, `is_due(kind, last, now=None) -> bool` (`kind` not in `DAYS`: False; `last` empty or unreadable: True; else `now - last >= DAYS[kind]` days; `last` is a string in `trends.FMT`). `trends.due` uses it (monthly stays 28 days, so nothing changes for existing users).
+- Settings `scan_schedule` (`""`, `daily`, `weekly`, `biweekly`, `monthly`), `scan_groups` (group labels, as `schedule_groups`), `scan_last`.
+- `scan_due(now=None) -> bool` and `run_scheduled_scan(now=None) -> list` (the rows; it saves them the way the Scanning page saves a scan, so the page's "Latest scan" shows them, and stores `scan_last`).
+
+**Behaviour:**
+- Settings > Scanning gains the row "Scan automatically" (Off, Daily, Weekly, Bi-Weekly, Monthly), the row "Devices" (the same `GroupPicker` Checks > Schedule uses, same meaning of an empty choice and of groups that no longer exist, see `core/service.py` `_groups_alive`) and the approved note.
+- The schedule belongs to the same scope `trend_schedule` does and is ticked from the same two places. Only the process that owns the schedule runs it (`service.owns_schedule()`), as for the trend report.
+- In the window the scan runs on the Scanning page's own worker (never the UI thread), and not while a scan is already running. In the service it runs in the service's loop like the trend report.
+- `scan_last` is stored before the scan's network work ends in a way that a failing source cannot make it scan again every minute (the trend report's comment at `core/trends.py` explains the same rule).
+- A scheduled scan sends no alerts (a manual scan sends none today; keep whatever the Scanning page does). It writes one audit line in the style of the "config backup" one in `core/service.py`.
+
+- [ ] **Step 1: Write the failing tests:** `is_due` at each period's boundary (one minute short, exactly on); off never due; never run is due; the scan covers only enabled devices in the chosen groups; groups that are all gone scan nothing; the rows are saved and `scan_last` set even when one device's scan raises; a second tick a minute later does not scan again; the settings page loads, saves and change-tracks both settings with the approved labels; `trends.due` still answers as before for weekly and monthly.
+- [ ] **Step 2:** Run and see them fail. **Step 3:** Implement. **Step 4:** Run the new test, the scanning, trends, service and settings tests.
+- [ ] **Step 5:** Commit "Scanning: scan on a schedule".
+
+### Task 10: Scheduled and sent reports (item 7)
+
+**Files:** `ui/settings_pages/appearance.py` (`ReportsPage`), `core/trends.py` (`SCHEDULES`, `due`, `generate_scheduled`), a small new `core/scanreports.py` (the vulnerability and hardening reports from the latest scan), `core/reports.py` (the existing report writers; `ui/scanning.py` `export` shows how a scan report is made today), the two one-minute hooks (`app.py:983`, `core/service.py:193`), `ui/settings.py` (`KEY_LABELS`).
+**Test:** the Reports settings page test and the trend report tests (`grep -ln "trend_schedule\|ReportsPage" tests/`), new `tests/test_scan_reports.py`.
+
+**Interfaces (consumes):** `core/periods.py` from Task 9 (`DAYS`, `LABELS`, `is_due`).
+
+**Behaviour:**
+- Settings > Reports has three report rows, each followed by its own "Email it to" row with a "Send now" button: "Trend report", "Vulnerability report", "Hardening report". Each drop-down is Off, Weekly, Bi-Weekly, Monthly, Quarterly. One approved note under them replaces today's "Sent through the first Email channel..." note. "Also one report per organization" stays with the trend report.
+- Settings: `trend_schedule`, `trend_email`, `trend_last` keep their names and their stored values (`weekly`, `monthly` still mean what they did); new `vuln_report_schedule`, `vuln_report_email`, `vuln_report_last`, `hardening_report_schedule`, `hardening_report_email`, `hardening_report_last`.
+- The trend report covers the period it is sent for: 7, 14, 30 or 90 days (weekly and monthly as today).
+- The vulnerability report holds the latest scan's vulnerability rows, the hardening report its hardening rows, per device in scope, made with the writers the Scanning page's Export uses. Titles: "Toner Vulnerability Report" (exists) and "Toner Hardening Report". File names follow the trend report's: `Toner-vulnerability-YYYY-MM-DD`, `Toner-hardening-YYYY-MM-DD` (PDF with a window, HTML from the service).
+- On schedule: saved to the default folder, then mailed to that report's addresses with `notify.mail_files`, with a subject and body in the pattern the trend report's mail uses; `*_last` is stored before the mail, and a refusal is written to the audit log as the trend report's is. With no scan yet, nothing is made or sent, and `*_last` is not stored.
+- Send now: makes that report now and mails it to the addresses in its box (the box's current text, validated as on save), on a worker thread, without touching `*_last`; with no default folder it is made in a temporary folder that is removed afterwards. The button is disabled while its box is empty and while a send is running. The result appears beside the button: "Sent to {n} addresses." ("Sent to 1 address." for one), "Couldn't send the report: {reason}" (the reason from `mail_files`, already scrubbed of secrets), or "No scan yet. Scan on the Scanning page first."
+- Validation on save: as today for the trend report, and the same rules for the other two (a schedule needs the default folder; addresses must be valid; addresses need an Email channel), wording as the existing messages with the report's name in place of "trend report".
+
+- [ ] **Step 1: Write the failing tests:** the drop-downs' options and stored values; old `weekly`/`monthly` settings load as Weekly/Monthly; each report's due-ness at its boundary; the trend window per period; the vulnerability report has only vulnerability rows and the hardening report only hardening rows from the latest scan; no scan means nothing made and `*_last` unset; a refusing mail server leaves the file saved, `*_last` set and an audit line with no secret; Send now's three results (with a fake `mail_files`), the singular form, the disabled states, and that it runs off the UI thread and leaves `*_last` alone; the page change-tracks all nine settings.
+- [ ] **Step 2:** Run and see them fail. **Step 3:** Implement. **Step 4:** Run the new test, the reports, trends, scanning, notify and settings tests.
+- [ ] **Step 5:** Commit "Reports: vulnerability and hardening reports, each on its own schedule, and Send now".
 
 ## Part 3
 
