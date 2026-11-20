@@ -184,6 +184,8 @@ Wording approved by the owner on 2026-11-19 (it counts as approved wording for t
 
 ### Task 8: Credential cache time (item 12)
 
+> **Moved out of this batch (owner, 2026-11-19).** The owner put the vault changes on hold. Task 8 was built and reviewed, and its commits are kept on the branch `vault/copy-time-limit`, together with a draft design for making the sync safe from two processes. Nothing in this task is part of what this plan's branch merges.
+
 **Files:** `core/extstore.py` (`keep_copies`, `memory_only`, `set_keep_copies`, the sync round `_sync_once`, `_loop`, `start`), `core/db.py` (the setting's default beside `vault_keep_copies`, lines 139 and 1230), `ui/vaultsettings.py` (`VaultSection`: `self.copies`, `_copies`, `copies_note`), `ui/settings.py` (`KEY_LABELS`).
 **Test:** `tests/test_extvault.py` and the vault settings UI test (`grep -ln "VaultSection\|set_keep_copies" tests/`).
 
@@ -256,4 +258,4 @@ Wording approved by the owner on 2026-11-19 (it counts as approved wording for t
 
 ## Part 3
 
-### Task 11: OAuth 2.0 for email (item 6) — its own design and plan, approved by the owner before any code
+### Task 11: OAuth 2.0 for email (item 6) — design at `docs/superpowers/specs/2026-11-19-oauth-email-design.md`, approved by the owner before any code
