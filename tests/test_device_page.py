@@ -153,6 +153,20 @@ check("two checks on a chart: no limits", marks() == [0, 0, 0], marks())
 T.pick.set_selected(["CPU", "Reachability", "Events"]); T.pick.changed.emit(); spin(30)
 check("CPU alone on its chart has its limits; the charts without limits have none", marks() == [1, 0, 0], marks())
 
+titles = lambda: sorted(t.opt["title"].get("text", "") for t in T.trends)
+check("each Trends chart says what it measures: one check by name, several joined with commas",
+      titles() == ["CPU", "Events", "Reachability"], titles())
+T.pick.set_selected(["CPU", "Memory", "Events"]); T.pick.changed.emit(); spin(30)
+check("a chart of two checks lists them in the order drawn", "CPU, Memory" in titles(), titles())
+T.pick.set_selected([]); T.pick.changed.emit(); spin(30)
+check("the empty-state chart has no title", len(T.trends) == 1 and not T.trends[0].opt.get("title", {}).get("text"), [t.opt for t in T.trends])
+longs = [("Name of a check that is rather long %d" % i, [(datetime.now() - timedelta(minutes=j), float(j)) for j in range(3)]) for i in range(5)]
+T._draw_trend(T._trend_view(), longs, None)
+big = T.trends[-1].opt
+want = ", ".join(n for n, _p in longs)
+check("five long names: the title is cut to fit, not run off the chart", big["title"]["text"] != want and "…" in big["title"]["text"], big["title"])
+check("and the plot starts below it (and the legend)", big["grid"]["top"] >= 70, big["grid"])
+
 print("== The picker lists shown names")
 dev("pk", "fortinet")
 db.save_run([Result("pk", c, "OK", "", numeric=n) for c, n in (("resources", 3.0), ("certificate", 30.0), ("certificate :443", 20.0),

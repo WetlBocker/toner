@@ -480,7 +480,8 @@ class DeviceView(QDialog):
             warn, fail = limits.get("warn") or None, limits.get("fail") or None
             if limits.get("warn", 0) and limits.get("fail", 0) and limits["warn"] > limits["fail"]:        # lower is worse (uptime): no bands
                 warn = fail = None
-        view.draw(lambda p: chartspec.area(p, stamps, cols, warn=warn, fail=fail, stacked=False))
+        title = fit_text(", ".join(n for n, _pts in series), max(self.width() - 80, 200), 13)      # the chart's width is not laid out yet
+        view.draw(lambda p: chartspec.area(p, stamps, cols, title=title, warn=warn, fail=fail, stacked=False))
 
     def _fill_versions(self):
         self.versions.blockSignals(True)
