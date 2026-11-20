@@ -100,16 +100,21 @@ def signed_in_as(ch):
     return got.get("account") if got else None
 
 
+def said(prov, e):
+    """The approved text for an oidc error other than a refused or cancelled sign-in (its own text names the provider's host)."""
+    if isinstance(e, oidc.Unreachable):
+        return UNREACHABLE.format(provider=prov)
+    return APP_REFUSED.format(provider=prov)    # invalid_client, unauthorized_client, a 401, a wrong tenant: the app's setup
+
+
 def _call(prov, fn):
     """fn's answer, with the provider's errors as the approved texts (oidc.Refused is left to the caller)."""
     try:
         return fn()
     except (oidc.Refused, oidc.Cancelled):
         raise
-    except oidc.Unreachable:
-        raise MailAuthError(UNREACHABLE.format(provider=prov)) from None
-    except oidc.OidcError:              # invalid_client, unauthorized_client, a 401, a wrong tenant: the app's setup
-        raise MailAuthError(APP_REFUSED.format(provider=prov)) from None
+    except oidc.OidcError as e:
+        raise MailAuthError(said(prov, e)) from None
 
 
 def sign_in(ch, secrets, cancelled=None):

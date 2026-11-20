@@ -264,12 +264,10 @@ class ChannelDialog(QDialog):
         """A failed sign-in in the approved words; an oidc error's own text names the provider's host, so is never shown."""
         if isinstance(e, (mailauth.MailAuthError, passvault.Locked)):
             return str(e)
-        if isinstance(e, oidc.Unreachable):
-            return mailauth.UNREACHABLE.format(provider=prov)
-        if isinstance(e, (oidc.Cancelled, oidc.Refused, oidc.BadAnswer)):
+        if isinstance(e, (oidc.Cancelled, oidc.Refused)):  # the person didn't finish, or said no
             return sso_said({"name": prov}, e)
-        if isinstance(e, oidc.OidcError):                   # invalid_client, a wrong tenant: the app's setup
-            return mailauth.APP_REFUSED.format(provider=prov)
+        if isinstance(e, oidc.OidcError):                   # unreachable, or the app's setup (invalid_client, a wrong tenant)
+            return mailauth.said(prov, e)
         raise e
 
     def _as_signed(self, ch):
@@ -368,7 +366,8 @@ class ChannelDialog(QDialog):
             raise error
         ok, detail = result
         a = job.tag
-        if not ok and a and a is self.kept and not mailauth.signed_in_as({"id": a.id}):
+        if not ok and a and a is self.kept and (
+                detail == mailauth.GONE.format(provider=mailauth.provider(self.inputs["auth"][1].currentData()))):
             self._drop()                                     # the provider refused the sign-in made here: it is gone
             self._say(detail)
         (QMessageBox.information if ok else QMessageBox.warning)(

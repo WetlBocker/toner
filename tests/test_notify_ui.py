@@ -36,6 +36,8 @@ class H(BaseHTTPRequestHandler):
     def do_POST(self):
         captured.append({"path": self.path, "body": self.rfile.read(int(self.headers.get("Content-Length", 0)))})
         self.send_response(200); self.end_headers()
+    def do_GET(self):                            # a provider's discovery for a tenant it doesn't know
+        self.send_response(400); self.send_header("Content-Type", "application/json"); self.end_headers(); self.wfile.write(b'{"error":"invalid_tenant"}')
     def log_message(self, *a): pass
 srv = HTTPServer(("127.0.0.1", 0), H); base = f"http://127.0.0.1:{srv.server_address[1]}"
 threading.Thread(target=srv.serve_forever, daemon=True).start()
@@ -225,13 +227,24 @@ check("Google: the typed client secret goes to the sign-in", wait(lambda: SIGN["
       and d.sign_status.text() == SSO_TEXT.format(provider="Google"))
 d.sign_btn.click()
 check("Cancel ends the wait and says nothing more", wait(lambda: d.sign_btn.text() == "Sign in") and d.sign_status.text() == "Not signed in.", d.sign_status.text())
-for err, text in ((oidc.Cancelled("the sign-in was not finished"), SSO_CANCELLED),
-                  (mailauth.MailAuthError(mailauth.NO_KEEPER.format(provider="Google")), mailauth.NO_KEEPER.format(provider="Google")),
-                  (oidc.Unreachable("accounts.example can't be reached"), mailauth.UNREACHABLE.format(provider="Google")),
-                  (oidc.OidcError("accounts.example said invalid_client"), mailauth.APP_REFUSED.format(provider="Google"))):
+def wrong_tenant():          # what discovery raises for a tenant the provider doesn't know (a 400 to the discovery document)
+    oidc._TEST_ALLOW_HTTP = True
+    try:
+        oidc.discover(base + "/no-such-tenant/v2.0")
+    except oidc.OidcError as e:
+        return e
+    finally:
+        oidc._TEST_ALLOW_HTTP = False
+check("a wrong tenant at discovery is a BadAnswer", isinstance(wrong_tenant(), oidc.BadAnswer), repr(wrong_tenant()))
+for what, err, text in (("Cancelled", oidc.Cancelled("the sign-in was not finished"), SSO_CANCELLED),
+                        ("MailAuthError", mailauth.MailAuthError(mailauth.NO_KEEPER.format(provider="Google")), mailauth.NO_KEEPER.format(provider="Google")),
+                        ("Unreachable", oidc.Unreachable("accounts.example can't be reached"), mailauth.UNREACHABLE.format(provider="Google")),
+                        ("invalid_client at the token call, a BadAnswer", oidc.BadAnswer("accounts.example gave an answer that can't be read"),
+                         mailauth.APP_REFUSED.format(provider="Google")),
+                        ("a wrong tenant at discovery", wrong_tenant(), mailauth.APP_REFUSED.format(provider="Google"))):
     SIGN["error"] = err; SIGN["go"].set(); d.sign_btn.click()
-    check(f"a failed sign-in ({type(err).__name__}) shows the approved text", wait(lambda: d.sign_btn.text() == "Sign in" and d.sign_status.text() == text)
-          and "example" not in d.sign_status.text(), d.sign_status.text())
+    check(f"a failed sign-in ({what}) shows the approved text", wait(lambda: d.sign_btn.text() == "Sign in" and d.sign_status.text() == text)
+          and "example" not in d.sign_status.text() and "127.0.0.1" not in d.sign_status.text(), d.sign_status.text())
 SIGN["error"] = None
 d.reject()
 
@@ -345,6 +358,16 @@ check("... no audit line and no notice to the other channels", not audited and n
 check("... and the saved sign-in is untouched", mailauth.signed_in_as(sch) == "first@example.com")
 d.reject()
 mailauth.audit.log, notify.announce, oidc.refresh = real_log, real_announce, real_refresh
+def locked_test(ch, secrets=None, desktop=None):         # the vault locks while the test runs; the failure is not a refusal
+    passvault._key = None; return False, "Locked: The vault is locked."
+key = passvault._key; notify.send_test = locked_test
+d = email_dialog(**FILLED, auth="ms_account"); signed(d); msgs.clear(); d.test()
+wait(lambda: d.test_btn.isEnabled() and msgs); passvault._key = key; notify.send_test = real_send_test
+drafts = lambda: [n for n in mail_refresh() if ".form" in n]
+check("a Send test that fails otherwise under a locked vault keeps the form's sign-in", d.sign_status.text() == "Signed in as mailbox@example.com."
+      and d.sign_btn.text() == "Sign in again" and len(drafts()) == 1, (d.sign_status.text(), drafts()))
+d.reject()
+check("... and Cancel then removes it", drafts() == [], drafts())
 
 print("== the smaller fixes")
 pch = dict(notify.new_channel("email"), **FILLED); d = ST.ChannelDialog(pch, None); HOLD.set(); sent.clear(); notify.send_test = held_send_test; d.test()
