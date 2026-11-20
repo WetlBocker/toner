@@ -116,6 +116,10 @@ em = {**notify.new_channel("email"), "smtp_host": "mail", "from_addr": "a@b.com"
 check("bad recipient address is caught", any("bad address" in p for p in notify.validate(em, {})), notify.validate(em, {}))
 check("email needs host, from, to", len(notify.validate(notify.new_channel("email"), {})) == 3, notify.validate(notify.new_channel("email"), {}))
 check("desktop needs nothing", notify.validate(notify.new_channel("desktop"), {}) == [])
+pre = {k: v for k, v in em.items() if k not in ("auth", "tenant", "client_id")}
+check("an email channel saved before OAuth (no auth) has only today's checks", notify.validate(pre, {}) == notify.validate({**em, "auth": "password"}, {}) and len(notify.validate(pre, {})) == 1)
+check("an OAuth email channel with Security None and no username is refused", {"Signing in with Microsoft 365 or Google needs STARTTLS or SSL/TLS.",
+      "Username is required: the mailbox Toner sends from."} <= set(notify.validate({**em, "auth": "ms_app", "security": "None", "username": ""}, {})))
 
 print("== delivery against local services")
 captured = []
@@ -234,6 +238,12 @@ check("secrets live in the vault, not the settings", "hook-all" not in json.dump
 check("settings export leaves channels out", "notify_channels" not in db.export_settings() and "notify_snooze_until" not in db.export_settings() and "notify_enabled" in db.export_settings())
 ok, sk = db.import_settings({"notify_channels": [], "notify_enabled": False}); check("import cannot overwrite channels", "notify_channels" in sk and "notify_enabled" in ok and len(notify.channels()) == 2)
 notify.delete_secrets(b); check("removing a channel deletes its secret", FakeKeyring.get_password(db.SERVICE, "notify:bbbb2222:url") is None)
+ec = {**notify.new_channel("email"), "id": "eeee3333"}; notify.set_secrets(ec, {"password": "pw-1", "client_secret": "cs-1"})
+notify.delete_secrets(ec); check("removing an email channel deletes its password and client secret (vault locked: no error)",
+                                 not [k for k in FakeKeyring.store if "eeee3333" in k[1]])
+notify.set_secrets(b, {"url": base + "/hook-crit"}); db.set_setting("notify_enabled", True); captured.clear()
+check("announce skips the channel it is told to", notify.announce("Toner", "x", "", "m", "FAIL", skip="aaaa1111") == 1 and [c["path"] for c in captured] == ["/hook-crit"], captured)
+db.set_setting("notify_enabled", False)
 notify.save_channels([a]); db.set_setting("notify_enabled", False)
 
 print(f"\n{PASS} passed, {FAIL} failed")

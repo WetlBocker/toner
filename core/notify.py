@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 import keyring
 import requests
 
-from core import acks, alerts, db, display, maintenance, proxy
+from core import acks, alerts, db, display, mailauth, maintenance, proxy
 from drivers.base import SEVERITY
 from core import quiet
 
@@ -35,8 +35,12 @@ CHANNEL_TYPES = {
               "fields": [("smtp_host", "SMTP server", "text", {"required": True, "placeholder": "smtp.example.com"}),
                          ("smtp_port", "Port", "int", {"default": 587, "range": (1, 65535)}),
                          ("security", "Security", "choice", {"choices": ["STARTTLS", "SSL/TLS", "None"], "default": "STARTTLS"}),
+                         ("auth", "Sign in with", "choice", {"choices": [k for k, _l in mailauth.METHODS], "default": "password"}),
                          ("username", "Username", "text", {"placeholder": "blank if the server needs no login"}),
                          ("password", "Password", "secret", {}),
+                         ("tenant", "Tenant ID", "text", {}),
+                         ("client_id", "Client ID", "text", {}),
+                         ("client_secret", "Client secret", "secret", {"placeholder": "leave blank if the app has none"}),
                          ("from_addr", "From", "text", {"required": True, "placeholder": "toner@example.com"}),
                          ("to_addrs", "To", "text", {"required": True, "placeholder": "a@example.com, b@example.com"}),
                          ("subject_prefix", "Subject prefix", "text", {"default": "[Toner]"})]},
@@ -106,6 +110,8 @@ def delete_secrets(ch):
                 keyring.delete_password(db.SERVICE, _secret_name(ch["id"], key))
             except Exception:
                 quiet.ignored()
+    if ch["type"] == "email":
+        mailauth.sign_out(ch)
 
 
 def validate(ch, secrets):
@@ -133,6 +139,19 @@ def validate(ch, secrets):
     if ch["type"] == "email":
         for field in ("from_addr", "to_addrs"):
             probs += [f"'{a}' is not a valid email address." for a in bad_addresses(ch.get(field, ""))]
+    auth = ch.get("auth") or "password"          # a channel saved before OAuth has none
+    if ch["type"] == "email" and auth != "password":
+        if ch.get("security") not in ("STARTTLS", "SSL/TLS"):
+            probs.append(TLS_NEEDED)
+        if not str(ch.get("username", "")).strip():
+            probs.append("Username is required: the mailbox Toner sends from.")
+        for key, label in (("tenant", "Tenant ID"), ("client_id", "Client ID")):
+            if not str(ch.get(key, "")).strip() and (key == "client_id" or auth.startswith("ms_")):
+                probs.append(f"{label} is required.")
+        if auth == "ms_app" and not str(secrets.get("client_secret") or "").strip():
+            probs.append("Client secret is required.")
+        if mailauth.needs_sign_in(auth) and not mailauth.signed_in_as(ch):
+            probs.append("Sign in first.")
     return probs
 
 
@@ -250,6 +269,9 @@ def _send_email(ch, secrets, msg):
     return _mail(ch, secrets, msg.title, msg.plain())
 
 
+TLS_NEEDED = "Signing in with Microsoft 365 or Google needs STARTTLS or SSL/TLS."
+
+
 def _mail(ch, secrets, subject, body, files=()):
     to = addresses(ch["to_addrs"])
     em = EmailMessage()
@@ -261,17 +283,28 @@ def _mail(ch, secrets, subject, body, files=()):
         with open(path, "rb") as f:
             em.add_attachment(f.read(), maintype=kind.split("/")[0], subtype=kind.split("/")[1], filename=os.path.basename(path))
     port, mode = int(ch.get("smtp_port") or 587), ch.get("security", "STARTTLS")
+    oauth = (ch.get("auth") or "password") != "password"
+    if oauth:                           # never in the clear; direct, not through the proxy (owner decision 4)
+        if mode not in ("STARTTLS", "SSL/TLS"):
+            raise mailauth.MailAuthError(TLS_NEEDED)
+        token = mailauth.access_token(ch, secrets)
     ctx = ssl.create_default_context()
     if mode == "SSL/TLS":
-        smtp = _SMTP_SSL(ch["smtp_host"].strip(), port, timeout=15, context=ctx)
+        smtp = (smtplib.SMTP_SSL if oauth else _SMTP_SSL)(ch["smtp_host"].strip(), port, timeout=15, context=ctx)
     else:
-        smtp = _SMTP(ch["smtp_host"].strip(), port, timeout=15)
+        smtp = (smtplib.SMTP if oauth else _SMTP)(ch["smtp_host"].strip(), port, timeout=15)
     with smtp:
         smtp.ehlo()
         if mode == "STARTTLS":
             smtp.starttls(context=ctx)
             smtp.ehlo()
-        if ch.get("username"):
+        if oauth:
+            xoauth2 = f"user={ch['username'].strip()}\x01auth=Bearer {token}\x01\x01"
+            try:                        # a 334 error challenge is answered with an empty line, as Google's XOAUTH2 page says
+                smtp.auth("XOAUTH2", lambda challenge=None: xoauth2 if challenge is None else "")
+            except smtplib.SMTPAuthenticationError:
+                raise mailauth.MailAuthError(mailauth.SERVER_REFUSED) from None     # its text may echo the token
+        elif ch.get("username"):
             smtp.login(ch["username"], secrets.get("password", ""))
         smtp.send_message(em)
     return f"sent to {len(to)} recipient(s)"
@@ -329,6 +362,8 @@ def deliver(ch, msg, desktop=None, secrets=None, retry_delay=2):
                 time.sleep(retry_delay)
                 continue
             return False, _scrub(f"{type(e).__name__}: {e}", secrets)
+        except mailauth.MailAuthError as e:
+            return False, str(e)
         except Exception as e:
             return False, _scrub(f"{type(e).__name__}: {e}", secrets)
     return False, "unknown error"
@@ -348,6 +383,8 @@ def mail_files(to, subject, body, files):
     secrets = get_secrets(ch)
     try:
         return True, _mail(dict(ch, to_addrs=to), secrets, subject, body, files)
+    except mailauth.MailAuthError as e:
+        return False, str(e)
     except Exception as e:
         return False, _scrub(f"{type(e).__name__}: {e}", secrets)
 
@@ -364,6 +401,7 @@ def process_run(results, ran, scheduled, desktop=None, retry_delay=2):
     """Called after every run. Works out what changed and sends it to each channel that wants it, organization by organization
     (a run in Global can cover several; each uses its own notification settings, and an archived one stays quiet).
     Returns a short text saying what happened (used by tests and the log)."""
+    mailauth.renew_stale()
     groups, where = {}, {}
     here = db.target()
     for r in results:
@@ -426,17 +464,17 @@ def _process_here(results, ran, scheduled, desktop=None, retry_delay=2):
     return f"{delivered}/{attempted} channels"
 
 
-def announce(device, check, value, message, status="WARN", desktop=None):
+def announce(device, check, value, message, status="WARN", desktop=None, skip=None):
     """Tell the notification channels about something that is not a failing check (a computer signed itself up, a
     certificate is running out). Honours Settings > Notifications (on, snoozed, each channel's level) and leaves the alert
-    state alone. Returns how many channels got it."""
+    state alone. skip: the id of a channel not to tell (the one the news is about). Returns how many channels got it."""
     if not db.get_setting("notify_enabled") or snoozed():
         return 0
     e = alerts.Event("new", device, check, status, "OK", value, message)
     org = db.get_setting("report_org").strip()
     sent = 0
     for ch in channels():
-        if ch.get("enabled", True) and wants(ch, e):
+        if ch.get("enabled", True) and (skip is None or ch.get("id") != skip) and wants(ch, e):
             ok, detail = deliver(ch, build_message([e], org, _prefix()), desktop)
             alerts.log_delivery(ch["name"], ok, 1, detail)
             sent += ok

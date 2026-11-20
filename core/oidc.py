@@ -204,11 +204,12 @@ class Tokens:
     claims: dict
 
 
-def _token_call(cfg, form):
-    """POST to the token endpoint; (id_token, access_token, refresh_token) from the answer. invalid_grant is Refused."""
+def _token_call(cfg, form, client_secret=None):
+    """POST to the token endpoint; (id_token, access_token, refresh_token) from the answer. invalid_grant is Refused.
+    client_secret: the caller's (email keeps its own); None reads single sign-on's from the system store."""
     url = discover(cfg["issuer"])["token_endpoint"]
     form = {**form, "client_id": cfg["client_id"]}
-    secret = osstore.get(f"oidc:{cfg['id']}")
+    secret = osstore.get(f"oidc:{cfg['id']}") if client_secret is None else client_secret.encode()
     if secret:
         form["client_secret"] = secret.decode()
     r = _send("POST", url, 10, data=form)
@@ -265,11 +266,13 @@ class _Redirect(http.server.BaseHTTPRequestHandler):
 
 
 class BrowserSignIn:
-    """One sign-in in the person's browser: authorization code with PKCE on a loopback port, forced fresh (prompt=login, max_age=0).
-    The port is bound here (so .url has it); run() or close() frees it."""
+    """One sign-in in the person's browser: authorization code with PKCE on a loopback port, forced fresh (prompt=login, max_age=0)
+    unless fresh=False (email's sign-in, which needs no proof of a sign-in just now). The port is bound here (so .url has it); run()
+    or close() frees it."""
 
-    def __init__(self, cfg, nonce=None, open_url=webbrowser.open, login_hint=None, scopes=SCOPES):
+    def __init__(self, cfg, nonce=None, open_url=webbrowser.open, login_hint=None, scopes=SCOPES, fresh=True, client_secret=None):
         self.cfg, self.open_url = cfg, open_url
+        self.fresh, self.client_secret = fresh, client_secret
         self.nonce = nonce or secrets.token_urlsafe(32)
         self._state = secrets.token_urlsafe(32)
         self._verifier = secrets.token_urlsafe(64)
@@ -284,6 +287,8 @@ class BrowserSignIn:
              "state": self._state,
              "nonce": self.nonce, "prompt": "login", "max_age": "0", "code_challenge_method": "S256",
              "code_challenge": base64.urlsafe_b64encode(hashlib.sha256(self._verifier.encode()).digest()).rstrip(b"=").decode()}
+        if not fresh:
+            del q["prompt"], q["max_age"]
         if login_hint:
             q["login_hint"] = login_hint
         if cfg.get("provider") == "google" and "offline_access" in scopes.split():
@@ -315,17 +320,18 @@ class BrowserSignIn:
         if not hmac.compare_digest(got.get("state", "").encode(), self._state.encode()) or not got.get("code"):
             raise BadAnswer(f"{host}'s answer doesn't match this sign-in")
         id_token, access, refresh_token = _token_call(self.cfg, {"grant_type": "authorization_code", "code": got["code"],
-                                                                 "redirect_uri": self.redirect_uri, "code_verifier": self._verifier})
+                                                                 "redirect_uri": self.redirect_uri, "code_verifier": self._verifier},
+                                                     self.client_secret)
         if not id_token:
             raise BadAnswer(f"{host} gave no ID token")
-        return Tokens(id_token, access, refresh_token, verify_id_token(self.cfg, id_token, self.nonce, max_age=300))
+        return Tokens(id_token, access, refresh_token, verify_id_token(self.cfg, id_token, self.nonce, max_age=300 if self.fresh else None))
 
 
-def refresh(cfg, refresh_token, scopes=SCOPES):
+def refresh(cfg, refresh_token, scopes=SCOPES, client_secret=None):
     """New tokens from a refresh token, asking for the sign-in's scopes again. A revoked one is Refused, no connection is
     Unreachable."""
     id_token, access, new = _token_call(cfg, {"grant_type": "refresh_token", "refresh_token": refresh_token,
-                                              "scope": _scopes(cfg, scopes)})
+                                              "scope": _scopes(cfg, scopes)}, client_secret)
     claims = verify_id_token(cfg, id_token, None, max_age=None) if id_token else {}
     return Tokens(id_token or "", access, new, claims)
 

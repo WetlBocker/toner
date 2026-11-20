@@ -214,6 +214,24 @@ P.revoked.add("rt-1")
 check("a revoked refresh token is Refused", raises(oidc.Refused, oidc.refresh, CFG, "rt-1"))
 P.revoked.clear()
 
+print("== a client secret given by the caller; a sign-in that is not forced fresh (email)")
+SECRETS["oidc:c1"] = b"the-secret"
+oidc.refresh(CFG, "rt-1", client_secret="given-secret")
+check("refresh: a given client secret is sent instead of the stored one", P.token_requests[-1].get("client_secret") == "given-secret")
+oidc.refresh(CFG, "rt-1", client_secret="")
+check("refresh: an empty given secret sends none and does not read the store", "client_secret" not in P.token_requests[-1])
+oidc.refresh(CFG, "rt-1")
+check("refresh: no secret given reads the store as before", P.token_requests[-1].get("client_secret") == "the-secret")
+SECRETS.clear()
+P.id_claims = {"auth_time": None}
+b, tok = flow(fresh=False, client_secret="mail-secret")
+seen = P.authorize_seen[-1]
+check("fresh=False: no prompt=login and no max_age", "prompt" not in seen and "max_age" not in seen, seen)
+check("...an ID token without auth_time is accepted", tok.claims["sub"] == "sub-1" and "auth_time" not in tok.claims)
+check("...and the given secret goes with the code", P.token_requests[-1].get("client_secret") == "mail-secret")
+check("the default still demands a fresh sign-in", raises(oidc.NotFresh, flow))
+P.id_claims = {}
+
 print("== groups, user_from, search_groups")
 oidc.GRAPH = ISS + "/graph"
 check("groups from the claim", oidc.groups(CFG, {"groups": ["a", "b"]}, "at-1") == ("a", "b"))
