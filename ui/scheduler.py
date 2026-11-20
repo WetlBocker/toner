@@ -80,8 +80,8 @@ class _OrgTimers(QObject):
     KIND = ""                                         # "checks" or "backups"
     background_done = Signal(list, list)              # results, device names: for the alerts and to refresh what is shown
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, tab):
+        super().__init__(tab)                         # the section's child: Sign out deletes the window, and this and its timers with it
         self.timer = QTimer(self)
         self.timer.setSingleShot(True)
         self.timer.timeout.connect(self._fire)
@@ -95,6 +95,14 @@ class _OrgTimers(QObject):
 
     def _run_here(self, groups):
         raise NotImplementedError
+
+    def _once(self, ms, fn):
+        """A run on start, on a timer of ours (nothing can stop a QTimer.singleShot): shutdown() stops it and it goes with us."""
+        t = QTimer(self)
+        t.setSingleShot(True)
+        t.timeout.connect(fn)
+        t.timeout.connect(t.deleteLater)
+        t.start(ms)
 
     def apply(self, first=False):
         """(Re)read every organization's settings and arm the timers. first=True on app start, for 'run on start'."""
@@ -113,7 +121,7 @@ class _OrgTimers(QObject):
                     self.timer.start(every)
                     self.next_at = datetime.now() + timedelta(milliseconds=every)
                 if first and on and on_start:
-                    QTimer.singleShot(self.START_DELAY, self._run)
+                    self._once(self.START_DELAY, self._run)
                 continue
             if on:
                 t = QTimer(self)
@@ -122,7 +130,7 @@ class _OrgTimers(QObject):
                 t.start(every)
                 self.others[org] = t
                 if first and on_start:
-                    QTimer.singleShot(self.START_DELAY + 1000, lambda org=org: self._run_other(org))
+                    self._once(self.START_DELAY + 1000, lambda org=org: self._run_other(org))
         self._shown()
 
     def _shown(self):
@@ -173,8 +181,8 @@ class _OrgTimers(QObject):
             t.start(every)
 
     def shutdown(self):
-        for t in (self.timer, *self.others.values()):
-            t.stop()                                  # Sign out leaves Toner open: a timer still armed fires on the window that has gone
+        for t in self.findChildren(QTimer):
+            t.stop()                                  # every timer of ours, a run on start included: none fires once the window closes
         for j in list(self.jobs) + [ScanJob.current]:
             if j is not None:
                 j.wait(30000)
@@ -185,7 +193,7 @@ class Scheduler(_OrgTimers):
     START_DELAY = 2000
 
     def __init__(self, results_tab):
-        super().__init__()
+        super().__init__(results_tab)
         self.results = results_tab
 
     def _settings(self):
@@ -209,7 +217,7 @@ class BackupScheduler(_OrgTimers):
     START_DELAY = 8000
 
     def __init__(self, configs_tab):
-        super().__init__()
+        super().__init__(configs_tab)
         self.configs = configs_tab
 
     def _settings(self):

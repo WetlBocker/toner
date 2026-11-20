@@ -1159,6 +1159,8 @@ class Main(QMainWindow):
         self.automation.shutdown()     # stop a playbook that is still running
         self.sessions.shutdown()       # close every open terminal and finish its log
         self.configs.shutdown()
+        self.results.shutdown()        # a health-check run or a scan still going: it would go on reaching devices after Sign out
+        self.scanning.shutdown()
         self.scheduler.shutdown()
         self.backup_scheduler.shutdown()
         agents.stop()

@@ -536,6 +536,11 @@ class ResultsTab(QWidget):
     def running(self):
         return bool(self.worker and self.worker.isRunning())
 
+    def shutdown(self):
+        """The window is closing: a run still going is waited for, as the Configs section waits for a backup (Sign out closes the data)."""
+        if self.running():
+            self.worker.wait(30000)
+
     def start(self):
         """Run the devices shown (the search box and the funnel decide; with neither, every device)."""
         if not self.find.words() and not self.funnel.active():

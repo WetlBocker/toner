@@ -226,7 +226,8 @@ gset("scan_last", ""); scheduler.start_scan(tab2)
 check("...and the next scheduled scan can run", scheduler.ScanJob.current is not job); scheduler.ScanJob.current.wait(15000)
 waited = []
 scheduler.ScanJob.current = types.SimpleNamespace(wait=lambda ms: waited.append(ms), isRunning=lambda: True)
-scheduler.Scheduler(tab2).shutdown()
+section = QLabel()                                   # a schedule is the child of the section it runs through
+scheduler.Scheduler(section).shutdown()
 check("shutting down waits for a running scheduled scan", waited == [30000], waited)
 scheduler.ScanJob.current = None
 real = ScanningTab(); real.resize(900, 500); real.show(); app.processEvents()

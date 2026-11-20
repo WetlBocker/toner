@@ -525,9 +525,11 @@ check("Sign in as someone else signs out and closes the window", session.state()
 check("...and installs no waiting update (Toner stays open)", applied == [])
 
 print("== Toner stays open: the window goes, the next sign-in gets a new one")
+check("(closing stopped the old window's schedules)", not any(t.isActive() for t in timers), [t.isActive() for t in timers])
 win.deleteLater(); app.sendPostedEvents(None, QEvent.Type.DeferredDelete); app.processEvents()
+import shiboken6
 check("the old window's schedules are no longer armed (they would fire on a window that has gone)",
-      not any(t.isActive() for t in timers), [t.isActive() for t in timers])
+      not any(shiboken6.isValid(t) for t in timers), [shiboken6.isValid(t) for t in timers])    # (they are the schedules' children, and so the window's)
 gone = (len(session._callbacks), len(roles._callbacks), len(AIm._listeners))
 check("the old window's listeners went with it (sign-in changes, roles, the assistant)",
       gone[0] < alive[0] and gone[1] < alive[1] and gone[2] < alive[2], (alive, gone))
