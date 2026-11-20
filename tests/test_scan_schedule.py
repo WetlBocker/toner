@@ -45,7 +45,7 @@ def fake_scan(d):
     seen.append(d["name"])
     if d["name"] == "c3":
         raise RuntimeError("source down")
-    return [Result(d["name"], advisories.SOFTWARE, "OK", "1.0", "m")]
+    return [Result(d["name"], advisories.SOFTWARE, "OK", "1.0", "m", org=d.get("org"))]
 advisories.scan = fake_scan
 cisco = [g for g in db.group_labels() if "isco" in g]
 check("the Cisco group exists", len(cisco) == 1, db.group_labels())
@@ -67,13 +67,47 @@ db.set_setting("scan_groups", [])
 seen.clear(); db.set_setting("scan_last", ""); scansched.run_scheduled_scan(NOW)
 check("no group chosen means every enabled device", sorted(seen) == ["c1", "c3", "f1"], seen)
 
+print("== every organization, one clock")
+from core import orgs
+acme = orgs.create("Acme Charter", "ACME"); beta = orgs.create("Beta Works", "BETA"); gone = orgs.create("Gone Ltd", "GONE")
+for o, names in ((acme, ("a1", "a2")), (beta, ("b1", "b2")), (gone, ("g1", "g2"))):
+    with db.within(o):
+        dev(names[0], "cisco"); dev(names[1], "fortinet")
+orgs.set_archived(gone, True)
+db.set_setting("scan_groups", cisco); db.set_setting("scan_schedule", "daily"); db.set_setting("scan_last", ""); seen.clear()
+db.set_home(acme)                                   # the window shows one organization
+rows = scansched.run_scheduled_scan(NOW)
+check("it covers Global's and every active organization's devices in the chosen group, and skips an archived one", sorted(seen) == ["a1", "b1", "c1", "c3"], seen)
+db.set_home(db.GLOBAL)
+here = {}
+for o in (db.GLOBAL, acme, beta, gone):
+    with db.within(o):
+        here[o] = sorted({r["device"] for r in db.connect().execute("SELECT device FROM scan_results")})
+check("each row is saved in the file of the organization its device belongs to", here[db.GLOBAL] == ["c1", "c3", "f1"] and here[acme] == ["a1"] and here[beta] == ["b1"] and here[gone] == [], here)
+check("scan_last is Global's, not the organization's", db.get_setting("scan_last") == NOW.strftime(F) and "scan_last" not in db.ORG_LOCAL)
+with db.within(acme):
+    check("...and an organization reads the same one", db.get_setting("scan_last") == NOW.strftime(F))
+n = db.connect().execute("SELECT COUNT(*) FROM audit WHERE action='scan'").fetchone()[0]
+check("one audit line for the whole scan, in Global", n >= 1 and db.connect().execute("SELECT detail FROM audit WHERE action='scan' ORDER BY id DESC LIMIT 1").fetchone()[0] == "4 device(s) (service)")
+seen.clear(); db.set_setting("scan_last", ""); db.set_setting("scan_groups", ["Vendor: Gone"])
+check("groups that exist nowhere scan nothing", scansched.run_scheduled_scan(NOW) == [] and not seen)
+db.set_setting("scan_groups", cisco)
+
+real_all = advisories.scan_all
+def boom(devs, **k): raise RuntimeError("everything down")
+advisories.scan_all = boom; db.set_setting("scan_last", "")
+try: scansched.run_scheduled_scan(NOW); raised = False
+except RuntimeError: raised = True
+advisories.scan_all = real_all
+check("a scan that fails outright has stored scan_last and does not start again a minute later", raised and db.get_setting("scan_last") == NOW.strftime(F) and not scansched.scan_due(NOW + timedelta(minutes=1)))
+
 print("== the service's tick")
 db.set_setting("scan_groups", cisco); db.set_setting("scan_last", ""); seen.clear()
 d = service.Daemon(log=lambda m: None)
 did = d.tick(NOW)
-check("the owning process runs it in its loop", ("scan", 2) in did and sorted(seen) == ["c1", "c3"], (did, seen))
+check("the owning process runs it in its loop, every organization at once", ("scan", 4) in did and sorted(seen) == ["a1", "b1", "c1", "c3"], (did, seen))
 d.tick(NOW + timedelta(minutes=1))
-check("and not again a minute later", sorted(seen) == ["c1", "c3"], seen)
+check("and not again a minute later", len(seen) == 4, seen)
 orig = service.owns_schedule; service.owns_schedule = lambda: False
 db.set_setting("scan_last", ""); seen.clear(); did = d.tick(NOW + timedelta(days=2))
 service.owns_schedule = orig
@@ -83,17 +117,33 @@ print("== the window")
 from PySide6.QtWidgets import QApplication, QLabel
 app = QApplication([])
 import app as A
-started = []
-tab = types.SimpleNamespace(busy=False, running=lambda: tab.busy, start_scheduled=lambda groups: started.append(groups))
-win = types.SimpleNamespace(scanning=tab)
-db.set_setting("scan_last", ""); A.Main.do_housekeeping(win)
-check("the one-minute hook starts it on the Scanning page's worker with the chosen groups", started == [cisco], started)
-A.Main.do_housekeeping(win)
-check("a minute later it does not start again", len(started) == 1)
-db.set_setting("scan_last", ""); tab.busy = True; A.Main.do_housekeeping(win)
-check("not while a scan is already running (it waits, nothing is marked)", len(started) == 1 and db.get_setting("scan_last") == "")
-tab.busy = False; service.owns_schedule = lambda: False; A.Main.do_housekeeping(win); service.owns_schedule = orig
-check("not when the service owns the schedule", len(started) == 1)
+from ui import scheduler
+import threading
+reloaded = []
+tab = types.SimpleNamespace(busy=False, running=lambda: tab.busy, reload=lambda: reloaded.append(1))
+db.set_setting("scan_last", ""); seen.clear(); db.set_home(acme)
+held = threading.Event(); orig_run = scheduler.ScanJob.run
+scheduler.ScanJob.run = lambda self: (held.wait(10), orig_run(self))[1]            # hold the thread's work so the test can look while it runs
+main = threading.get_ident()
+scheduler.start_scan(tab)
+job = scheduler.ScanJob.current
+check("the window shows Acme and starts a scan on its own thread, which is held here, so the UI thread was not used", job is not None and job.isRunning() and not seen, (job, seen))
+check("scan_last is stored before the network work", db.get_setting("scan_last") != "" and not seen)
+db.set_setting("scan_last", ""); scheduler.start_scan(tab)
+check("not while the previous scheduled scan is still running", scheduler.ScanJob.current is job and db.get_setting("scan_last") == "")
+held.set(); job.wait(15000); app.processEvents()
+check("it scans every organization, from the thread", sorted(seen) == ["a1", "b1", "c1", "c3"], seen)
+check("the Scanning page reloads its latest scan when it ends", reloaded == [1], reloaded)
+scheduler.ScanJob.run = orig_run
+db.set_setting("scan_last", ""); tab.busy = True; n0 = len(seen); scheduler.start_scan(tab)
+check("not while a manual scan is running (nothing stored)", len(seen) == n0 and db.get_setting("scan_last") == "")
+tab.busy = False; service.owns_schedule = lambda: False; scheduler.start_scan(tab); service.owns_schedule = orig
+check("not when the service owns the schedule", len(seen) == n0 and db.get_setting("scan_last") == "")
+scheduler.start_scan(tab); scheduler.ScanJob.current.wait(15000); app.processEvents(); n1 = len(seen)
+scheduler.start_scan(tab)
+check("a minute later nothing starts again", len(seen) == n1 and not scheduler.ScanJob.current.isRunning())
+db.set_home(db.GLOBAL)
+check("the housekeeping hook calls it", "scheduler.start_scan(self.scanning)" in open(A.__file__).read())
 
 print("== Settings > Scanning")
 from ui.settings_pages.scanning import ScanningPage

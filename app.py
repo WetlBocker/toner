@@ -9,7 +9,7 @@ from pathlib import Path
 from PySide6.QtCore import QEvent, QTimer, Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import QApplication, QMainWindow, QMenu, QMessageBox, QSplitter, QSystemTrayIcon
-from core import agents, audit, checks, db, demarc, dircheck, display, legacyssh, notify, paths, perms, reports, roles, scansched, service, session, sessionlog, sessions, trends, trust, tunnel, updates
+from core import agents, audit, checks, db, demarc, dircheck, display, legacyssh, notify, paths, perms, reports, roles, session, sessionlog, sessions, trends, trust, tunnel, updates
 from ui import theme
 from ui.about import AboutTab
 from ui.configs import ConfigsTab
@@ -18,7 +18,7 @@ from ui.device_view import DeviceView
 from ui.history import HistoryTab
 from ui.nav import NavStack
 from ui.inventory import InventoryTab
-from ui import otpprompt
+from ui import otpprompt, scheduler
 from ui.widgets import while_alive
 from ui.notifier import Notifier
 from ui.palette import CommandPalette
@@ -985,10 +985,7 @@ class Main(QMainWindow):
                 if path:
                     log.info("Trend report saved to %s", path)
                     audit.log("trend report made", path)
-            if scansched.scan_due() and service.owns_schedule() and not self.scanning.running():
-                devices = scansched.begin()
-                if devices:
-                    self.scanning.start_scheduled(service._groups_alive(db.get_setting("scan_groups")))
+            scheduler.start_scan(self.scanning)
             if agents.running():
                 agents.check_cert()
         except Exception:

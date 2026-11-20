@@ -1259,7 +1259,7 @@ GLOBAL_ONLY = {"credential_manager_carried", "rules_key", "rules_signed", "windo
                "signin_session_hours", "signin_idle_minutes", "helper_off_notice"}
 # (agent sign-up, its interval and whether installed agents are told it are each organization's own: Settings > Agents)
 # ...and these belong to one organization's own lists, so an organization never borrows Global's:
-ORG_LOCAL = {"acks", "inventory_expanded", "sessions_expanded", "client_scope", "trend_last", "scan_last", "notify_snooze_until", "firmware_source"}
+ORG_LOCAL = {"acks", "inventory_expanded", "sessions_expanded", "client_scope", "trend_last", "notify_snooze_until", "firmware_source"}
 
 _settings = {}                      # file -> (read at, {key: raw json})
 _settings_lock = threading.Lock()

@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal
 
-from core import db
+from core import db, scansched
 
 
 def _files():
@@ -43,6 +43,30 @@ class _Background(QThread):
             devices = service.own_devices(self.groups)
             results = fn(self.groups, do_notify=False, own=True) if devices else []
         self.finished_run.emit(results, [d["name"] for d in devices])
+
+
+class ScanJob(QThread):
+    """The scheduled scan of every organization (Settings > Scanning), on a thread of its own: the Scanning page shows one organization."""
+    current = None
+
+    def __init__(self, devices):
+        super().__init__()
+        self.devices = devices
+
+    def run(self):
+        scansched.scan(self.devices)
+
+
+def start_scan(scanning_tab):
+    """Once a minute: start the scheduled scan when it is due, this process owns the schedule, and neither a manual scan nor the
+    last scheduled one is still running. The Scanning page shows the new latest scan when it ends."""
+    if not scansched.scan_due() or not _ours() or scanning_tab.running() or (ScanJob.current and ScanJob.current.isRunning()):
+        return
+    devices = scansched.begin()
+    if devices:
+        ScanJob.current = job = ScanJob(devices)
+        job.finished.connect(scanning_tab.reload)
+        job.start()
 
 
 class _OrgTimers(QObject):
