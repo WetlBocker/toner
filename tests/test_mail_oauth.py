@@ -271,6 +271,30 @@ check("invalid_grant with a newer token in the vault: one retry with it, sent", 
       and P.token_requests[-1]["refresh_token"] == "rt-newer-2222", (d, P.token_requests[n:]))
 check("...nothing removed, nobody told", stored(MS) is not None and not hooked)
 
+print("== a sign-in removed or replaced while its token call runs stays so")
+DRAFT = chan("ms_account", "c-ms.form1", draft=True)
+for what, ch, during in (("a form's draft removed (Save, Cancel or an edit)", DRAFT, lambda f: passvault.remove(mailauth.PREFIX + DRAFT["id"])),
+                         ("a channel's sign-in removed (Remove)", MS, lambda f: passvault.remove(mailauth.PREFIX + MS["id"]))):
+    plant(ch, RT1); STATE["hook"] = during
+    okd, d = send(ch)
+    check(f"{what} during the send's token call is not put back", okd and stored(ch) is None, (d, bool(stored(ch))))
+plant(MS, RT1); STATE["hook"] = lambda f: plant(MS, "rt-replaced-8888", account="new@example.com")
+okd, d = send(MS)
+STATE["hook"] = None
+check("a sign-in replaced during the send's token call (Sign in again, then Save) keeps the replacement",
+      okd and stored(MS)["refresh_token"] == "rt-replaced-8888" and stored(MS)["account"] == "new@example.com", (d, (stored(MS) or {}).get("account")))
+
+print("== a locked vault")
+notify.save_channels([MS, HOOK]); plant(MS, RT1)
+key = passvault._key; passvault._key = None
+okd, d = send(MS)
+okf, df = notify.mail_files("boss@example.com", "Weekly report", "Attached.", [])
+check("a windowless send says the vault is locked, not 'sign in'", not okd and d == "Locked: The vault is locked." and not leaks([d], SECRETS), d)
+check("...so does a scheduled report's mail", not okf and df == "Locked: The vault is locked." and not leaks([df], SECRETS), df)
+check("...and signed_in_as names nobody", mailauth.signed_in_as(MS) is None)
+passvault._key = key
+check("...and the sign-in is still there once it opens", stored(MS)["refresh_token"] == RT1)
+
 print("== the provider can't be reached")
 plant(MS, RT1)
 P.force = 503
@@ -447,17 +471,36 @@ except Exception as ex:
     raised = ex
 notify.channels = real_channels
 check("renew_stale never raises (channels can't be read)", raised is None, raised)
-notify.save_channels([{**OLD, "enabled": False}, HOOK]); plant(OLD, RT1, age_days=8); n = len(P.token_requests)
+notify.save_channels([chan("password", "c-pw"), {**OLD, "enabled": False}, HOOK]); plant(OLD, RT1, age_days=8); n = len(P.token_requests)
 mailauth.renew_stale()
 check("a disabled channel's sign-in is not renewed", len(P.token_requests) == n)
+notify.save_channels([{**OLD, "enabled": False}, chan("password", "c-pw"), HOOK]); n = len(P.token_requests)
+mailauth.renew_stale()
+check("...unless it is the first Email channel, which the scheduled reports still mail through", len(P.token_requests) == n + 1
+      and time.time() - stored(OLD)["renewed"] < 60, len(P.token_requests) - n)
+from core import orgs
+arc = orgs.create("Archived Co", "ARC"); ARC = chan("ms_account", "c-arch")
+with db.within(arc):
+    notify.save_channels([ARC])
+plant(ARC, RT1, age_days=8); orgs.set_archived(arc, True); n = len(P.token_requests)
+mailauth.renew_stale()
+check("an archived organization's channels are not renewed", len(P.token_requests) == n and time.time() - stored(ARC)["renewed"] > 7 * 86400, len(P.token_requests) - n)
+orgs.set_archived(arc, False)
+mailauth.renew_stale()
+check("...and are once it is back", len(P.token_requests) == n + 1 and time.time() - stored(ARC)["renewed"] < 60, len(P.token_requests) - n)
 notify.save_channels([OLD, HOOK]); plant(OLD, RT1)
-passvault.put(mailauth.PREFIX + "c-old.form1", json.dumps({"refresh_token": "rt-draft-9999", "account": "d@example.com", "renewed": time.time() - 9 * 86400}))
+draft = lambda n_, **kw: passvault.put(mailauth.PREFIX + n_, json.dumps({"refresh_token": "rt-draft-9999", "account": "d@example.com", **kw}))
+draft("c-old.form1", renewed=time.time() - 9 * 86400); draft("c-old.form2", renewed=time.time() - 25 * 3600); draft("c-old.form3")
+draft("c-old.form4", renewed="not a time"); draft("c-old.form5", renewed=time.time() - 3600)
+plant(chan("ms_account", "c-orphan"), RT1, age_days=30)
 n = len(P.token_requests)
 mailauth.renew_stale()
-check("a form's draft sign-in (<prefix><id>.form<n>) is not renewed or changed", len(P.token_requests) == n
-      and json.loads(passvault.get(mailauth.PREFIX + "c-old.form1"))["refresh_token"] == "rt-draft-9999")
-check("...and is not the channel's sign-in", mailauth.signed_in_as(OLD) == "mailbox@example.com")
-passvault.remove(mailauth.PREFIX + "c-old.form1")
+left = [x[len(mailauth.PREFIX):] for x in passvault.names() if x.startswith(mailauth.PREFIX + "c-o")]
+check("form drafts more than a day old, or with no readable time, are removed, never renewed", len(P.token_requests) == n
+      and not {"c-old.form1", "c-old.form2", "c-old.form3", "c-old.form4"} & set(left), left)
+check("...a recent draft is left as it was", "c-old.form5" in left and json.loads(passvault.get(mailauth.PREFIX + "c-old.form5"))["refresh_token"] == "rt-draft-9999", left)
+check("...and a channel's own sign-in is never swept, however old", "c-orphan" in left and mailauth.signed_in_as(OLD) == "mailbox@example.com", left)
+passvault.remove(mailauth.PREFIX + "c-old.form5"); passvault.remove(mailauth.PREFIX + "c-orphan")
 
 print("== sign_in for a method with no browser sign-in")
 for auth in ("ms_app", "password"):
