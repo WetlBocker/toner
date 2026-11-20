@@ -244,6 +244,10 @@ print("-- stopping, and failing to start")
 pg.check.setChecked(True)
 FB.hold = threading.Event(); pg.start()
 check("Stop is on while it runs and Run is off", wait(lambda: "TASK" in pg.output.toPlainText() or "PLAY" in pg.output.toPlainText()) and pg.stop.isEnabled() and not pg.go.isEnabled())
+m = pg._menu(pg.listing.visualItemRect(pg.listing.item(0)).center())       # the playbook's right-click menu while that run is held
+check("...and the menu's run entry is off as the Run button is, while Edit follows its button",
+      pg.running() and not m.actions()[0].isEnabled() and m.actions()[1].isEnabled() == pg.edit_btn.isEnabled(),
+      (pg.running(), pg.go.isEnabled(), [a.isEnabled() for a in m.actions()]))
 pg.stop.click()
 check("Stop ends it and says it was cancelled", wait(lambda: pg.go.isEnabled()) and "cancelled" in pg.output.toPlainText() and pg.go.isEnabled() and not pg.stop.isEnabled())
 FB.hold = None
