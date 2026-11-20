@@ -87,6 +87,13 @@ check("each row is saved in the file of the organization its device belongs to",
 check("scan_last is Global's, not the organization's", db.get_setting("scan_last") == NOW.strftime(F) and "scan_last" not in db.ORG_LOCAL)
 with db.within(acme):
     check("...and an organization reads the same one", db.get_setting("scan_last") == NOW.strftime(F))
+check("the schedule, its groups and its clock are Global-only, as scan_enabled is", {"scan_schedule", "scan_groups", "scan_last"} <= db.GLOBAL_ONLY)
+db.set_home(acme); db.set_setting("scan_schedule", "weekly"); db.set_home(db.GLOBAL)
+with db.within(acme), db.connect() as c:
+    stray = c.execute("SELECT value FROM settings WHERE key = 'scan_schedule'").fetchone()
+check("...so one written while an organization is on screen (an imported settings file) is Global's, the one the scan reads",
+      stray is None and db.get_setting("scan_schedule") == "weekly", stray)
+db.set_setting("scan_schedule", "daily")
 n = db.connect().execute("SELECT COUNT(*) FROM audit WHERE action='scan'").fetchone()[0]
 check("one audit line for the whole scan, in Global", n >= 1 and db.connect().execute("SELECT detail FROM audit WHERE action='scan' ORDER BY id DESC LIMIT 1").fetchone()[0] == "4 device(s) (service)")
 seen.clear(); db.set_setting("scan_last", ""); db.set_setting("scan_groups", ["Vendor: Gone"])
@@ -234,3 +241,4 @@ while not real.results and time.time() - t0 < 10: app.processEvents(); time.slee
 check("the real Scanning page shows the new latest scan when the job ends", empty == 0 and real.stored and any(r.device.split("@@")[0] == "sw" for r in real.results), (empty, real.stored, [r.device for r in real.results][:4]))
 db.set_home(db.GLOBAL)
 print(f"\n{ok} passed, {bad} failed")
+sys.exit(1 if bad else 0)
