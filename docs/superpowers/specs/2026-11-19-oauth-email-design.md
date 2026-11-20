@@ -1,6 +1,6 @@
 # OAuth 2.0 for email: design
 
-**Status:** draft for the owner's approval (2026-11-19). No code is written from this until it is approved, including the wording in section 5.
+**Status:** approved by the owner on 2026-11-19, with these decisions on section 7: (1) both providers in the first version, Microsoft app-only included; (2) no Google service account; (3) no HTTP mail APIs for now; (4) for a channel that signs in with Microsoft 365 or Google, the token calls and the mail itself connect directly and ignore Toner's proxy settings (this replaces what sections 2 and 3 say about the mail using the proxy; Password channels are unchanged); (5) deleting an organization also removes its channels' saved secrets, in this change. The wording in section 5 is approved. Plan: `docs/superpowers/plans/2026-11-19-oauth-email.md`.
 
 **Request (Adjustments 2026-11-19, item 6):** "Due to increased security requirements, OAuth2.0 needs to be supported to be able to configure email notifications and to email reports. Please ensure Toner can be configured with OAuth as required by both Exchange and Gmail. This is an addition to standard SMTP not a replacement."
 
