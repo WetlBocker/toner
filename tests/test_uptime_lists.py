@@ -68,5 +68,25 @@ db.init(); db.init()
 check("a later untick survives the next starts", lists(0)[0]["pve-old"] == ["reachability", "nodes"], lists(0)[0]["pve-old"])
 check("the files are at the newest version", db.schema_version() == db.SCHEMA_VERSION and db.SCHEMA_VERSION >= 18)
 
+# a file stamped past step 4 whose devices table the start-up just created without checkopts (test_demarc's 1.6.1 file: only orgs, version 6)
+import sqlite3
+old = os.path.join(SP, "noopts%d.db" % int(time.time() * 1000))
+c = sqlite3.connect(old)
+c.executescript("CREATE TABLE orgs (id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL COLLATE NOCASE, code TEXT UNIQUE NOT NULL COLLATE NOCASE, "
+                "colour TEXT DEFAULT '', archived INTEGER DEFAULT 0, created TEXT DEFAULT '');")
+c.execute("PRAGMA user_version = 6"); c.commit(); c.close()
+saved = os.environ["NETCHECK_DB"]; os.environ["NETCHECK_DB"] = old
+db._wal_set.clear(); db.forget_orgs()
+try:
+    db.init(); db.forget_orgs()
+    with db.connect() as c:
+        cols = {r[1] for r in c.execute("PRAGMA table_info(devices)")}
+    check("a file that skipped step 4 opens, and its devices table has checkopts", "checkopts" in cols and db.schema_version() == db.SCHEMA_VERSION, cols)
+except Exception as e:
+    check("a file that skipped step 4 opens, and its devices table has checkopts", False, repr(e))
+finally:
+    os.environ["NETCHECK_DB"] = saved
+    db._wal_set.clear(); db.forget_orgs(); db._forget_settings(); db._invalidate_folders()
+
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

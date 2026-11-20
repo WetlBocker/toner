@@ -775,6 +775,7 @@ def _m18_uptime_lists(c):
     """Proxmox and Mist have their own Uptime check now (it came with `nodes` and `devices` before): a device's own list of checks and a
     monitoring profile's list saved before that, with nodes (Proxmox) or devices (Mist) in it, gain `uptime`, so the row stays. Runs once
     per file, so a later untick stays."""
+    _m4_device_checks(c)                                 # a file stamped past step 4 whose devices table was just created lacks the column
     follows = {"proxmox": "nodes", "mist": "devices"}
     def gain(vendor, checks):
         return isinstance(checks, list) and follows.get(vendor) in checks and "uptime" not in checks
