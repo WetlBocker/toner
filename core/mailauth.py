@@ -138,12 +138,13 @@ def sign_out(ch):
 
 
 def _refused(ch, prov, stored):
-    """The provider refused the sign-in for good: remove it, and (only the process that removed it) say so once."""
+    """The provider refused the sign-in for good: remove it, and (only the process that removed it) say so once. A sign-in the
+    channel's form made and has not saved (ch["draft"], ui/settings_pages/notifications.py) is only removed: no channel lost one."""
     try:
         had = passvault.remove(_name(ch))
     except Exception:
         had = False
-    if had:
+    if had and not ch.get("draft"):
         audit.log("email sign-in refused", f"{ch['name']}, {prov}, {stored.get('account', '')}")
         try:
             from core import notify      # notify imports this module

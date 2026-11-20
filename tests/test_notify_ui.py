@@ -147,6 +147,8 @@ def mail_refresh(): return sorted(n for n in passvault.names() if n.startswith(m
 SIGN = {"go": threading.Event(), "account": "mailbox@example.com", "error": None, "calls": []}
 def fake_sign_in(ch, secrets, cancelled=None):          # stands in for the browser sign-in; stores as the real one does
     SIGN["calls"].append((dict(ch), dict(secrets), threading.current_thread()))
+    if SIGN.get("stubborn"):                     # discovery or the token exchange: deaf to Cancel for a while, then it stores
+        time.sleep(SIGN["stubborn"]); mailauth._store(ch, "rt-late", "late@example.com"); return "late@example.com"
     end = time.time() + 5                                # (run on the window's thread by mistake, it fails instead of hanging)
     while not SIGN["go"].wait(0.01):
         if cancelled.is_set() or time.time() > end: raise oidc.Cancelled("the sign-in was not finished")
@@ -186,7 +188,16 @@ for auth, extra in EXPECT.items():
     check(f"{auth}: only its fields show", shown(d) == COMMON | extra, sorted(shown(d) ^ (COMMON | extra)))
     check(f"{auth}: its help under the form", (d.method_help.text() == HELP[auth] and not d.method_help.isHidden())
           if auth in HELP else d.method_help.isHidden(), d.method_help.text())
-check("the client secret's placeholder", d.inputs["client_secret"][1].placeholderText() == "leave blank if the app has none")
+SAVED = "saved in the vault - leave blank to keep it"
+sch_ = dict(notify.new_channel("email"), id="cs000001"); FakeKeyring.set_password(db.SERVICE, "notify:cs000001:client_secret", "cs-made-up-0000")
+for label, dd, want in (("none stored", d, {"google_account": "leave blank if the app has none", "ms_app": ""}),
+                        ("one stored", ST.ChannelDialog(sch_, None), {"google_account": SAVED, "ms_app": SAVED})):
+    for auth in ("google_account", "ms_app", "google_account"):
+        dd.inputs["auth"][1].setCurrentIndex(dd.inputs["auth"][1].findData(auth))
+        got = dd.inputs["client_secret"][1].placeholderText()
+        check(f"the client secret's placeholder, {label}, {auth}", got == want[auth], got)
+    dd is d or dd.reject()
+FakeKeyring.store.pop((db.SERVICE, "notify:cs000001:client_secret"))
 check("the channel's help", notify.CHANNEL_TYPES["email"]["help"] == "Sent through your mail server. Passwords and sign-ins are kept in Toner's vault.")
 d.reject()
 
@@ -279,6 +290,108 @@ AutoDialog.script = None
 N.table.selectRow(row(gch["id"])); answer["q"] = QMessageBox.StandardButton.Yes; N.remove()
 check("removing it deletes its sign-in and client secret", mailauth.PREFIX + gch["id"] not in mail_refresh()
       and FakeKeyring.get_password(db.SERVICE, f"notify:{gch['id']}:client_secret") is None)
+
+print("== a slow provider never holds the window")
+import shiboken6
+raised = []
+sys.excepthook = lambda *a: raised.append(a[1])
+def stubborn(d, secs=1.5):
+    SIGN["stubborn"] = secs; SIGN["calls"].clear(); d.sign_btn.click(); wait(lambda: SIGN["calls"])
+def landed():                                       # the fake has ended and its result has been posted back
+    time.sleep(SIGN["stubborn"] + 0.3); wait(lambda: False, 0.3); SIGN["stubborn"] = 0
+def took(fn):
+    t0 = time.time(); fn(); return time.time() - t0
+for what, out in (("pressing the button again", lambda d: d.sign_btn.click()), ("Cancel", lambda d: d.reject()),
+                  ("the window's close button", lambda d: d.close())):
+    d = email_dialog(**FILLED, auth="ms_account"); d.show(); stubborn(d); t = took(lambda: out(d))
+    back = (d.sign_btn.text(), d.sign_status.text()); landed()
+    check(f"{what} during a slow sign-in returns at once; when it lands late nothing is kept and nothing raises", t < 0.3
+          and mail_refresh() == [] and not raised and (what != "pressing the button again" or back == ("Sign in", "Not signed in."))
+          and (what == "pressing the button again" or d.isHidden()), (t, back, mail_refresh(), raised))
+    d.close()
+d = email_dialog(**FILLED, auth="ms_account"); stubborn(d); shiboken6.delete(d); del d; landed()
+check("the dialog destroyed during a slow sign-in: nothing kept, nothing raises", mail_refresh() == [] and not raised, (mail_refresh(), raised))
+d = email_dialog(**FILLED, auth="ms_account"); stubborn(d); msgs.clear(); t = took(d.accept)
+check("Save during a sign-in, none before it: at once, Sign in first.", t < 0.3 and d.result_ch is None and msgs and "Sign in first." in msgs[-1][1], (t, msgs))
+d.reject(); landed(); check("... and the late one is not kept", mail_refresh() == [] and not raised, mail_refresh())
+AutoDialog.fill, AutoDialog.fill_meta = {}, {"name": "Slow mail"}
+AutoDialog.script = lambda d: (fill(d, **FILLED, auth="ms_account"), signed(d, "first@example.com"), stubborn(d))
+t = took(lambda: N.add_channel("email")); sch = notify.channels()[-1]; landed()
+check("Save during Sign in again after a sign-in made here: at once, that one is saved, the unfinished one is not", t < 1
+      and mailauth.signed_in_as(sch) == "first@example.com" and mail_refresh() == [mailauth.PREFIX + sch["id"]] and not raised, (t, mail_refresh()))
+AutoDialog.script = lambda d: stubborn(d)
+N.table.selectRow(row(sch["id"])); t = took(N.edit); landed()
+check("Save during Sign in again on a saved channel: at once, the saved sign-in is kept", t < 1
+      and mailauth.signed_in_as(sch) == "first@example.com" and mail_refresh() == [mailauth.PREFIX + sch["id"]] and not raised, (t, mail_refresh()))
+HOLD.clear(); sent.clear(); notify.send_test = held_send_test
+d = ST.ChannelDialog(notify.channels()[0], None); d.test(); wait(lambda: sent); shiboken6.delete(d); del d
+P2 = ST.NotificationsPage(); P2.reload_channels(); P2.table.selectRow(0); P2.test(); wait(lambda: len(sent) == 2); shiboken6.delete(P2); del P2
+HOLD.set(); wait(lambda: False, 0.5)
+check("the dialog and the page destroyed during Send test: nothing raises", len(sent) == 2 and not raised, raised)
+notify.send_test = real_send_test
+
+print("== a refused Send test on a sign-in made in the form")
+audited, announced = [], []
+real_log, real_announce, real_refresh = mailauth.audit.log, notify.announce, oidc.refresh
+mailauth.audit.log = lambda *a, **k: audited.append(a)
+notify.announce = lambda *a, **k: announced.append(a) or 0
+def refuse(*a, **k): raise oidc.Refused("login.example refused the refresh token")
+oidc.refresh = refuse
+d = ST.ChannelDialog(sch, None); signed(d, "other@example.com"); msgs.clear(); d.test()
+check("the form's sign-in refused: removed, and the form says Not signed in with the approved text", wait(lambda: d.test_btn.isEnabled() and msgs)
+      and d.sign_btn.text() == "Sign in" and d.sign_status.text() == mailauth.GONE.format(provider="Microsoft 365")
+      and mail_refresh() == [mailauth.PREFIX + sch["id"]], (d.sign_status.text(), mail_refresh(), msgs))
+check("... no audit line and no notice to the other channels", not audited and not announced, (audited, announced))
+check("... and the saved sign-in is untouched", mailauth.signed_in_as(sch) == "first@example.com")
+d.reject()
+mailauth.audit.log, notify.announce, oidc.refresh = real_log, real_announce, real_refresh
+
+print("== the smaller fixes")
+pch = dict(notify.new_channel("email"), **FILLED); d = ST.ChannelDialog(pch, None); HOLD.set(); sent.clear(); notify.send_test = held_send_test; d.test()
+check("a password channel's Send test keeps its own id", wait(lambda: sent and d.test_btn.isEnabled()) and sent[-1]["id"] == pch["id"], sent)
+notify.send_test = real_send_test; d.reject()
+for auth, missing, label in (("google_account", "client_id", "Client ID"), ("ms_account", "client_id", "Client ID"), ("ms_account", "tenant", "Tenant ID")):
+    d = email_dialog(**dict(FILLED, **{missing: ""}), auth=auth); SIGN["calls"].clear(); msgs.clear(); d.sign_btn.click(); wait(lambda: False, 0.2)
+    check(f"Sign in with no {label} ({auth}): the required-field message, nothing contacted", msgs and msgs[-1][1] == f"• {label} is required."
+          and not SIGN["calls"] and d.sign_btn.text() == "Sign in", (msgs, SIGN["calls"]))
+    d.reject()
+d = email_dialog(**FILLED, auth="ms_account"); d.show(); wait(lambda: False, 0.2)
+check("the Sign in row is as tall as its button", d.sign_row.height() >= d.sign_btn.sizeHint().height(), (d.sign_row.height(), d.sign_btn.sizeHint()))
+d.reject()
+
+grab = {}
+real_put = passvault.put
+def broken(name, secret): raise passvault.Locked("The vault is locked.")
+AutoDialog.fill_meta = {"name": "Locked mail"}
+AutoDialog.script = lambda d: (grab.__setitem__("d", d), fill(d, **FILLED, auth="google_account", client_secret="cs-made-up-0006"), signed(d),
+                               setattr(passvault, "put", broken))
+n_before = len(notify.channels()); msgs.clear(); N.add_channel("email"); passvault.put = real_put
+lid = grab["d"].ch["id"]
+check("a vault that fails at Save: nothing saved, the error shown, the dialog still open", len(notify.channels()) == n_before
+      and msgs and "The vault is locked." in msgs[-1][1] and FakeKeyring.get_password(db.SERVICE, f"notify:{lid}:client_secret") is None
+      and mailauth.signed_in_as({"id": lid}) is None and grab["d"].result_ch is None, (msgs, mail_refresh()))
+grab["d"].reject()
+check("... and cancelling it then leaves nothing", not [n for n in mail_refresh() if lid in n], mail_refresh())
+
+secret = lambda c, k: FakeKeyring.get_password(db.SERVICE, f"notify:{c['id']}:{k}")
+AutoDialog.fill_meta = {"name": "Switching mail"}
+AutoDialog.script = lambda d: fill(d, **FILLED, password="pw-made-up-0007")
+N.add_channel("email"); wch = notify.channels()[-1]
+d = ST.ChannelDialog(wch, None); fill(d, auth="google_account", client_secret="cs-made-up-0008"); d.reject()
+check("switching the method and cancelling removes nothing", secret(wch, "password") == "pw-made-up-0007")
+AutoDialog.script = lambda d: (fill(d, auth="google_account", client_secret="cs-made-up-0008"), signed(d))
+N.table.selectRow(row(wch["id"])); N.edit()
+check("password -> Google, saved: the password is removed, the client secret and sign-in kept", secret(wch, "password") is None
+      and secret(wch, "client_secret") == "cs-made-up-0008" and mailauth.signed_in_as(wch) == "mailbox@example.com")
+d = ST.ChannelDialog(wch, None); fill(d, auth="password", password="pw-made-up-0009"); d.reject()
+check("switching back and cancelling removes nothing", secret(wch, "client_secret") == "cs-made-up-0008" and mailauth.signed_in_as(wch) == "mailbox@example.com")
+AutoDialog.script = lambda d: fill(d, auth="password", password="pw-made-up-0009")
+N.table.selectRow(row(wch["id"])); N.edit()
+check("Google -> password, saved: the client secret and the sign-in are removed", secret(wch, "password") == "pw-made-up-0009"
+      and secret(wch, "client_secret") is None and mailauth.signed_in_as(wch) is None and mailauth.PREFIX + wch["id"] not in mail_refresh())
+AutoDialog.script = None
+check("nothing raised in a slot", not raised, raised)
+sys.excepthook = sys.__excepthook__
 for c in [c for c in notify.channels() if c["type"] == "email"]:
     notify.delete_secrets(c)
 notify.save_channels([c for c in notify.channels() if c["type"] != "email"])

@@ -5,10 +5,10 @@ from datetime import datetime, timedelta
 
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout,
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout,
                                QHBoxLayout, QLabel, QLineEdit, QMenu, QMessageBox, QPushButton, QSpinBox, QTableWidget,
                                QTableWidgetItem, QToolButton, QVBoxLayout, QWidget)
-from core import alerts, db, mailauth, notify, oidc, passvault, quiet
+from core import alerts, audit, db, mailauth, notify, oidc, passvault, quiet
 from core.dirsignin import SSO_TEXT, sso_said
 from ui.brandicons import channel_icon
 from ui.settings_base import Page, note, row_of, spin
@@ -29,32 +29,89 @@ METHOD_HELP = {
     "google_account": "In Google Cloud, create an OAuth client of type Desktop app in a project set to Internal, then sign in here as "
                       "the mailbox."}
 SIGN_IN, SIGN_IN_AGAIN, NOT_SIGNED_IN, SIGNED_IN_AS = "Sign in", "Sign in again", "Not signed in.", "Signed in as {account}."
+SAVED = "saved in the vault - leave blank to keep it"
 
 
-def _run(owner, fn, landed):
-    """fn on a worker; landed(result, error) back on the window's thread. owner._jobs keeps the thread alive meanwhile."""
+def _run(fn, landed, tag=None):
+    """fn on a worker; landed(job, result, error) back on the window's thread, unless the window that asked is gone by then.
+    The application holds the job until it ends, so nothing ever waits for it and closing its window is always immediate."""
     job = Job(fn)
-    job.landed = landed
-    job.done.connect(owner._landed, Qt.ConnectionType.QueuedConnection)
-    owner._jobs.add(job)
+    job.tag = tag
+    job.setParent(QApplication.instance())
+    job.finished.connect(job.deleteLater)
+    job.done.connect(landed, Qt.ConnectionType.QueuedConnection)
     job.start()
-    return job
+
+
+class _Attempt:
+    """One browser sign-in from the form, kept in the vault under a draft name of its own (<channel id>.form<n>) until Save.
+    Whichever learns last that it is not wanted removes what it stored: the worker when it finishes after a Cancel (the provider
+    can keep it busy for many seconds, deaf to Cancel), or the window when it is cancelled, edited away or closed."""
+
+    def __init__(self, cid, n):
+        self.id, self.cancel, self.lock, self.stored = f"{cid}.form{n}", threading.Event(), threading.Lock(), False
+
+    def finished(self):                              # the worker, once the sign-in returned or failed
+        with self.lock:
+            self.stored = True
+            if self.cancel.is_set():
+                self._remove()
+
+    def drop(self):                                  # the window
+        with self.lock:
+            self.cancel.set()
+            if self.stored:
+                self._remove()
+
+    def _remove(self):
+        self.stored = False
+        try:
+            passvault.remove(mailauth.PREFIX + self.id)
+        except Exception:
+            quiet.ignored()
+
+
+_KEYRING = (lambda n: notify.keyring.get_password(db.SERVICE, n), lambda n, v: notify.keyring.set_password(db.SERVICE, n, v),
+            lambda n: notify.keyring.delete_password(db.SERVICE, n))
+_VAULT = (lambda n: passvault.get(n), lambda n, v: passvault.put(n, v), lambda n: passvault.remove(n))
+
+
+def _apply(changes, then):
+    """changes: [(store, name, value)], None removing it; then then(). All or none: a failure puts back what was changed and raises."""
+    done = []
+    try:
+        for store, name, value in changes:
+            get, put, remove = store
+            old = get(name)
+            if value is None and old is None:
+                continue
+            put(name, value) if value is not None else remove(name)
+            done.append((store, name, old))
+        then()
+    except Exception:
+        for (_get, put, remove), name, old in reversed(done):
+            try:
+                put(name, old) if old is not None else remove(name)
+            except Exception:
+                quiet.ignored()
+        raise
 
 
 # ------------------------------------------------------------------ Notifications
 class ChannelDialog(QDialog):
     """Add or edit one notification channel. Its fields come from notify.CHANNEL_TYPES.
 
-    An Email channel's sign-in made here is kept in the vault under a name of the dialog's own (self.draft) until Save, when
-    keep_sign_in() makes it the channel's; Cancel removes it, so the channel's earlier sign-in is untouched."""
+    Save writes the channel through self.commit (set by the page) and its secrets, all or none. An Email channel's sign-in made
+    here stays a draft (_Attempt) until then; Cancel removes it, so the channel's earlier sign-in is untouched."""
     popup = Signal(str, str)                # a desktop channel's test pop-up, from the worker to the window's thread
 
     def __init__(self, ch, desktop_cb, parent=None):
         super().__init__(parent)
         self.ch, self.desktop_cb = dict(ch), desktop_cb
-        self.result_ch, self.typed_secrets = None, {}
-        self._jobs, self._cancel, self._sign_job, self._closed, self._drafted = set(), None, None, False, False
-        self.draft = ch["id"] + ".form"
+        self.result_ch, self.typed_secrets, self.commit = None, {}, None
+        self._closed, self.running, self.kept, self._attempts = False, None, None, []
+        # destroyed without done() (its page went away): a sign-in still running cleans up after itself
+        self.destroyed.connect(lambda *_, a=self._attempts: [x.drop() for x in a])
         signed = ch["type"] == "email" and mailauth.needs_sign_in(ch.get("auth")) and mailauth.signed_in_as(ch)
         self.sign_id, self.account = (ch["id"], signed) if signed else (None, None)
         if desktop_cb:
@@ -96,7 +153,7 @@ class ChannelDialog(QDialog):
                 if kind == "secret":
                     w.setEchoMode(QLineEdit.EchoMode.Password)
                     if self.stored.get(key):
-                        w.setPlaceholderText("saved in the vault - leave blank to keep it")
+                        w.setPlaceholderText(SAVED)
             self.inputs[key] = (kind, w)
             form.addRow(label, w)
         self.form = form
@@ -112,6 +169,14 @@ class ChannelDialog(QDialog):
         if "auth" in self.inputs:
             self._email_form(lay)
         lay.addWidget(buttons)
+        self._fit()
+
+    def _fit(self):
+        """As tall as the form needs at this width: Qt sizes a window with wrapping text by its minimum, which squeezes the rows
+        (the Sign in button lost its bottom edge)."""
+        if self.layout():
+            w = max(self.width(), self.minimumWidth()) if self.isVisible() else self.minimumWidth()
+            self.resize(w, self.layout().totalHeightForWidth(w))
 
     # ---------- an Email channel's way of signing in
     def _email_form(self, lay):
@@ -124,6 +189,7 @@ class ChannelDialog(QDialog):
         self.method_help = note("")
         lay.addWidget(self.method_help)
         self._user_hint = self.inputs["username"][1].placeholderText()
+        self._secret_hint = {f[0]: f[3] for f in notify.CHANNEL_TYPES["email"]["fields"]}["client_secret"]["placeholder"]
         self.inputs["auth"][1].currentIndexChanged.connect(self._method)
         for key in ("auth", "tenant", "client_id", "client_secret", "username"):
             w = self.inputs[key][1]
@@ -139,46 +205,59 @@ class ChannelDialog(QDialog):
         self.method_help.setText(METHOD_HELP.get(auth, ""))
         self.method_help.setVisible(auth in METHOD_HELP)
         self.inputs["username"][1].setPlaceholderText(self._user_hint if auth == "password" else "")
+        self.inputs["client_secret"][1].setPlaceholderText(     # Google's app may have none; Microsoft's must
+            SAVED if self.stored.get("client_secret") else self._secret_hint if auth == "google_account" else "")
+        self._fit()
 
     def _say(self, text=None):
-        self.sign_btn.setText("Cancel" if self._cancel else SIGN_IN_AGAIN if self.sign_id else SIGN_IN)
+        self.sign_btn.setText("Cancel" if self.running else SIGN_IN_AGAIN if self.sign_id else SIGN_IN)
         self.sign_status.setText(text or (SIGNED_IN_AS.format(account=self.account) if self.sign_id else NOT_SIGNED_IN))
+        self._fit()
 
     def _drop(self, *_):
         """The method, tenant, client ID, client secret or username changed: a sign-in made for the old ones is not used."""
-        if self._cancel:
-            self._cancel.set()
-        if self.sign_id == self.draft:
-            self._forget_draft()
-        self.sign_id = self.account = None
+        for a in (self.running, self.kept):
+            if a:
+                a.drop()
+        self.running = self.kept = self.sign_id = self.account = None
         self._say()
-
-    def _forget_draft(self):
-        try:
-            passvault.remove(mailauth.PREFIX + self.draft)
-        except Exception:
-            quiet.ignored()
 
     def sign_in(self):
-        """The browser sign-in, on a worker; while it waits the button is Cancel."""
-        if self._cancel:
-            return self._cancel.set()
+        """The browser sign-in, on a worker; while it waits the button is Cancel, which lets it go at once."""
+        if self.running:
+            self.running.drop()
+            self.running = None
+            return self._say()
         ch, _typed, merged = self.collect()
-        ch, cancel = dict(ch, id=self.draft), threading.Event()
-        self._cancel, self._drafted = cancel, True
-        self._say(SSO_TEXT.format(provider=mailauth.provider(ch["auth"])))
-        self._sign_job = _run(self, lambda: mailauth.sign_in(ch, merged, cancel),
-                              lambda r, e: self._signed(r, e, cancel.is_set(), mailauth.provider(ch["auth"])))
+        missing = [f"{label} is required." for key, label in (("tenant", "Tenant ID"), ("client_id", "Client ID"))
+                   if not ch[key] and (key == "client_id" or ch["auth"].startswith("ms_"))]
+        if missing:
+            return self._warn(missing)
+        a = self.running = _Attempt(self.ch["id"], len(self._attempts) + 1)
+        self._attempts.append(a)
+        ch = dict(ch, id=a.id)
 
-    def _signed(self, account, error, cancelled, prov):
-        self._cancel = self._sign_job = None
-        if error is None and not cancelled:
-            self.sign_id, self.account = self.draft, account
-        elif error is None:                                  # it finished just as it was cancelled: not kept
-            self._forget_draft()
+        def work():
+            try:
+                return mailauth.sign_in(ch, merged, a.cancel)
+            finally:
+                a.finished()
+        self._say(SSO_TEXT.format(provider=mailauth.provider(ch["auth"])))
+        _run(work, self._signed, tag=a)
+
+    def _signed(self, job, account, error):
+        a = job.tag
+        if a is not self.running:                            # let go meanwhile: it removed what it stored itself
+            return
+        self.running = None
+        if error is None:
+            if self.kept:
+                self.kept.drop()
+            self.kept, self.sign_id, self.account = a, a.id, account
+            return self._say()
+        a.drop()
         self._say()
-        if error is not None and not cancelled:
-            self._say(self._failed(error, prov))
+        self._say(self._failed(error, mailauth.provider(self.inputs["auth"][1].currentData())))
 
     @staticmethod
     def _failed(e, prov):
@@ -194,34 +273,20 @@ class ChannelDialog(QDialog):
         raise e
 
     def _as_signed(self, ch):
-        """The channel with the form's sign-in (its own, the one made here, or none), for the checks and Send test."""
-        return dict(ch, id=self.sign_id or self.draft) if "auth" in self.inputs else ch
-
-    def keep_sign_in(self):
-        """After Save: the sign-in made here becomes the channel's; one the form dropped is removed."""
-        if self.sign_id == self.draft:
-            got = passvault.get(mailauth.PREFIX + self.draft)
-            if got:
-                passvault.put(mailauth.PREFIX + self.ch["id"], got)
-            self._forget_draft()
-        elif self.sign_id is None and mailauth.needs_sign_in(self.ch.get("auth")):
-            mailauth.sign_out(self.ch)
-
-    def _landed(self, job, result, error):
-        job.wait()
-        self._jobs.discard(job)
-        if not self._closed:
-            job.landed(result, error)
-        job.landed = None
+        """The channel with the form's sign-in (its own, the draft made here, or none), for the checks and Send test."""
+        if not mailauth.needs_sign_in(ch.get("auth")):
+            return ch
+        if self.kept:
+            return dict(ch, id=self.kept.id, draft=True)
+        return dict(ch, id=self.sign_id or self.ch["id"] + ".form")      # (a name that never holds a sign-in)
 
     def done(self, r):
-        """A sign-in's wait ends with the dialog, and only Save (keep_sign_in) keeps what it made."""
+        """Never waits: a sign-in still running is let go and removes what it stores itself. Save has already moved its draft."""
         self._closed = True
-        if self._cancel:
-            self._cancel.set()
-            self._sign_job.wait()                            # the browser wait ends within a tenth of a second
-        if self._drafted and (r != QDialog.DialogCode.Accepted or self.sign_id != self.draft):
-            self._forget_draft()
+        for a in (self.running, self.kept):
+            if a:
+                a.drop()
+        self.running = self.kept = None
         super().done(r)
 
     def collect(self):
@@ -244,15 +309,47 @@ class ChannelDialog(QDialog):
         ch, typed, merged = self.collect()
         problems = notify.validate(self._as_signed(ch), merged)
         if problems:
-            QMessageBox.warning(self, "Check the settings", "\n".join(f"\u2022 {p}" for p in problems))
+            self._warn(problems)
             return None
         return ch, typed, merged
 
+    def _warn(self, problems):
+        QMessageBox.warning(self, "Check the settings", "\n".join(f"\u2022 {p}" for p in problems))
+
     def accept(self):
         got = self._checked()
-        if got:
-            self.result_ch, self.typed_secrets = got[0], got[1]
-            super().accept()
+        if not got:
+            return
+        if self.commit:
+            try:
+                self._save(got[0], got[1])
+            except passvault.Locked as e:                   # nothing was saved; the dialog stays open
+                return self._warn([str(e)])
+        self.result_ch, self.typed_secrets = got[0], got[1]
+        super().accept()
+
+    def _save(self, ch, typed):
+        """The secrets typed, those the method doesn't use removed, the sign-in made here made the channel's (or one the form
+        dropped removed), then the channel itself: all or none."""
+        used = METHOD_FIELDS[ch["auth"]] if ch["type"] == "email" else None
+        changes = []
+        for key, (kind, _w) in self.inputs.items():
+            if kind == "secret" and (used is None or key in used):
+                if typed.get(key):
+                    changes.append((_KEYRING, notify._secret_name(ch["id"], key), typed[key]))
+            elif kind == "secret":
+                changes.append((_KEYRING, notify._secret_name(ch["id"], key), None))
+        own, old = mailauth.PREFIX + ch["id"], None
+        if self.kept:
+            changes += [(_VAULT, own, passvault.get(mailauth.PREFIX + self.kept.id)), (_VAULT, mailauth.PREFIX + self.kept.id, None)]
+        elif self.sign_id is None and mailauth.needs_sign_in(self.ch.get("auth")):
+            old = mailauth.signed_in_as(self.ch)
+            changes.append((_VAULT, own, None))
+        _apply(changes, lambda: self.commit(ch))
+        if self.kept:
+            self.kept.stored = False                         # moved: nothing of the draft is left
+        if old:
+            audit.log("email sign-in removed", f"{self.ch['name']}, {mailauth.provider(self.ch.get('auth'))}, {old}")
 
     def test(self):
         got = self._checked()
@@ -261,13 +358,19 @@ class ChannelDialog(QDialog):
         ch, _typed, merged = got
         ch, popup = self._as_signed(ch), self.popup.emit if self.desktop_cb else None
         self.test_btn.setEnabled(False)
-        _run(self, lambda: notify.send_test(ch, merged, popup), self._tested)
+        _run(lambda: notify.send_test(ch, merged, popup), self._tested, tag=self.kept)
 
-    def _tested(self, result, error):
+    def _tested(self, job, result, error):
+        if self._closed:
+            return
         self.test_btn.setEnabled(True)
         if error is not None:
             raise error
         ok, detail = result
+        a = job.tag
+        if not ok and a and a is self.kept and not mailauth.signed_in_as({"id": a.id}):
+            self._drop()                                     # the provider refused the sign-in made here: it is gone
+            self._say(detail)
         (QMessageBox.information if ok else QMessageBox.warning)(
             self, "Test", f"Sent: {detail}" if ok else f"The test failed:\n\n{detail}")
 
@@ -280,7 +383,6 @@ class NotificationsPage(Page):
 
     def __init__(self):
         super().__init__()
-        self._jobs = set()
         self.enabled = QCheckBox("Send notifications")
         self.consecutive = spin(1, 10, " run(s) in a row", choices=(1, 2, 3, 5))
         self.remind = spin(0, 168, " hours", choices=(0, 4, 8, 24))
@@ -390,10 +492,8 @@ class NotificationsPage(Page):
 
     def add_channel(self, ctype):
         dlg = ChannelDialog(notify.new_channel(ctype), self.desktop_cb, self)
-        if dlg.exec() and dlg.result_ch:
-            notify.set_secrets(dlg.result_ch, dlg.typed_secrets)
-            dlg.keep_sign_in()
-            notify.save_channels(notify.channels() + [dlg.result_ch])
+        dlg.commit = lambda new: notify.save_channels(notify.channels() + [new])      # Save writes it, with its secrets
+        if dlg.exec():
             self.reload_channels()
 
     def edit(self):
@@ -401,10 +501,8 @@ class NotificationsPage(Page):
         if not ch:
             return
         dlg = ChannelDialog(ch, self.desktop_cb, self)
-        if dlg.exec() and dlg.result_ch:
-            notify.set_secrets(dlg.result_ch, dlg.typed_secrets)
-            dlg.keep_sign_in()
-            notify.save_channels([dlg.result_ch if c["id"] == ch["id"] else c for c in notify.channels()])
+        dlg.commit = lambda new: notify.save_channels([new if c["id"] == ch["id"] else c for c in notify.channels()])
+        if dlg.exec():
             self.reload_channels()
 
     def remove(self):
@@ -422,17 +520,12 @@ class NotificationsPage(Page):
             return
         self.test_btn.setEnabled(False)
         popup = self.popup.emit if self.desktop_cb else None
-        _run(self, lambda: notify.send_test(ch, None, popup), self._tested)
+        _run(lambda: notify.send_test(ch, None, popup), self._tested)
 
     def _popup(self, title, body):
         self.desktop_cb(title, body)
 
-    def _landed(self, job, result, error):
-        job.wait()
-        self._jobs.discard(job)
-        job.landed(result, error)
-
-    def _tested(self, result, error):
+    def _tested(self, _job, result, error):
         self.test_btn.setEnabled(True)
         if error is not None:
             raise error
