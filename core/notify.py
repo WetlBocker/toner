@@ -104,15 +104,46 @@ def set_secrets(ch, secrets):
             keyring.set_password(db.SERVICE, _secret_name(ch["id"], key), val)
 
 
-def delete_secrets(ch):
+def delete_secrets(ch, keep=()):
+    """keep: what another channel list still uses of them (used_elsewhere), which stays."""
     for key, _l, kind, _e in CHANNEL_TYPES[ch["type"]]["fields"]:
-        if kind == "secret":
+        if kind == "secret" and key not in keep:
             try:
                 keyring.delete_password(db.SERVICE, _secret_name(ch["id"], key))
             except Exception:
                 quiet.ignored()
-    if ch["type"] == "email":
+    if ch["type"] == "email" and "sign-in" not in keep:
         mailauth.sign_out(ch)
+
+
+def _uses(ch):
+    """The channel's secrets its settings use, by key, and "sign-in" for an Email channel's stored sign-in."""
+    keys = {k for k, _l, kind, _e in CHANNEL_TYPES[ch["type"]]["fields"] if kind == "secret"}
+    if ch["type"] != "email":
+        return keys
+    auth = ch.get("auth") or "password"
+    return (keys & mailauth.METHOD_FIELDS.get(auth, keys)) | ({"sign-in"} if mailauth.needs_sign_in(auth) else set())
+
+
+def used_elsewhere(cid, org=None):
+    """What another channel list still uses of the secrets named by this channel id (their keys, and "sign-in"): Global's list
+    and every organization's own, but not org's (default: the one being written to). A channel's secrets are named by its id
+    alone, and an organization's first saved list is a copy of Global's with the same ids. All of them when a list can't be read."""
+    org = db.target() if org is None else org
+    used = set()
+    try:
+        for o in [db.GLOBAL] + [r["id"] for r in db.org_rows()]:
+            if o == org:
+                continue
+            with db.within(o):
+                if not o or db.overridden("notify_channels"):          # (one that follows Global's uses Global's)
+                    for c in channels():
+                        if c.get("id") == cid:
+                            used |= _uses(c)
+    except Exception:
+        quiet.ignored()
+        return {k for t in CHANNEL_TYPES.values() for k, _l, kind, _e in t["fields"] if kind == "secret"} | {"sign-in"}
+    return used
 
 
 def validate(ch, secrets):

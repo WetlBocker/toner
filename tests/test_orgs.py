@@ -272,6 +272,15 @@ fill([own])
 orgs.remove(sh)
 check("a channel id the organization shares with Global keeps its secrets; its own go",
       all(vault_of(c["id"]) for c in glob + [gmail, goa]) and not vault_of("cybhk"), (vault_of("goauth"), vault_of("cybhk")))
+mx, mixed = orgs.create("Mixco", "MIX"), chan("email", "mixed1", name="Mixed")       # Global's on Password, the copy on Microsoft 365
+with db.within(0):
+    notify.save_channels(notify.channels() + [mixed])
+with db.within(mx):
+    notify.save_channels([dict(mixed, auth="ms_account")])
+fill([dict(mixed, auth="ms_account")])
+orgs.remove(mx)
+check("a shared id on another method: what Global's channel uses stays (its password), what only the copy used goes (the sign-in)",
+      [k[1] for k in STORE if k[1].startswith("notify:mixed1:")] == ["notify:mixed1:password"] and mailauth.signed_in_as(mixed) is None, vault_of("mixed1"))
 a1, a2 = orgs.create("Wayne", "WAY"), orgs.create("Stark", "STA")
 twin = chan("webhook", "twinhk", name="Twin")
 for o in (a1, a2):
@@ -292,9 +301,9 @@ orgs.remove(bad1)
 check("a malformed stored channel list does not stop the removal", orgs.get(bad1) is None and not db.org_path(bad1).exists())
 
 orig = notify.delete_secrets
-def flaky(ch):
+def flaky(ch, *keep):
     if ch["id"] == "mailpw": raise RuntimeError("boom")
-    orig(ch)
+    orig(ch, *keep)
 chs = [chan("email", "mailpw", name="Mail"), chan("webhook", "hookx", name="Hook")]
 fl = orgs.create("Aperture", "APE")
 with db.within(fl):

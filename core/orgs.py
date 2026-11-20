@@ -369,9 +369,9 @@ def remove(org, move_to=None):
     db.forget_orgs()
     from core import notify
     with db.within(org):
-        for ch in channels:                               # only now: a failure above leaves the organization with its channels' secrets
+        for ch, keep in channels:                         # only now: a failure above leaves the organization with its channels' secrets
             try:
-                notify.delete_secrets(ch)
+                notify.delete_secrets(ch, keep)
             except Exception:                         # one channel's failure stops neither the others nor the file's removal
                 quiet.ignored()
     if db.home() == org:
@@ -389,20 +389,16 @@ def remove(org, move_to=None):
 
 
 def _own_channels(org):
-    """The channels in the organization's own list that no other list uses. An organization with none of its own follows
-    Global's (their secrets are Global's); its first save starts from a copy with the same ids, so a shared id is kept."""
+    """[(channel, what another list still uses of its secrets)] for the organization's own list (notify.used_elsewhere: its first
+    save starts from a copy of Global's with the same ids). An organization with none of its own follows Global's, whose secrets
+    are Global's."""
     from core import notify
     try:
         with db.within(org):
             if not db.overridden("notify_channels"):
                 return []
             mine = notify.channels()
-        used = set()
-        for o in [GLOBAL] + [r["id"] for r in list_orgs() if r["id"] != org]:
-            with db.within(o):
-                if not o or db.overridden("notify_channels"):
-                    used |= {c.get("id") for c in notify.channels()}
-        return [c for c in mine if c.get("id") not in used]
+        return [(c, notify.used_elsewhere(c.get("id"), org)) for c in mine]
     except Exception:
         quiet.ignored()
         return []

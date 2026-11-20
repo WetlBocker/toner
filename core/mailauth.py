@@ -13,6 +13,9 @@ from core import audit, db, extstore, oidc, passvault, quiet
 
 METHODS = [("password", "Password"), ("ms_account", "Microsoft 365 account"), ("ms_app", "Microsoft 365 app (no person)"),
            ("google_account", "Google account")]
+METHOD_FIELDS = {"password": {"username", "password"}, "ms_account": {"tenant", "client_id", "username"},     # an Email channel's
+                 "ms_app": {"tenant", "client_id", "client_secret", "username"},                       # fields for each method
+                 "google_account": {"client_id", "client_secret", "username"}}
 MS_ISSUER = "https://login.microsoftonline.com/{tenant}/v2.0"
 GOOGLE_ISSUER = "https://accounts.google.com"
 SCOPES = {"ms_account": "openid profile offline_access https://outlook.office.com/SMTP.Send",

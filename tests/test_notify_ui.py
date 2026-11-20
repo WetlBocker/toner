@@ -433,6 +433,36 @@ AutoDialog.script = lambda d: fill(d, auth="password", password="pw-made-up-0009
 N.table.selectRow(row(wch["id"])); N.edit()
 check("Google -> password, saved: the client secret and the sign-in are removed", secret(wch, "password") == "pw-made-up-0009"
       and secret(wch, "client_secret") is None and mailauth.signed_in_as(wch) is None and mailauth.PREFIX + wch["id"] not in mail_refresh())
+
+print("== a channel and its copy in an organization's own list share one id, so one set of secrets")
+from core import orgs
+AutoDialog.fill_meta = {"name": "Shared mail"}
+AutoDialog.script = lambda d: fill(d, **FILLED, password="pw-made-up-0010")
+N.add_channel("email"); xch = notify.channels()[-1]
+cpy = orgs.create("Copyco", "CPY")
+def in_org(fn):
+    with db.within(cpy):
+        return fn()
+in_org(lambda: notify.save_channels(notify.channels() + [notify.new_channel("webhook")]))     # its first save: a copy of Global's list
+the_copy = lambda: in_org(lambda: next(c for c in notify.channels() if c["id"] == xch["id"]))
+check("(the organization's own list holds a copy with the same id)", in_org(lambda: db.overridden("notify_channels")) and the_copy()["auth"] == "password")
+AutoDialog.script = lambda d: (fill(d, auth="google_account", client_secret="cs-made-up-0011"), signed(d))
+N.table.selectRow(row(xch["id"])); N.edit()
+check("Global's channel -> Google, saved: the copy still on Password keeps the password it sends with", notify.channels()[row(xch["id"])]["auth"] == "google_account"
+      and in_org(lambda: notify.get_secrets(the_copy())["password"]) == "pw-made-up-0010" and mailauth.signed_in_as(xch) == "mailbox@example.com")
+in_org(lambda: notify.save_channels([dict(c, auth="google_account") if c["id"] == xch["id"] else c for c in notify.channels()]))
+AutoDialog.script = lambda d: fill(d, auth="password", password="pw-made-up-0012")
+N.table.selectRow(row(xch["id"])); N.edit()
+check("Global's channel -> Password, saved: the copy on Google keeps the sign-in and the client secret", notify.channels()[row(xch["id"])]["auth"] == "password"
+      and mailauth.signed_in_as(the_copy()) == "mailbox@example.com" and in_org(lambda: notify.get_secrets(the_copy())["client_secret"]) == "cs-made-up-0011")
+N.table.selectRow(row(xch["id"])); answer["q"] = QMessageBox.StandardButton.Yes; N.remove()
+check("Global's channel removed: the copy keeps its sign-in and client secret; the password nobody uses now goes", xch["id"] not in [c["id"] for c in notify.channels()]
+      and mailauth.signed_in_as(xch) == "mailbox@example.com" and secret(xch, "client_secret") == "cs-made-up-0011" and secret(xch, "password") is None)
+with db.within(cpy):
+    N.reload_channels(); N.table.selectRow(row(xch["id"])); N.remove()
+N.reload_channels()
+check("...and removed from the organization too, used nowhere now: all of it goes", in_org(lambda: [c for c in notify.channels() if c["id"] == xch["id"]]) == []
+      and mailauth.signed_in_as(xch) is None and secret(xch, "client_secret") is None and mailauth.PREFIX + xch["id"] not in mail_refresh())
 AutoDialog.script = None
 check("nothing raised in a slot", not raised, raised)
 sys.excepthook = sys.__excepthook__

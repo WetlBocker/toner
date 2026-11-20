@@ -16,9 +16,7 @@ from ui.toast import toast
 from ui.widgets import EmptyHint, filling
 
 # An Email channel's fields for each way of signing in (the others are hidden), and the help shown under the form
-METHOD_FIELDS = {"password": {"username", "password"}, "ms_account": {"tenant", "client_id", "username"},
-                 "ms_app": {"tenant", "client_id", "client_secret", "username"},
-                 "google_account": {"client_id", "client_secret", "username"}}
+METHOD_FIELDS = mailauth.METHOD_FIELDS
 METHOD_HELP = {
     "ms_account": "In the Entra admin center, register an app for Toner as a public client (mobile and desktop) with the redirect URI "
                   "http://localhost and the delegated permission SMTP.Send. Turn on authenticated SMTP for the mailbox, then sign in "
@@ -344,17 +342,17 @@ class ChannelDialog(QDialog):
         """The secrets typed, those the method doesn't use removed, the sign-in made here made the channel's (or one the form
         dropped removed), then the channel itself: all or none."""
         used = METHOD_FIELDS[ch["auth"]] if ch["type"] == "email" else None
-        changes = []
+        keep, changes = notify.used_elsewhere(ch["id"]), []         # what a copy of this channel in another list still uses
         for key, (kind, _w) in self.inputs.items():
             if kind == "secret" and (used is None or key in used):
                 if typed.get(key):
                     changes.append((_KEYRING, notify._secret_name(ch["id"], key), typed[key]))
-            elif kind == "secret":
+            elif kind == "secret" and key not in keep:
                 changes.append((_KEYRING, notify._secret_name(ch["id"], key), None))
         own, old = mailauth.PREFIX + ch["id"], None
         if self.kept:
             changes += [(_VAULT, own, passvault.get(mailauth.PREFIX + self.kept.id)), (_VAULT, mailauth.PREFIX + self.kept.id, None)]
-        elif self.sign_id is None and mailauth.needs_sign_in(self.ch.get("auth")):
+        elif self.sign_id is None and mailauth.needs_sign_in(self.ch.get("auth")) and "sign-in" not in keep:
             old = mailauth.signed_in_as(self.ch)
             changes.append((_VAULT, own, None))
         _apply(changes, lambda: self.commit(ch))
@@ -522,7 +520,7 @@ class NotificationsPage(Page):
         ch = self.selected_channel()
         if ch and QMessageBox.question(self, "Remove channel", f"Remove '{ch['name']}'?\n\nIts saved "
                                        "webhook URL, password or sign-in is deleted too.") == QMessageBox.StandardButton.Yes:
-            notify.delete_secrets(ch)
+            notify.delete_secrets(ch, notify.used_elsewhere(ch["id"]))
             notify.save_channels([c for c in notify.channels() if c["id"] != ch["id"]])
             self.reload_channels()
 
