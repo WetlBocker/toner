@@ -361,17 +361,19 @@ def remove(org, move_to=None):
         extstore.forget_org(org)                      # its collection in the password manager goes with it (while its name is still known)
     except Exception:
         quiet.ignored()
-    from core import notify
-    with db.within(org):
-        channels = notify.channels()                      # (settings are not moved: they go with the file)
+    channels = _own_channels(org)                          # (settings are not moved: they go with the file)
     _forget_secrets(org)
     with db.within(GLOBAL):
         with db.connect() as c:
             c.execute("DELETE FROM orgs WHERE id=?", (org,))
     db.forget_orgs()
+    from core import notify
     with db.within(org):
         for ch in channels:                               # only now: a failure above leaves the organization with its channels' secrets
-            notify.delete_secrets(ch)
+            try:
+                notify.delete_secrets(ch)
+            except Exception:                         # one channel's failure stops neither the others nor the file's removal
+                quiet.ignored()
     if db.home() == org:
         set_current(GLOBAL)
     path = db.org_path(org)
@@ -384,6 +386,26 @@ def remove(org, move_to=None):
             p.unlink(missing_ok=True)
         except OSError:
             quiet.ignored()
+
+
+def _own_channels(org):
+    """The channels in the organization's own list that no other list uses. An organization with none of its own follows
+    Global's (their secrets are Global's); its first save starts from a copy with the same ids, so a shared id is kept."""
+    from core import notify
+    try:
+        with db.within(org):
+            if not db.overridden("notify_channels"):
+                return []
+            mine = notify.channels()
+        used = set()
+        for o in [GLOBAL] + [r["id"] for r in list_orgs() if r["id"] != org]:
+            with db.within(o):
+                if not o or db.overridden("notify_channels"):
+                    used |= {c.get("id") for c in notify.channels()}
+        return [c for c in mine if c.get("id") not in used]
+    except Exception:
+        quiet.ignored()
+        return []
 
 
 def clashes_many(org_ids, move_to):

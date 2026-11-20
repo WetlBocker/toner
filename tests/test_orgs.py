@@ -255,6 +255,79 @@ orgs.remove(dead)
 check("removing the organization removes all its channels' secrets, sign-in included", not any(vault_of(c["id"]) for c in mine), [vault_of(c["id"]) for c in mine])
 check("...and no other organization's, nor Global's", all(vault_of(c["id"]) for c in other + glob))
 
+print("== ...only its own channels' secrets, and a failing one stops nothing")
+gmail, goa = chan("email", "gmailpw", name="G mail"), chan("email", "goauth", name="G OAuth", auth="ms_account")
+with db.within(0):
+    notify.save_channels(glob + [gmail, goa])
+fill([gmail, goa])
+bare = orgs.create("Initrode", "INITR")                  # no channels of its own: follows Global's
+orgs.remove(bare)
+check("an organization that follows Global's channels takes none of Global's secrets with it",
+      all(vault_of(c["id"]) for c in glob + [gmail, goa]) and mailauth.signed_in_as(goa) == "a@example.com", [vault_of(c["id"]) for c in glob + [gmail, goa]])
+sh = orgs.create("Cyberdyne", "CYB")                     # its first save started from Global's list, so ids are shared
+own = chan("webhook", "cybhk", name="Own hook")
+with db.within(sh):
+    notify.save_channels(notify.channels() + [own])
+fill([own])
+orgs.remove(sh)
+check("a channel id the organization shares with Global keeps its secrets; its own go",
+      all(vault_of(c["id"]) for c in glob + [gmail, goa]) and not vault_of("cybhk"), (vault_of("goauth"), vault_of("cybhk")))
+a1, a2 = orgs.create("Wayne", "WAY"), orgs.create("Stark", "STA")
+twin = chan("webhook", "twinhk", name="Twin")
+for o in (a1, a2):
+    with db.within(o):
+        notify.save_channels([twin, chan("webhook", f"only{o}", name="Only")])
+fill([twin, chan("webhook", f"only{a1}")])
+orgs.remove(a1)
+check("a channel id another organization's list uses keeps its secrets", vault_of("twinhk") and not vault_of(f"only{a1}"))
+orgs.remove(a2)
+check("...and goes with the last organization that used it", not vault_of("twinhk"))
+
+bad1 = orgs.create("Tyrell", "TYR")
+with db.within(bad1):
+    with db.connect() as c:
+        c.execute("INSERT INTO settings(key,value) VALUES('notify_channels','{not json')")
+db._forget_settings()
+orgs.remove(bad1)
+check("a malformed stored channel list does not stop the removal", orgs.get(bad1) is None and not db.org_path(bad1).exists())
+
+orig = notify.delete_secrets
+def flaky(ch):
+    if ch["id"] == "mailpw": raise RuntimeError("boom")
+    orig(ch)
+chs = [chan("email", "mailpw", name="Mail"), chan("webhook", "hookx", name="Hook")]
+fl = orgs.create("Aperture", "APE")
+with db.within(fl):
+    notify.save_channels(chs)
+fill(chs)
+notify.delete_secrets = flaky
+try:
+    orgs.remove(fl)
+finally:
+    notify.delete_secrets = orig
+check("a channel whose cleanup fails stops neither the others nor the removal",
+      orgs.get(fl) is None and not db.org_path(fl).exists() and not vault_of("hookx"))
+
+seen = []
+real_log = mailauth.audit.log
+mailauth.audit.log = lambda *a, **k: seen.append((db.target(), a[0], db.org_path(db.target()).exists()))
+lk = orgs.create("Oscorp", "OSC")
+with db.within(lk):
+    notify.save_channels([chan("email", "lockoa", name="Lock OA", auth="ms_account")])
+fill([chan("email", "lockoa", auth="ms_account")])
+orgs.remove(lk)
+mailauth.audit.log = real_log
+check("the sign-in's removal is audited in the organization's own, still-present file", seen == [(lk, "email sign-in removed", True)], seen)
+lk2 = orgs.create("Massive", "MAS")
+with db.within(lk2):
+    notify.save_channels([chan("email", "lock2", name="Lock2", auth="ms_account")])
+passvault.lock()
+try:
+    orgs.remove(lk2)
+    check("a locked vault does not stop the removal", orgs.get(lk2) is None and not db.org_path(lk2).exists())
+except Exception as e:
+    check("a locked vault does not stop the removal", False, repr(e))
+
 print("== startup brings every organization's file up to date")
 db.init()
 with db.within(acme):
