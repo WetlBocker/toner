@@ -47,9 +47,42 @@ def _cn(name):
     return got[0].value if got else name.rfc4514_string()
 
 
+def _serial_span(der):
+    """Where the serial number's bytes are in a DER certificate (start, end): Certificate > tbsCertificate > [version] > serial."""
+    def head(i):                                       # the element at i: its tag, where its content starts and ends
+        n, j = der[i + 1], i + 2
+        if n & 0x80:
+            j += n & 0x7F
+            n = int.from_bytes(der[i + 2:j], "big")
+        return der[i], j, j + n
+    _, i, _ = head(0)
+    _, i, _ = head(i)
+    tag, start, end = head(i)
+    if tag == 0xA0:                                    # the version, which a v1 certificate leaves out
+        tag, start, end = head(end)
+    if tag != 0x02 or not start < end <= len(der):
+        raise ValueError("no serial number")
+    return start, end
+
+
+def positive_serial(der):
+    """The certificate for cryptography to load, and its real serial number when that differs (else None). A serial number that
+    is zero or negative (RFC 5280 forbids both, devices issue them anyway) makes cryptography warn on every load and every read
+    of it, and a later release is to refuse the certificate. So the serial is read from the bytes and cryptography is handed a
+    copy with a positive one of the same length. Only for reading: a fingerprint or a pin is of the bytes the server sent."""
+    try:
+        start, end = _serial_span(der)
+        n = int.from_bytes(der[start:end], "big", signed=True)
+        if n <= 0:
+            return der[:start] + b"\x01" * (end - start) + der[end:], n
+    except (IndexError, ValueError):
+        pass                                           # not laid out like a certificate: cryptography says what is wrong with it
+    return der, None
+
+
 def describe(der):
     """What the trust prompt shows: names (made out to), issuer, valid_from, valid_to (dates), expired, sha256 (AA:BB:...)."""
-    c = x509.load_der_x509_certificate(der)
+    c = x509.load_der_x509_certificate(positive_serial(der)[0])
     try:
         names = [n for n in c.extensions.get_extension_for_class(x509.SubjectAlternativeName).value.get_values_for_type(x509.DNSName)]
     except x509.ExtensionNotFound:

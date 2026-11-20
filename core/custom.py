@@ -239,7 +239,10 @@ def run_tls(chk, dev, timeout=8):
                 der = s.getpeercert(binary_form=True)
     except OSError as e:
         return Result(dev["name"], chk["name"], FAIL, "no certificate", f"port {port}: {e}")
-    info = cert_info(der)
+    try:
+        info = cert_info(der)
+    except Exception as e:                             # a certificate that cannot be read is a row, as in run_network: the sweep has no catch of its own
+        return Result(dev["name"], chk["name"], ERROR, "", f"{type(e).__name__}: {e}")
     days = info["days_left"]
     c2 = {**chk, "higher_worse": 0}
     if c2.get("warn") is None:
@@ -279,6 +282,8 @@ def cert_info(der):
     """Subject, issuer, validity, SANs and days left for a DER certificate."""
     from cryptography import x509
     from cryptography.x509.oid import NameOID
+    from core import certpeek
+    der, serial = certpeek.positive_serial(der)        # a zero or negative serial: cryptography warns, and is to refuse it
     cert = x509.load_der_x509_certificate(der)
     after = getattr(cert, "not_valid_after_utc", None) or cert.not_valid_after.replace(tzinfo=timezone.utc)
     before = getattr(cert, "not_valid_before_utc", None) or cert.not_valid_before.replace(tzinfo=timezone.utc)
@@ -289,7 +294,7 @@ def cert_info(der):
         sans = []
     return {"subject": cn[0].value if cn else cert.subject.rfc4514_string(), "issuer": cert.issuer.rfc4514_string(),
             "not_before": before, "not_after": after, "days_left": (after - datetime.now(timezone.utc)).days,
-            "sans": list(sans), "serial": format(cert.serial_number, "x")}
+            "sans": list(sans), "serial": format(cert.serial_number if serial is None else serial, "x")}
 
 
 def run_ping(chk, dev, timeout=8):
