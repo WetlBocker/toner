@@ -4,6 +4,8 @@ The Site field is an optional filter on console and site names ('default', blank
 Add dialog's Sites list makes one entry per ticked site) scopes the entry to that site: its console, its health, and each of its devices."""
 from datetime import datetime, timezone
 
+from core import display
+
 from .base import OK, WARN, FAIL, grade, grade_low
 from .unifiapi import CLOUD_HOST, UnifiApi, state_status
 
@@ -28,7 +30,7 @@ class UnifiCloudDriver(UnifiApi):
         if self.enabled("consoles"):
             self.safe(out, "consoles", lambda: self.consoles(out, hosts))
         names = {(s.get("hostId"), s.get("siteId")): ((s.get("meta") or {}).get("name") or s.get("siteId")) for s in sites}
-        if self.enabled("devices") or self.enabled("firmware"):
+        if any(self.enabled(k) for k in ("devices", "firmware", "uptime")):
             self.safe(out, "devices", lambda: self.devices(out))
         if self.enabled("sites"):
             for s in sites:
@@ -107,6 +109,22 @@ class UnifiCloudDriver(UnifiApi):
                 if old:
                     out.append(self.agg(label, "firmware", FAIL if sev == "FAIL" else WARN, f"{len(old)} to update",
                                         ", ".join(f"{d.get('name') or d.get('mac')} -> {d.get('updateAvailable')}" for d in old[:6]), numeric=float(len(old))))
+            ups = [h for h in map(self.up_hours, devs) if h is not None] if self.enabled("uptime") else []
+            if ups:                                  # the console's shortest: one recent reboot shows
+                out.append(self.agg(label, "uptime", *self.up_grade(min(ups))))
+
+    @staticmethod
+    def up_hours(d):
+        """Hours since the device's startupTime (the date-time List Devices documents, https://developer.ui.com/site-manager-api/listdevices), or None."""
+        try:
+            return max(0.0, (datetime.now(timezone.utc) - datetime.fromisoformat(str(d["startupTime"]).replace("Z", "+00:00"))).total_seconds() / 3600)
+        except (KeyError, ValueError, TypeError):
+            return None
+
+    def up_grade(self, hours):
+        t = self.th["uptime"]
+        status = grade_low(hours, t["warn"], t["fail"])
+        return status, display.uptime(hours), "recent reboot" if status != OK else "", hours
 
     def each_device(self, out, devs, sev):
         """A site entry: each device's own state and firmware, so it is listed under the entry with a page of its own."""
@@ -118,6 +136,9 @@ class UnifiCloudDriver(UnifiApi):
                 rows.append(self.row(label, "state", status, word, d.get("model", "") if status != OK else ""))
             if self.enabled("firmware") and sev != "Ignore" and d.get("updateAvailable"):
                 rows.append(self.row(label, "firmware", FAIL if sev == "FAIL" else WARN, str(d.get("version") or ""), "an update is available"))
+            hours = self.up_hours(d) if self.enabled("uptime") else None
+            if hours is not None:
+                rows.append(self.row(label, "uptime", *self.up_grade(hours)))
             kid = (d.get("id") or d.get("mac") or label, d.get("model") or "")
             for r in rows:
                 r.kid = kid

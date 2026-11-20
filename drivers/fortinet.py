@@ -1,6 +1,6 @@
 import re
 
-from core import proxy, tlsverify
+from core import display, proxy, tlsverify
 from core import quiet
 import requests
 
@@ -75,7 +75,7 @@ class FortinetDriver(Driver):
                                    "its trusted hosts.") from None
         except Exception:
             quiet.ignored()
-        for name, fn in (("resources", self.resources), ("firmware", self.firmware),
+        for name, fn in (("resources", self.resources), ("uptime", self.uptime), ("firmware", self.firmware),
                          ("wan links", self.wan), ("ha", self.ha), ("vpn", self.vpn), ("licenses", self.licenses), ("certificates", self.certificates),
                          ("interfaces", self.interfaces), ("ha sync", self.ha_sync), ("fortiaps", self.fortiaps), ("fortiswitches", self.fortiswitches),
                          ("log disk", self.log_disk), ("wan usage", self.wan_usage), ("bgp", self.bgp), ("ospf", self.ospf)):
@@ -87,6 +87,20 @@ class FortinetDriver(Driver):
         res = self._get("system/resource/usage?scope=global")
         return [self.level_check("cpu", res["cpu"][0]["current"]),
                 self.level_check("memory", res["mem"][0]["current"])]
+
+    def uptime(self):
+        """monitor/web-ui/state: snapshot_utc_time (now) and utc_last_reboot, as Fortinet staff name them at
+        https://community.fortinet.com/t5/Support-Forum/Finding-System-boot-time-or-uptime-from-FortiGate-API/m-p/295596 (the developer network's
+        reference is behind a login: the unit of the two times is not confirmed; a value above 1e11 is taken as milliseconds, else seconds)."""
+        st = _one(self._optional("web-ui/state"))
+        try:
+            now, boot = float(st["snapshot_utc_time"]), float(st["utc_last_reboot"])
+        except (KeyError, TypeError, ValueError):
+            return []
+        hours = max(0.0, (now - boot) / (1000 if boot > 1e11 else 1) / 3600)
+        t = self.th["uptime"]
+        status = grade_low(hours, t["warn"], t["fail"])
+        return self.result("uptime", status, display.uptime(hours), "recent reboot" if status != OK else "", numeric=hours)
 
     def firmware(self):
         return self.result("firmware", OK, self._version() or "?")

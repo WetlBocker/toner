@@ -154,6 +154,16 @@ r, per = run("mist", host="api.mist.com", username="", site="org-1")
 check("Mist: the token header, the self call, the device count", r["reachability"].value == "2 device(s)" and all(h.get("Authorization") == "Token pw" for m, p, h, kw in CALLS))
 check("Mist: the disconnected AP fails the devices row; the switch gets uptime, CPU and memory rows", r["devices"].status == "FAIL" and "ap-lobby" in r["devices"].message
       and any(x.device.endswith("/ sw-core") and x.check == "cpu" and x.value == "5%" for x in per) and any(x.device.endswith("/ sw-core") and x.check == "uptime" for x in per))
+check("Mist: it has its own uptime check, graded like the others", ("uptime", "Uptime and recent reboots") in checks.CATALOG["mist"]
+      and [(x.status, x.value, x.message) for x in per if x.check == "uptime"] == [("OK", "1:01:00:00", "")] and [x.numeric for x in per if x.check == "uptime"] == [25.0])
+ROUTES[("GET", "/api/v1/orgs/org-1/stats/devices")] = Resp(js=[{"name": "sw-core", "type": "switch", "status": "connected", "uptime": 1200}, {"name": "sw-new", "type": "switch", "status": "connected"}])
+r, per = run("mist", host="api.mist.com", username="", site="org-1")
+check("Mist: a recent reboot is said; a device without the field has no uptime row and no error", [(x.device, x.status, x.message) for x in per if x.check == "uptime"] == [("mist1 / sw-core", "WARN", "recent reboot")])
+OPTS["disabled"] = {"mist:uptime"}; r, per = run("mist", host="api.mist.com", username="", site="org-1")
+check("Mist: unticking uptime removes the rows and keeps the devices row", not [x for x in per if x.check == "uptime"] and "devices" in r)
+OPTS["disabled"] = {"mist:devices"}; r, per = run("mist", host="api.mist.com", username="", site="org-1")
+check("Mist: devices off, uptime on: the uptime rows only", "devices" not in r and not [x for x in per if x.check == "device"] and [x for x in per if x.check == "uptime"])
+OPTS["disabled"] = set()
 check("Mist: only the open alarms count", r["alarms"].value == "1" and "device_down x1" in r["alarms"].message)
 try:
     DRIVERS["mist"]({"name": "m", "vendor": "mist", "host": "api.mist.com", "password": "pw", "site": ""}, TH, OPTS).run(); said = ""

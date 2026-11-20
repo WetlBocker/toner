@@ -31,7 +31,7 @@ class MistDriver(WebApi):
             if self.enabled("reachability"):
                 out.append(self.result("reachability", OK, f"{len(self.devices_)} device(s)", str(me.get("email") or me.get("name") or "")))
             for key, fn in (("devices", self.devices), ("alarms", self.alarms), ("resources", self.resources)):
-                if self.enabled(key):
+                if self.enabled(key) or (key == "devices" and self.enabled("uptime")):
                     self.safe(out, key, fn)
         finally:
             self.close()
@@ -39,7 +39,7 @@ class MistDriver(WebApi):
 
     def devices(self):
         if not self.devices_:
-            return self.result("devices", WARN, "none", "the organization has no devices")
+            return self.result("devices", WARN, "none", "the organization has no devices") if self.enabled("devices") else []
         rows, down = [], []
         t = self.th["uptime"]
         for d in self.devices_:
@@ -48,17 +48,19 @@ class MistDriver(WebApi):
             connected = status == "connected"
             if not connected:
                 down.append(name)
-            r = self.result("device", OK if connected else FAIL, status or "unknown", f"{d.get('type', '')} {d.get('model', '')} {d.get('version', '')}".strip())
-            r.device = f"{self.name} / {name}"
-            rows.append(r)
-            if connected and isinstance(d.get("uptime"), (int, float)):
+            if self.enabled("devices"):
+                r = self.result("device", OK if connected else FAIL, status or "unknown", f"{d.get('type', '')} {d.get('model', '')} {d.get('version', '')}".strip())
+                r.device = f"{self.name} / {name}"
+                rows.append(r)
+            if self.enabled("uptime") and connected and isinstance(d.get("uptime"), (int, float)):
                 hours = float(d["uptime"]) / 3600
                 st = grade_low(hours, t["warn"], t["fail"])
                 u = self.result("uptime", st, display.uptime(hours), "recent reboot" if st != OK else "", numeric=hours)
                 u.device = f"{self.name} / {name}"
                 rows.append(u)
-        rows.insert(0, self.result("devices", FAIL if down else OK, f"{len(self.devices_) - len(down)}/{len(self.devices_)} connected",
-                                   "disconnected: " + ", ".join(down[:6]) if down else "", numeric=float(len(self.devices_) - len(down))))
+        if self.enabled("devices"):
+            rows.insert(0, self.result("devices", FAIL if down else OK, f"{len(self.devices_) - len(down)}/{len(self.devices_)} connected",
+                                       "disconnected: " + ", ".join(down[:6]) if down else "", numeric=float(len(self.devices_) - len(down))))
         return rows
 
     def alarms(self):

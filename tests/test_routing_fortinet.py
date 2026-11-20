@@ -114,5 +114,22 @@ check("a token that may not read the configuration: no neighbours reads as not c
 r = run({"router/bgp/neighbors": BGP, "router/ospf/neighbors": OSPF}, disabled=("fortinet:bgp",))
 check("switched off in Settings: no row and no call; the other one still runs", "bgp" not in r and not [c for c in CALLS if "router/bgp" in c] and r["ospf"].value == "2/8 established", (list(r), CALLS))
 
+print("== uptime, from web-ui/state (snapshot_utc_time and utc_last_reboot; the unit is not confirmed, so both are read)")
+from core import checks
+check("Fortinet lists the uptime check, with the label the other vendors use", ("uptime", "Uptime and recent reboots") in checks.CATALOG["fortinet"])
+T0 = 1_700_000_000
+r = run({"web-ui/state": {"snapshot_utc_time": (T0 + 90 * 3600) * 1000, "utc_last_reboot": T0 * 1000}})
+check("milliseconds: 90 hours up is OK, shown like the others", row(r["uptime"]) == ("OK", "3:18:00:00", "") and abs(r["uptime"].numeric - 90) < 1e-6, r.get("uptime"))
+r = run({"web-ui/state": {"snapshot_utc_time": T0 + 1800, "utc_last_reboot": T0}})
+check("seconds: half an hour up is a recent reboot", row(r["uptime"])[0] == "WARN" and r["uptime"].message == "recent reboot" and abs(r["uptime"].numeric - 0.5) < 1e-6, r.get("uptime"))
+r = run({"web-ui/state": {"utc_last_reboot": T0}})
+check("a reply without the snapshot time gives no uptime row and no error", "uptime" not in r and not [k for k, v in r.items() if v.status == "ERROR"], list(r))
+r = run({"web-ui/state": {"snapshot_utc_time": "x", "utc_last_reboot": None}})
+check("fields that are not numbers give no row either", "uptime" not in r)
+r = run(codes={"monitor/web-ui/state": 404})
+check("a FortiOS without the call gives no row", "uptime" not in r)
+r = run({"web-ui/state": {"snapshot_utc_time": T0 + 7200, "utc_last_reboot": T0}}, disabled=("fortinet:uptime",))
+check("switched off in Settings: no row and no call", "uptime" not in r and "monitor/web-ui/state" not in CALLS, CALLS)
+
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

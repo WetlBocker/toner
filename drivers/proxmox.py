@@ -30,7 +30,7 @@ class ProxmoxDriver(RestApi):
             out.append(self.result("reachability", OK, f"Proxmox VE {version.get('version', '')}".strip(), version.get("release") and f"release {version['release']}" or ""))
         resources = self.data("/cluster/resources") or []
         for key, fn in (("cluster", self.cluster), ("nodes", self.nodes), ("storage", self.storage), ("guests", self.guests), ("tasks", self.tasks), ("backups", self.backups)):
-            if self.enabled(key):
+            if self.enabled(key) or (key == "nodes" and self.enabled("uptime")):
                 self.safe(out, key, lambda fn=fn: fn(resources))
         return out
 
@@ -51,19 +51,20 @@ class ProxmoxDriver(RestApi):
         for n in self.data("/nodes") or []:
             label = f"{self.name} / {n.get('node', '?')}"
             st = str(n.get("status") or "unknown").lower()
-            rows = [self.result("node", OK if st == "online" else FAIL, st)]
+            rows = [self.result("node", OK if st == "online" else FAIL, st)] if self.enabled("nodes") else []
             if st == "online":
                 cpu = n.get("cpu")
-                if cpu is not None:
+                if self.enabled("nodes") and cpu is not None:
                     t = self.th["cpu"]
                     rows.append(self.result("cpu", grade(float(cpu) * 100, t["warn"], t["fail"]), f"{float(cpu) * 100:.0f}%", numeric=float(cpu) * 100))
-                if n.get("maxmem"):
+                if self.enabled("nodes") and n.get("maxmem"):
                     t, pct = self.th["memory"], float(n.get("mem") or 0) / float(n["maxmem"]) * 100
                     rows.append(self.result("memory", grade(pct, t["warn"], t["fail"]), f"{pct:.0f}%", numeric=pct))
-                if n.get("uptime") is not None:
+                if self.enabled("uptime") and n.get("uptime") is not None:
                     hours = float(n["uptime"]) / 3600
                     t = self.th["uptime"]
-                    rows.append(self.result("uptime", grade_low(hours, t["warn"], t["fail"]), display.uptime(hours), numeric=hours))
+                    status = grade_low(hours, t["warn"], t["fail"])
+                    rows.append(self.result("uptime", status, display.uptime(hours), "recent reboot" if status != OK else "", numeric=hours))
             for r in rows:
                 r.device = label
             out += rows
