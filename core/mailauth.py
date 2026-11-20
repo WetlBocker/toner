@@ -8,7 +8,7 @@ import time
 import urllib.parse
 import webbrowser
 
-from core import audit, db, oidc, passvault, quiet
+from core import audit, db, extstore, oidc, passvault, quiet
 
 METHODS = [("password", "Password"), ("ms_account", "Microsoft 365 account"), ("ms_app", "Microsoft 365 app (no person)"),
            ("google_account", "Google account")]
@@ -19,7 +19,7 @@ SCOPES = {"ms_account": "openid profile offline_access https://outlook.office.co
           # (https://developers.google.com/identity/protocols/oauth2/native-app, the token response; [G2] in the design)
           "google_account": "openid email https://mail.google.com/",
           "ms_app": "https://outlook.office365.com/.default"}
-PREFIX = "mail-refresh:"
+PREFIX = extstore.LOCAL + "mail-refresh:"     # '~toner/': kept in Toner's vault only, never sent to a password manager
 STALE = 7 * 86400
 RETRY = 3600        # a failed renewal waits an hour: an outage then costs each run's alerts at most one slow token call an hour,
                     # and a sign-in that lasts 90 days (Microsoft) or 6 months unused (Google) loses nothing by the wait
@@ -186,8 +186,8 @@ def access_token(ch, secrets):
 
 def renew_stale(now=None):
     """Renew every enabled channel's sign-in last renewed more than 7 days ago, so a quiet spell can't let one lapse; a failed
-    renewal waits RETRY before the next try. Only names that are a channel's own (mail-refresh:<channel id>) are looked at: a
-    form's draft (mail-refresh:<id>.form) is never renewed. Never raises: it runs before a run's alerts."""
+    renewal waits RETRY before the next try. Only names that are a channel's own (PREFIX + <channel id>) are looked at: a form's
+    draft (PREFIX + <id>.form<n>) is never renewed. Never raises: it runs before a run's alerts."""
     from core import notify
     now = time.time() if now is None else now
     try:
@@ -211,9 +211,17 @@ def renew_stale(now=None):
             quiet.ignored()
 
 
+def _when(v):
+    """A stored time; one that can't be read counts as never (so the sign-in is renewed, not stuck)."""
+    try:
+        return float(v or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _renew_one(ch, now, notify):
     got = _stored(ch)
-    if not got or now - float(got.get("renewed") or 0) <= STALE or now - float(got.get("tried") or 0) < RETRY:
+    if not got or now - _when(got.get("renewed")) <= STALE or now - _when(got.get("tried")) < RETRY:
         return
     try:
         access_token(ch, notify.get_secrets(ch))

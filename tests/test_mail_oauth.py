@@ -56,7 +56,7 @@ def token_route(prov, h):
     if f.get("grant_type") == "refresh_token":
         if f.get("refresh_token") in REVOKED:
             return h.send_json({"error": "invalid_grant", "error_description": f"AADSTS70000 {f.get('refresh_token')}"}, 400)
-        out = {"access_token": AT, "id_token": prov.token()}
+        out = {"access_token": STATE.get("at") or AT, "id_token": prov.token()}
         if STATE["rotate"]:
             out["refresh_token"] = RT2
         return h.send_json(out)
@@ -102,6 +102,7 @@ class Smtp(socketserver.StreamRequestHandler):
             elif cmd.startswith("RCPT") and SMTP_MODE.get("rcpt") == "echo": w(f"550 5.7.1 recipient refused for {echo()}")
             elif cmd.startswith("RCPT"): rcpt.append(line.split(":", 1)[1].strip(" <>")); w("250 ok")
             elif cmd == "DATA": w("354 go"); data = True
+            elif cmd == "QUIT" and SMTP_MODE.get("quit") == "echo": w(f"554 5.0.0 not like this {echo()}"); return
             elif cmd == "QUIT": w("221 bye"); return
             else: w("250 ok")
 class TS(socketserver.ThreadingTCPServer): allow_reuse_address = True; daemon_threads = True
@@ -129,10 +130,10 @@ def chan(auth, cid=None, **kw):
             "client_id": "toner-app", "smtp_host": "127.0.0.1", "smtp_port": SP_PORT, "security": "STARTTLS",
             "username": "mailbox@example.com", "from_addr": "toner@example.com", "to_addrs": "a@example.com", **kw}
 def stored(ch):
-    raw = passvault.get("mail-refresh:" + ch["id"])
+    raw = passvault.get(mailauth.PREFIX + ch["id"])
     return json.loads(raw) if raw else None
 def plant(ch, rt, age_days=0, account="mailbox@example.com"):
-    passvault.put("mail-refresh:" + ch["id"], json.dumps({"refresh_token": rt, "account": account, "renewed": time.time() - age_days * 86400}))
+    passvault.put(mailauth.PREFIX + ch["id"], json.dumps({"refresh_token": rt, "account": account, "renewed": time.time() - age_days * 86400}))
 msg = notify.build_message([alerts.Event("new", "core", "cpu", "FAIL", "OK", "95%", "")])
 def send(ch, secrets=None):
     return notify.deliver(ch, msg, secrets={} if secrets is None else secrets, retry_delay=0)
@@ -314,6 +315,88 @@ check("a 550 to RCPT or DATA that echoes the token: refused, and the token is in
 check("...the details still say what the server said, by type", all("SMTPRecipientsRefused" in d and "550" in d for _ok, d in out["rcpt"])
       and all("SMTPDataError" in d and "550" in d for _ok, d in out["data"]), got)
 
+print("== nothing that leaves _mail holds the token: not its text, attributes, __context__ or __cause__")
+def holds(e, token, depth=0):
+    """True when the exception, its attributes or anything chained to it still has the token."""
+    if e is None or depth > 5:
+        return False
+    if token in repr(e.args) or any(token in repr(v) for v in vars(e).values() if not isinstance(v, BaseException)) \
+            or token in repr(getattr(e, "object", "")):
+        return True
+    return holds(e.__context__, token, depth + 1) or holds(e.__cause__, token, depth + 1)
+def raised_by_mail(ch, secrets=None):
+    try:
+        notify._mail(ch, secrets or {}, "s", "b")
+    except Exception as ex:
+        return ex
+plant(MS, RT1); STATE["rotate"] = False
+cases = {}
+SMTP_MODE["rcpt"] = SMTP_MODE["quit"] = "echo"
+cases["550 to RCPT, then a bad reply to QUIT"] = raised_by_mail(MS)
+SMTP_MODE["rcpt"] = SMTP_MODE["quit"] = None
+SMTP_MODE["auth"] = "challenge"
+cases["535 after the 334 challenge"] = raised_by_mail(MS)
+SMTP_MODE["auth"] = "ok"
+P.force = 503
+cases["the provider can't be reached"] = raised_by_mail(MS)
+P.force = None
+STATE["at"] = "at-\u00fcnicode-FFFF6666"
+cases["an access token smtplib can't encode"] = raised_by_mail(MS)
+STATE["at"] = None
+for name, ex in cases.items():
+    check(f"{name}: raised, no token anywhere on it, nothing chained", ex is not None and not holds(ex, AT) and not holds(ex, "FFFF6666")
+          and ex.__context__ is None and ex.__cause__ is None, (type(ex).__name__, ex, ex and ex.__context__))
+check("...and the QUIT case still says what the server said", "554" in str(cases["550 to RCPT, then a bad reply to QUIT"]))
+n_conn, n = len(conns), len(P.token_requests)
+okd, d = send(chan("ms_account", username="m\u00e4ilbox@example.com"))
+check("a username that is not ASCII is refused before any token call or connection, with the existing address text",
+      not okd and d == "'m\u00e4ilbox@example.com' is not a valid email address." and len(conns) == n_conn and len(P.token_requests) == n, d)
+check("...and validation says so too", "'m\u00e4ilbox@example.com' is not a valid email address." in notify.validate(chan("ms_account", username="m\u00e4ilbox@example.com"), {}))
+check("...but a password channel's username is left as it was", not [x for x in notify.validate({**chan("password"), "username": "m\u00e4ilbox"}, {}) if "m\u00e4ilbox" in x])
+STATE["rotate"] = True
+
+print("== a password manager as the store never gets a sign-in")
+from core import extstore, extvault
+MANAGER = {"items": {}, "containers": {}}
+class FakeManager(extvault.Provider):
+    kind = "bitwarden"
+    def connect(self): pass
+    def containers(self): return {nm: cid for cid, nm in MANAGER["containers"].items()}
+    def create_container(self, name):
+        cid = f"c{len(MANAGER['containers']) + 1}"; MANAGER["containers"][cid] = name; return cid
+    def all_items(self, cid):
+        return [extvault.Item(ref=r, title=i["title"], username=i["user"], value=i["pw"], toner_id=i["tid"], container=MANAGER["containers"][cid], raw=i)
+                for r, i in MANAGER["items"].items() if i["cid"] == cid]
+    def put(self, cid, toner_id, title, username, value, item=None):
+        ref = item.ref if item else f"i{len(MANAGER['items']) + 1}"
+        MANAGER["items"].setdefault(ref, {}).update({"cid": cid, "tid": toner_id, "title": title, "user": username, "pw": value}); return ref
+    def delete(self, item): MANAGER["items"].pop(item.ref, None)
+    def delete_container(self, cid): MANAGER["containers"].pop(cid)
+    def search(self, text): return []
+    def read(self, ref): return MANAGER["items"][ref]["pw"]
+extvault.CONNECTORS["bitwarden"] = FakeManager
+extstore.start = lambda: None
+check("a sign-in's name is one Toner's vault keeps to itself", mailauth.PREFIX.startswith(extstore.LOCAL) and extstore.is_internal(mailauth.PREFIX + "x"))
+STATE["rotate"] = False; plant(MS, RT1); passvault.put(mailauth.PREFIX + MS["id"] + ".form1", json.dumps({"refresh_token": "rt-draft-7777"}))
+db.set_secret("sw-mgr", "pw-mgr")
+extstore.use("bitwarden")
+for copies in (False, True):
+    db.set_setting("vault_keep_copies", copies); MANAGER["items"].clear()      # each mode on its own: the manager starts empty
+    db.set_secret("sw-mgr", "pw-mgr")                                            # (with copies off, only what is saved then is sent)
+    st = extstore.sync_once()
+    sent = [i["tid"] + " " + i["pw"] for i in MANAGER["items"].values()]
+    check(f"copies {'kept' if copies else 'off'}: the manager got the other passwords but no sign-in and no draft",
+          st["connected"] and any("pw-mgr" in x for x in sent) and not [x for x in sent if "mail-refresh" in x or "rt-" in x], (st, sent))
+    check("...the names offered to it hold none", not [x for x in extstore.local_names() if "mail-refresh" in x], extstore.local_names())
+    check("...and the sign-in still reads, renews and stays in the vault", mailauth.signed_in_as(MS) == "mailbox@example.com"
+          and send(MS)[0] and stored(MS) is not None and mailauth.PREFIX + MS["id"] in passvault.names(), (copies, mailauth.signed_in_as(MS), send(MS), stored(MS)))
+had_draft = passvault.remove(mailauth.PREFIX + MS["id"] + ".form1")
+mailauth.sign_out(MS)
+check("copies off: the sign-in and the draft are removed from the vault", had_draft and stored(MS) is None
+      and not [x for x in passvault.names() if x.startswith(mailauth.PREFIX + MS["id"])], [x for x in passvault.names() if "mail-refresh" in x])
+extstore.use("toner"); STATE["rotate"] = True
+db.set_setting("vault_keep_copies", True)
+
 print("== renewal of quiet sign-ins")
 OLD, YOUNG = chan("ms_account", "c-old"), chan("ms_account", "c-young")
 notify.save_channels([OLD, YOUNG, HOOK])
@@ -338,10 +421,20 @@ STATE["error"] = None
 check("...and another once the interval has passed", len(P.token_requests) == n + 2, P.token_requests[n:])
 check("the retry interval is an hour", mailauth.RETRY == 3600)
 notify.save_channels([YOUNG, OLD, HOOK])
-passvault.put("mail-refresh:c-young", json.dumps({"refresh_token": RT1, "account": "x", "renewed": "not a time"}))
-plant(OLD, RT1, age_days=8); n = len(P.token_requests)
+plant(YOUNG, RT1, age_days=8); plant(OLD, RT1, age_days=8); n = len(P.token_requests)
+real_access = mailauth.access_token
+def failing_for_young(ch, secrets):
+    if ch["id"] == YOUNG["id"]:
+        raise RuntimeError("something unexpected")
+    return real_access(ch, secrets)
+mailauth.access_token = failing_for_young
 mailauth.renew_stale()
-check("a malformed stored sign-in does not stop the next channel's renewal", len(P.token_requests) == n + 1 and time.time() - stored(OLD)["renewed"] < 60)
+mailauth.access_token = real_access
+check("one channel's unexpected failure does not stop the next channel's renewal", len(P.token_requests) == n + 1 and time.time() - stored(OLD)["renewed"] < 60)
+for odd in ({"renewed": "not a time"}, {"renewed": time.time() - 8 * 86400, "tried": "not a time"}, {"renewed": None, "tried": [1]}):
+    passvault.put(mailauth.PREFIX + "c-young", json.dumps({"refresh_token": RT1, "account": "x", **odd})); n = len(P.token_requests)
+    mailauth.renew_stale()
+    check(f"an unreadable stored time counts as never ({odd})", len(P.token_requests) == n + 1 and time.time() - stored(YOUNG)["renewed"] < 60, P.token_requests[n:])
 real_channels = notify.channels
 notify.channels = lambda: 1 / 0
 try:
@@ -354,13 +447,13 @@ notify.save_channels([{**OLD, "enabled": False}, HOOK]); plant(OLD, RT1, age_day
 mailauth.renew_stale()
 check("a disabled channel's sign-in is not renewed", len(P.token_requests) == n)
 notify.save_channels([OLD, HOOK]); plant(OLD, RT1)
-passvault.put("mail-refresh:c-old.form", json.dumps({"refresh_token": "rt-draft-9999", "account": "d@example.com", "renewed": time.time() - 9 * 86400}))
+passvault.put(mailauth.PREFIX + "c-old.form1", json.dumps({"refresh_token": "rt-draft-9999", "account": "d@example.com", "renewed": time.time() - 9 * 86400}))
 n = len(P.token_requests)
 mailauth.renew_stale()
-check("a form's draft sign-in (mail-refresh:<id>.form) is not renewed or changed", len(P.token_requests) == n
-      and json.loads(passvault.get("mail-refresh:c-old.form"))["refresh_token"] == "rt-draft-9999")
+check("a form's draft sign-in (<prefix><id>.form<n>) is not renewed or changed", len(P.token_requests) == n
+      and json.loads(passvault.get(mailauth.PREFIX + "c-old.form1"))["refresh_token"] == "rt-draft-9999")
 check("...and is not the channel's sign-in", mailauth.signed_in_as(OLD) == "mailbox@example.com")
-passvault.remove("mail-refresh:c-old.form")
+passvault.remove(mailauth.PREFIX + "c-old.form1")
 
 print("== sign_in for a method with no browser sign-in")
 for auth in ("ms_app", "password"):
@@ -399,10 +492,13 @@ check("sign_out with nothing stored writes nothing", len(audits("email sign-in r
 print("== password export and import")
 notify.save_channels([OLD, G, HOOK]); notify.set_secrets(G, {"client_secret": CS})
 got = vault.collect()
-check("a password export carries the client secret but no sign-in", CS in got.values() and not [k for k in got if k.startswith("mail-refresh:")], sorted(got))
-data, _n = vault.export_bytes("a long enough password", {"sw1": "pw", "mail-refresh:c-planted": json.dumps({"refresh_token": "rt-evil"})})
+check("a password export carries the client secret but no sign-in", CS in got.values() and not [k for k in got if "mail-refresh" in k], sorted(got))
+evil = json.dumps({"refresh_token": "rt-evil"})
+data, _n = vault.export_bytes("a long enough password", {"sw1": "pw", "mail-refresh:c-planted": evil, mailauth.PREFIX + "c-planted": evil,
+                                                          mailauth.PREFIX + "c-planted.form1": evil})
 vault.import_bytes(data, "a long enough password")
-check("an import carrying a sign-in does not store it", passvault.get("mail-refresh:c-planted") is None and passvault.get("sw1") == "pw")
+check("an import carrying a sign-in does not store it (today's name, a draft, or the name before ~toner/)",
+      [n for n in passvault.names() if "c-planted" in n] == [] and passvault.get("sw1") == "pw", [n for n in passvault.names() if "c-planted" in n])
 
 print("== scheduled reports (mail_files)")
 notify.save_channels([MS, HOOK]); plant(MS, RT1)

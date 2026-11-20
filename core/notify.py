@@ -139,13 +139,15 @@ def validate(ch, secrets):
                 probs.append(f"{label} must be a number from {lo} to {hi}.")
     if ch["type"] == "email":
         for field in ("from_addr", "to_addrs"):
-            probs += [f"'{a}' is not a valid email address." for a in bad_addresses(ch.get(field, ""))]
+            probs += [_BAD_ADDRESS.format(a) for a in bad_addresses(ch.get(field, ""))]
     auth = ch.get("auth") or "password"          # a channel saved before OAuth has none
     if ch["type"] == "email" and auth != "password":
         if ch.get("security") not in ("STARTTLS", "SSL/TLS"):
             probs.append(TLS_NEEDED)
         if not str(ch.get("username", "")).strip():
             probs.append("Username is required: the mailbox Toner sends from.")
+        elif not str(ch["username"]).strip().isascii():
+            probs.append(_BAD_ADDRESS.format(str(ch["username"]).strip()))
         for key, label in (("tenant", "Tenant ID"), ("client_id", "Client ID")):
             if not str(ch.get(key, "")).strip() and (key == "client_id" or auth.startswith("ms_")):
                 probs.append(f"{label} is required.")
@@ -271,6 +273,7 @@ def _send_email(ch, secrets, msg):
 
 
 TLS_NEEDED = "Signing in with Microsoft 365 or Google needs STARTTLS or SSL/TLS."
+_BAD_ADDRESS = "'{}' is not a valid email address."
 
 
 def _mail(ch, secrets, subject, body, files=()):
@@ -284,13 +287,15 @@ def _mail(ch, secrets, subject, body, files=()):
         with open(path, "rb") as f:
             em.add_attachment(f.read(), maintype=kind.split("/")[0], subtype=kind.split("/")[1], filename=os.path.basename(path))
     port, mode = int(ch.get("smtp_port") or 587), ch.get("security", "STARTTLS")
-    oauth = (ch.get("auth") or "password") != "password"
-    if oauth:                           # never in the clear; direct, not through the proxy (owner decision 4)
-        if mode not in ("STARTTLS", "SSL/TLS"):
-            raise mailauth.MailAuthError(TLS_NEEDED)
-        token = mailauth.access_token(ch, secrets)
+    oauth, token = (ch.get("auth") or "password") != "password", None
     ctx = ssl.create_default_context()
     try:
+        if oauth:                       # never in the clear; direct, not through the proxy (owner decision 4)
+            if mode not in ("STARTTLS", "SSL/TLS"):
+                raise mailauth.MailAuthError(TLS_NEEDED)
+            if not ch.get("username", "").strip().isascii():        # smtplib's encode error would carry the whole XOAUTH2 string
+                raise mailauth.MailAuthError(_BAD_ADDRESS.format(ch["username"].strip()))
+            token = mailauth.access_token(ch, secrets)
         if mode == "SSL/TLS":
             smtp = (smtplib.SMTP_SSL if oauth else _SMTP_SSL)(ch["smtp_host"].strip(), port, timeout=15, context=ctx)
         else:
@@ -310,13 +315,14 @@ def _mail(ch, secrets, subject, body, files=()):
                 smtp.login(ch["username"], secrets.get("password", ""))
             smtp.send_message(em)
     except Exception as e:
-        if not oauth or not token:
+        if not oauth:
             raise
-        # any reply may say the token back: blank it in the exception itself, keeping its type (deliver retries by type)
-        e.args = _hide(e.args, token)
-        for attr in ("smtp_error", "recipients", "strerror"):
-            if getattr(e, attr, None) is not None:
-                setattr(e, attr, _hide(getattr(e, attr), token))
+        if token:   # any reply may say the token back: blank it in the exception itself, keeping its type (deliver retries by type)
+            e.args = _hide(e.args, token)
+            for attr in ("smtp_error", "recipients", "strerror", "object"):
+                if getattr(e, attr, None) is not None:
+                    setattr(e, attr, _hide(getattr(e, attr), token))
+        e.__context__ = e.__cause__ = None      # an earlier exception (QUIT after a refusal, the 535, a token call's) may hold it
         raise e from None
     return f"sent to {len(to)} recipient(s)"
 

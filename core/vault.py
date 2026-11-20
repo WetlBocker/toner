@@ -78,7 +78,8 @@ def export_bytes(password, secrets=None):
     return MAGIC + salt + nonce + AESGCM(_key(password, salt)).encrypt(nonce, body, MAGIC), len(secrets)
 
 
-PRIVATE_NAMES = ("service:directory-", "sso-refresh:", "mail-refresh:")     # the directory re-check's password, SSO's and email's refresh tokens
+PRIVATE_NAMES = ("service:directory-", "sso-refresh:", "mail-refresh:")     # the directory re-check's password, SSO's refresh tokens, and
+                                                                            # email's under their name before '~toner/' (today's is internal)
 
 
 def read_bytes(data, password):
