@@ -3,7 +3,7 @@
 import threading
 from datetime import datetime, timedelta
 
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import QObject, QSize, Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout,
                                QHBoxLayout, QLabel, QLineEdit, QMenu, QMessageBox, QPushButton, QSpinBox, QTableWidget,
@@ -12,7 +12,6 @@ from core import alerts, audit, db, mailauth, notify, oidc, passvault, quiet
 from core.dirsignin import SSO_TEXT, sso_said
 from ui.brandicons import channel_icon
 from ui.settings_base import Page, note, row_of, spin
-from ui.signinwindow import Job
 from ui.toast import toast
 from ui.widgets import EmptyHint, filling
 
@@ -32,15 +31,30 @@ SIGN_IN, SIGN_IN_AGAIN, NOT_SIGNED_IN, SIGNED_IN_AS = "Sign in", "Sign in again"
 SAVED = "saved in the vault - leave blank to keep it"
 
 
+class _Relay(QObject):
+    """Hands a worker's result to the window's thread (as ui/notifier.py does)."""
+    done = Signal(object, object, object)
+
+
 def _run(fn, landed, tag=None):
-    """fn on a worker; landed(job, result, error) back on the window's thread, unless the window that asked is gone by then.
-    The application holds the job until it ends, so nothing ever waits for it and closing its window is always immediate."""
-    job = Job(fn)
+    """fn on a daemon thread; landed(job, result, error) back on the window's thread, unless the window that asked is gone by then.
+    Nothing ever waits for it: closing its window is immediate, and quitting Toner with one still running just ends it (a QThread
+    still running at quit aborts the process)."""
+    job = _Relay(QApplication.instance())
     job.tag = tag
-    job.setParent(QApplication.instance())
-    job.finished.connect(job.deleteLater)
     job.done.connect(landed, Qt.ConnectionType.QueuedConnection)
-    job.start()
+    job.done.connect(job.deleteLater, Qt.ConnectionType.QueuedConnection)
+
+    def work():
+        try:
+            result, error = fn(), None
+        except Exception as e:                       # noqa: BLE001  (the window says what it can, or raises it there)
+            result, error = None, e
+        try:
+            job.done.emit(job, result, error)
+        except RuntimeError:                         # the application, and the relay with it, has gone
+            quiet.ignored()
+    threading.Thread(target=work, daemon=True).start()
 
 
 class _Attempt:

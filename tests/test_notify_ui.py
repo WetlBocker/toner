@@ -4,6 +4,27 @@ import os as _os, sys as _sys, tempfile as _tmp
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+if _sys.argv[1:] == ["quit"]:      # the child of "quitting Toner while a Send test and a sign-in still run", below
+    import time, keyring
+    _os.environ["NETCHECK_DB"] = _os.path.join(_os.environ["SP"], "nuiquit%d.db" % int(time.time() * 1000))
+    keyring.get_password = lambda s, u: None; keyring.set_password = lambda s, u, p: None; keyring.delete_password = lambda s, u: None
+    from core import db, mailauth, notify, passvault
+    db.init(); passvault.open_with(_os.urandom(32))
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QApplication
+    app = QApplication([])
+    import ui.settings_pages.notifications as NT
+    started = []
+    notify.send_test = lambda ch, secrets=None, desktop=None: (started.append("test"), time.sleep(8), (True, "late"))[2]
+    mailauth.sign_in = lambda ch, secrets, cancelled=None: (started.append("sign-in"), time.sleep(8), "late@example.com")[2]
+    mail = dict(notify.new_channel("email"), smtp_host="smtp.example.com", from_addr="a@example.com", to_addrs="b@example.com",
+                tenant="11111111-2222-3333-4444-555555555555", client_id="toner-app", username="a@example.com")
+    d1, d2 = NT.ChannelDialog(mail, None), NT.ChannelDialog(dict(mail, auth="ms_account"), None)
+    d1.test(); d2.sign_btn.click()
+    QTimer.singleShot(500, app.quit)
+    code = app.exec()
+    print("running at quit:", sorted(started), flush=True)
+    _sys.exit(code)
 import os, sys, time, json, threading
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -450,5 +471,12 @@ with db.connect() as c: c.execute("INSERT INTO alert_state(device, check_name, s
 alerts.evaluate([], []);
 with db.connect() as c: gone = c.execute("select count(*) from alert_state where device='ghost'").fetchone()[0]
 check("state of a device that is not in the inventory is deleted", gone == 0, gone)
+
+print("== quitting Toner while a Send test and a sign-in still run")
+import subprocess
+t0 = time.time()
+r = subprocess.run([sys.executable, "-u", os.path.abspath(__file__), "quit"], capture_output=True, text=True, timeout=60)
+check("the app quits cleanly (exit code 0) and without waiting for them", r.returncode == 0 and "running at quit: ['sign-in', 'test']" in r.stdout
+      and time.time() - t0 < 7, (r.returncode, round(time.time() - t0, 1), r.stdout[-200:], r.stderr[-300:]))
 
 print(f"\n{PASS} passed, {FAIL} failed")
