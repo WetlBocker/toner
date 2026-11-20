@@ -162,10 +162,42 @@ check("the service makes both when due", ("vulnerability report", os.path.join(f
       and ("hardening report", os.path.join(folder, "Toner-hardening-2026-06-15.html")) in did, did)
 did = service.Daemon(log=lambda m: None).tick(NOW + timedelta(minutes=1))
 check("and not again a minute later", not any(k in ("vulnerability report", "hardening report") for k, *_ in did), did)
-import app as A
-src = open(A.__file__, encoding="utf-8").read()
-check("the window's housekeeping hook makes them too", "scanreports.generate_scheduled(" in src)
-for rep in ("vuln_report", "hardening_report"): db.set_setting(f"{rep}_schedule", "")
+import app as A, logging
+class Catch(logging.Handler):
+    def __init__(self): super().__init__(); self.lines = []
+    def emit(self, r): self.lines.append(r.getMessage())
+def housekeeping():
+    """Main.do_housekeeping on a stand-in window (it only needs .scanning); returns what it did and what it logged."""
+    did, catch = [], Catch()
+    real = (A.scheduler.start_scan, A.agents.running, A.agents.check_cert)
+    A.scheduler.start_scan = lambda tab: did.append("scan"); A.agents.running = lambda: True; A.agents.check_cert = lambda: did.append("cert")
+    A.log.addHandler(catch)
+    try:
+        attempt(A.Main.do_housekeeping, types.SimpleNamespace(scanning=None))
+    finally:
+        A.log.removeHandler(catch); A.scheduler.start_scan, A.agents.running, A.agents.check_cert = real
+    return did, catch.lines
+for k in ("trend", "vuln_report", "hardening_report"): db.set_setting(f"{k}_schedule", "weekly"); db.set_setting(f"{k}_last", "")
+made = []
+real_make, real_tmake = scanreports.make, trends.make
+def failing(report, folder, now):
+    made.append(report)
+    if report == "vuln_report": raise PermissionError("the report folder is read-only")
+    return real_make(report, folder, now)
+def failing_trend(folder, kind, now):
+    made.append("trend"); raise OSError("disk full")
+scanreports.make, trends.make = failing, failing_trend
+did, lines = housekeeping()
+scanreports.make, trends.make = real_make, real_tmake
+check("the window's hook: a trend report and a vulnerability report that fail do not stop the hardening report", made == ["trend", "vuln_report", "hardening_report"]
+      and gs("hardening_report_last") != "" and gs("vuln_report_last") == "", made)
+check("...nor the scheduled scan and the certificate check", did == ["scan", "cert"], did)
+check("...and each failure is logged once, by name", lines == ["trend report failed", "vulnerability report failed"], lines)
+hard_last = gs("hardening_report_last")
+did, lines = housekeeping()
+check("next time the failed ones are tried again and made (the window's housekeeping runs every 30 minutes); the one made is not due", not lines
+      and gs("trend_last") != "" and gs("vuln_report_last") != "" and gs("hardening_report_last") == hard_last and did == ["scan", "cert"], (lines, gs("trend_last"), gs("vuln_report_last")))
+for rep in ("trend", "vuln_report", "hardening_report"): db.set_setting(f"{rep}_schedule", ""); db.set_setting(f"{rep}_last", "")
 
 print("== Send now (the core)")
 calls.clear(); fake_mail.reply = (True, "sent to 1 recipient(s)")

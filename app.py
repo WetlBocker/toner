@@ -979,19 +979,21 @@ class Main(QMainWindow):
         self.notifier.handle_run(results, ran, scheduled)
 
     def do_housekeeping(self):
-        try:
-            if trends.due():
-                path = trends.generate_scheduled()
-                if path:
-                    log.info("Trend report saved to %s", path)
-                    audit.log("trend report made", path)
-            from core import scanreports
-            for report, (label, _title, _word) in scanreports.KINDS.items():
-                if scanreports.due(report):
-                    path = scanreports.generate_scheduled(report)
+        from core import scanreports
+        # Each report on its own: one that fails (a full folder) is logged and tried again next time (every 30 minutes, as the service
+        # retries each tick), and never stops another report, the scheduled scan or the certificate check.
+        made = [("Trend report", trends.due, trends.generate_scheduled)] + [
+            (label, lambda r=r: scanreports.due(r), lambda r=r: scanreports.generate_scheduled(r)) for r, (label, _t, _w) in scanreports.KINDS.items()]
+        for label, due, generate in made:
+            try:
+                if due():
+                    path = generate()
                     if path:
                         log.info("%s saved to %s", label, path)
                         audit.log(f"{label.lower()} made", path)
+            except Exception:
+                log.exception("%s failed", label.lower())
+        try:
             scheduler.start_scan(self.scanning)
             if agents.running():
                 agents.check_cert()
