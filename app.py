@@ -985,6 +985,13 @@ class Main(QMainWindow):
                 if path:
                     log.info("Trend report saved to %s", path)
                     audit.log("trend report made", path)
+            from core import scanreports
+            for report, (label, _title, _word) in scanreports.KINDS.items():
+                if scanreports.due(report):
+                    path = scanreports.generate_scheduled(report)
+                    if path:
+                        log.info("%s saved to %s", label, path)
+                        audit.log(f"{label.lower()} made", path)
             scheduler.start_scan(self.scanning)
             if agents.running():
                 agents.check_cert()

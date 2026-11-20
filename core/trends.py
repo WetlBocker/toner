@@ -8,8 +8,13 @@ from html import escape
 from core import backup, db, display, fleet, periods, reports
 
 PERIODS = [("Last 7 days", 7), ("Last 30 days", 30), ("Last 90 days", 90)]
-SCHEDULES = [("Off", ""), ("Every week", "weekly"), ("Every month", "monthly")]
+SCHEDULES = [(periods.LABELS[k], k) for k in ("", "weekly", "biweekly", "monthly", "quarterly")]     # Settings > Reports, each report's drop-down
 FMT = periods.FMT
+
+
+def window(kind):
+    """The days a report sent on this schedule covers (Off, sent by hand: a week)."""
+    return {"biweekly": 14, "monthly": 30, "quarterly": 90}.get(kind, 7)
 
 
 def _pct(part, whole):
@@ -171,6 +176,48 @@ def due(now=None):
     return periods.is_due(db.get_setting("trend_schedule"), db.get_setting("trend_last"), now)
 
 
+def pdf_ok():
+    """True when the program has a Qt application, so a report is a PDF; else HTML (a service has no window system)."""
+    try:
+        from PySide6.QtGui import QGuiApplication
+        return QGuiApplication.instance() is not None
+    except Exception:
+        return False
+
+
+def make(folder, kind, now):
+    """Save the trend report for this schedule's period into `folder`, and in Global one per organization when asked. Returns the paths."""
+    pdf = pdf_ok()
+    path = os.path.join(folder, f"Toner-trend-{now:%Y-%m-%d}") + (".pdf" if pdf else ".html")
+    (save_pdf if pdf else save_html)(compute(window(kind), now), path)
+    made = [path]
+    if db.get_setting("trend_per_org") and db.everything():            # Global: and one report per organization, from its own file
+        for o in db.org_rows():
+            if o["archived"]:
+                continue
+            with db.within(o["id"]):
+                part = compute(window(kind), now)
+            if part["runs"]:
+                name = o["code"] or str(o["id"])                      # (codes are letters, digits, - and _: safe in a file name)
+                made.append(os.path.join(folder, f"Toner-trend-{name}-{now:%Y-%m-%d}") + (".pdf" if pdf else ".html"))
+                (save_pdf if pdf else save_html)(part, made[-1])
+    return made
+
+
+def mail(label, kind, to, files, now):
+    """Mail a report from Settings > Reports to its own addresses and say so in the audit log. `label` is its row's name ("Trend report");
+    the subject names the period its schedule covers. Returns (sent, detail) from notify.mail_files."""
+    from core import audit, notify
+    name = label.lower()
+    if kind:
+        subject, body = f"{label}, {now - timedelta(days=window(kind)):%Y-%m-%d} to {now:%Y-%m-%d}", f"The {periods.LABELS.get(kind, kind).lower()} {name} from Toner is attached."
+    else:                                                        # Send now with the schedule Off
+        subject, body = f"{label}, {now:%Y-%m-%d}", f"The {name} from Toner is attached."
+    sent, detail = notify.mail_files(to, subject, body, files)
+    audit.log(f"{name} emailed" if sent else f"{name} not emailed", detail)
+    return sent, detail
+
+
 def generate_scheduled(now=None):
     """Make the report into the reports folder (Settings > Reports) and remember when. PDF when the program has a Qt application,
     else HTML (a service has no window system). Returns the path, or '' when there is nowhere to put it."""
@@ -178,32 +225,10 @@ def generate_scheduled(now=None):
     if not folder or not os.path.isdir(folder):
         return ""
     now = now or datetime.now()
-    data = compute(7 if db.get_setting("trend_schedule") == "weekly" else 30, now)
-    stem = os.path.join(folder, f"Toner-trend-{now:%Y-%m-%d}")
-    try:
-        from PySide6.QtGui import QGuiApplication
-        pdf = QGuiApplication.instance() is not None
-    except Exception:
-        pdf = False
-    path = stem + (".pdf" if pdf else ".html")
-    (save_pdf if pdf else save_html)(data, path)
-    made = [path]
-    if db.get_setting("trend_per_org") and db.everything():            # Global: and one report per organization, from its own file
-        for o in db.org_rows():
-            if o["archived"]:
-                continue
-            with db.within(o["id"]):
-                part = compute(7 if db.get_setting("trend_schedule") == "weekly" else 30, now)
-            if part["runs"]:
-                name = o["code"] or str(o["id"])                      # (codes are letters, digits, - and _: safe in a file name)
-                made.append(os.path.join(folder, f"Toner-trend-{name}-{now:%Y-%m-%d}") + (".pdf" if pdf else ".html"))
-                (save_pdf if pdf else save_html)(part, made[-1])
+    kind = db.get_setting("trend_schedule")
+    made = make(folder, kind, now)
     db.set_setting("trend_last", now.strftime(FMT))             # (before the mail: a server that refuses must not make it again each minute)
     to = db.get_setting("trend_email")
     if to:                                                      # Settings > Reports, "Email it to": its own list of addresses
-        from core import audit, notify
-        kind = db.get_setting("trend_schedule")
-        sent, detail = notify.mail_files(to, f"Trend report, {now - timedelta(days=7 if kind == 'weekly' else 30):%Y-%m-%d} to {now:%Y-%m-%d}",
-                                         f"The {kind} trend report from Toner is attached.", made)
-        audit.log("trend report emailed" if sent else "trend report not emailed", detail)
-    return path
+        mail("Trend report", kind, to, made, now)
+    return made[0]

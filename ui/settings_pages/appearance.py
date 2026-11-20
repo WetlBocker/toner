@@ -1,11 +1,12 @@
 """Settings pages: Appearance, Terminal and Reports."""
 
 import os
+import threading
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QFont
-from PySide6.QtWidgets import QCheckBox, QColorDialog, QComboBox, QFileDialog, QFontComboBox, QLineEdit, QPushButton, QSlider
-from core import db, reports, trends
+from PySide6.QtWidgets import QCheckBox, QColorDialog, QComboBox, QFileDialog, QFontComboBox, QLabel, QLineEdit, QPushButton, QSlider
+from core import db, reports, scanreports, trends
 from ui import terminal, theme
 from ui.settings_base import Page, compact_row, note, row_of, spin
 
@@ -265,6 +266,9 @@ class TerminalPage(Page):
 # ------------------------------------------------------------------ Reports
 class ReportsPage(Page):
     title = "Reports"
+    NOTE = ("Each report is saved to the default folder and emailed to its addresses through the first Email channel in Settings > Notifications. "
+            "The vulnerability and hardening reports use the latest scan.")
+    sent = Signal(str, str)                 # report, the text beside its Send now button (from the worker thread)
 
     def __init__(self):
         super().__init__()
@@ -274,22 +278,70 @@ class ReportsPage(Page):
         browse = QPushButton("Browse...")
         browse.clicked.connect(self.browse)
         self.include_all = QCheckBox("Include the full per-device listing (not just 'Needs attention')")
-        self.trend = QComboBox()
-        for label, key in trends.SCHEDULES:
-            self.trend.addItem(label, key)
-        self.trend.setToolTip("A weekly or monthly trend report is saved into the default folder (a PDF from the window, HTML from the "
-                              "background service) while Toner is running.")
         self.form.addRow("Report title", self.report_title)
         self.form.addRow("Organisation", self.org)
         self.form.addRow("Default folder", row_of(self.folder, browse))
         self.form.addRow("", self.include_all)
-        self.form.addRow("Trend report", self.trend)
-        self.trend_email = QLineEdit()
-        self.trend_email.setPlaceholderText("a@example.com, b@example.com")
-        self.form.addRow("Email it to", self.trend_email)
-        self.form.addRow("", note("Sent through the first Email channel in Settings > Notifications, to these addresses only."))
-        self.per_org = QCheckBox("Also one report per organization")      # Global, with organizations: one file each beside it
-        self.form.addRow("", self.per_org)
+        self.schedule, self.email, self.send, self.result, self._sending = {}, {}, {}, {}, set()
+        for report, label in (("trend", "Trend report"), *((k, v[0]) for k, v in scanreports.KINDS.items())):
+            box, email, btn, res = QComboBox(), QLineEdit(), QPushButton("Send now"), QLabel("")
+            for text, key in trends.SCHEDULES:
+                box.addItem(text, key)
+            email.setPlaceholderText("a@example.com, b@example.com")
+            res.setWordWrap(True)                          # a long result beside the button wraps instead of squeezing the box
+            btn.setProperty("notSetting", True)
+            btn.setAutoDefault(False)
+            btn.clicked.connect(lambda _=False, r=report: self.send_now(r))
+            email.textChanged.connect(lambda _t, r=report: self._enable(r))
+            res.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            self.form.addRow(label, box)
+            row = row_of(email, btn, res)
+            row.layout().setStretch(0, 3)
+            row.layout().setStretch(2, 2)
+            self.form.addRow("Email it to", row)
+            self.schedule[report], self.email[report], self.send[report], self.result[report] = box, email, btn, res
+            self._enable(report)
+            if report == "trend":
+                self.per_org = QCheckBox("Also one report per organization")      # Global, with organizations: one file each beside it
+                self.form.addRow("", self.per_org)
+        self.trend, self.trend_email = self.schedule["trend"], self.email["trend"]
+        self.trend.setToolTip("A weekly or monthly trend report is saved into the default folder (a PDF from the window, HTML from the "
+                              "background service) while Toner is running.")
+        self.form.addRow("", note(self.NOTE))
+        self.sent.connect(self._sent)
+
+    def _enable(self, report):
+        self.send[report].setEnabled(bool(self.email[report].text().strip()) and report not in self._sending)
+
+    def send_now(self, report):
+        """Make the report now and mail it to the addresses in its box, on a worker thread (its last time is left alone)."""
+        problems = self._address_problems(report)
+        if problems:
+            self.result[report].setText(" ".join(problems))
+            return
+        to, kind, org = self.email[report].text().strip(), self.schedule[report].currentData(), db.home()
+        self._sending.add(report)
+        self._enable(report)
+        self.result[report].setText("")
+
+        def work():
+            # shortcut: Global reads whatever the window shows when the thread runs (within(0) would narrow it to Global's own file); pin it if
+            # switching organization mid-send ever matters
+            try:
+                with db.within(org or None):
+                    text = scanreports.send_now(report, kind, to)
+            except Exception as e:                       # (mail_files catches its own; this is making the file)
+                text = f"Couldn't send the report: {type(e).__name__}: {e}"
+            try:
+                self.sent.emit(report, text)
+            except RuntimeError:                         # Settings was closed meanwhile: nobody to tell
+                pass
+        threading.Thread(target=work, daemon=True).start()
+
+    def _sent(self, report, text):
+        self._sending.discard(report)
+        self._enable(report)
+        self.result[report].setText(text)
 
     def browse(self):
         d = QFileDialog.getExistingDirectory(self, "Default report folder", self.folder.text())
@@ -301,24 +353,38 @@ class ReportsPage(Page):
         self.org.setText(db.get_setting("report_org"))
         self.folder.setText(db.get_setting("report_folder"))
         self.include_all.setChecked(bool(db.get_setting("report_include_all")))
-        self.trend.setCurrentIndex(max(0, self.trend.findData(db.get_setting("trend_schedule"))))
-        self.trend_email.setText(db.get_setting("trend_email"))
+        for report, box in self.schedule.items():
+            box.setCurrentIndex(max(0, box.findData(db.get_setting(f"{report}_schedule"))))
+            self.email[report].setText(db.get_setting(f"{report}_email"))
+            self.result[report].setText("")
         self.per_org.setChecked(bool(db.get_setting("trend_per_org")))
         self.per_org.setVisible(db.home() == db.GLOBAL and bool(db.org_rows()))
+
+    def _name(self, report):
+        return "trend report" if report == "trend" else scanreports.KINDS[report][0].lower()
+
+    def _address_problems(self, report):
+        text = self.email[report].text()
+        if not text.strip():
+            return []
+        from core import notify
+        wrong = notify.bad_addresses(text)
+        if wrong:
+            return [f"Reports: '{a}' is not a valid email address." for a in wrong]
+        if not notify.email_channel():
+            return [f"Reports: add an Email channel in Settings > Notifications before emailing the {self._name(report)}."]
+        return []
 
     def validate(self):
         f = self.folder.text().strip()
         if f and not os.path.isdir(f):
             return [f"Reports: the folder '{f}' does not exist."]
-        if self.trend.currentData() and not f:
-            return ["Reports: choose a default folder to save the scheduled trend report into."]
-        if self.trend_email.text().strip():
-            from core import notify
-            wrong = notify.bad_addresses(self.trend_email.text())
-            if wrong:
-                return [f"Reports: '{a}' is not a valid email address." for a in wrong]
-            if not notify.email_channel():
-                return ["Reports: add an Email channel in Settings > Notifications before emailing the trend report."]
+        for report, box in self.schedule.items():
+            if box.currentData() and not f:
+                return [f"Reports: choose a default folder to save the scheduled {self._name(report)} into."]
+            problems = self._address_problems(report)
+            if problems:
+                return problems
         return []
 
     def save(self):
@@ -326,6 +392,7 @@ class ReportsPage(Page):
         db.set_setting("report_org", self.org.text().strip())
         db.set_setting("report_folder", self.folder.text().strip())
         db.set_setting("report_include_all", self.include_all.isChecked())
-        db.set_setting("trend_schedule", self.trend.currentData())
-        db.set_setting("trend_email", self.trend_email.text().strip())
+        for report, box in self.schedule.items():
+            db.set_setting(f"{report}_schedule", box.currentData())
+            db.set_setting(f"{report}_email", self.email[report].text().strip())
         db.set_setting("trend_per_org", self.per_org.isChecked())

@@ -135,7 +135,7 @@ DEFAULT_SETTINGS = {
     "ssh_tunnel": {"enabled": False, "host": "", "port": 22, "username": "", "key_file": "", "otp": "", "local_port": 1080,
                    "autostart": False},
     # Windows agents (see core/agents.py): Toner listens for their reports while this is on
-    "agent_cert_warned": "", "trend_schedule": "", "trend_per_org": False, "trend_last": "", "scan_schedule": "", "scan_groups": [], "scan_last": "", "trend_email": "", "monitoring_profiles": [], "tls_sweep": False, "tls_sweep_ports": "443", "agent_enabled": False, "agent_enroll": False, "agent_token_days": 0, "agent_port": 8750, "agent_minutes": 5, "agent_push_minutes": False, "agent_bind": "0.0.0.0", "agent_address": "",
+    "agent_cert_warned": "", "trend_schedule": "", "trend_per_org": False, "trend_last": "", "scan_schedule": "", "scan_groups": [], "scan_last": "", "trend_email": "", "vuln_report_schedule": "", "vuln_report_email": "", "vuln_report_last": "", "hardening_report_schedule": "", "hardening_report_email": "", "hardening_report_last": "","monitoring_profiles": [], "tls_sweep": False, "tls_sweep_ports": "443", "agent_enabled": False, "agent_enroll": False, "agent_token_days": 0, "agent_port": 8750, "agent_minutes": 5, "agent_push_minutes": False, "agent_bind": "0.0.0.0", "agent_address": "",
     "vault_provider": "toner", "vault_config": {}, "vault_collections_migrated": {}, "vault_direct": False, "update_direct": False, "vault_keep_copies": True,   # (the last two: ignore the proxy)             # where passwords are kept: Toner's vault, or a password manager (core/extstore.py)
     # Demarc (see core/demarc.py): this install's permanent ID, and the Demarc it sends to (its token is in the vault)
     "install_uid": "", "demarc": {"address": "", "pin": "", "trusted": False, "enabled": False, "history": "all"},
@@ -1260,7 +1260,7 @@ GLOBAL_ONLY = {"credential_manager_carried", "rules_key", "rules_signed", "windo
                "signin_session_hours", "signin_idle_minutes", "helper_off_notice"}
 # (agent sign-up, its interval and whether installed agents are told it are each organization's own: Settings > Agents)
 # ...and these belong to one organization's own lists, so an organization never borrows Global's:
-ORG_LOCAL = {"acks", "inventory_expanded", "sessions_expanded", "client_scope", "trend_last", "notify_snooze_until", "firmware_source"}
+ORG_LOCAL = {"acks", "inventory_expanded", "sessions_expanded", "client_scope", "trend_last", "vuln_report_last", "hardening_report_last", "notify_snooze_until", "firmware_source"}
 
 _settings = {}                      # file -> (read at, {key: raw json})
 _settings_lock = threading.Lock()

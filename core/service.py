@@ -197,6 +197,16 @@ class Daemon:
                     self.log(f"{now:%Y-%m-%d %H:%M:%S} trend report: {path}")
         except Exception as e:
             self.log(f"trend report failed: {type(e).__name__}: {e}")
+        from core import scanreports
+        for report, (label, _title, _word) in scanreports.KINDS.items():
+            try:
+                if scanreports.due(report, now):
+                    path = scanreports.generate_scheduled(report, now)
+                    if path:
+                        did.append((label.lower(), path))
+                        self.log(f"{now:%Y-%m-%d %H:%M:%S} {label.lower()}: {path}")
+            except Exception as e:
+                self.log(f"{label.lower()} failed: {type(e).__name__}: {e}")
         if not hasattr(self, "due"):
             self.due = {db.GLOBAL: {"checks": self.next_checks, "backup": self.next_backup}}
         self.due[db.GLOBAL].update(checks=self.next_checks, backup=self.next_backup)      # (tests set these directly)

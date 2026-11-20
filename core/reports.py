@@ -143,9 +143,13 @@ def save_pdf(results, path, scope="", when=None, title=None, kind=None):
     w.setPageMargins(QMarginsF(12, 12, 12, 12), QPageLayout.Unit.Millimeter)
     doc = QTextDocument()
     doc.setDefaultFont(QFont("Segoe UI", 9))
-    QApplication.setOverrideCursor(QCursor(Qt.CursorShape.WaitCursor))       # a long report takes a while
+    from PySide6.QtCore import QThread
+    gui = QApplication.instance() is not None and QThread.currentThread() == QApplication.instance().thread()   # (Send now makes it on a worker thread)
+    if gui:
+        QApplication.setOverrideCursor(QCursor(Qt.CursorShape.WaitCursor))   # a long report takes a while
     try:
         doc.setHtml(to_html(results, when=when, scope=scope, title=title, kind=kind))
         doc.print_(w)
     finally:
-        QApplication.restoreOverrideCursor()
+        if gui:
+            QApplication.restoreOverrideCursor()
