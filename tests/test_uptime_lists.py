@@ -37,10 +37,42 @@ for org in (0, acme):
         db.set_setting("monitoring_profiles", [prof("p-pve", "proxmox", ["nodes", "guests"]), prof("p-mist", "mist", ["devices"]),
                                                 prof("p-pve-none", "proxmox", ["guests"]), prof("p-fg", "fortinet", ["resources", "nodes", "devices"]),
                                                 prof("p-mist-has", "mist", ["devices", "uptime"])])
-for org in (0, acme):
+# Settings > Checks, the opt-out list: Global's unticked nodes and devices; Acme's own unticked both but already has Proxmox's uptime;
+# Beta's own lacks nodes and devices; Gamma's own holds a value that is not JSON
+beta, gamma = orgs.create("Beta", "BETA"), orgs.create("Gamma", "GAMMA")
+with db.within(0):
+    db.set_setting("disabled_checks", ["proxmox:nodes", "mist:devices", "cisco:cpu"])
+with db.within(acme):
+    db.set_setting("disabled_checks", ["proxmox:nodes", "proxmox:uptime", "mist:devices"])
+with db.within(beta):
+    db.set_setting("disabled_checks", ["mist:alarms", "proxmox:storage"])
+with db.within(gamma), db.connect() as c:
+    c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('disabled_checks', 'not json')")
+for org in (0, acme, beta, gamma):
     with db.within(org), db.connect() as c:
         c.execute("PRAGMA user_version = 17")           # the file as Toner kept it before the upgrade
-db.init()
+db.init(); db._forget_settings()
+
+def off(org):
+    with db.within(org), db.connect() as c:
+        row = c.execute("SELECT value FROM settings WHERE key = 'disabled_checks'").fetchone()
+    return row[0] if row else None
+import json
+g = json.loads(off(0))
+check("Global's opt-out list with nodes and devices gains both uptime keys, nothing else changes",
+      sorted(g) == sorted(["proxmox:nodes", "mist:devices", "cisco:cpu", "proxmox:uptime", "mist:uptime"]), g)
+a = json.loads(off(acme))
+check("an organization's own list gains Mist's uptime key; Proxmox's, already there, is not added twice",
+      a == ["proxmox:nodes", "proxmox:uptime", "mist:devices", "mist:uptime"], a)
+b = json.loads(off(beta))
+check("a list without nodes or devices is untouched", b == ["mist:alarms", "proxmox:storage"], b)
+check("an unparsable value is left as it was", off(gamma) == "not json", off(gamma))
+with db.within(gamma):
+    check("...and that file's upgrade still finishes", db.schema_version() == db.SCHEMA_VERSION)
+with db.within(0):
+    fd = next(x for x in db.list_devices() if x["name"] == "pve-global-0")
+    check("a device that follows Global's list (no own list, no profile) has the uptime check off after the upgrade",
+          "proxmox:uptime" in db.disabled_for(fd, set(db.get_setting("disabled_checks")), profiles=[]))
 
 def lists(org):
     with db.within(org):

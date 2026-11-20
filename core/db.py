@@ -773,8 +773,9 @@ def _m17_device_settings(c):
 
 def _m18_uptime_lists(c):
     """Proxmox and Mist have their own Uptime check now (it came with `nodes` and `devices` before): a device's own list of checks and a
-    monitoring profile's list saved before that, with nodes (Proxmox) or devices (Mist) in it, gain `uptime`, so the row stays. Runs once
-    per file, so a later untick stays."""
+    monitoring profile's list saved before that, with nodes (Proxmox) or devices (Mist) in it, gain `uptime`, so the row stays; the opt-out
+    list (`disabled_checks`) with nodes or devices in it gains the vendor's uptime key, so the row stays off. Runs once per file, so a later
+    untick stays."""
     _m4_device_checks(c)                                 # a file stamped past step 4 whose devices table was just created lacks the column
     follows = {"proxmox": "nodes", "mist": "devices"}
     def gain(vendor, checks):
@@ -797,6 +798,16 @@ def _m18_uptime_lists(c):
             if isinstance(p, dict) and gain(p.get("vendor"), p.get("checks")):
                 p["checks"] = p["checks"] + ["uptime"]
         c.execute("UPDATE settings SET value = ? WHERE key = 'monitoring_profiles'", (json.dumps(profiles),))
+    # Settings > Checks' opt-out list: nodes (devices) unticked there keeps uptime off too
+    row = c.execute("SELECT value FROM settings WHERE key = 'disabled_checks'").fetchone()
+    try:
+        off = json.loads(row[0]) if row else None
+    except ValueError:
+        off = None
+    if isinstance(off, list):
+        add = [f"{v}:uptime" for v, k in follows.items() if f"{v}:{k}" in off and f"{v}:uptime" not in off]
+        if add:
+            c.execute("UPDATE settings SET value = ? WHERE key = 'disabled_checks'", (json.dumps(off + add),))
 
 
 MIGRATIONS = [(1, _m1_legacy_columns), (2, _m2_agent_history), (3, _m3_agent_tokens), (4, _m4_device_checks), (5, _m5_ansible_runs),
