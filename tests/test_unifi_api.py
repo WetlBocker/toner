@@ -224,18 +224,19 @@ iso = lambda hours: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() 
 check("Site Manager has the uptime check, with the label the others use", ("uptime", "Uptime and recent reboots") in checks.CATALOG["unifi_cloud"])
 cloud_routes(); ROUTES["/devices"] = {"data": [{"hostId": "h1", "hostName": "HQ UDM", "devices": [{"id": "1", "name": "UDM", "status": "online", "startupTime": iso(100)}, {"id": "2", "name": "Switch", "status": "online", "startupTime": iso(0.5)}, {"id": "3", "name": "AP 1", "status": "online"}]}]}
 R = by(run(cd))
-u = R[("uni-cloud / HQ UDM", "uptime")]
-check("a console's uptime row is its shortest startupTime, graded like the others", u.status == "WARN" and u.message == "recent reboot" and abs(u.numeric - 0.5) < 0.01 and u.value == display.uptime(u.numeric), u)
+u = R.get(("uni-cloud / HQ UDM", "uptime"))
+check("a console's uptime row is its shortest startupTime, graded like the others", u is not None and u.status == "WARN" and u.message == "recent reboot" and abs(u.numeric - 0.5) < 0.01 and u.value == display.uptime(u.numeric), u)
 cloud_routes(); ROUTES["/devices"] = {"data": [{"hostId": "h1", "hostName": "HQ UDM", "devices": [{"id": "3", "name": "AP 1", "status": "online"}, {"id": "4", "name": "Bad", "startupTime": "yesterday"}]}]}
 R = by(run(cd))
-check("devices without a usable startupTime give no uptime row and no error", ("uni-cloud / HQ UDM", "uptime") not in R and ("uni-cloud / HQ UDM", "devices") in R)
+check("devices without a usable startupTime give no uptime row and no error", ("uni-cloud / HQ UDM", "uptime") not in R and not [r for r in R.values() if r.status == "ERROR"] and ("uni-cloud / HQ UDM", "devices") in R)
 cloud_routes(); ROUTES["/devices"] = {"data": [{"hostId": "h1", "hostName": "HQ UDM", "devices": [{"id": "1", "name": "UDM", "status": "online", "startupTime": iso(100)}]}]}
 R = by(run(cd, {"disabled": {"unifi_cloud:uptime"}}))
-check("unticking uptime removes the row", ("uni-cloud / HQ UDM", "uptime") not in R and ("uni-cloud / HQ UDM", "devices") in R)
+R_on = by(run(cd))
+check("unticking uptime removes the row", ("uni-cloud / HQ UDM", "uptime") in R_on and ("uni-cloud / HQ UDM", "uptime") not in R and ("uni-cloud / HQ UDM", "devices") in R)
 R = by(run(cd, {"disabled": {"unifi_cloud:devices", "unifi_cloud:firmware"}}))
 check("uptime on, devices and firmware off: the uptime row alone", ("uni-cloud / HQ UDM", "uptime") in R and ("uni-cloud / HQ UDM", "devices") not in R)
 R = by(run(dev("unifi_cloud", name="uni-cloud", host="api.ui.com", site="st1")))
-check("a site entry: each device's own uptime row", ("uni-cloud / UDM", "uptime") in R and R[("uni-cloud / UDM", "uptime")].status == "OK")
+check("a site entry: each device's own uptime row", ("uni-cloud / UDM", "uptime") in R and R[("uni-cloud / UDM", "uptime")].status == "OK", [k for k in R])
 cloud_routes()
 check("an account without SD-WAN is fine", not [r for r in run(cd) if r.status == "ERROR"])
 cloud_routes(); ROUTES["/sites"] = 429
