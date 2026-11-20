@@ -64,8 +64,8 @@ class ScanJob(QThread):
 
 
 def start_scan(scanning_tab):
-    """Once a minute: start the scheduled scan when it is due, this process owns the schedule, and neither a manual scan nor the
-    last scheduled one is still running. The Scanning page shows the new latest scan when it ends."""
+    """From the window's housekeeping, every 30 minutes: start the scheduled scan when it is due, this process owns the schedule, and
+    neither a manual scan nor the last scheduled one is still running. The Scanning page shows the new latest scan when it ends."""
     if not scansched.scan_due() or not _ours() or scanning_tab.running() or (ScanJob.current and ScanJob.current.isRunning()):
         return
     devices = scansched.begin()

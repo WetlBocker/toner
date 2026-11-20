@@ -3,7 +3,8 @@ isn't, the columns share the width (none narrower than its heading, the widest g
 Every column can always be dragged, and a column the person dragged keeps its width until the view closes. Qt cannot drag a section set
 to ResizeToContents or Stretch, so sections are Interactive and the fitting is done here. A view can name the columns that say which row
 is which (view.fit_keep = (0,)): those keep their text, up to two fifths of the width, and the others share what is left. A view can name
-the column that takes any width left over (view.fit_fill = 1), so the table fills its frame."""
+the column that takes any width left over (view.fit_fill = 1), so the table fills its frame. A view that sizes its own columns
+sets the property fitSkip (view.setProperty("fitSkip", True)) and is left alone: none of the above applies to it."""
 import weakref
 
 from PySide6.QtCore import QEvent, QObject, Qt, QTimer
