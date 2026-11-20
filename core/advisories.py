@@ -582,6 +582,16 @@ def _prepared(dev):
     return dev, version, source, None
 
 
+FIXED_IN = "Fixed in"
+_FIXED_SENTENCE = re.compile(rf"(?:^| ){FIXED_IN} (.+)\.$")
+
+
+def split_fixed(message):
+    """(title, releases) of an advisory row's message: the sentence ' Fixed in A, B, C.' written below, read back. releases is '' when none."""
+    m = _FIXED_SENTENCE.search(message or "")
+    return ((message or "")[:m.start()].strip(), m.group(1)) if m else ((message or "").strip(), "")
+
+
 def versions(dev):
     """The version rows of one device: its software version (and whether it could be looked up), one row per advisory found,
     an 'advisories' row when none was, and the CISA known-exploited row."""
@@ -611,7 +621,7 @@ def versions(dev):
         value = (UNSCORED if a["cvss"] is None else f"CVSS {a['cvss']:g}") + (f", EPSS {best:.0%}" if best else "")
         # the vendor's title (Cisco, Palo Alto), else CISA's name when exploited, else the first sentence NIST gives
         title = a.get("title") or next((exploited[c] for c in a["cves"] if exploited.get(c)), "") or a.get("summary", "")
-        message = title + (f" Fixed in {', '.join(a['fixed'][:3])}." if a["fixed"] else "")
+        message = title + (f" {FIXED_IN} {', '.join(a['fixed'][:3])}." if a["fixed"] else "")
         rows.append(row(a["id"], status, value, message.strip()))
     hot = sorted({c for a in found for c in a["cves"] if c in exploited})
     rows.append(row(KEV, FAIL if hot else OK, "", f"{', '.join(hot)} on CISA's known exploited list" if hot else NONE_KEV) if found else row(KEV, OK, "", NONE_KEV))

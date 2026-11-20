@@ -6,6 +6,7 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 _os.environ.setdefault("TONER_NO_WEBCHARTS", "1")
+if _os.path.isdir(r"C:\Windows\Fonts"): _os.environ.setdefault("QT_QPA_FONTDIR", r"C:\Windows\Fonts")      # off-screen text widths are wrong without it
 import re
 import os, sys, time
 SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = os.path.join(SP, "dp%d.db" % int(time.time() * 1000)); os.environ["APPDATA"] = SP
@@ -208,11 +209,11 @@ vt.chart.clicked.emit({"kind": "series", "name": "High"})
 m = vt.detail.model()
 heads = [m.headerData(j, Qt.Orientation.Horizontal) for j in range(m.columnCount())]
 row = [m.index(0, j).data() for j in range(m.columnCount())]
-check("the list's columns", heads == ["Advisory", "Title", "CVSS", "Exploited", "Link"], heads)
-check("High lists the 7.5 advisory: id, title, score, exploited, link", m.rowCount() == 1 and row == ["CVE-2024-0002", "Path traversal in the GUI", 7.5, "Yes",
+check("the list's columns", heads == ["Advisory", "Title", "Fixed in", "CVSS", "Exploited", "Link"], heads)
+check("High lists the 7.5 advisory: id, title, score, exploited, link", m.rowCount() == 1 and row == ["CVE-2024-0002", "Path traversal in the GUI", "7.2.6", 7.5, "Yes",
       advisories.advisory_url("CVE-2024-0002", "fortinet")] and vt.detail.isVisibleTo(vt), row)
 vt.chart.clicked.emit({"kind": "series", "name": "Critical"})
-check("a CVE is matched whole: CVE-2024-0001 is not exploited because CVE-2024-00011 is", [m.index(0, j).data() for j in range(m.columnCount())][3] == "No")
+check("a CVE is matched whole: CVE-2024-0001 is not exploited because CVE-2024-00011 is", [m.index(0, j).data() for j in range(m.columnCount())][4] == "No")
 vt.chart.clicked.emit({"kind": "series", "name": "Critical"})
 check("the same slice again: every advisory is back", [r["id"] for r in vt.detail.rows] == ["CVE-2024-0001", "CVE-2024-0002", "CVE-2024-0003"])
 from ui.vulntab import VulnTab
@@ -247,6 +248,31 @@ other.show_device(db.find_device(db.qualified("acme-fw", acme)))
 check("and from Global", [r["id"] for r in other.rows] == ["CVE-2024-0009"], other.rows)
 other.show_device(db.find_device("fw"))
 check("Global's own device still finds only its own", sorted(r["id"] for r in other.rows) == ["CVE-2024-0001", "CVE-2024-0002", "CVE-2024-0003"], other.rows)
+
+print("== Fixed in, and the table fills its frame")
+check("the sentence is read once: releases as the message has them, the title without it, blank when none", [advisories.split_fixed(x) for x in (
+      "Heap overflow Fixed in 7.2.7.", "T. Fixed in 17.9.4a, 17.9.5, 17.10.1.", "Fixed in build 10.0.20348.5761.", "Fixed in build 1.2, build 1.3.", "No fix stated", "")]
+      == [("Heap overflow", "7.2.7"), ("T.", "17.9.4a, 17.9.5, 17.10.1"), ("", "build 10.0.20348.5761"), ("", "build 1.2, build 1.3"), ("No fix stated", ""), ("", "")])
+dev("fx", "fortinet")
+db.save_scan([Result("fx", advisories.SOFTWARE, "FAIL", "1", "x, 4 advisories"),
+              Result("fx", "CVE-2024-1001", "FAIL", "CVSS 9.8", "Title. Fixed in 17.9.4a, 17.9.5, 17.10.1."),
+              Result("fx", "CVE-2024-1002", "FAIL", "CVSS 7.5", "Windows kernel elevation of privilege. Fixed in build 10.0.20348.5761."),
+              Result("fx", "CVE-2024-1003", "WARN", "CVSS 5", "No fix named"),
+              Result("fx", "CVE-2024-1004", "WARN", "CVSS 4", "A long advisory title that is cut short in a narrow window Fixed in 7.0.1.")])
+from ui import tablefit
+tablefit.install_everywhere(app)                      # as app.main does; the widths below are not the app's without it
+fx = VulnTab(); fx.show_device(db.find_device("fx"))
+fm = fx.detail.model()
+cells = {fm.index(r, 0).data(): (fm.index(r, 1).data(), fm.index(r, 2).data()) for r in range(fm.rowCount())}
+check("Fixed in lists the releases, blank for no fix, and Title does not repeat the sentence", cells["CVE-2024-1001"] == ("Title.", "17.9.4a, 17.9.5, 17.10.1")
+      and cells["CVE-2024-1002"][1] == "build 10.0.20348.5761" and cells["CVE-2024-1003"] == ("No fix named", "") and "Fixed in" not in cells["CVE-2024-1004"][0], cells)
+for width in (1200, 800):
+    fx.resize(width, 700); fx.show(); spin(80)
+    h = fx.detail.horizontalHeader(); vw = fx.detail.viewport().width(); w = [h.sectionSize(i) for i in range(h.count())]
+    check(f"{width} px: the columns fill the frame, Title the widest", sum(w) == vw and w[1] == max(w), (w, vw))
+    cut = [c for c in range(h.count()) if fx.detail.sizeHintForColumn(c) > w[c]]
+    check(f"{width} px: a cut-off cell shows its full text on hover", all(any(tablefit.full_text_at(fx.detail, fx.detail.visualRect(fm.index(r, c)).center()) for r in range(fm.rowCount())) for c in cut), (w, cut))
+    fx.hide()
 
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

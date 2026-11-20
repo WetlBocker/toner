@@ -14,7 +14,7 @@ from ui.webchart import ChartView
 
 NO_SCAN = "No scan yet. Scan this device on the Scanning page to see its advisories."
 NONE = "No advisories for this version"
-COLUMNS = [("id", "Advisory"), ("title", "Title"), ("cvss", "CVSS"), ("exploited", "Exploited"), ("link", "Link")]
+COLUMNS = [("id", "Advisory"), ("title", "Title"), ("fixed", "Fixed in"), ("cvss", "CVSS"), ("exploited", "Exploited"), ("link", "Link")]
 CVE = r"CVE-\d{4}-\d+"
 BAND_STATUS = {"Low": "OK", "Medium": "OK", "High": "WARN", "Critical": "FAIL", advisories.UNSCORED: "N/A"}          # the colours the Scanning page has used
 
@@ -59,6 +59,7 @@ class VulnTab(QWidget):
         self.chart.clicked.connect(self._slice)
         self.detail = DetailList()
         self.detail.setMinimumHeight(160)
+        self.detail.fit_fill = 1                          # Title takes the width the others leave (ui.tablefit)
         self.detail.doubleClicked.connect(self._open)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 8, 0, 0)
@@ -77,7 +78,8 @@ class VulnTab(QWidget):
             advisory = r["check_name"] not in (advisories.SOFTWARE, advisories.ADVISORIES, advisories.KEV)
             score = advisories.cvss_of(r["value"]) if advisory else None
             if score is not None or (advisory and advisories.is_unscored(r["value"])):
-                self.rows.append({"id": r["check_name"], "title": (r["message"] or "").partition(" Fixed in ")[0].strip(), "cvss": score,
+                title, fixed = advisories.split_fixed(r["message"])
+                self.rows.append({"id": r["check_name"], "title": title, "fixed": fixed, "cvss": score,
                                   "exploited": exploited(r, score, on_list), "link": advisories.advisory_url(r["check_name"], dev.get("vendor") or "")})
         # nothing looked up (no source, lookups off, no version, the source refused): the version row says why
         looked = software is None or software["status"] not in ("N/A", "ERROR")
