@@ -5,6 +5,7 @@ import os as _os, sys as _sys, tempfile as _tmp
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+if _os.path.isdir(r"C:\Windows\Fonts"): _os.environ.setdefault("QT_QPA_FONTDIR", r"C:\Windows\Fonts")      # off-screen text widths are wrong without it
 import os, sys, time
 SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\mpui%d.db").replace("\\", os.sep) % int(time.time()); os.environ["APPDATA"] = os.path.join(SP, "roamingmp%d" % int(time.time()))
 from core import checks, db, display, perms
@@ -31,6 +32,8 @@ from PySide6.QtWidgets import QApplication, QCheckBox, QLabel, QMessageBox, QPus
 app = QApplication([])
 import app as A
 A.apply_look(app)
+from ui import tablefit
+tablefit.install_everywhere(app)                      # as app.main does: it fits every table, and must leave the limits table alone
 import ui.settings as ST
 import ui.inventory as I
 import ui.settings_pages.monitoring as M
@@ -176,8 +179,8 @@ check("Settings > Thresholds says where a profile's limits sit", any(
 
 print("== the limits table fits its boxes")
 from ui.devicechecks import DeviceChecks
-def limits_fit(w, label, top=None):
-    (top or w).resize(640, 760); w.show(); app.processEvents(); app.processEvents()
+def limits_fit(w, label, top=None, width=640):
+    (top or w).resize(width, 760); w.show(); app.processEvents(); app.processEvents()
     t = w.limits; h = t.horizontalHeader(); bad_rows = []
     for r in range(t.rowCount()):
         for c in (2, 3):
@@ -186,10 +189,15 @@ def limits_fit(w, label, top=None):
     check(label + ": every row is as tall as its boxes and each box lies inside its cell", not bad_rows, bad_rows[:2])
     check(label + ": WARN and FAIL are the same width, and the columns fill the viewport",
           h.sectionSize(2) == h.sectionSize(3) and sum(h.sectionSize(i) for i in range(4)) == t.viewport().width(), [h.sectionSize(i) for i in range(4)] + [t.viewport().width()])
+    fm = t.fontMetrics()
+    # at 640 every label fits; at 560 the long Windows/UniFi ones cannot (two boxes with arrows take most of the width), so the ones people read most are named
+    named = ["CPU %", "Memory %", "Channel utilization %", "Temperature C", "Port errors (count)", "Uptime below (hours)", "Session table used %", "Disk used %"]
+    wrapped = [t.item(r, 1).text() for r in range(t.rowCount()) if (width >= 640 or t.item(r, 1).text() in named) and fm.horizontalAdvance(t.item(r, 1).text()) > h.sectionSize(1) - 12]
+    check(label + ": no Check label wraps", not wrapped, (wrapped, h.sectionSize(1)))
     check(label + ": the Check column takes the slack", h.sectionResizeMode(1) == h.ResizeMode.Stretch and h.sectionSize(1) > 0)
 pd = M.MonitoringProfileDialog(); pd.show(); app.processEvents()
 limits_fit(pd.checks, "profile window", pd)
-ed = DeviceChecks(); ed.set_vendor("cisco"); limits_fit(ed, "edit device")
+ed = DeviceChecks(); ed.set_vendor("cisco"); limits_fit(ed, "edit device", None, 560)
 check("the reset button says Use Global Settings", [b.text() for b in ed.findChildren(QPushButton) if "Global" in b.text()] == ["Use Global Settings"])
 
 print(f"\n{ok} passed, {bad} failed")

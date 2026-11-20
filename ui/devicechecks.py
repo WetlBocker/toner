@@ -2,7 +2,8 @@
 Settings > Thresholds, so a device with nothing set here behaves exactly as before. A monitoring profile's dialog uses the same list
 and table for the profile's checks and limits (for_profile)."""
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton,
+from PySide6.QtGui import QResizeEvent
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton,
                                QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 from PySide6.QtWidgets import QMessageBox
 from core import checks, db, ifaces
@@ -50,6 +51,7 @@ class DeviceChecks(QWidget):
         self.limits = QTableWidget(0, 4)
         self.limits.setHorizontalHeaderLabels(["Own limits", "Check", "WARN", "FAIL"])
         self.limits.verticalHeader().setVisible(False)
+        self.limits.setProperty("fitSkip", True)                     # its columns are sized in _fit_limits (ui/tablefit.py leaves it alone)
         self.limits.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self.limits.setMinimumHeight(170)
         self.spins = {}
@@ -111,18 +113,22 @@ class DeviceChecks(QWidget):
         self._fit_limits()
 
     def _fit_limits(self):
-        """Rows as tall as their boxes and WARN/FAIL one width, from the boxes' own hints once the theme has styled them; Check takes the slack."""
+        """Rows as tall as their boxes and WARN/FAIL one width, from the boxes once the theme has styled them (WARN/FAIL: the largest value and the arrows, no wider); Check takes the slack."""
         pad = 3                                                           # the theme's row padding would squeeze the boxes (and differs per density): set it here
         self.limits.setStyleSheet(f"QTableView::item {{ padding: {pad}px 6px; border: 0; }}")
         box = self.spins["cpu"][0]
-        box.ensurePolished()                                              # (the theme's size rules apply from here, not before)
-        hint = box.sizeHint()
-        self.limits.verticalHeader().setDefaultSectionSize(hint.height() + 2 * pad + 1)      # (+1: the grid line)
+        box.ensurePolished()
+        box.resize(200, box.sizeHint().height())                          # (any width: it lays the number field out, so the chrome round it can be read)
+        QApplication.sendEvent(box, QResizeEvent(box.size(), box.size()))
+        chrome = box.width() - box.lineEdit().width()                     # padding, border and arrows: what the theme puts round the number
+        widest = box.fontMetrics().horizontalAdvance(f"{box.maximum():.{box.decimals()}f}")      # the largest value it allows, in full
+        self.limits.verticalHeader().setDefaultSectionSize(box.sizeHint().height() + 2 * pad + 1)      # (+1: the grid line)
         self.limits.resizeColumnsToContents()
         h = self.limits.horizontalHeader()
         h.setSectionResizeMode(1, h.ResizeMode.Stretch)
+        h.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)       # headings over their text, as ui/tablefit.py does
         for col in (2, 3):
-            h.resizeSection(col, hint.width() + 12)                       # (12: the cell's side padding)
+            h.resizeSection(col, max(chrome + widest, h.sectionSizeFromContents(col).width()) + 2 * pad)      # (the heading never cut either)
 
     # ---------- what is shown
     def _refresh_globals(self):

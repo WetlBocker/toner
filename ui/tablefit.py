@@ -128,7 +128,7 @@ class _Fitter(QObject):
 
 def fit(view):
     """Apply the rule to one table or tree (once; calling it again does nothing)."""
-    if not isinstance(view, QAbstractItemView) or view.findChild(_Fitter, options=Qt.FindChildOption.FindDirectChildrenOnly):
+    if not isinstance(view, QAbstractItemView) or view.findChild(_Fitter, options=Qt.FindChildOption.FindDirectChildrenOnly) or view.property("fitSkip"):      # (a view that sizes its own columns says so)
         return
     _Fitter(view)
 
