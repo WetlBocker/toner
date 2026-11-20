@@ -72,8 +72,9 @@ class AutoDialog(ST.ChannelDialog):
         for key, val in self.fill.items():
             kind, wdg = self.inputs[key]; wdg.setText(val) if hasattr(wdg, "setText") else None
         if "name" in self.fill_meta: self.name.setText(self.fill_meta["name"])
+        if self.script: self.script()                              # a lambda d: ... set on the class, so bound to this dialog
         self.accept(); return 1 if self.result_ch else 0
-    fill_meta = {}
+    fill_meta, script = {}, None
 import ui.settings_pages.notifications as _NT                 # the page looks the dialog up where it is defined
 _NT.ChannelDialog = ST.ChannelDialog = AutoDialog
 AutoDialog.fill, AutoDialog.fill_meta = {"url": base + "/hook-one"}, {"name": "Ops webhook"}
@@ -88,11 +89,12 @@ check("edit: renamed, blank secret keeps the stored URL", notify.channels()[0]["
 AutoDialog.fill, AutoDialog.fill_meta = {"url": base + "/hook-two"}, {"name": "Second"}
 N.add_channel("slack") if False else N.add_channel("webhook")
 check("several channels at once", len(notify.channels()) == 2 and N.table.rowCount() == 2)
-captured.clear(); N.table.selectRow(0); msgs.clear(); N.test()
+captured.clear(); N.table.selectRow(0); msgs.clear(); N.test(); wait(lambda: N.test_btn.isEnabled())
 check("Send test posts a sample and reports success", captured and captured[-1]["path"] == "/hook-one" and __import__("ui.toast", fromlist=["x"]).history[-1].startswith("Sent") and "Test device" in captured[-1]["body"].decode(), (msgs, captured))
 check("the test is in the delivery log", N.log.rowCount() >= 1 and "(test)" in N.log.item(0, 1).text() and N.log.item(0, 2).text() == "sent")
 N.table.selectRow(1); cid2 = notify.channels()[1]["id"]; answer["q"] = QMessageBox.StandardButton.No; N.remove()
 check("remove asks first (No keeps it)", len(notify.channels()) == 2)
+check("the remove prompt names the sign-in too", msgs[-1][1].endswith("Its saved webhook URL, password or sign-in is deleted too."), msgs[-1])
 answer["q"] = QMessageBox.StandardButton.Yes; N.remove()
 check("remove deletes the channel and its secret", len(notify.channels()) == 1 and FakeKeyring.get_password(db.SERVICE, f"notify:{cid2}:url") is None and N.table.rowCount() == 1)
 N.table.clearSelection(); N.test(); check("test with nothing selected asks you to pick one", "Select a channel" in __import__("ui.toast", fromlist=["x"]).history[-1])
@@ -100,8 +102,187 @@ N.table.clearSelection(); N.test(); check("test with nothing selected asks you t
 print("== a failing channel is explained, not hidden")
 d = ST.ChannelDialog(notify.channels()[0], None); d.inputs["url"][1].setText("http://127.0.0.1:9/dead"); msgs.clear(); orig_deliver = notify.deliver
 notify.deliver = lambda ch, m, de=None, s=None, retry_delay=2: orig_deliver(ch, m, de, s, 0); d.test()
-check("dialog Send test shows the failure", msgs and msgs[-1][0] == "warn" and "failed" in msgs[-1][1], msgs)
+check("dialog Send test shows the failure", wait(lambda: msgs) and msgs[-1][0] == "warn" and "failed" in msgs[-1][1], msgs)
 check("failed test is logged and flagged", alerts.recent_deliveries(1)[0]["ok"] == 0)
+notify.deliver = orig_deliver
+
+print("== Send test runs on a worker")
+HOLD, sent = threading.Event(), []
+real_send_test = notify.send_test
+def held_send_test(ch, secrets=None, desktop=None):
+    sent.append(dict(ch)); HOLD.wait(10); return True, "held"
+notify.send_test = held_send_test
+d = ST.ChannelDialog(notify.channels()[0], None); msgs.clear(); HOLD.clear(); d.test()
+check("dialog: the handler returns while the send still runs, and its button is off", wait(lambda: sent) and not HOLD.is_set()
+      and not d.test_btn.isEnabled() and not msgs, msgs)
+HOLD.set()
+check("dialog: then its result appears and the button is back", wait(lambda: d.test_btn.isEnabled() and msgs) and msgs[-1] == ("info", "Sent: held"), msgs)
+sent.clear(); HOLD.clear(); N.table.selectRow(0); N.test()
+check("page: the handler returns while the send still runs, and its button is off", wait(lambda: sent) and not N.test_btn.isEnabled())
+HOLD.set()
+check("page: then its result appears and the button is back", wait(lambda: N.test_btn.isEnabled())
+      and __import__("ui.toast", fromlist=["x"]).history[-1] == "Sent: held")
+notify.send_test = real_send_test
+from PySide6.QtCore import QObject
+class Popups(QObject):
+    threads = []
+    def show(self, title, body): self.threads.append(threading.current_thread())
+pops = Popups(); d = ST.ChannelDialog(notify.new_channel("desktop"), pops.show); msgs.clear(); d.test()
+check("a desktop channel's test pop-up is still shown on the window's thread", wait(lambda: pops.threads and msgs)
+      and pops.threads == [threading.main_thread()] and msgs[-1][0] == "info", (pops.threads, msgs))
+
+print("== the Email channel: Sign in with")
+from core import mailauth, oidc, passvault
+from core.dirsignin import SSO_TEXT, SSO_CANCELLED
+passvault.open_with(os.urandom(32))
+LABELS = ["Password", "Microsoft 365 account", "Microsoft 365 app (no person)", "Google account"]
+HELP = {"ms_account": "In the Entra admin center, register an app for Toner as a public client (mobile and desktop) with the redirect "
+                      "URI http://localhost and the delegated permission SMTP.Send. Turn on authenticated SMTP for the mailbox, then sign "
+                      "in here as that mailbox.",
+        "ms_app": "Register an app with the application permission SMTP.SendAsApp, admin consent and a client secret. Register it in "
+                  "Exchange Online and give it access to the mailbox. Nobody signs in.",
+        "google_account": "In Google Cloud, create an OAuth client of type Desktop app in a project set to Internal, then sign in here "
+                          "as the mailbox."}
+def mail_refresh(): return sorted(n for n in passvault.names() if n.startswith(mailauth.PREFIX))
+SIGN = {"go": threading.Event(), "account": "mailbox@example.com", "error": None, "calls": []}
+def fake_sign_in(ch, secrets, cancelled=None):          # stands in for the browser sign-in; stores as the real one does
+    SIGN["calls"].append((dict(ch), dict(secrets), threading.current_thread()))
+    end = time.time() + 5                                # (run on the window's thread by mistake, it fails instead of hanging)
+    while not SIGN["go"].wait(0.01):
+        if cancelled.is_set() or time.time() > end: raise oidc.Cancelled("the sign-in was not finished")
+    if SIGN["error"]: raise SIGN["error"]
+    mailauth._store(ch, "rt-" + SIGN["account"], SIGN["account"])
+    return SIGN["account"]
+mailauth.sign_in = fake_sign_in
+def fill(d, **fields):
+    for k, v in fields.items():
+        kind, wdg = d.inputs[k]
+        wdg.setCurrentIndex(wdg.findData(v)) if kind == "choice" else wdg.setText(v)
+def email_dialog(ch=None, **fields):
+    d = ST.ChannelDialog(ch or notify.new_channel("email"), None); fill(d, **fields); return d
+def shown(d):
+    return {k for k, (_kind, wdg) in d.inputs.items() if d.form.isRowVisible(wdg)} | ({"sign in"} if d.form.isRowVisible(d.sign_row) else set())
+def signed(d, account="mailbox@example.com"):
+    SIGN["go"].clear(); SIGN["error"] = None; SIGN["account"] = account
+    d.sign_btn.click(); SIGN["go"].set()
+    return wait(lambda: d.sign_btn.text() == "Sign in again")
+COMMON = {"auth", "smtp_host", "smtp_port", "security", "from_addr", "to_addrs", "subject_prefix"}
+FILLED = dict(smtp_host="smtp.example.com", tenant="11111111-2222-3333-4444-555555555555", client_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+              username="alerts@example.com", from_addr="alerts@example.com", to_addrs="noc@example.com")
+
+d = email_dialog(); combo = d.inputs["auth"][1]
+check("'Sign in with' offers the four methods, in the approved order and words", [combo.itemText(i) for i in range(combo.count())] == LABELS
+      and [combo.itemData(i) for i in range(combo.count())] == [k for k, _l in mailauth.METHODS])
+check("... at the top of the channel's own fields", d.form.getWidgetPosition(combo)[0]
+      < min(d.form.getWidgetPosition(wdg)[0] for k, (_kind, wdg) in d.inputs.items() if k != "auth"))
+check("a password channel's form is as before", combo.currentData() == "password" and shown(d) == COMMON | {"username", "password"}
+      and d.method_help.isHidden() and d.inputs["username"][1].placeholderText() == "blank if the server needs no login", sorted(shown(d)))
+ch_, _t, _m = d.collect()
+check("... and saves the method's key", ch_["auth"] == "password")
+EXPECT = {"ms_account": {"tenant", "client_id", "username", "sign in"}, "ms_app": {"tenant", "client_id", "client_secret", "username"},
+          "google_account": {"client_id", "client_secret", "username", "sign in"}, "password": {"username", "password"}}
+for auth, extra in EXPECT.items():
+    combo.setCurrentIndex(combo.findData(auth))
+    check(f"{auth}: only its fields show", shown(d) == COMMON | extra, sorted(shown(d) ^ (COMMON | extra)))
+    check(f"{auth}: its help under the form", (d.method_help.text() == HELP[auth] and not d.method_help.isHidden())
+          if auth in HELP else d.method_help.isHidden(), d.method_help.text())
+check("the client secret's placeholder", d.inputs["client_secret"][1].placeholderText() == "leave blank if the app has none")
+check("the channel's help", notify.CHANNEL_TYPES["email"]["help"] == "Sent through your mail server. Passwords and sign-ins are kept in Toner's vault.")
+d.reject()
+
+d = email_dialog(**FILLED, auth="ms_account")
+check("not signed in yet", d.sign_status.text() == "Not signed in." and d.sign_btn.text() == "Sign in")
+SIGN["go"].clear(); SIGN["error"] = None; SIGN["calls"].clear(); SIGN["account"] = "mailbox@example.com"; d.sign_btn.click()
+check("Sign in returns at once: the browser wait runs on a worker, and the button cancels it", wait(lambda: SIGN["calls"])
+      and SIGN["calls"][-1][2] is not threading.main_thread() and d.sign_btn.text() == "Cancel"
+      and d.sign_status.text() == SSO_TEXT.format(provider="Microsoft 365"), d.sign_status.text())
+check("... with the form's settings", SIGN["calls"][-1][0]["tenant"] == FILLED["tenant"] and SIGN["calls"][-1][0]["auth"] == "ms_account")
+SIGN["go"].set()
+check("signed in: the status names the account, the button says Sign in again", wait(lambda: d.sign_btn.text() == "Sign in again")
+      and d.sign_status.text() == "Signed in as mailbox@example.com.", d.sign_status.text())
+check("... and it is not the channel's in the vault before Save", mailauth.signed_in_as(d.ch) is None)
+HOLD.clear(); sent.clear(); notify.send_test = held_send_test; HOLD.set(); msgs.clear(); d.test()
+check("Send test uses the form's sign-in", wait(lambda: sent and d.test_btn.isEnabled()) and mailauth.signed_in_as(sent[-1]) == "mailbox@example.com"
+      and sent[-1]["tenant"] == FILLED["tenant"], msgs)
+notify.send_test = real_send_test
+d.reject()
+check("the dialog cancelled: nothing of it is left in the vault", mail_refresh() == [], mail_refresh())
+
+d = email_dialog(**FILLED, auth="google_account"); d.inputs["client_secret"][1].setText("cs-made-up-0001")
+SIGN["go"].clear(); SIGN["calls"].clear(); d.sign_btn.click(); wait(lambda: d.sign_btn.text() == "Cancel")
+check("Google: the typed client secret goes to the sign-in", wait(lambda: SIGN["calls"]) and SIGN["calls"][-1][1].get("client_secret") == "cs-made-up-0001"
+      and d.sign_status.text() == SSO_TEXT.format(provider="Google"))
+d.sign_btn.click()
+check("Cancel ends the wait and says nothing more", wait(lambda: d.sign_btn.text() == "Sign in") and d.sign_status.text() == "Not signed in.", d.sign_status.text())
+for err, text in ((oidc.Cancelled("the sign-in was not finished"), SSO_CANCELLED),
+                  (mailauth.MailAuthError(mailauth.NO_KEEPER.format(provider="Google")), mailauth.NO_KEEPER.format(provider="Google")),
+                  (oidc.Unreachable("accounts.example can't be reached"), mailauth.UNREACHABLE.format(provider="Google")),
+                  (oidc.OidcError("accounts.example said invalid_client"), mailauth.APP_REFUSED.format(provider="Google"))):
+    SIGN["error"] = err; SIGN["go"].set(); d.sign_btn.click()
+    check(f"a failed sign-in ({type(err).__name__}) shows the approved text", wait(lambda: d.sign_btn.text() == "Sign in" and d.sign_status.text() == text)
+          and "example" not in d.sign_status.text(), d.sign_status.text())
+SIGN["error"] = None
+d.reject()
+
+EDITS = (("the method", "ms_account", lambda d: d.inputs["auth"][1].setCurrentIndex(d.inputs["auth"][1].findData("google_account"))),
+         ("the tenant ID", "ms_account", lambda d: d.inputs["tenant"][1].setText("99999999-2222-3333-4444-555555555555")),
+         ("the client ID", "google_account", lambda d: d.inputs["client_id"][1].setText("other-client.apps.example.com")),
+         ("the client secret", "google_account", lambda d: d.inputs["client_secret"][1].setText("cs-made-up-0002")),
+         ("the username", "google_account", lambda d: d.inputs["username"][1].setText("other@example.com")))
+for what, auth, edit in EDITS:
+    d = email_dialog(**FILLED, auth=auth); ok1 = signed(d); edit(d)
+    check(f"changing {what} after signing in drops the sign-in", ok1 and d.sign_status.text() == "Not signed in." and d.sign_btn.text() == "Sign in"
+          and mail_refresh() == [], (ok1, d.sign_status.text(), mail_refresh()))
+    d.reject()
+
+ch_new = notify.new_channel("email")
+d = email_dialog(ch_new, **FILLED, auth="google_account"); d.inputs["client_secret"][1].setText("cs-made-up-0003"); signed(d); d.reject()
+check("a new channel's dialog cancelled after signing in leaves no sign-in and no client secret", mail_refresh() == []
+      and not any(n.startswith(f"notify:{ch_new['id']}:") for _s, n in FakeKeyring.store), (mail_refresh(), list(FakeKeyring.store)))
+d = email_dialog(**FILLED, auth="ms_account"); SIGN["go"].clear(); d.sign_btn.click(); wait(lambda: d.sign_btn.text() == "Cancel")
+t0 = time.time(); d.reject()
+check("closed while the browser is still open: the wait ends with the dialog, nothing kept", time.time() - t0 < 2 and mail_refresh() == [])
+d = email_dialog(**FILLED, auth="ms_account"); msgs.clear(); d.accept()
+check("Save without a sign-in: Sign in first.", d.result_ch is None and msgs and "Sign in first." in msgs[-1][1], msgs)
+d.reject()
+
+AutoDialog.fill, AutoDialog.fill_meta = {}, {"name": "Mail"}
+AutoDialog.script = lambda d: (fill(d, **FILLED, auth="ms_account"), signed(d))
+N.add_channel("email"); mch = notify.channels()[-1]
+check("Save keeps the sign-in as the channel's, and only it", mch["auth"] == "ms_account" and mailauth.signed_in_as(mch) == "mailbox@example.com"
+      and mail_refresh() == [mailauth.PREFIX + mch["id"]], (mch.get("auth"), mail_refresh()))
+d = ST.ChannelDialog(mch, None)
+check("an existing channel shows who it is signed in as", d.sign_status.text() == "Signed in as mailbox@example.com." and d.sign_btn.text() == "Sign in again")
+signed(d, "other@example.com")
+check("signing in again shows the new account", d.sign_status.text() == "Signed in as other@example.com.")
+d.reject()
+check("cancelled after signing in again: the channel keeps its earlier sign-in", mailauth.signed_in_as(mch) == "mailbox@example.com"
+      and json.loads(passvault.get(mailauth.PREFIX + mch["id"]))["refresh_token"] == "rt-mailbox@example.com"
+      and mail_refresh() == [mailauth.PREFIX + mch["id"]], mail_refresh())
+d = ST.ChannelDialog(mch, None); d.inputs["tenant"][1].setText("99999999-2222-3333-4444-555555555555"); msgs.clear(); d.accept()
+check("edited: Save says Sign in first. although the old sign-in is stored", d.result_ch is None and msgs and "Sign in first." in msgs[-1][1], msgs)
+d.reject()
+check("cancelled after an edit: the channel keeps its earlier sign-in", mailauth.signed_in_as(mch) == "mailbox@example.com")
+row = lambda cid: [c["id"] for c in notify.channels()].index(cid)
+AutoDialog.script = lambda d: (fill(d, tenant="99999999-2222-3333-4444-555555555555"), signed(d, "new@example.com"))
+N.table.selectRow(row(mch["id"])); N.edit()
+check("edited and signed in again: Save replaces the sign-in", mailauth.signed_in_as(mch) == "new@example.com"
+      and notify.channels()[row(mch["id"])]["tenant"].startswith("9999") and mail_refresh() == [mailauth.PREFIX + mch["id"]], mail_refresh())
+AutoDialog.script = lambda d: fill(d, auth="password", password="pw-made-up-0004")
+N.table.selectRow(row(mch["id"])); N.edit()
+check("switched to a password and saved: the sign-in is removed", notify.channels()[row(mch["id"])]["auth"] == "password" and mail_refresh() == [], mail_refresh())
+AutoDialog.script = lambda d: (fill(d, **FILLED, auth="google_account", client_secret="cs-made-up-0005"), signed(d))
+N.add_channel("email"); gch = notify.channels()[-1]
+check("a Google channel saved with its client secret and sign-in", mailauth.signed_in_as(gch) == "mailbox@example.com"
+      and FakeKeyring.get_password(db.SERVICE, f"notify:{gch['id']}:client_secret") == "cs-made-up-0005")
+AutoDialog.script = None
+N.table.selectRow(row(gch["id"])); answer["q"] = QMessageBox.StandardButton.Yes; N.remove()
+check("removing it deletes its sign-in and client secret", mailauth.PREFIX + gch["id"] not in mail_refresh()
+      and FakeKeyring.get_password(db.SERVICE, f"notify:{gch['id']}:client_secret") is None)
+for c in [c for c in notify.channels() if c["type"] == "email"]:
+    notify.delete_secrets(c)
+notify.save_channels([c for c in notify.channels() if c["type"] != "email"])
+N.reload_channels()
 
 print("== snooze and rules")
 N.snooze(4); check("snooze sets a time and says so", notify.snoozed() and "Snoozed until" in N.snooze_label.text(), N.snooze_label.text())
