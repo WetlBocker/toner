@@ -333,5 +333,65 @@ while len(calls) == n and time.time() - t0 < 15: app.processEvents(); time.sleep
 time.sleep(0.3); app.processEvents()
 check("leaving the page and closing Settings while it sends does not crash; the send finishes", len(calls) == n + 1 and not errors, (len(calls), errors))
 notify.mail_files = real_mail
+
+print("== a report that falls due with the scheduled scan waits for it")
+from core import advisories, scansched
+from ui import scheduler
+NEW = ("cisco-sa-new-scan", "Hardening: New rule")
+real_scan = advisories.scan
+advisories.scan = lambda d: [Result(d["name"], NEW[0], "FAIL", "CVSS 9.1", "new", org=d.get("org")), Result(d["name"], NEW[1], "FAIL", "", "new", org=d.get("org"))]
+def due_both():
+    """The scheduled scan and both scan reports due, nothing mailed, an empty folder."""
+    with db.within(db.GLOBAL):
+        db.set_setting("scan_schedule", "daily"); db.set_setting("scan_groups", []); db.set_setting("scan_last", "")
+    db.set_setting("report_folder", folder); db.set_setting("trend_schedule", "")
+    for rep in ("vuln_report", "hardening_report"):
+        db.set_setting(f"{rep}_schedule", "weekly"); db.set_setting(f"{rep}_last", ""); db.set_setting(f"{rep}_email", "")
+    for f in os.listdir(folder): os.remove(os.path.join(folder, f))
+    seen_rows.clear()
+seen_rows = {}
+real_rows = scanreports.rows
+def recording(report):
+    got = real_rows(report); seen_rows[report] = [r.check for r in got]; return got
+scanreports.rows = recording                        # what each report was made from (from the window it is a PDF)
+def report_text(word):
+    """The checks of the rows the report was last made from ('' when it was not made since)."""
+    return " ".join(seen_rows.pop("vuln_report" if word == "vulnerability" else "hardening_report", []))
+due_both()
+did = service.Daemon(log=lambda m: None).tick(NOW)
+kinds = [k for k, *_ in did]
+check("service: the scan runs before the two reports in the same tick", "scan" in kinds and "vulnerability report" in kinds and "hardening report" in kinds
+      and kinds.index("scan") < kinds.index("vulnerability report") and kinds.index("scan") < kinds.index("hardening report"), kinds)
+check("...and the reports hold the new scan's rows", NEW[0] in report_text("vulnerability") and NEW[1] in report_text("hardening"))
+due_both(); orig_owns = service.owns_schedule; service.owns_schedule = lambda: False
+did = service.Daemon(log=lambda m: None).tick(NOW)
+check("service that does not own the schedule: while the scan is due (the window runs it) the reports are not made or stamped",
+      not any(k in ("vulnerability report", "hardening report") for k, *_ in did) and gs("vuln_report_last") == "" and gs("hardening_report_last") == "" and not os.listdir(folder), did)
+with db.within(db.GLOBAL): db.set_setting("scan_last", NOW.strftime(F))
+did = service.Daemon(log=lambda m: None).tick(NOW + timedelta(minutes=1))
+service.owns_schedule = orig_owns
+check("...once it has run they are made on a later tick", any(k == "vulnerability report" for k, *_ in did) and any(k == "hardening report" for k, *_ in did), did)
+
+due_both(); db.set_setting("trend_schedule", "weekly"); db.set_setting("trend_last", "")
+for o in (db.GLOBAL, acme): no_scans(o)
+db.save_scan(scan_rows("gw"))                       # the previous scan
+held = threading.Event(); orig_run = scheduler.ScanJob.run
+scheduler.ScanJob.run = lambda self: (held.wait(10), orig_run(self))[1]          # hold the scan's thread so the test can look while it runs
+tab = types.SimpleNamespace(running=lambda: False, reload=lambda: None)
+real_agents = A.agents.running; A.agents.running = lambda: False
+win = types.SimpleNamespace(scanning=tab)
+A.Main.do_housekeeping(win)
+job = scheduler.ScanJob.current
+check("window: a housekeeping pass with the scan due starts the scan and makes neither scan report, nor stamps it",
+      job is not None and job.isRunning() and gs("vuln_report_last") == "" and gs("hardening_report_last") == "" and not report_text("vulnerability"), (job, gs("vuln_report_last")))
+check("...the trend report is made as before", gs("trend_last") != "")
+A.Main.do_housekeeping(win)
+check("...nor on a pass while that scan is still running", job.isRunning() and gs("vuln_report_last") == "" and gs("hardening_report_last") == "" and not report_text("hardening"))
+held.set(); job.wait(15000); app.processEvents()
+A.Main.do_housekeeping(win)
+check("the next housekeeping after the scan has finished makes both, with the new scan's rows",
+      gs("vuln_report_last") != "" and gs("hardening_report_last") != "" and NEW[0] in report_text("vulnerability") and NEW[1] in report_text("hardening"),
+      (gs("vuln_report_last"), os.listdir(folder)))
+scheduler.ScanJob.run = orig_run; A.agents.running = real_agents; advisories.scan = real_scan; scanreports.rows = real_rows
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

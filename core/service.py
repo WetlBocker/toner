@@ -197,10 +197,18 @@ class Daemon:
                     self.log(f"{now:%Y-%m-%d %H:%M:%S} trend report: {path}")
         except Exception as e:
             self.log(f"trend report failed: {type(e).__name__}: {e}")
-        from core import scanreports
+        owner = owns_schedule()                             # the window runs the schedule while it is open
+        from core import scanreports, scansched
+        if owner:
+            try:                                            # before the scan reports, so a report due with it is made from it
+                if scansched.scan_due(now):
+                    did.append(("scan", len(scansched.run_scheduled_scan(now))))
+                    self.log(f"{now:%Y-%m-%d %H:%M:%S} scan: {did[-1][1]} row(s)")
+            except Exception as e:
+                self.log(f"scan failed: {type(e).__name__}: {e}")
         for report, (label, _title, _word) in scanreports.KINDS.items():
             try:
-                if scanreports.due(report, now):
+                if not scansched.scan_due(now) and scanreports.due(report, now):      # a scan still to run (the window's): wait for it
                     path = scanreports.generate_scheduled(report, now)
                     if path:
                         did.append((label.lower(), path))
@@ -210,15 +218,8 @@ class Daemon:
         if not hasattr(self, "due"):
             self.due = {db.GLOBAL: {"checks": self.next_checks, "backup": self.next_backup}}
         self.due[db.GLOBAL].update(checks=self.next_checks, backup=self.next_backup)      # (tests set these directly)
-        if not owns_schedule():                             # the window runs the schedule while it is open
+        if not owner:
             return did
-        try:
-            from core import scansched
-            if scansched.scan_due(now):
-                did.append(("scan", len(scansched.run_scheduled_scan(now))))
-                self.log(f"{now:%Y-%m-%d %H:%M:%S} scan: {did[-1][1]} row(s)")
-        except Exception as e:
-            self.log(f"scan failed: {type(e).__name__}: {e}")
         self._follow_settings(now)
         for org, when in list(self.due.items()):
             who = "" if org == db.GLOBAL else f"{db.org_name(org)}: "
