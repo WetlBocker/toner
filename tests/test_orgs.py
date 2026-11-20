@@ -11,9 +11,10 @@ STORE = {}
 keyring.set_password = lambda s, u, p: STORE.__setitem__((s, u), p)
 keyring.get_password = lambda s, u: STORE.get((s, u))
 keyring.delete_password = lambda s, u: STORE.pop((s, u), None)
-from core import db, orgs, profiles
+from core import db, mailauth, notify, orgs, passvault, profiles
 from drivers.base import Result
 db.init()
+passvault.open_with(os.urandom(32))
 ok = bad = 0
 def check(name, cond, extra=""):
     global ok, bad
@@ -231,6 +232,28 @@ try:
     orgs.remove(0); check("Global cannot be removed", False)
 except ValueError:
     check("Global cannot be removed", True)
+
+print("== removing an organization removes its channels' secrets")
+import json
+def chan(ctype, cid, **kw): return dict(notify.new_channel(ctype), id=cid, **kw)
+def vault_of(cid): return [k for k in STORE if k[1].startswith(f"notify:{cid}:")] + [n for n in passvault.names() if n.endswith(cid)]
+def fill(chs):
+    for c in chs:
+        notify.set_secrets(c, {k: "s-" + k for k, _l, kind, _e in notify.CHANNEL_TYPES[c["type"]]["fields"] if kind == "secret"})
+        if c["type"] == "email" and c.get("auth") != "password":
+            passvault.put(mailauth.PREFIX + c["id"], json.dumps({"refresh_token": "rt", "account": "a@example.com", "renewed": time.time()}))
+mine = [chan("email", "mailpw", name="Mail"), chan("email", "mailoa", name="OAuth mail", auth="ms_account"), chan("webhook", "hook1", name="Hook")]
+other = [chan("email", "othoa", name="Other OAuth", auth="ms_account"), chan("webhook", "othhk", name="Other hook")]
+glob = [chan("webhook", "globhk", name="Global hook")]
+dead, live = orgs.create("Soylent", "SOY"), orgs.create("Umbrella", "UMB")
+for o, chs in ((dead, mine), (live, other), (0, glob)):
+    with db.within(o):
+        notify.save_channels(chs)
+    fill(chs)
+check("the channels' secrets are in the vault before", all(vault_of(c["id"]) for c in mine + other + glob))
+orgs.remove(dead)
+check("removing the organization removes all its channels' secrets, sign-in included", not any(vault_of(c["id"]) for c in mine), [vault_of(c["id"]) for c in mine])
+check("...and no other organization's, nor Global's", all(vault_of(c["id"]) for c in other + glob))
 
 print("== startup brings every organization's file up to date")
 db.init()

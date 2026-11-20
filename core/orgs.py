@@ -361,11 +361,17 @@ def remove(org, move_to=None):
         extstore.forget_org(org)                      # its collection in the password manager goes with it (while its name is still known)
     except Exception:
         quiet.ignored()
+    from core import notify
+    with db.within(org):
+        channels = notify.channels()                      # (settings are not moved: they go with the file)
     _forget_secrets(org)
     with db.within(GLOBAL):
         with db.connect() as c:
             c.execute("DELETE FROM orgs WHERE id=?", (org,))
     db.forget_orgs()
+    with db.within(org):
+        for ch in channels:                               # only now: a failure above leaves the organization with its channels' secrets
+            notify.delete_secrets(ch)
     if db.home() == org:
         set_current(GLOBAL)
     path = db.org_path(org)
