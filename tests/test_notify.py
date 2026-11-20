@@ -243,7 +243,6 @@ notify.delete_secrets(ec); check("removing an email channel deletes its password
                                  not [k for k in FakeKeyring.store if "eeee3333" in k[1]])
 notify.set_secrets(b, {"url": base + "/hook-crit"}); db.set_setting("notify_enabled", True); captured.clear()
 check("announce skips the channel it is told to", notify.announce("Toner", "x", "", "m", "FAIL", skip="aaaa1111") == 1 and [c["path"] for c in captured] == ["/hook-crit"], captured)
-db.set_setting("notify_enabled", False)
 notify.save_channels([a]); db.set_setting("notify_enabled", False)
 
 print(f"\n{PASS} passed, {FAIL} failed")

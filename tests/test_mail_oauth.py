@@ -79,10 +79,12 @@ class Smtp(socketserver.StreamRequestHandler):
         w = lambda s: self.wfile.write((s + "\r\n").encode())
         conn = {"auth": None, "reply": None, "starttls": False}; conns.append(conn)
         w("220 test ESMTP"); data = False; buf = []; rcpt = []; waiting = None
+        echo = lambda: (conn["auth"] or "").split("Bearer ", 1)[-1].rstrip("\x01")      # the access token, said back
         for raw in self.rfile:
             line = raw.decode(errors="replace").rstrip("\r\n")
             if data:
-                if line == ".": mails.append({"rcpt": rcpt, "text": "\n".join(buf)}); w("250 queued"); data = False; buf = []
+                if line == "." and SMTP_MODE.get("data") == "echo": w(f"550 5.7.1 message refused for {echo()}"); data = False; buf = []
+                elif line == ".": mails.append({"rcpt": rcpt, "text": "\n".join(buf)}); w("250 queued"); data = False; buf = []
                 else: buf.append(line[1:] if line.startswith("..") else line)
                 continue
             if waiting is not None:                        # the client's answer to our error challenge
@@ -97,6 +99,7 @@ class Smtp(socketserver.StreamRequestHandler):
                     waiting = conn["auth"].split("Bearer ", 1)[1].rstrip("\x01")
                     w("334 " + base64.b64encode(json.dumps({"status": "400", "schemes": "Bearer", "scope": "https://mail.google.com/"}).encode()).decode())
             elif cmd.startswith("MAIL"): w("250 ok")
+            elif cmd.startswith("RCPT") and SMTP_MODE.get("rcpt") == "echo": w(f"550 5.7.1 recipient refused for {echo()}")
             elif cmd.startswith("RCPT"): rcpt.append(line.split(":", 1)[1].strip(" <>")); w("250 ok")
             elif cmd == "DATA": w("354 go"); data = True
             elif cmd == "QUIT": w("221 bye"); return
@@ -295,6 +298,22 @@ SMTP_MODE["auth"] = "ok"
 everything = details + [d, d2, d3] + logged + [r["detail"] or "" for r in alerts.recent_deliveries(500)] + [r["detail"] or "" for r in audit.recent(500)]
 check("the provider's and the mail server's echoes stay out", not okd2 and not okd3 and not leaks(everything, SECRETS), leaks(everything, SECRETS)[:3])
 
+print("== a mail server that says the token back after AUTH")
+notify.save_channels([MS, HOOK]); plant(MS, RT1); STATE["rotate"] = False
+out = {}
+for mode in ("rcpt", "data"):
+    SMTP_MODE[mode] = "echo"
+    out[mode] = [notify.send_test(MS, {}), notify.mail_files("boss@example.com", "Weekly report", "Attached.", []),
+                 notify.send_test(APP, {"client_secret": CS})]
+    SMTP_MODE[mode] = None
+STATE["rotate"] = True
+got = [d for runs in out.values() for _ok, d in runs]
+everything = got + logged + [r["detail"] or "" for r in alerts.recent_deliveries(500)] + [r["detail"] or "" for r in audit.recent(500)]
+check("a 550 to RCPT or DATA that echoes the token: refused, and the token is in no detail, log or audit line",
+      not any(okx for runs in out.values() for okx, _d in runs) and not leaks(everything, SECRETS), (got, leaks(everything, SECRETS)[:3]))
+check("...the details still say what the server said, by type", all("SMTPRecipientsRefused" in d and "550" in d for _ok, d in out["rcpt"])
+      and all("SMTPDataError" in d and "550" in d for _ok, d in out["data"]), got)
+
 print("== renewal of quiet sign-ins")
 OLD, YOUNG = chan("ms_account", "c-old"), chan("ms_account", "c-young")
 notify.save_channels([OLD, YOUNG, HOOK])
@@ -306,6 +325,52 @@ check("an 8-day-old sign-in is renewed, a 6-day-old one is left", len(P.token_re
 plant(OLD, RT1, age_days=8); n = len(P.token_requests)
 notify.process_run([], [], True)
 check("process_run renews first", len(P.token_requests) == n + 1 and time.time() - stored(OLD)["renewed"] < 60)
+
+print("== renewal: an outage, a bad stored value, disabled channels, form drafts")
+plant(OLD, RT1, age_days=8); STATE["error"], STATE["status"] = "temporarily_unavailable", 503; n = len(P.token_requests)
+mailauth.renew_stale()
+first = len(P.token_requests) - n
+mailauth.renew_stale(); notify.process_run([], [], True)
+check("a provider outage: one attempt, then none again within the retry interval", first == 1 and len(P.token_requests) == n + 1
+      and stored(OLD)["refresh_token"] == RT1, P.token_requests[n:])
+mailauth.renew_stale(now=time.time() + mailauth.RETRY + 1)
+STATE["error"] = None
+check("...and another once the interval has passed", len(P.token_requests) == n + 2, P.token_requests[n:])
+check("the retry interval is an hour", mailauth.RETRY == 3600)
+notify.save_channels([YOUNG, OLD, HOOK])
+passvault.put("mail-refresh:c-young", json.dumps({"refresh_token": RT1, "account": "x", "renewed": "not a time"}))
+plant(OLD, RT1, age_days=8); n = len(P.token_requests)
+mailauth.renew_stale()
+check("a malformed stored sign-in does not stop the next channel's renewal", len(P.token_requests) == n + 1 and time.time() - stored(OLD)["renewed"] < 60)
+real_channels = notify.channels
+notify.channels = lambda: 1 / 0
+try:
+    mailauth.renew_stale(); raised = None
+except Exception as ex:
+    raised = ex
+notify.channels = real_channels
+check("renew_stale never raises (channels can't be read)", raised is None, raised)
+notify.save_channels([{**OLD, "enabled": False}, HOOK]); plant(OLD, RT1, age_days=8); n = len(P.token_requests)
+mailauth.renew_stale()
+check("a disabled channel's sign-in is not renewed", len(P.token_requests) == n)
+notify.save_channels([OLD, HOOK]); plant(OLD, RT1)
+passvault.put("mail-refresh:c-old.form", json.dumps({"refresh_token": "rt-draft-9999", "account": "d@example.com", "renewed": time.time() - 9 * 86400}))
+n = len(P.token_requests)
+mailauth.renew_stale()
+check("a form's draft sign-in (mail-refresh:<id>.form) is not renewed or changed", len(P.token_requests) == n
+      and json.loads(passvault.get("mail-refresh:c-old.form"))["refresh_token"] == "rt-draft-9999")
+check("...and is not the channel's sign-in", mailauth.signed_in_as(OLD) == "mailbox@example.com")
+passvault.remove("mail-refresh:c-old.form")
+
+print("== sign_in for a method with no browser sign-in")
+for auth in ("ms_app", "password"):
+    try:
+        mailauth.sign_in(chan(auth), {}); err = None
+    except ValueError as ex:
+        err = ex
+    except Exception as ex:
+        err = ("wrong type", ex)
+    check(f"{auth}: a ValueError naming the method, nothing stored", isinstance(err, ValueError) and auth in str(err) and stored(chan(auth)) is None, err)
 
 print("== validation")
 v = lambda ch, s=None: notify.validate(ch, s or {})

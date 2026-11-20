@@ -290,25 +290,48 @@ def _mail(ch, secrets, subject, body, files=()):
             raise mailauth.MailAuthError(TLS_NEEDED)
         token = mailauth.access_token(ch, secrets)
     ctx = ssl.create_default_context()
-    if mode == "SSL/TLS":
-        smtp = (smtplib.SMTP_SSL if oauth else _SMTP_SSL)(ch["smtp_host"].strip(), port, timeout=15, context=ctx)
-    else:
-        smtp = (smtplib.SMTP if oauth else _SMTP)(ch["smtp_host"].strip(), port, timeout=15)
-    with smtp:
-        smtp.ehlo()
-        if mode == "STARTTLS":
-            smtp.starttls(context=ctx)
+    try:
+        if mode == "SSL/TLS":
+            smtp = (smtplib.SMTP_SSL if oauth else _SMTP_SSL)(ch["smtp_host"].strip(), port, timeout=15, context=ctx)
+        else:
+            smtp = (smtplib.SMTP if oauth else _SMTP)(ch["smtp_host"].strip(), port, timeout=15)
+        with smtp:
             smtp.ehlo()
-        if oauth:
-            xoauth2 = f"user={ch['username'].strip()}\x01auth=Bearer {token}\x01\x01"
-            try:                        # a 334 error challenge is answered with an empty line, as Google's XOAUTH2 page says
-                smtp.auth("XOAUTH2", lambda challenge=None: xoauth2 if challenge is None else "")
-            except smtplib.SMTPAuthenticationError:
-                raise mailauth.MailAuthError(mailauth.SERVER_REFUSED) from None     # its text may echo the token
-        elif ch.get("username"):
-            smtp.login(ch["username"], secrets.get("password", ""))
-        smtp.send_message(em)
+            if mode == "STARTTLS":
+                smtp.starttls(context=ctx)
+                smtp.ehlo()
+            if oauth:
+                xoauth2 = f"user={ch['username'].strip()}\x01auth=Bearer {token}\x01\x01"
+                try:                    # a 334 error challenge is answered with an empty line, as Google's XOAUTH2 page says
+                    smtp.auth("XOAUTH2", lambda challenge=None: xoauth2 if challenge is None else "")
+                except smtplib.SMTPAuthenticationError:
+                    raise mailauth.MailAuthError(mailauth.SERVER_REFUSED) from None     # its text may echo the token
+            elif ch.get("username"):
+                smtp.login(ch["username"], secrets.get("password", ""))
+            smtp.send_message(em)
+    except Exception as e:
+        if not oauth or not token:
+            raise
+        # any reply may say the token back: blank it in the exception itself, keeping its type (deliver retries by type)
+        e.args = _hide(e.args, token)
+        for attr in ("smtp_error", "recipients", "strerror"):
+            if getattr(e, attr, None) is not None:
+                setattr(e, attr, _hide(getattr(e, attr), token))
+        raise e from None
     return f"sent to {len(to)} recipient(s)"
+
+
+def _hide(v, token):
+    """v with the token blanked out, through the str, bytes, tuples, lists and dicts an smtplib exception holds."""
+    if isinstance(v, str):
+        return v.replace(token, "***")
+    if isinstance(v, bytes):
+        return v.replace(token.encode(), b"***")
+    if isinstance(v, (tuple, list)):
+        return type(v)(_hide(x, token) for x in v)
+    if isinstance(v, dict):
+        return {_hide(k, token): _hide(x, token) for k, x in v.items()}
+    return v
 
 
 def _send(ch, secrets, msg, desktop):

@@ -21,6 +21,8 @@ SCOPES = {"ms_account": "openid profile offline_access https://outlook.office.co
           "ms_app": "https://outlook.office365.com/.default"}
 PREFIX = "mail-refresh:"
 STALE = 7 * 86400
+RETRY = 3600        # a failed renewal waits an hour: an outage then costs each run's alerts at most one slow token call an hour,
+                    # and a sign-in that lasts 90 days (Microsoft) or 6 months unused (Google) loses nothing by the wait
 open_url = webbrowser.open          # tests replace it
 
 NOT_SIGNED_IN = "Toner isn't signed in to {provider} for this channel. Edit the channel and choose Sign in."
@@ -73,6 +75,19 @@ def _store(ch, refresh_token, account):
     passvault.put(_name(ch), json.dumps({"refresh_token": refresh_token, "account": account, "renewed": time.time()}))
 
 
+def _note_try(ch, refresh_token, now):
+    """Remember a failed renewal's time on the sign-in, in one locked step and only if it still holds the token tried (another
+    process may have renewed it meanwhile, and that newer token must not be overwritten)."""
+    def mark(data):
+        try:
+            got = json.loads(data.get(_name(ch)) or "null")
+        except ValueError:
+            return
+        if isinstance(got, dict) and got.get("refresh_token") == refresh_token:
+            data[_name(ch)] = json.dumps({**got, "tried": now})
+    passvault._change(mark)
+
+
 def signed_in_as(ch):
     got = _stored(ch)
     return got.get("account") if got else None
@@ -94,6 +109,8 @@ def sign_in(ch, secrets, cancelled=None):
     """The person signs in in their browser (the window only, off its thread). Stores the refresh token; returns the account.
     oidc.Cancelled when cancelled or not finished; other oidc errors as single sign-on raises them."""
     auth, prov = ch.get("auth"), provider(ch.get("auth"))
+    if not needs_sign_in(auth):
+        raise ValueError(f"{auth!r} has no browser sign-in")        # a caller's mistake, never shown to a person
     browser = oidc.BrowserSignIn(_cfg(ch), open_url=open_url, scopes=SCOPES[auth], fresh=False,
                                  client_secret=secrets.get("client_secret", ""))
     try:
@@ -167,25 +184,38 @@ def access_token(ch, secrets):
 
 
 def renew_stale(now=None):
-    """Renew every stored sign-in last renewed more than 7 days ago, so a quiet spell can't let one lapse. Never raises."""
+    """Renew every enabled channel's sign-in last renewed more than 7 days ago, so a quiet spell can't let one lapse; a failed
+    renewal waits RETRY before the next try. Only names that are a channel's own (mail-refresh:<channel id>) are looked at: a
+    form's draft (mail-refresh:<id>.form) is never renewed. Never raises: it runs before a run's alerts."""
     from core import notify
     now = time.time() if now is None else now
     try:
         names = {n for n in passvault.names() if n.startswith(PREFIX)}
+        orgs = [db.GLOBAL] + [r["id"] for r in db.org_rows()] if names else []
     except Exception:
         return
-    if not names:
-        return
     done = set()
-    for org in [db.GLOBAL] + [r["id"] for r in db.org_rows()]:
-        with db.within(org):
-            for ch in notify.channels():
-                if ch["type"] != "email" or ch["id"] in done or _name(ch) not in names or not needs_sign_in(ch.get("auth")):
-                    continue
-                done.add(ch["id"])
-                got = _stored(ch)
-                if got and now - float(got.get("renewed") or 0) > STALE:
+    for org in orgs:
+        try:
+            with db.within(org):
+                chs = [c for c in notify.channels() if c.get("type") == "email" and c.get("enabled", True)
+                       and needs_sign_in(c.get("auth")) and PREFIX + str(c.get("id")) in names and c["id"] not in done]
+                for ch in chs:
+                    done.add(ch["id"])
                     try:
-                        access_token(ch, notify.get_secrets(ch))
+                        _renew_one(ch, now, notify)
                     except Exception:
                         quiet.ignored()
+        except Exception:
+            quiet.ignored()
+
+
+def _renew_one(ch, now, notify):
+    got = _stored(ch)
+    if not got or now - float(got.get("renewed") or 0) <= STALE or now - float(got.get("tried") or 0) < RETRY:
+        return
+    try:
+        access_token(ch, notify.get_secrets(ch))
+    except MailAuthError as e:
+        if not e.gone:
+            _note_try(ch, got["refresh_token"], now)
