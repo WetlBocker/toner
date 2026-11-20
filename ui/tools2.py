@@ -9,7 +9,7 @@ import pyqtgraph as pg
 from PySide6.QtCore import QThread, Qt, Signal
 from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
-                               QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QSpinBox, QSplitter,
+                               QListWidget, QListWidgetItem, QDialog, QDialogButtonBox, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QSpinBox, QSplitter,
                                QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget, QFrame)
 from core import audit, cmdrun, custom, db, discovery, listeners, nettools, oui, perms, pinger, profiles, reach, snmp
 from core import proxy, topology, vendors
@@ -538,7 +538,7 @@ class CommandRunnerTab(QWidget):
         self.commands.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
         self.snippets = QComboBox()
         self.snippets.setMinimumWidth(140)
-        self.snip_save, self.snip_del = QPushButton("Save..."), QPushButton("Delete")       # next to "Snippets", so short words are enough
+        self.snip_create, self.snip_save, self.snip_del = QPushButton("Create..."), QPushButton("Save..."), QPushButton("Delete")       # next to "Snippets", so short words are enough
         self.snip_save.setToolTip("Save the commands as a snippet")
         self.snip_del.setToolTip("Delete the chosen snippet")
         self.safe = QCheckBox("Read-only mode")
@@ -569,7 +569,7 @@ class CommandRunnerTab(QWidget):
         lb.addWidget(self.none_btn)
         left.addLayout(lb)
         right = QVBoxLayout()
-        right.addLayout(_row("Snippets", self.snippets, self.snip_save, self.snip_del, self.safe, self.go, self.stop))   # wraps in a narrow window
+        right.addLayout(_row("Snippets", self.snippets, self.snip_create, self.snip_save, self.snip_del, self.safe, self.go, self.stop))   # wraps in a narrow window
         right.addWidget(self.commands)
         right.addWidget(self.status)
         split = QSplitter(Qt.Orientation.Vertical)
@@ -595,6 +595,7 @@ class CommandRunnerTab(QWidget):
         self.none_btn.clicked.connect(lambda: self._tick_all(False))
         self.table.itemSelectionChanged.connect(self.show_output)
         self.snippets.activated.connect(self.load_snippet)
+        self.snip_create.clicked.connect(self.create_snippet)
         self.snip_save.clicked.connect(self.save_snippet)
         self.snip_del.clicked.connect(self.delete_snippet)
         self.copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(self.output.toPlainText()))
@@ -698,11 +699,37 @@ class CommandRunnerTab(QWidget):
             return
         name, ok = QInputDialog.getText(self, "Save snippet", "Name:")
         if ok and name.strip():
-            snips = [s for s in db.get_setting("snippets") if s["name"].lower() != name.strip().lower()]
-            snips.append({"name": name.strip(), "commands": text})
-            db.set_setting("snippets", sorted(snips, key=lambda s: s["name"].lower()))
-            self.fill_snippets()
-            self.snippets.setCurrentIndex(self.snippets.findText(name.strip()))
+            self._store_snippet(name, text)
+
+    def _store_snippet(self, name, text):
+        name = name.strip()
+        snips = [s for s in db.get_setting("snippets") if s["name"].lower() != name.lower()]
+        snips.append({"name": name, "commands": text})
+        db.set_setting("snippets", sorted(snips, key=lambda s: s["name"].lower()))
+        self.fill_snippets()
+        self.snippets.setCurrentIndex(self.snippets.findText(name))
+
+    def create_snippet(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Create snippet")
+        name, cmds = QLineEdit(), QPlainTextEdit()
+        cmds.setFont(self.commands.font())
+        form = QFormLayout()
+        form.addRow("Name", name)
+        form.addRow("Commands", cmds)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        save = buttons.button(QDialogButtonBox.StandardButton.Save)
+        ready = lambda: save.setEnabled(bool(name.text().strip() and cmds.toPlainText().strip()))
+        name.textChanged.connect(ready)
+        cmds.textChanged.connect(ready)
+        ready()
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        lay = QVBoxLayout(dlg)
+        lay.addLayout(form)
+        lay.addWidget(buttons)
+        if dlg.exec():
+            self._store_snippet(name.text(), cmds.toPlainText().strip())
 
     def delete_snippet(self):
         name = self.snippets.currentText()

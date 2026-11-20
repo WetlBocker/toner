@@ -210,6 +210,32 @@ R.commands.setPlainText("show version\nshow clock"); R.save_snippet()
 check("snippets are saved and offered", any(s["name"] == "version check" for s in db.get_setting("snippets")) and R.snippets.currentText() == "version check")
 R.commands.clear(); R.load_snippet(); check("choosing a snippet fills the commands", R.commands.toPlainText() == "show version\nshow clock")
 R.delete_snippet(); check("snippets can be deleted", db.get_setting("snippets") == [])
+from PySide6.QtCore import QTimer
+from PySide6.QtWidgets import QDialogButtonBox, QLineEdit as _LE, QPlainTextEdit as _PT
+def create_snippet(name, cmds, action="save"):
+    seen = {}
+    def drive():
+        d = QApplication.activeModalWidget(); seen["d"] = d
+        d.findChild(_LE).setText(name); d.findChild(_PT).setPlainText(cmds)
+        bb = d.findChild(QDialogButtonBox); seen["save_on"] = bb.button(QDialogButtonBox.StandardButton.Save).isEnabled()
+        (bb.button(QDialogButtonBox.StandardButton.Save) if action == "save" else bb.button(QDialogButtonBox.StandardButton.Cancel)).click()
+    QTimer.singleShot(0, drive); R.snip_create.click(); return seen
+check("Snippets row has a Create... button before Save...", R.snip_create.text() == "Create..." and R.snip_create.geometry().right() < R.snip_save.geometry().left() and R.snip_create.geometry().top() == R.snip_save.geometry().top())
+R.commands.setPlainText("keep me")
+s = create_snippet("clock", "show clock\nshow ver")
+d = s["d"]; labels = [l.text() for l in d.findChildren(QLabel)]
+check("the window is titled Create snippet with Name and Commands", d.windowTitle() == "Create snippet" and "Name" in labels and "Commands" in labels, (d.windowTitle(), labels))
+check("its commands box uses the command box's font", d.findChild(_PT).font().family() == R.commands.font().family())
+check("Create saves the snippet, lists it, and leaves the command box alone", s["save_on"] and {"name": "clock", "commands": "show clock\nshow ver"} in db.get_setting("snippets") and R.snippets.findText("clock") >= 0 and R.commands.toPlainText() == "keep me")
+create_snippet("CLOCK", "show clock2"); check("an existing name is replaced as Save... does", [s["commands"] for s in db.get_setting("snippets") if s["name"].lower() == "clock"] == ["show clock2"])
+def probe():
+    d = QApplication.activeModalWidget(); bb = d.findChild(QDialogButtonBox); sv = bb.button(QDialogButtonBox.StandardButton.Save)
+    a = sv.isEnabled(); d.findChild(_LE).setText("x"); b = sv.isEnabled(); d.findChild(_PT).setPlainText("y"); c = sv.isEnabled(); probe.r = (a, b, c); d.reject()
+QTimer.singleShot(0, probe); R.snip_create.click()
+check("Save stays off until both boxes have text", probe.r == (False, False, True), probe.r)
+before = list(db.get_setting("snippets")); create_snippet("nope", "show x", "cancel")
+check("Cancel stores nothing", db.get_setting("snippets") == before)
+db.set_setting("snippets", [])
 T2.QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (SP + (r"\cmd_out.txt").replace("\\", os.sep), "")); R.save_all()
 txt = open(SP + (r"\cmd_out.txt").replace("\\", os.sep), encoding="utf-8").read(); check("save-all writes a section per device", "===== r1" in txt and "FAILED: TimeoutError" in txt and "$ show version" in txt)
 R.funnel.clear(); R.commands.clear(); R.go.click(); check("nothing to run is explained", "at least one" in R.status.text())
