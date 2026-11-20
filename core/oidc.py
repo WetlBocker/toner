@@ -267,7 +267,7 @@ class _Redirect(http.server.BaseHTTPRequestHandler):
 
 class BrowserSignIn:
     """One sign-in in the person's browser: authorization code with PKCE on a loopback port, forced fresh (prompt=login, max_age=0)
-    unless fresh=False (email's sign-in, which needs no proof of a sign-in just now). The port is bound here (so .url has it); run()
+    unless fresh=False (email's sign-in, which needs no proof of a sign-in just now: prompt=select_account). The port is bound here (so .url has it); run()
     or close() frees it."""
 
     def __init__(self, cfg, nonce=None, open_url=webbrowser.open, login_hint=None, scopes=SCOPES, fresh=True, client_secret=None):
@@ -287,8 +287,9 @@ class BrowserSignIn:
              "state": self._state,
              "nonce": self.nonce, "prompt": "login", "max_age": "0", "code_challenge_method": "S256",
              "code_challenge": base64.urlsafe_b64encode(hashlib.sha256(self._verifier.encode()).digest()).rstrip(b"=").decode()}
-        if not fresh:
-            del q["prompt"], q["max_age"]
+        if not fresh:                                   # no proof of a fresh sign-in, but the person picks the account (the mailbox)
+            del q["max_age"]
+            q["prompt"] = "select_account"
         if login_hint:
             q["login_hint"] = login_hint
         if cfg.get("provider") == "google" and "offline_access" in scopes.split():

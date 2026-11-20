@@ -226,7 +226,7 @@ SECRETS.clear()
 P.id_claims = {"auth_time": None}
 b, tok = flow(fresh=False, client_secret="mail-secret")
 seen = P.authorize_seen[-1]
-check("fresh=False: no prompt=login and no max_age", "prompt" not in seen and "max_age" not in seen, seen)
+check("fresh=False: prompt=select_account (the person picks the account) and no max_age", seen.get("prompt") == "select_account" and "max_age" not in seen, (seen.get("prompt"), seen.get("max_age")))
 check("...an ID token without auth_time is accepted", tok.claims["sub"] == "sub-1" and "auth_time" not in tok.claims)
 check("...and the given secret goes with the code", P.token_requests[-1].get("client_secret") == "mail-secret")
 check("the default still demands a fresh sign-in", raises(oidc.NotFresh, flow))

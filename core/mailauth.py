@@ -54,7 +54,7 @@ def needs_sign_in(auth):
 def _cfg(ch):
     if ch.get("auth") == "google_account":
         return {"issuer": GOOGLE_ISSUER, "client_id": str(ch.get("client_id", "")).strip(), "provider": "google"}
-    tenant = urllib.parse.quote(str(ch.get("tenant", "")).strip(), safe="")
+    tenant = urllib.parse.quote(str(ch.get("tenant", "")).strip().lower(), safe="")     # discovery names it in lower case
     return {"issuer": MS_ISSUER.format(tenant=tenant), "client_id": str(ch.get("client_id", "")).strip()}
 
 

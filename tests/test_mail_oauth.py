@@ -154,6 +154,10 @@ check("email fields: auth (default password), tenant, client_id plain, client_se
       fields["auth"][1].get("default") == "password" and fields["tenant"][0] == "text" and fields["client_id"][0] == "text"
       and fields["client_secret"][0] == "secret", fields.keys())
 check("a new email channel signs in with a password", notify.new_channel("email")["auth"] == "password")
+mailauth.MS_ISSUER = "https://login.example/{tenant}/v2.0"
+got = mailauth._cfg({"auth": "ms_account", "tenant": " ABCDEF12-3456-7890-ABCD-EF1234567890 ", "client_id": "x"})["issuer"]
+mailauth.MS_ISSUER = ISS
+check("an upper-case tenant ID is lower-cased in the issuer (discovery's issuer check)", got == "https://login.example/abcdef12-3456-7890-abcd-ef1234567890/v2.0", got)
 
 print("== signing in (browser)")
 MS = chan("ms_account")
@@ -164,7 +168,7 @@ check("sign_in returns the account", who == "mailbox@example.com", who)
 check("...and stores the refresh token with the account and the time", stored(MS)["refresh_token"] == RT1 and stored(MS)["account"] == who
       and abs(stored(MS)["renewed"] - time.time()) < 60, stored(MS))
 check("signed_in_as names it", mailauth.signed_in_as(MS) == who)
-check("no 'sign in again now' demands (prompt, max_age) and no auth_time needed", "prompt" not in seen and "max_age" not in seen, seen)
+check("the person picks the account (prompt=select_account); no max_age and no auth_time needed", seen.get("prompt") == "select_account" and "max_age" not in seen, (seen.get("prompt"), seen.get("max_age")))
 check("Microsoft scopes: SMTP.Send, offline_access and the account's name", set(seen["scope"].split()) >= {"https://outlook.office.com/SMTP.Send", "offline_access", "openid"}, seen["scope"])
 check("PKCE and the loopback redirect, as single sign-on", seen["code_challenge_method"] == "S256" and seen["redirect_uri"].startswith("http://localhost:"))
 check("no client secret given: none sent", "client_secret" not in form, form)
@@ -174,7 +178,7 @@ G = chan("google_account")
 mailauth.sign_in(G, {"client_secret": CS})
 gs = P.authorize_seen[-1]
 check("Google: the mail.google.com scope and the account's email, no offline_access scope", set(gs["scope"].split()) == {"openid", "email", "https://mail.google.com/"}, gs["scope"])
-check("Google: no prompt or max_age either", "prompt" not in gs and "max_age" not in gs, gs)
+check("Google: prompt=select_account too, no max_age", gs.get("prompt") == "select_account" and "max_age" not in gs, (gs.get("prompt"), gs.get("max_age")))
 check("Google: the client secret is sent with the code", P.token_requests[-1].get("client_secret") == CS)
 STATE["code_rt"] = False
 X = chan("ms_account", "c-norefresh")
