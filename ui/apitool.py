@@ -88,6 +88,29 @@ class KeyValueTable(QTableWidget):
         self._filling = False
         self.itemChanged.connect(self._changed)
         self.set_rows([])
+        self.add_btn, self.remove_btn = QPushButton("Add"), QPushButton("Remove")
+        self.add_btn.clicked.connect(self.add)
+        self.remove_btn.clicked.connect(self.remove)
+        bar = QHBoxLayout()
+        bar.addWidget(self.add_btn)
+        bar.addWidget(self.remove_btn)
+        bar.addStretch(1)
+        self.panel = QWidget()                              # what goes in the tab: the buttons above the table
+        lay = QVBoxLayout(self.panel)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addLayout(bar)
+        lay.addWidget(self, 1)
+
+    def add(self):
+        """The empty row is always there, ready: put the cursor in its Name cell."""
+        self.setCurrentCell(self.rowCount() - 1, 1)
+        self.editItem(self.item(self.rowCount() - 1, 1))
+
+    def remove(self):
+        r = self.currentRow()
+        if 0 <= r < self.rowCount() - 1:                    # (never the ready row)
+            self.removeRow(r)
+            self.changed.emit()
 
     def _add(self, on=True, name="", value=""):
         r = self.rowCount()
@@ -135,9 +158,11 @@ class VariablesPanel(QWidget):
         self.table.setHorizontalHeaderLabels(["Name", "Value", "Secret"])
         self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setStretchLastSection(False)
+        self.table.setProperty("fitSkip", True)                      # ui/tablefit.py would undo Stretch (every column as wide as its text): Value takes the slack here
         self.table.setColumnWidth(0, 200)
         self.table.setColumnWidth(2, 70)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)       # headings over their text, as tablefit does
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setItemDelegate(CellEditDelegate(self.table))
         self.add_btn, self.remove_btn = QPushButton("Add"), QPushButton("Remove")
@@ -478,8 +503,8 @@ class ApiTesterTab(QWidget):
         al.addStretch(1)
         self.variables = VariablesPanel()
         self.tabs = QTabWidget()
-        self.tabs.addTab(self.params, "Params")
-        self.tabs.addTab(self.headers, "Headers")
+        self.tabs.addTab(self.params.panel, "Params")
+        self.tabs.addTab(self.headers.panel, "Headers")
         self.tabs.addTab(body_page, "Body")
         self.tabs.addTab(auth_page, "Auth")
         self.tabs.addTab(self.variables, "Variables")

@@ -6,6 +6,7 @@ import os as _os, sys as _sys, tempfile as _tmp
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
 _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+_os.environ.setdefault("QT_QPA_FONTDIR", r"C:\Windows\Fonts")
 import base64, http.server, json, os, socket, ssl, sys, threading, time
 from datetime import datetime, timedelta, timezone
 SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = SP + (r"\api%d.db").replace("\\", os.sep) % int(time.time()); os.environ["APPDATA"] = SP
@@ -464,6 +465,27 @@ check("Save makes the organization's own copy, pointing at Global's profile the 
 hits.clear(); page.send_now(); wait_sent()
 check("...and the copy sends with that profile's secret", hits and hits[-1]["headers"].get("authorization") == "Bearer shared-prof-secret", page.status.text())
 db.set_home(db.GLOBAL); page.refresh()
+# ---- Add and Remove on Params and Headers; Variables fills its width (with the table fitting the app installs)
+from ui import tablefit
+tablefit.install_everywhere(app)
+for name, T in (("Params", page.params), ("Headers", page.headers)):
+    check(f"{name} has Add and Remove above its table", [b.text() for b in T.panel.findChildren(U.QPushButton)] == ["Add", "Remove"] and T.panel.layout().itemAt(1).widget() is T)
+    T.set_rows([[True, "a", "1"], [False, "b", "2"]]); fired = []; T.changed.connect(lambda: fired.append(1))
+    T.add_btn.click()
+    check(f"{name}: Add puts the cursor in the Name cell of the empty last row, with no second empty row", T.rowCount() == 3 and (T.currentRow(), T.currentColumn()) == (2, 1), (T.rowCount(), T.currentRow(), T.currentColumn()))
+    T.setCurrentCell(0, 2); fired.clear(); T.remove_btn.click()
+    check(f"{name}: Remove deletes the current row and emits changed", T.rows() == [[False, "b", "2"]] and T.rowCount() == 2 and fired, (T.rows(), T.rowCount(), fired))
+    T.setCurrentCell(T.rowCount() - 1, 1); fired.clear(); T.remove_btn.click()
+    check(f"{name}: Remove on the ready empty row does nothing", T.rows() == [[False, "b", "2"]] and T.rowCount() == 2 and not fired, (T.rows(), T.rowCount(), fired))
+    T.setCurrentCell(0, 1); T.remove_btn.click()
+    check(f"{name}: removing the last filled row still leaves an empty row to type into", T.rows() == [] and T.rowCount() == 1)
+    T.set_rows([[True, "k", "v"]])
+    check(f"{name}: rows() and set_rows() are unchanged", T.rows() == [[True, "k", "v"]] and T.rowCount() == 2)
+V = U.VariablesPanel(); V.resize(900, 400); V.show()
+for _ in range(10): app.processEvents(); time.sleep(0.02)
+w = [V.table.horizontalHeader().sectionSize(i) for i in range(3)]
+check("Variables, 900 px wide: the three columns fill the viewport, Value takes the slack, Secret stays narrow", sum(w) == V.table.viewport().width() and w[1] > 2 * w[0] and w[1] > 3 * w[2] and w[2] < 150, (w, V.table.viewport().width()))
+V.close()
 tools.shutdown()
 check("the page shuts down cleanly", not page.running())
 
