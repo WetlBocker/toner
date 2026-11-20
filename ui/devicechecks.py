@@ -50,7 +50,6 @@ class DeviceChecks(QWidget):
         self.limits = QTableWidget(0, 4)
         self.limits.setHorizontalHeaderLabels(["Own limits", "Check", "WARN", "FAIL"])
         self.limits.verticalHeader().setVisible(False)
-        self.limits.horizontalHeader().setStretchLastSection(True)
         self.limits.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self.limits.setMinimumHeight(170)
         self.spins = {}
@@ -73,9 +72,8 @@ class DeviceChecks(QWidget):
                 self.limits.setItem(r, col, w)
             self.limits.setCellWidget(r, 2, warn)
             self.limits.setCellWidget(r, 3, fail)
-        self.limits.resizeColumnsToContents()
         self.limits.itemChanged.connect(self._tick)
-        reset = QPushButton("Use the global settings for everything")
+        reset = QPushButton("Use Global Settings")
         reset.setAutoDefault(False)
         reset.clicked.connect(self.reset)
         self.follows = note("")
@@ -107,6 +105,24 @@ class DeviceChecks(QWidget):
         self.if_choose.clicked.connect(self.choose_interfaces)
         self._refresh_globals()
         self._show_ifs()
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        self._fit_limits()
+
+    def _fit_limits(self):
+        """Rows as tall as their boxes and WARN/FAIL one width, from the boxes' own hints once the theme has styled them; Check takes the slack."""
+        pad = 3                                                           # the theme's row padding would squeeze the boxes (and differs per density): set it here
+        self.limits.setStyleSheet(f"QTableView::item {{ padding: {pad}px 6px; border: 0; }}")
+        box = self.spins["cpu"][0]
+        box.ensurePolished()                                              # (the theme's size rules apply from here, not before)
+        hint = box.sizeHint()
+        self.limits.verticalHeader().setDefaultSectionSize(hint.height() + 2 * pad + 1)      # (+1: the grid line)
+        self.limits.resizeColumnsToContents()
+        h = self.limits.horizontalHeader()
+        h.setSectionResizeMode(1, h.ResizeMode.Stretch)
+        for col in (2, 3):
+            h.resizeSection(col, hint.width() + 12)                       # (12: the cell's side padding)
 
     # ---------- what is shown
     def _refresh_globals(self):

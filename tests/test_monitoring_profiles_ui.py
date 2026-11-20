@@ -174,5 +174,23 @@ check("Settings > Thresholds says where a profile's limits sit", any(
     "A device can also carry its own limits (Inventory > Edit device > Checks); they beat everything." in t
     for t in texts(next(p for p in S.pages if p.title == "Thresholds"))))
 
+print("== the limits table fits its boxes")
+from ui.devicechecks import DeviceChecks
+def limits_fit(w, label, top=None):
+    (top or w).resize(640, 760); w.show(); app.processEvents(); app.processEvents()
+    t = w.limits; h = t.horizontalHeader(); bad_rows = []
+    for r in range(t.rowCount()):
+        for c in (2, 3):
+            box = t.cellWidget(r, c); cell = t.visualRect(t.model().index(r, c))
+            if t.rowHeight(r) < box.sizeHint().height() or not cell.contains(box.geometry()): bad_rows.append((r, c, t.rowHeight(r), box.sizeHint().height(), box.geometry(), cell))
+    check(label + ": every row is as tall as its boxes and each box lies inside its cell", not bad_rows, bad_rows[:2])
+    check(label + ": WARN and FAIL are the same width, and the columns fill the viewport",
+          h.sectionSize(2) == h.sectionSize(3) and sum(h.sectionSize(i) for i in range(4)) == t.viewport().width(), [h.sectionSize(i) for i in range(4)] + [t.viewport().width()])
+    check(label + ": the Check column takes the slack", h.sectionResizeMode(1) == h.ResizeMode.Stretch and h.sectionSize(1) > 0)
+pd = M.MonitoringProfileDialog(); pd.show(); app.processEvents()
+limits_fit(pd.checks, "profile window", pd)
+ed = DeviceChecks(); ed.set_vendor("cisco"); limits_fit(ed, "edit device")
+check("the reset button says Use Global Settings", [b.text() for b in ed.findChildren(QPushButton) if "Global" in b.text()] == ["Use Global Settings"])
+
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)
