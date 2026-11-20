@@ -4,11 +4,14 @@ Each organization has its own schedule (Settings > Checks > Schedule and Config 
 Global's, as a separate run). Global's covers Global's own and Shared devices; an organization's, its own devices. The schedule of
 the organization being looked at runs through the Results and Configs sections, so it shows there; the others run quietly in the
 background, are stored in their own files and alert as usual. Archived organizations do not run."""
+import logging
 from datetime import datetime, timedelta
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal
 
 from core import db, scansched
+
+log = logging.getLogger(__name__)
 
 
 def _files():
@@ -54,7 +57,10 @@ class ScanJob(QThread):
         self.devices = devices
 
     def run(self):
-        scansched.scan(self.devices)
+        try:
+            scansched.scan(self.devices)
+        except Exception:
+            log.exception("scheduled scan failed")          # the job still ends, so the next scheduled scan can run
 
 
 def start_scan(scanning_tab):
@@ -169,8 +175,9 @@ class _OrgTimers(QObject):
     def shutdown(self):
         for t in (self.timer, *self.others.values()):
             t.stop()                                  # Sign out leaves Toner open: a timer still armed fires on the window that has gone
-        for j in list(self.jobs):
-            j.wait(30000)
+        for j in list(self.jobs) + [ScanJob.current]:
+            if j is not None:
+                j.wait(30000)
 
 
 class Scheduler(_OrgTimers):

@@ -9,7 +9,7 @@ from core import backup, db, display, fleet, periods, reports
 
 PERIODS = [("Last 7 days", 7), ("Last 30 days", 30), ("Last 90 days", 90)]
 SCHEDULES = [("Off", ""), ("Every week", "weekly"), ("Every month", "monthly")]
-FMT = "%Y-%m-%d %H:%M:%S"
+FMT = periods.FMT
 
 
 def _pct(part, whole):

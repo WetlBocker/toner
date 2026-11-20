@@ -21,7 +21,9 @@ def begin(now=None, who=None):
     for org in [db.GLOBAL] + [o["id"] for o in db.org_rows() if not o["archived"]]:
         with db.within(org):
             alive = service._groups_alive(groups)
-            devices += [] if alive is None else service.own_devices(alive)
+            for d in [] if alive is None else service.own_devices(alive):
+                d["key"] = f"{d['name']}@@{d['org']}"       # a scan thread has no organization set: the key says whose backups to read (Global's is @@0)
+                devices.append(d)
     if devices:
         with db.within(db.GLOBAL):
             audit.log("scan", f"{len(devices)} device(s)" + (f" ({who})" if who else ""), who=who)

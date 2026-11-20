@@ -119,26 +119,30 @@ app = QApplication([])
 import app as A
 from ui import scheduler
 import threading
+def gset(k, v):
+    with db.within(db.GLOBAL): db.set_setting(k, v)
+def gget(k):
+    with db.within(db.GLOBAL): return db.get_setting(k)
 reloaded = []
 tab = types.SimpleNamespace(busy=False, running=lambda: tab.busy, reload=lambda: reloaded.append(1))
-db.set_setting("scan_last", ""); seen.clear(); db.set_home(acme)
+gset("scan_last", ""); seen.clear(); db.set_home(acme)
 held = threading.Event(); orig_run = scheduler.ScanJob.run
 scheduler.ScanJob.run = lambda self: (held.wait(10), orig_run(self))[1]            # hold the thread's work so the test can look while it runs
 main = threading.get_ident()
 scheduler.start_scan(tab)
 job = scheduler.ScanJob.current
 check("the window shows Acme and starts a scan on its own thread, which is held here, so the UI thread was not used", job is not None and job.isRunning() and not seen, (job, seen))
-check("scan_last is stored before the network work", db.get_setting("scan_last") != "" and not seen)
-db.set_setting("scan_last", ""); scheduler.start_scan(tab)
-check("not while the previous scheduled scan is still running", scheduler.ScanJob.current is job and db.get_setting("scan_last") == "")
+check("scan_last is stored before the network work", gget("scan_last") != "" and not seen)
+gset("scan_last", ""); scheduler.start_scan(tab)
+check("not while the previous scheduled scan is still running", scheduler.ScanJob.current is job and gget("scan_last") == "")
 held.set(); job.wait(15000); app.processEvents()
 check("it scans every organization, from the thread", sorted(seen) == ["a1", "b1", "c1", "c3"], seen)
 check("the Scanning page reloads its latest scan when it ends", reloaded == [1], reloaded)
 scheduler.ScanJob.run = orig_run
-db.set_setting("scan_last", ""); tab.busy = True; n0 = len(seen); scheduler.start_scan(tab)
-check("not while a manual scan is running (nothing stored)", len(seen) == n0 and db.get_setting("scan_last") == "")
+gset("scan_last", ""); tab.busy = True; n0 = len(seen); scheduler.start_scan(tab)
+check("not while a manual scan is running (nothing stored)", len(seen) == n0 and gget("scan_last") == "")
 tab.busy = False; service.owns_schedule = lambda: False; scheduler.start_scan(tab); service.owns_schedule = orig
-check("not when the service owns the schedule", len(seen) == n0 and db.get_setting("scan_last") == "")
+check("not when the service owns the schedule", len(seen) == n0 and gget("scan_last") == "")
 scheduler.start_scan(tab); scheduler.ScanJob.current.wait(15000); app.processEvents(); n1 = len(seen)
 scheduler.start_scan(tab)
 check("a minute later nothing starts again", len(seen) == n1 and not scheduler.ScanJob.current.isRunning())
@@ -167,4 +171,66 @@ check("a changed group choice is tracked too", S._dirty.get(i), dict(S._dirty))
 check("the labels of the two settings", ST.KEY_LABELS["scan_schedule"] == "Scan automatically" and ST.KEY_LABELS["scan_groups"] == "Devices")
 note_text = "Scans the chosen devices for vulnerabilities and hardening while Toner or its background service is running. The results are on the Scanning page."
 check("the approved note is on the page", any(l.text() == note_text for l in pg.findChildren(QLabel)))
+
+print("== each device is scanned against its own organization's backups")
+from core import backup, hardening
+BAD = "hostname sw\nenable password cisco\nip http server\nip finger\nsnmp-server community public RO\nline vty 0 4\n transport input telnet\n"
+CLEAN = "hostname sw\n"
+def cdev(name):
+    db.save_device(dict(name=name, vendor="cisco", host=name, port=0, platform="cisco_ios", username="", site="default", verify_ssl=0, ha_expected=0, enabled=1, location="", details="", folder_id=None))
+cdev("gw"); backup.store("gw", BAD, mask=False)
+with db.within(acme): cdev("sw"); backup.store("sw", CLEAN, mask=False)
+with db.within(beta): cdev("sw"); cdev("bx"); backup.store("sw", BAD, mask=False)
+advisories.scan = lambda dv: advisories.versions(dv) + hardening.scan(dv)             # the real scan: only the network lookups are off
+db.set_setting("scan_enabled", False); db.set_setting("scan_groups", cisco)
+for shown in (acme, beta, db.GLOBAL):
+    db.set_home(shown)
+    got = scansched.scan(scansched.begin(NOW))
+    db.set_home(db.GLOBAL)
+    def hard(name, org):
+        return [r for r in got if r.device == name and r.org == org and r.check.startswith("Hardening")]
+    tel = lambda name, org: next((r.status for r in hard(name, org) if r.check == "Hardening: Telnet allowed on VTY lines"), None)
+    fails = lambda name, org: sum(r.status == "FAIL" for r in hard(name, org))
+    where = f"(window shows {db.org_name(shown) if shown else 'Global'})"
+    check(f"a Global device reads Global's backup {where}", fails("gw", 0) > 0, [(r.check, r.status) for r in hard("gw", 0)][:3])
+    check(f"Acme's 'sw' reads its own backup (Telnet fine), not Beta's {where}", tel("sw", acme) == "OK", [(r.check, r.status, r.message[:30]) for r in hard("sw", acme)][:3])
+    check(f"Beta's 'sw' reads its own backup (Telnet allowed) {where}", tel("sw", beta) == "FAIL")
+    check(f"a device with no backup says so {where}", [r.message for r in hard("bx", beta)] == [hardening.NO_BACKUP], [r.message for r in hard("bx", beta)])
+
+
+print("== the window's job: a failure, shutdown, and the real Scanning page")
+import logging
+from ui.scanning import ScanningTab
+class Catch(logging.Handler):
+    def __init__(self): super().__init__(); self.lines = []
+    def emit(self, r): self.lines.append(r.getMessage())
+catch = Catch(); logging.getLogger("ui.scheduler").addHandler(catch)
+real_scan = scansched.scan
+def gset(k, v):
+    with db.within(db.GLOBAL): db.set_setting(k, v)
+def locked(devs): raise RuntimeError("database is locked")
+scansched.scan = locked
+db.set_home(acme); gset("scan_last", ""); gset("scan_schedule", "daily")
+tab2 = types.SimpleNamespace(running=lambda: False, reload=lambda: None)
+scheduler.start_scan(tab2); job = scheduler.ScanJob.current; job.wait(15000)
+check("a scan that raises in the job is logged, and the job ends", catch.lines == ["scheduled scan failed"] and job.isFinished(), catch.lines)
+scansched.scan = real_scan
+gset("scan_last", ""); scheduler.start_scan(tab2)
+check("...and the next scheduled scan can run", scheduler.ScanJob.current is not job); scheduler.ScanJob.current.wait(15000)
+waited = []
+scheduler.ScanJob.current = types.SimpleNamespace(wait=lambda ms: waited.append(ms), isRunning=lambda: True)
+scheduler.Scheduler(tab2).shutdown()
+check("shutting down waits for a running scheduled scan", waited == [30000], waited)
+scheduler.ScanJob.current = None
+real = ScanningTab(); real.resize(900, 500); real.show(); app.processEvents()
+db.set_home(acme); real.reset_view(); before = len(real.results)
+gset("scan_last", "")
+with db.within(acme):
+    with db.connect() as c: c.execute("DELETE FROM scan_results"); c.execute("DELETE FROM scans")
+real.reset_view(); empty = len(real.results)
+scheduler.start_scan(real); scheduler.ScanJob.current.wait(15000)
+t0 = time.time()
+while not real.results and time.time() - t0 < 10: app.processEvents(); time.sleep(0.02)
+check("the real Scanning page shows the new latest scan when the job ends", empty == 0 and real.stored and any(r.device.split("@@")[0] == "sw" for r in real.results), (empty, real.stored, [r.device for r in real.results][:4]))
+db.set_home(db.GLOBAL)
 print(f"\n{ok} passed, {bad} failed")
