@@ -3,15 +3,18 @@ key (both kept in the vault), and a Test that asks Cisco about one well-known ve
 import threading
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QCheckBox, QLabel, QLineEdit, QListWidget, QListWidgetItem, QPushButton
+from PySide6.QtWidgets import QCheckBox, QComboBox, QLabel, QLineEdit, QListWidget, QListWidgetItem, QPushButton
 
-from core import advisories, db, hardening
+from core import advisories, db, hardening, periods
 from ui.settings_base import Page, compact_row, note
+from ui.widgets import GroupPicker
 
 CISCO_NOTE = ("From apiconsole.cisco.com: register an application of type Service with the Client Credentials grant and the Cisco PSIRT "
               "openVuln API ticked; no redirect URL is needed. Needed for Cisco devices. The other vendors use NIST's database, which needs no account.")
 NVD_NOTE = "Raises NIST's rate limit from 5 to 50 requests every 30 seconds. Free at nvd.nist.gov/developers/request-an-api-key."
 RULES_NOTE = "Each scan also reads a device's newest configuration backup against these rules. Untick a rule to leave it out of every scan."
+SCHEDULE_NOTE = ("Scans the chosen devices for vulnerabilities and hardening while Toner or its background service is running. "
+                 "The results are on the Scanning page.")
 SAVED = "saved; leave blank to keep"
 TESTING = "Testing…"
 
@@ -36,6 +39,13 @@ class ScanningPage(Page):
         self.result.setWordWrap(True)
         self.result.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.form.addRow("", self.enabled)
+        self.schedule = QComboBox()
+        for kind in ("", "daily", "weekly", "biweekly", "monthly"):
+            self.schedule.addItem(periods.LABELS[kind], kind)
+        self.groups = GroupPicker()
+        self.form.addRow("Scan automatically", self.schedule)
+        self.form.addRow("Devices", self.groups)
+        self.form.addRow("", note(SCHEDULE_NOTE))
         self.form.addRow("Cisco PSIRT client ID", self.cisco_id)
         self.form.addRow("Cisco PSIRT client secret", self.cisco_secret)
         self.form.addRow("", note(CISCO_NOTE))
@@ -62,6 +72,9 @@ class ScanningPage(Page):
 
     def load(self):
         self.enabled.setChecked(bool(db.get_setting("scan_enabled")))
+        self.schedule.setCurrentIndex(max(0, self.schedule.findData(db.get_setting("scan_schedule"))))
+        self.groups.set_labels(db.group_labels()[1:])
+        self.groups.set_selected(db.get_setting("scan_groups"))
         off = hardening.rules_off()
         for it in self._rule_items():
             it.setCheckState(Qt.CheckState.Unchecked if it.data(Qt.ItemDataRole.UserRole) in off else Qt.CheckState.Checked)
@@ -72,6 +85,8 @@ class ScanningPage(Page):
 
     def save(self):
         db.set_setting("scan_enabled", self.enabled.isChecked())
+        db.set_setting("scan_schedule", self.schedule.currentData())
+        db.set_setting("scan_groups", self.groups.selected())
         db.set_setting("hardening_off", [it.data(Qt.ItemDataRole.UserRole) for it in self._rule_items() if it.checkState() != Qt.CheckState.Checked])
         for box, kind in ((self.cisco_id, "psirt_id"), (self.cisco_secret, "psirt_secret"), (self.nvd_key, "nvd_key")):
             typed = box.text().strip()
@@ -79,6 +94,11 @@ class ScanningPage(Page):
                 advisories.set_secret(kind, typed)
                 box.clear()
                 box.setPlaceholderText(SAVED)
+
+    def refresh(self):
+        keep = self.groups.selected()
+        self.groups.set_labels(db.group_labels()[1:])
+        self.groups.set_selected(keep)
 
     def _rule_items(self):
         return [it for it in (self.rules.item(i) for i in range(self.rules.count())) if it.data(Qt.ItemDataRole.UserRole)]

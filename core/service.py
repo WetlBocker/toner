@@ -202,6 +202,13 @@ class Daemon:
         self.due[db.GLOBAL].update(checks=self.next_checks, backup=self.next_backup)      # (tests set these directly)
         if not owns_schedule():                             # the window runs the schedule while it is open
             return did
+        try:
+            from core import scansched
+            if scansched.scan_due(now):
+                did.append(("scan", len(scansched.run_scheduled_scan(now))))
+                self.log(f"{now:%Y-%m-%d %H:%M:%S} scan: {did[-1][1]} row(s)")
+        except Exception as e:
+            self.log(f"scan failed: {type(e).__name__}: {e}")
         self._follow_settings(now)
         for org, when in list(self.due.items()):
             who = "" if org == db.GLOBAL else f"{db.org_name(org)}: "

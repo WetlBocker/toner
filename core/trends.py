@@ -5,7 +5,7 @@ import os
 from datetime import datetime, timedelta
 from html import escape
 
-from core import backup, db, display, fleet, reports
+from core import backup, db, display, fleet, periods, reports
 
 PERIODS = [("Last 7 days", 7), ("Last 30 days", 30), ("Last 90 days", 90)]
 SCHEDULES = [("Off", ""), ("Every week", "weekly"), ("Every month", "monthly")]
@@ -168,17 +168,7 @@ def to_csv(data, path):
 # ---------------------------------------------------------------- on a schedule
 def due(now=None):
     """True when the scheduled trend report should be made now (Settings > Reports)."""
-    kind = db.get_setting("trend_schedule")
-    if kind not in ("weekly", "monthly"):
-        return False
-    last = db.get_setting("trend_last")
-    if not last:
-        return True
-    try:
-        then = datetime.strptime(last, FMT)
-    except ValueError:
-        return True
-    return (now or datetime.now()) - then >= timedelta(days=7 if kind == "weekly" else 28)
+    return periods.is_due(db.get_setting("trend_schedule"), db.get_setting("trend_last"), now)
 
 
 def generate_scheduled(now=None):

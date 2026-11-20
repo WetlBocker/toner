@@ -60,7 +60,7 @@ KEY_LABELS = {"monitoring_profiles": "Monitoring profiles", "retention_days": "K
               "threshold_overrides": "Threshold overrides", "thresholds": "Thresholds", "schedule_enabled": "Scheduled checks",
               "schedule_minutes": "Check interval", "schedule_groups": "Devices checked on the schedule", "schedule_on_start": "Run when Toner starts",
               "report_title": "Report title", "report_org": "Report organization name", "report_folder": "Reports folder",
-              "report_include_all": "Reports include every check", "trend_schedule": "Scheduled trend report",
+              "report_include_all": "Reports include every check", "trend_schedule": "Scheduled trend report", "scan_schedule": "Scan automatically", "scan_groups": "Devices",
               "notify_enabled": "Notifications", "notify_channels": "Notification channels", "notify_consecutive": "Alert after failed runs",
               "notify_remind_hours": "Reminders", "notify_on_manual": "Alert on runs started by hand",
               "backup_enabled": "Scheduled backups", "backup_hours": "Backup interval", "backup_groups": "Devices backed up on the schedule",
