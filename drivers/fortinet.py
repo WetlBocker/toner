@@ -90,12 +90,15 @@ class FortinetDriver(Driver):
 
     def uptime(self):
         """monitor/web-ui/state: snapshot_utc_time (now) and utc_last_reboot, as Fortinet staff name them at
-        https://community.fortinet.com/t5/Support-Forum/Finding-System-boot-time-or-uptime-from-FortiGate-API/m-p/295596 (the developer network's
-        reference is behind a login: the unit of the two times is not confirmed; a value above 1e11 is taken as milliseconds, else seconds)."""
+        https://community.fortinet.com/t5/Support-Forum/Finding-System-boot-time-or-uptime-from-FortiGate-API/m-p/295596 (a forum answer, with no
+        sample reply). Not confirmed in Fortinet's documentation (its reference is on the developer network, behind a login): the endpoint, the
+        two field names, their unit (a value above 1e11 is taken as milliseconds, else seconds) and that they sit under results."""
         st = _one(self._optional("web-ui/state"))
         try:
             now, boot = float(st["snapshot_utc_time"]), float(st["utc_last_reboot"])
         except (KeyError, TypeError, ValueError):
+            return []
+        if boot <= 0:                                    # 0 or less is no boot time (it would read as decades up)
             return []
         hours = max(0.0, (now - boot) / (1000 if boot > 1e11 else 1) / 3600)
         t = self.th["uptime"]

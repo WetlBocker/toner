@@ -771,9 +771,36 @@ def _m17_device_settings(c):
     """)
 
 
+def _m18_uptime_lists(c):
+    """Proxmox and Mist have their own Uptime check now (it came with `nodes` and `devices` before): a device's own list of checks and a
+    monitoring profile's list saved before that, with nodes (Proxmox) or devices (Mist) in it, gain `uptime`, so the row stays. Runs once
+    per file, so a later untick stays."""
+    follows = {"proxmox": "nodes", "mist": "devices"}
+    def gain(vendor, checks):
+        return isinstance(checks, list) and follows.get(vendor) in checks and "uptime" not in checks
+    for did, vendor, raw in c.execute("SELECT id, vendor, checkopts FROM devices WHERE vendor IN ('proxmox', 'mist') AND IFNULL(checkopts, '') <> ''").fetchall():
+        try:
+            opts = json.loads(raw)
+        except ValueError:
+            continue
+        if isinstance(opts, dict) and gain(vendor, opts.get("checks")):
+            opts["checks"] = opts["checks"] + ["uptime"]
+            c.execute("UPDATE devices SET checkopts = ? WHERE id = ?", (json.dumps(opts), did))
+    row = c.execute("SELECT value FROM settings WHERE key = 'monitoring_profiles'").fetchone()
+    try:
+        profiles = json.loads(row[0]) if row else None
+    except ValueError:
+        profiles = None
+    if isinstance(profiles, list):
+        for p in profiles:
+            if isinstance(p, dict) and gain(p.get("vendor"), p.get("checks")):
+                p["checks"] = p["checks"] + ["uptime"]
+        c.execute("UPDATE settings SET value = ? WHERE key = 'monitoring_profiles'", (json.dumps(profiles),))
+
+
 MIGRATIONS = [(1, _m1_legacy_columns), (2, _m2_agent_history), (3, _m3_agent_tokens), (4, _m4_device_checks), (5, _m5_ansible_runs),
               (6, _m6_shared), (7, _m7_org_uids), (8, _m8_faster_history), (9, _m9_api_tester), (10, _m10_assistant), (11, _m11_device_software),
-              (12, _m12_assistant_searches), (13, _m13_backup_secrets), (14, _m14_unifi_seen), (15, _m15_result_items), (16, _m16_runs_started), (17, _m17_device_settings)]
+              (12, _m12_assistant_searches), (13, _m13_backup_secrets), (14, _m14_unifi_seen), (15, _m15_result_items), (16, _m16_runs_started), (17, _m17_device_settings), (18, _m18_uptime_lists)]
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 
 

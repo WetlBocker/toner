@@ -124,6 +124,9 @@ r = run({"web-ui/state": {"snapshot_utc_time": T0 + 1800, "utc_last_reboot": T0}
 check("seconds: half an hour up is a recent reboot", "uptime" in r and row(r["uptime"])[0] == "WARN" and r["uptime"].message == "recent reboot" and abs(r["uptime"].numeric - 0.5) < 1e-6, r.get("uptime"))
 r = run({"web-ui/state": {"utc_last_reboot": T0}})
 check("a reply without the snapshot time gives no uptime row and no error", "web-ui/state" in " ".join(CALLS) and "uptime" not in r and not [k for k, v in r.items() if v.status == "ERROR"], list(r))
+for bad_boot in (0, -5):
+    r = run({"web-ui/state": {"snapshot_utc_time": T0, "utc_last_reboot": bad_boot}})
+    check(f"a utc_last_reboot of {bad_boot} gives no uptime row", "web-ui/state" in " ".join(CALLS) and "uptime" not in r, r.get("uptime"))
 r = run({"web-ui/state": {"snapshot_utc_time": "x", "utc_last_reboot": None}})
 check("fields that are not numbers give no row either", "web-ui/state" in " ".join(CALLS) and "uptime" not in r)
 r = run(codes={"monitor/web-ui/state": 404})
