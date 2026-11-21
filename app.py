@@ -982,8 +982,8 @@ class Main(QMainWindow):
         from core import scanreports, scansched
         # Each report on its own: one that fails (a full folder) is logged and tried again next time (every 30 minutes, as the service
         # retries each tick), and never stops another report, the scheduled scan or the certificate check.
-        def scan_waits():                                   # the scan reports wait for a scheduled scan that is due or still running
-            return scansched.scan_due() or bool(scheduler.ScanJob.current and scheduler.ScanJob.current.isRunning())
+        def scan_waits():      # the scan reports wait for a scheduled scan that is due or still running, and are the schedule's owner's to make
+            return not scheduler._ours() or scansched.scan_due() or bool(scheduler.ScanJob.current and scheduler.ScanJob.current.isRunning())
         made = [("Trend report", trends.due, trends.generate_scheduled)] + [
             (label, lambda r=r: not scan_waits() and scanreports.due(r), lambda r=r: scanreports.generate_scheduled(r)) for r, (label, _t, _w) in scanreports.KINDS.items()]
         for label, due, generate in made:

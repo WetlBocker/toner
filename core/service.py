@@ -208,7 +208,9 @@ class Daemon:
                 self.log(f"scan failed: {type(e).__name__}: {e}")
         for report, (label, _title, _word) in scanreports.KINDS.items():
             try:
-                if not scansched.scan_due(now) and scanreports.due(report, now):      # a scan still to run (the window's): wait for it
+                # only the schedule's owner: it knows its own scan has finished (the window's scan can't be seen from here, and a
+                # report made while it runs would be of the scan before)
+                if owner and not scansched.scan_due(now) and scanreports.due(report, now):
                     path = scanreports.generate_scheduled(report, now)
                     if path:
                         did.append((label.lower(), path))

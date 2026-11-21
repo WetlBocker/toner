@@ -370,7 +370,8 @@ check("service that does not own the schedule: while the scan is due (the window
 with db.within(db.GLOBAL): db.set_setting("scan_last", NOW.strftime(F))
 did = service.Daemon(log=lambda m: None).tick(NOW + timedelta(minutes=1))
 service.owns_schedule = orig_owns
-check("...once it has run they are made on a later tick", any(k == "vulnerability report" for k, *_ in did) and any(k == "hardening report" for k, *_ in did), did)
+check("...nor once the window's scan has started: the process that owns the schedule makes them, from the finished scan (this one would use the scan before)",
+      not any(k in ("vulnerability report", "hardening report") for k, *_ in did) and gs("vuln_report_last") == "" and gs("hardening_report_last") == "" and not os.listdir(folder), did)
 
 due_both(); db.set_setting("trend_schedule", "weekly"); db.set_setting("trend_last", "")
 for o in (db.GLOBAL, acme): no_scans(o)
@@ -392,6 +393,16 @@ A.Main.do_housekeeping(win)
 check("the next housekeeping after the scan has finished makes both, with the new scan's rows",
       gs("vuln_report_last") != "" and gs("hardening_report_last") != "" and NEW[0] in report_text("vulnerability") and NEW[1] in report_text("hardening"),
       (gs("vuln_report_last"), os.listdir(folder)))
+for rep in ("vuln_report", "hardening_report"): db.set_setting(f"{rep}_last", "")
+for f in os.listdir(folder): os.remove(os.path.join(folder, f))
+real_ours = scheduler._ours; scheduler._ours = lambda: False             # the service started first and runs the schedule
+A.Main.do_housekeeping(win)
+check("window that does not own the schedule: both scan reports are due and no scan is, and it still makes neither (the service does)",
+      gs("vuln_report_last") == "" and gs("hardening_report_last") == "" and not report_text("vulnerability") and not report_text("hardening") and not os.listdir(folder),
+      (gs("vuln_report_last"), os.listdir(folder)))
+scheduler._ours = real_ours
+A.Main.do_housekeeping(win)
+check("...and makes them again once the schedule is its own", gs("vuln_report_last") != "" and gs("hardening_report_last") != "", gs("vuln_report_last"))
 scheduler.ScanJob.run = orig_run; A.agents.running = real_agents; advisories.scan = real_scan; scanreports.rows = real_rows
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)
