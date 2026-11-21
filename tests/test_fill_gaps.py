@@ -1,6 +1,6 @@
 # Run directly (python tests/test_fill_gaps.py) or all together (python tests/run_all.py).
 # Which tick box governs each subject (CPU, memory, storage, uptime, interfaces, interface errors) for each vendor.
-import os as _os, sys as _sys, tempfile as _tmp
+import os as _os, sys as _sys
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 from core import checks, vendors
 ok = bad = 0
@@ -22,8 +22,12 @@ check("fortinet has no interface errors key", "interface errors" not in [k for k
 check("paloalto gains interface errors via SNMP", ("interface errors", "Interface errors (via SNMP)") in checks.CATALOG["paloalto"])
 jun = [e for e in checks.CATALOG["juniper"] if e[0] == "storage"]
 check("juniper keeps its own storage label, once", jun == [("storage", "Storage space")], jun)
-check("no key twice in a vendor's list (sonicwall's own uptime and interfaces aside)",
-      all(len({k for k, _ in l}) == len(l) for v, l in checks.CATALOG.items() if v != "sonicwall"))
+def _dups(l):
+    ks = [k for k, _ in l]; return {k for k in ks if ks.count(k) > 1}
+check("no key twice in a vendor's list, except sonicwall's own uptime and interfaces",
+      all(_dups(l) == ({"uptime", "interfaces"} if v == "sonicwall" else set()) for v, l in checks.CATALOG.items()))
+check("proxmox gains exactly cpu, memory, interfaces and interface errors",
+      [k for k, _ in checks.CATALOG["proxmox"][-4:]] == ["cpu", "memory", "interfaces", "interface errors"])
 check("the six labels say via SNMP", [l for _, l in checks.SNMP_EXTRA] == ["CPU (via SNMP, when set up)", "Memory (via SNMP)", "Disk and storage (via SNMP)",
       "Uptime and recent reboots (via SNMP)", "Interface status (via SNMP)", "Interface errors (via SNMP)"])
 

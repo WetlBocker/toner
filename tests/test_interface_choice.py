@@ -71,6 +71,28 @@ try:
 except ValueError as e:
     check("a Windows computer has none to list", "no list of interfaces" in str(e))
 
+print("== a device whose interfaces are read via SNMP")
+from core import profiles
+from drivers.snmpdev import SnmpDriver
+_snmp_list, _snmp_cfg, _fg_list = SnmpDriver.list_interfaces, profiles.snmp_configured, FG.FortinetDriver.list_interfaces
+SnmpDriver.list_interfaces = lambda self: [("eth0", "up"), ("eth1", "down")]
+PX = {"name": "pve", "vendor": "proxmox", "host": "10.0.0.2", "password": "TOK", "verify_ssl": 0, "port": 0}
+profiles.snmp_configured = lambda dev: True
+check("a device with no list of its own lists them via SNMP", ifaces.listing(PX) == [("eth0", "Up", None), ("eth1", "Down", None)], ifaces.listing(PX))
+profiles.snmp_configured = lambda dev: False
+try:
+    ifaces.listing(PX); check("without SNMP set up, a ValueError with the usual text", False)
+except ValueError as e:
+    check("without SNMP set up, a ValueError with the usual text", str(e) == "this kind of device has no list of interfaces to choose from", e)
+except NotImplementedError:
+    check("without SNMP set up, a ValueError with the usual text", False, "NotImplementedError")
+FG.FortinetDriver.list_interfaces = lambda self: [("own", "up")]
+for cfg in (True, False):
+    profiles.snmp_configured = lambda dev, cfg=cfg: cfg
+    check(f"fortinet keeps its own list (SNMP set up: {cfg})", ifaces.listing({**PX, "vendor": "fortinet"}) == [("own", "Up", None)])
+SnmpDriver.list_interfaces, profiles.snmp_configured, FG.FortinetDriver.list_interfaces = _snmp_list, _snmp_cfg, _fg_list
+check("the picker still appears for proxmox, not for windows", ifaces.available("proxmox") and not ifaces.available("windows"))
+
 print("== the picker")
 from PySide6.QtWidgets import QApplication, QMessageBox
 from PySide6.QtCore import Qt

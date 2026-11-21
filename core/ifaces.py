@@ -24,10 +24,18 @@ def listing(dev, opts=None):
     vendor = dev["vendor"]
     if vendor not in DRIVERS or not available(vendor):
         raise ValueError("this kind of device has no list of interfaces to choose from")
-    drv = DRIVERS[vendor](dev, db.get_thresholds(), opts or db.runtime_options())
+    from drivers.base import Driver
+    own = DRIVERS[vendor].list_interfaces is not Driver.list_interfaces
+    if not own and not profiles.snmp_configured(dev):                # its interfaces check is made via SNMP, so the list comes that way
+        raise ValueError("this kind of device has no list of interfaces to choose from")
+    if not own:
+        from drivers.snmpdev import SnmpDriver
+        drv = SnmpDriver(dev, db.get_thresholds(), opts or db.runtime_options())
+    else:
+        drv = DRIVERS[vendor](dev, db.get_thresholds(), opts or db.runtime_options())
     rows = drv.list_interfaces()
     speeds = {}
-    if wan_capable(vendor):
+    if own and wan_capable(vendor):
         try:
             speeds = {str(n): c[2] for n, c in drv.interface_counters().items()}
         except Exception:                                            # noqa: BLE001  (no speeds only means no placeholder in the picker)
