@@ -264,12 +264,21 @@ def _run_ssh(dev, commands, opts, read_timeout, out):
 
 def _run_cli(dev, commands, opts, read_timeout, out):
     """A firewall's own command line, over SSH, with the login stored on the device (its API key is for the checks)."""
+    run_cli(dev, commands, opts, read_timeout, out=out)
+
+
+def run_cli(dev, commands, opts=None, read_timeout=30, device_type=None, before=None, out=None):
+    """[(command, output)] from a firewall's command line over SSH, with the SSH login stored on the device. device_type overrides
+    vendors.CLI_TYPES; before(connection), called once after sign-in, returns False to send no command. `out` (the Command Runner's)
+    takes the session log and each output as it comes, so a failure keeps what came before it."""
+    out = out if out is not None else {"outputs": []}
+    start = len(out["outputs"])
     user, pw = (dev.get("username") or "").strip(), profiles.ssh_secret(dev)
     if not user or not pw:
         raise ValueError("no SSH login is stored for this device: Edit device > Access, SSH user name and SSH password")
     t = int((opts or db.runtime_options()).get("ssh_timeout", 20))
     port = int(db.get_setting("default_ssh_port") or 22)
-    args = dict(device_type=vendors.CLI_TYPES[dev["vendor"]], host=dev["host"], username=user, password=pw,
+    args = dict(device_type=device_type or vendors.CLI_TYPES[dev["vendor"]], host=dev["host"], username=user, password=pw,
                 port=port, timeout=t, conn_timeout=t)
     if out.get("_log") is not None:
         args["session_log"] = out["_log"]
@@ -279,9 +288,12 @@ def _run_cli(dev, commands, opts, read_timeout, out):
         args["sock"] = sock
     try:
         with ConnectHandler(**args) as c:
+            if before is not None and before(c) is False:
+                return []
             prompt = any_mode(c)
             for cmd in commands:
                 out["outputs"].append((cmd, c.send_command(cmd, read_timeout=read_timeout, expect_string=prompt)))
+        return out["outputs"][start:]
     finally:
         for x in closers:
             try:

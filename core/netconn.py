@@ -10,7 +10,9 @@ import re
 import time
 
 from netmiko import ConnectHandler
+from netmiko.base_connection import BaseConnection
 from netmiko.cisco.cisco_asa_ssh import CiscoAsaSSH
+from netmiko.fortinet.fortinet_ssh import FortinetSSH
 from netmiko.exceptions import ReadTimeout
 
 PROMPT = re.compile(r"\S[>#]\s?$")
@@ -87,7 +89,18 @@ def any_mode(conn):
     return re.escape(base[:16]) + r"[^\r\n]*[>#\]$]\s*$"
 
 
-SPECIAL = {"cisco_asa": AsaSSH}
+class FortinetReadOnly(FortinetSSH):
+    """FortinetSSH that changes nothing on the firewall: netmiko's sign-in sets `config system console` / `set output standard` and
+    puts `set output more` back on exit, two configuration changes per session. The checks send commands too short to page instead."""
+
+    def disable_paging(self, *args, **kw):
+        return ""
+
+    def cleanup(self, command="exit"):
+        return BaseConnection.cleanup(self, command=command)
+
+
+SPECIAL = {"cisco_asa": AsaSSH, "fortinet_readonly": FortinetReadOnly}
 
 
 def connect(**args):

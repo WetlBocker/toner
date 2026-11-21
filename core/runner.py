@@ -1,4 +1,5 @@
 import dataclasses
+import re
 import socket
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -8,7 +9,7 @@ import requests
 from core import checks, custom, db, ifaces, nettools, profiles, reach, support, vendors, winmon, winsettings
 from core.nettools import resolve_host
 from drivers import DRIVERS
-from drivers.base import AuthRejected, Driver, Result, ERROR, FAIL, NA, WARN
+from drivers.base import AuthRejected, Driver, Result, ERROR, FAIL, NA, OK, WARN
 from core import quiet
 
 
@@ -101,14 +102,56 @@ def snmp_extras(dev, thresholds, opts, have, on_check=None, only=None):
 
         def enabled(self, check_key):
             return (only is not None and check_key in only) or super().enabled(check_key)
-    drv = Extras(dev, thresholds, opts)
-    drv.on_check = on_check
     try:
+        drv = Extras(dev, thresholds, opts)
+        drv.on_check = on_check
         rows = drv.run()
     except Exception as e:
         return [Result(dev["name"], "snmp", ERROR, "", "SNMP: " + Driver.explain(e))]
     drv.flush_baselines()
     return [r for r in rows if r.check != "reachability"]
+
+
+SSH_FILL = {"fortinet": ("cpu", "memory", "uptime"), "paloalto": ("cpu", "memory", "uptime", "firmware")}
+FG_COMMANDS = {"cpu": 'get system performance status | grep "CPU states"', "memory": "get system performance status | grep Memory",
+               "uptime": "get system performance status | grep Uptime"}       # one line each, so the pager never starts
+
+
+def ssh_extras(dev, thresholds, opts, wanted, on_check=None):
+    """A FortiGate's or Palo Alto's CPU, memory, uptime (and Palo Alto's version) from its command line, with the SSH login stored on
+    it, for the `wanted` subjects: a row for each it could read. A failed session is one ssh ERROR row."""
+    from core import cmdrun
+    from drivers import fortinet, paloalto, sshbase
+    vendor, rows = dev["vendor"], []
+    try:
+        drv = DRIVERS[vendor](dev, thresholds, opts)           # makes the rows; never run
+        drv.on_check = on_check
+        if vendor == "fortinet":
+            # shortcut: FortiGates with VDOMs are not filled over SSH, upgrade when one is available to test against
+            text = "\n".join(o for _c, o in cmdrun.run_cli(dev, [FG_COMMANDS[s] for s in SSH_FILL[vendor] if s in wanted], opts,
+                                                           device_type="fortinet_readonly", before=lambda c: not c._vdoms))
+            cpu, mem, up = fortinet.cli_cpu(text), fortinet.cli_memory(text), re.search(r"^Uptime:.*$", text, re.M)
+            read = {"cpu": lambda: cpu is not None and drv.level_check("cpu", cpu),
+                    "memory": lambda: mem is not None and drv.level_check("memory", mem),
+                    "uptime": lambda: up and drv.uptime_row(sshbase.uptime_hours(up.group(0)))}
+        else:
+            text = "\n".join(o for _c, o in cmdrun.run_cli(dev, (["show system info"] if {"uptime", "firmware"} & set(wanted) else [])
+                                                           + (["show system resources"] if {"cpu", "memory"} & set(wanted) else []), opts))
+            sw = paloalto.cli_field(text, "sw-version")
+            read = {"cpu": lambda: drv.level_check("cpu", paloalto.cpu_memory(text)[0]),
+                    "memory": lambda: drv.level_check("memory", paloalto.cpu_memory(text)[1]),
+                    "uptime": lambda: drv.uptime_row(paloalto.uptime_hours(paloalto.cli_field(text, "uptime"))),
+                    "firmware": lambda: sw and drv.result("firmware", OK, sw, paloalto.cli_field(text, "model"))}
+    except Exception as e:
+        return [Result(dev["name"], "ssh", ERROR, "", "SSH: " + Driver.explain(e))]
+    for s in SSH_FILL[vendor]:
+        try:
+            r = s in wanted and read[s]()
+        except ValueError:                                     # not in the output: no row
+            r = None
+        if r:
+            rows.append(r)
+    return rows
 
 
 def tagged(row, source, failed="", main="API"):
@@ -119,28 +162,41 @@ def tagged(row, source, failed="", main="API"):
 
 def fill_gaps(dev, thresholds, opts, res, on_check=None, signed_in=True):
     """After a device's own driver: the CPU, memory, storage, uptime and interfaces it did not give, or failed at, by SNMP once that
-    is set up, each filled row saying so. A main ERROR row goes once all it covers is filled. signed_in=False: the run raised."""
+    is set up, each filled row saying so; then, on a FortiGate or Palo Alto, what is still missing over SSH (SSH_FILL) with the SSH
+    login stored on it. A main ERROR row goes once all it covers is filled. signed_in=False: the run raised."""
     vendor, name = dev["vendor"], dev["name"]
     if not vendors.fills(vendor):
         return res
-    gov = {s: checks.governs(vendor, s) for s in checks.SUBJECTS}
-    on = [s for s in checks.SUBJECTS if checks.key(vendor, gov[s]) not in opts["disabled"]]
+    by_ssh = SSH_FILL.get(vendor, ())
+    subjects = checks.SUBJECTS + (("firmware",) if by_ssh else ())
+    gov = {s: checks.governs(vendor, s) for s in subjects}
+    on = [s for s in subjects if checks.key(vendor, gov[s]) not in opts["disabled"]]
     mine = [r for r in res if r.device == name] if signed_in else []
     about = {s: [r for r in mine if r.check in (s, gov[s])] for s in on}
     failed = {s: rows[0].message for s, rows in about.items() if rows and all(r.status == ERROR for r in rows)}
-    wanted = [s for s in on if not about[s] or s in failed]
-    if not wanted or not profiles.snmp_configured(dev):
+    wanted = [s for s in on if s in failed or not about[s] and (s != "firmware" or not signed_in)]
+    snmp_on = profiles.snmp_configured(dev)
+    ssh_on = bool(set(wanted) & set(by_ssh)) and bool((dev.get("username") or "").strip()) and bool(profiles.ssh_secret(dev))
+    if not wanted or not (snmp_on or ssh_on):
         return res
-    got = snmp_extras(dev, thresholds, opts, res, on_check, only=wanted)
+    by_snmp = [s for s in wanted if s in checks.SUBJECTS]
+    got = snmp_extras(dev, thresholds, opts, res, on_check, only=by_snmp) if snmp_on and by_snmp else []
     main = "SSH" if vendors.get(vendor).get("kind") == "ssh" else "API"
-    filled = sorted((r for r in got if r.check in wanted and r.status != ERROR), key=lambda r: checks.SUBJECTS.index(r.check))
-    done = {r.check for r in filled}
+    filled = [(r, "SNMP") for r in got if r.check in by_snmp and r.status != ERROR]
+    done = {r.check for r, _src in filled}
     errors = [r for r in got if r.status == ERROR and r.check not in failed]     # SNMP's own failure stays only where the main method said nothing
+    left = [s for s in wanted if s in by_ssh and s not in done]
+    if ssh_on and left:
+        more = ssh_extras(dev, thresholds, opts, left, on_check)
+        filled += [(r, "SSH") for r in more if r.check in left and r.status != ERROR]
+        done = {r.check for r, _src in filled}
+        errors = [r for r in errors if r.check not in done] + [r for r in more if r.status == ERROR]     # the ssh row is kept
+    filled.sort(key=lambda f: subjects.index(f[0].check))
 
     def dropped(r):
         covers = [s for s in on if r.check in (s, gov[s])]
         return r.device == name and r.status == ERROR and covers and all(s in done for s in covers)
-    return [r for r in res if not dropped(r)] + [tagged(r, "SNMP", failed.get(r.check, ""), main) for r in filled] + errors
+    return [r for r in res if not dropped(r)] + [tagged(r, src, failed.get(r.check, ""), main) for r, src in filled] + errors
 
 
 def _no_login(dev, opts):
@@ -179,7 +235,10 @@ def run_one(dev, thresholds, opts=None, on_check=None):
             if dev["vendor"] in vendors.SNMP_EXTRAS and profiles.snmp_configured(dev):
                 res += snmp_extras(dev, thresholds, opts, res, on_check)     # the managers: CPU, memory, storage, uptime, interfaces by SNMP, beside the API
             elif vendors.fills(dev["vendor"]):
-                res = fill_gaps(dev, thresholds, opts, res, on_check)        # what the device's own checks lacked or failed at, by SNMP
+                try:                                                         # what the device's own checks lacked or failed at, by SNMP or SSH;
+                    res = fill_gaps(dev, thresholds, opts, res, on_check)    # a failure here never costs the device its own rows
+                except Exception:
+                    quiet.ignored()
             res += custom.run_network(dev, drv.custom)                       # web, port, certificate, ping, SNMP
             if "all:support" not in opts.get("disabled", ()):
                 res += support.rows(dev, thresholds)                         # support, warranty and licence dates kept in the device's fields

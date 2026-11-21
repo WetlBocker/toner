@@ -146,7 +146,7 @@ fast = FakeAsa(delay=0)
 with netconn.connect(**args(fast)) as c:
     out = c.send_command("show version")
 check("an ASA that is ready at once works the same", "Adaptive Security Appliance" in out)
-check("other device types are left to netmiko", netconn.SPECIAL == {"cisco_asa": netconn.AsaSSH})
+check("other device types are left to netmiko (the FortiGate checks' read-only login aside)", netconn.SPECIAL == {"cisco_asa": netconn.AsaSSH, "fortinet_readonly": netconn.FortinetReadOnly})
 check("the prompt test", netconn.is_prompt("banner\r\nfw1# ") and netconn.is_prompt("fw1/admin>") and netconn.is_prompt("fw1(config)#")
       and not netconn.is_prompt("fw1# \r\n") and not netconn.is_prompt("Type help or '?'"))
 
