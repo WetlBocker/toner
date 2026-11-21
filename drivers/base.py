@@ -1,7 +1,7 @@
 import time
 from dataclasses import dataclass, field
 from typing import Optional
-from core import checks, db, profiles
+from core import checks, db, display, profiles
 from core import quiet
 
 OK, WARN, FAIL, ERROR = "OK", "WARN", "FAIL", "ERROR"
@@ -225,6 +225,11 @@ class Driver:
     def item(name, numeric=None, status=None, text="", data=None):
         """One per-component detail for a row's items: a drive, certificate, sensor or interface."""
         return {"name": str(name), "numeric": numeric, "status": status, "text": text, "data": data or {}}
+
+    def uptime_row(self, hours, text=""):
+        t = self.th["uptime"]
+        status = grade_low(hours, t["warn"], t["fail"])
+        return self.result("uptime", status, display.uptime(hours), "recent reboot" if status != OK else "", numeric=hours)
 
     def result(self, check, status, value="", message="", numeric=None, items=None):
         if self.on_check is not None:

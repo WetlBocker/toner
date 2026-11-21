@@ -33,6 +33,18 @@ def ospf_running(cfg):
     cfg = _one(cfg)
     return str(cfg.get("router-id") or "0.0.0.0") != "0.0.0.0" or bool(cfg.get("area") or cfg.get("network"))
 
+def cli_cpu(text):
+    """CPU percent (100 minus idle) from the `CPU states:` line of `get system performance status`; None when there is none."""
+    m = re.search(r"^CPU states:.*?([\d.]+)%\s*idle", text, re.M)
+    return round(100 - float(m.group(1)), 1) if m else None
+
+
+def cli_memory(text):
+    """Memory percent, the figure in brackets after `used` on the `Memory:` line; None when there is none."""
+    m = re.search(r"^Memory:.*?used\s*\(([\d.]+)%\)", text, re.M)
+    return float(m.group(1)) if m else None
+
+
 class FortinetDriver(Driver):
     wan_in_run = True                    # its run reads wan usage from the interface list it already has
 

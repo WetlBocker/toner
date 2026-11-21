@@ -55,6 +55,30 @@ def pan_routing_runs(res):
     return res is not None and (res.find(".//router-id") is not None or '"routerId"' in (res.findtext("json") or ""))
 
 
+def cpu_memory(text):
+    """(CPU percent, memory percent) from `show system resources` (top's output): 100 minus idle; (total - free - buff/cache) / total."""
+    idle = re.search(r"%Cpu\(s\):.*?([\d.]+)\s*id", text)
+    mem = re.search(r"Mem\s*:\s*([\d.]+)\s*total,\s*([\d.]+)\s*free,\s*([\d.]+)\s*used(?:,\s*([\d.]+)\s*buff/cache)?", text)
+    if not (idle and mem):
+        raise ValueError("could not read CPU and memory from 'show system resources'")
+    total, free, cache = float(mem.group(1)), float(mem.group(2)), float(mem.group(4) or 0)
+    return 100 - float(idle.group(1)), (total - free - cache) / total * 100
+
+
+def uptime_hours(text):
+    """Hours from '31 days, 5:55:14' or '5:55:14' (`show system info`)."""
+    m = re.match(r"(?:(\d+)\s+days?,\s*)?(\d+):(\d+):(\d+)", text)
+    if not m:
+        raise ValueError(f"unrecognised uptime '{text}'")
+    return int(m.group(1) or 0) * 24 + int(m.group(2)) + int(m.group(3)) / 60 + int(m.group(4)) / 3600
+
+
+def cli_field(text, name):
+    """The value of a `name: value` line of `show system info`, '' when there is none."""
+    m = re.search(rf"^{re.escape(name)}:[ 	]*(.*?)\s*$", text, re.M)
+    return m.group(1) if m else ""
+
+
 class PaloAltoDriver(Driver):
     """PAN-OS firewalls through the XML API. The API key is the stored secret."""
 
@@ -108,21 +132,12 @@ class PaloAltoDriver(Driver):
     def resources(self):
         res = self._op("<show><system><resources/></system></show>")
         text = (res.text or "") if res is not None else ""
-        idle = re.search(r"%Cpu\(s\):.*?([\d.]+)\s*id", text)
-        mem = re.search(r"Mem\s*:\s*([\d.]+)\s*total,\s*([\d.]+)\s*free,\s*([\d.]+)\s*used(?:,\s*([\d.]+)\s*buff/cache)?",
-                        text)
-        if not (idle and mem):
-            raise ValueError("could not read CPU and memory from 'show system resources'")
-        total, free, cache = float(mem.group(1)), float(mem.group(2)), float(mem.group(4) or 0)
-        return [self.level_check("cpu", 100 - float(idle.group(1))),
-                self.level_check("memory", (total - free - cache) / total * 100)]
+        cpu, mem = cpu_memory(text)
+        return [self.level_check("cpu", cpu), self.level_check("memory", mem)]
 
     def uptime(self):
         text = (self._system().findtext("uptime") or "").strip()
-        m = re.match(r"(?:(\d+)\s+days?,\s*)?(\d+):(\d+):(\d+)", text)
-        if not m:
-            raise ValueError(f"unrecognised uptime '{text}'")
-        hours = int(m.group(1) or 0) * 24 + int(m.group(2)) + int(m.group(3)) / 60 + int(m.group(4)) / 3600
+        hours = uptime_hours(text)
         t = self.th["uptime"]
         status = grade_low(hours, t["warn"], t["fail"])
         return self.result("uptime", status, display.uptime(hours), "recent reboot" if status != OK else "", numeric=hours)

@@ -122,11 +122,6 @@ class SshDriver(Driver):
     def unreadable(what, command):
         return ValueError(f"could not read {what} from '{command}' (unexpected output)")
 
-    def uptime_row(self, hours, text):
-        t = self.th["uptime"]
-        status = grade_low(hours, t["warn"], t["fail"])
-        return self.result("uptime", status, display.uptime(hours), "recent reboot" if status != OK else "", numeric=hours)
-
     def peers_row(self, check, established, total, down, fail=True, protocol=None, running=False):
         """With `protocol` ('BGP', 'OSPF'), no neighbors gives the N/A row (not configured) or the WARN row (running, no neighbors)."""
         if not total:
