@@ -23,15 +23,15 @@
 - Do not commit files under `.postman/`, `postman/`, `.impeccable/`, `.superpowers/` or `docs/Toner-Technical-Guide.pdf`.
 - Commit trailer: `Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>`. Never push.
 
-## Wording (approved by the owner 2026-11-21 unless marked)
+## Wording (approved by the owner 2026-11-21)
 
 | Where | Text |
 |---|---|
 | Filled row, no message of its own | `via SNMP` / `via SSH` |
 | Filled row with a message | `{message}, via SNMP` (e.g. `recent reboot, via SNMP`) |
 | Filled because the main check failed, API vendor | `via SNMP; the API check failed: {reason}` (same with `via SSH`) |
-| Filled because the main check failed, SSH vendor | `via SNMP; the SSH check failed: {reason}` **(awaiting approval)** |
-| SSH fill-in could not sign in or run | row `ssh`, ERROR, `SSH: {reason}` **(awaiting approval; mirrors today's `SNMP: {reason}`)** |
+| Filled because the main check failed, SSH vendor | `via SNMP; the SSH check failed: {reason}` |
+| SSH fill-in could not sign in or run | row `ssh`, ERROR, `SSH: {reason}` (mirrors today's `SNMP: {reason}`) |
 | Settings > Checks labels | `CPU (via SNMP, when set up)`, `Memory (via SNMP)`, `Disk and storage (via SNMP)`, `Uptime and recent reboots (via SNMP)`, `Interface status (via SNMP)`, `Interface errors (via SNMP)` |
 
 ## Rulings made while planning (each is in the spec, section 8)
@@ -189,7 +189,7 @@ FG_UP = "Uptime: 31 days,  4 hours,  0 minutes"
 - Consumes: Task 3's `fill_gaps` and `tagged`; Task 4's parsers and `Driver.uptime_row`.
 - Produces:
   - `netconn.FortinetReadOnly(FortinetSSH)`: `disable_paging(...)` returns `""` and writes nothing; `cleanup(command="exit")` calls `BaseConnection.cleanup` only (never `set output more`). Registered as `SPECIAL["fortinet_readonly"]`.
-  - `cmdrun.run_cli(dev, commands, opts=None, read_timeout=30, device_type=None) -> [(command, output)]`: the body of `_run_cli`, which becomes a call to it. `device_type` overrides `vendors.CLI_TYPES[...]`. Raises as today when no SSH login is stored.
+  - `cmdrun.run_cli(dev, commands, opts=None, read_timeout=30, device_type=None, before=None) -> [(command, output)]`: the body of `_run_cli`, which becomes a call to it. `device_type` overrides `vendors.CLI_TYPES[...]`. Raises as today when no SSH login is stored.
   - `runner.SSH_FILL = {"fortinet": ("cpu", "memory", "uptime"), "paloalto": ("cpu", "memory", "uptime", "firmware")}`
   - `runner.ssh_extras(dev, thresholds, opts, wanted, on_check=None) -> list`: rows for the wanted subjects it could read; `[]` when it read none; one `Result(name, "ssh", ERROR, "", "SSH: " + Driver.explain(e))` when the session failed.
 

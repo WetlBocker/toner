@@ -1,6 +1,6 @@
 # Collecting a check by any available method: design
 
-**Status:** every decision in section 7 is settled by the owner (2026-11-21). The build plan is `docs/superpowers/plans/2026-11-21-collect-by-any-method.md`; no code is written until the owner has reviewed it. Two strings and the rulings in section 8 await the owner's nod.
+**Status:** every decision in section 7 is settled by the owner (2026-11-21). The build plan is `docs/superpowers/plans/2026-11-21-collect-by-any-method.md`; the owner approved the plan, the wording and the rulings in section 8 on 2026-11-21.
 
 **Request (owner, 2026-11-21):** "Uptime data and any data for that matter should be able to be collected from any available method, SSH, SNMP, or API."
 
@@ -73,7 +73,7 @@ The owner's rule (2026-11-21): "via", not "from" or "by".
 - A row filled because the main method failed: "via SNMP; the API check failed: {reason}" (or "via SSH; ...").
 - Settings > Checks: the six labels in `checks.SNMP_EXTRA` change from "(by SNMP)" to "(via SNMP)", for the five vendors that show them today as well, since the list is shared: "CPU (via SNMP, when set up)", "Memory (via SNMP)", "Disk and storage (via SNMP)", "Uptime and recent reboots (via SNMP)", "Interface status (via SNMP)", "Interface errors (via SNMP)". Only the labels change; the check names and their history do not.
 
-Awaiting the owner's approval (found while planning):
+Found while planning, approved by the owner 2026-11-21:
 
 - For a vendor whose main method is SSH (Cisco, Juniper and the other switches): "via SNMP; the SSH check failed: {reason}".
 - When the SSH fill-in cannot sign in or run, one row named `ssh`: "SSH: {reason}", as today's `snmp` row says "SNMP: {reason}".
@@ -86,7 +86,7 @@ Awaiting the owner's approval (found while planning):
 - **All six labels** change to "via SNMP". Other sentences that say "by SNMP" (the WAN interface hint, the README) are not part of this change.
 - **Palo Alto's parser** is built from the owner's readable session log of 2026-11-21.
 
-## 8. Rulings made while planning (to be confirmed by the owner)
+## 8. Rulings made while planning (approved by the owner 2026-11-21)
 
 1. **Who gains fill-in:** vendors reached by SSH or by an API on the device itself. Not the three whose address is the vendor's cloud (Meraki, Mist, UniFi Site Manager), and not Windows computers, status pages or SNMP-only devices.
 2. **A device whose management port does not answer is not filled.** It is most likely down, and trying SNMP would add a time-out and a second error row to every down device. A refused sign-in, or any other failed run, is filled.
