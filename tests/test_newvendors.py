@@ -330,6 +330,14 @@ g = I.DeviceDialog(); g.vendor.setCurrentIndex(g.vendor.findData("cisco")); g.pl
 check("the FMC dialog asks for Username and Password, offers an optional SSH password, and has the SNMP tab", g.access.labelForField(g.username).text() == "Username" and g.access.isRowVisible(g.ssh_pw)
       and g.ssh_pw.placeholderText() == "blank = the password above" and g.tabs.isTabVisible(2), (g.access.labelForField(g.username).text(), g.ssh_pw.placeholderText()))
 g.close()
+for v in ("fortinet", "paloalto"):
+    g = I.DeviceDialog(); g.vendor.setCurrentIndex(g.vendor.findData(v))
+    check(f"the {v} dialog says its SSH login also serves the checks the API cannot answer (the checks fill CPU, memory and uptime with it)",
+          g.access.labelForField(g.username).text() == "SSH user name"
+          and g.username.placeholderText() == "optional, for the Command Runner, config backups and checks the API can't answer"
+          and g.username.toolTip().endswith("The checks use the API key, and this login for what the API can't answer."),
+          (g.username.placeholderText(), g.username.toolTip()))
+    g.close()
 check("the catalogue lists the SNMP checks for the managers, switchable like the rest", all(("cpu", "CPU (via SNMP, when set up)") in checks.CATALOG[v] for v in ("ciscoise", "ciscofmc", "ciscosdwan", "vmware", "sonicwall")))
 import drivers.snmpdev as SD
 from drivers.base import Result as R
