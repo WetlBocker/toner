@@ -330,7 +330,7 @@ g = I.DeviceDialog(); g.vendor.setCurrentIndex(g.vendor.findData("cisco")); g.pl
 check("the FMC dialog asks for Username and Password, offers an optional SSH password, and has the SNMP tab", g.access.labelForField(g.username).text() == "Username" and g.access.isRowVisible(g.ssh_pw)
       and g.ssh_pw.placeholderText() == "blank = the password above" and g.tabs.isTabVisible(2), (g.access.labelForField(g.username).text(), g.ssh_pw.placeholderText()))
 g.close()
-check("the catalogue lists the SNMP checks for the managers, switchable like the rest", all(("cpu", "CPU (by SNMP, when set up)") in checks.CATALOG[v] for v in ("ciscoise", "ciscofmc", "ciscosdwan", "vmware", "sonicwall")))
+check("the catalogue lists the SNMP checks for the managers, switchable like the rest", all(("cpu", "CPU (via SNMP, when set up)") in checks.CATALOG[v] for v in ("ciscoise", "ciscofmc", "ciscosdwan", "vmware", "sonicwall")))
 import drivers.snmpdev as SD
 from drivers.base import Result as R
 SD.SnmpDriver.run = lambda self: [R(self.name, "reachability", "OK", "x")] + [R(self.name, k, "OK", "v") for k, _fn in self.check_list()]   # (what a live agent would answer)

@@ -152,6 +152,12 @@ def is_snmp(vendor):
 CLI_TYPES = {"fortinet": "fortinet", "paloalto": "paloalto_panos", "ciscoise": "cisco_ios", "ciscofmc": "cisco_ftd", "ciscosdwan": "cisco_viptela"}
 SHARED_LOGIN = {"ciscoise", "ciscofmc", "ciscosdwan"}         # the API user name and password serve SSH too (an SSH password of its own is optional)
 SNMP_EXTRAS = {"ciscoise", "ciscofmc", "ciscosdwan", "vmware", "sonicwall"}   # API-checked managers that also answer SNMP once it is set up on the device
+CLOUD_ONLY = {"meraki", "mist", "unifi_cloud"}   # cloud services with no device address to reach by SNMP or SSH
+
+
+def fills(vendor):
+    """True when a gap in this vendor's own checks can be filled by SNMP (an SSH or API device that is not a manager or a cloud service)."""
+    return get(vendor).get("kind") in ("ssh", "api") and vendor not in SNMP_EXTRAS and vendor not in CLOUD_ONLY
 
 
 def shared_login(vendor):

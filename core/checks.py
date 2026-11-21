@@ -1,8 +1,9 @@
 """The checks each vendor driver runs, so they can be switched on and off in Settings."""
+from core import vendors
 
 # the checks a manager reached through its API also gets by SNMP, once SNMP is set up on it and in the device's SNMP tab (core/runner.snmp_extras)
-SNMP_EXTRA = [("cpu", "CPU (by SNMP, when set up)"), ("memory", "Memory (by SNMP)"), ("storage", "Disk and storage (by SNMP)"),
-              ("uptime", "Uptime and recent reboots (by SNMP)"), ("interfaces", "Interface status (by SNMP)"), ("interface errors", "Interface errors (by SNMP)")]
+SNMP_EXTRA = [("cpu", "CPU (via SNMP, when set up)"), ("memory", "Memory (via SNMP)"), ("storage", "Disk and storage (via SNMP)"),
+              ("uptime", "Uptime and recent reboots (via SNMP)"), ("interfaces", "Interface status (via SNMP)"), ("interface errors", "Interface errors (via SNMP)")]
 
 # vendor -> [(key, label)]. The key is what the driver tests with Driver.enabled(key).
 CATALOG = {
@@ -105,6 +106,25 @@ CATALOG = {
 # (Fortinet and the SNMP device list it above, where their run reads it)
 for _vendor in ("arista", "cisco", "dell", "extreme", "hpe", "juniper", "mikrotik", "paloalto", "sonicwall", "sophos"):
     CATALOG[_vendor] = CATALOG[_vendor] + [("wan usage", "WAN usage")]
+
+SUBJECTS = ("cpu", "memory", "storage", "uptime", "interfaces", "interface errors")
+ERRORS_IN_INTERFACES = {"cisco", "fortinet"}      # their `interfaces` check reads the error counters
+
+
+def governs(vendor, subject):
+    """The catalogue key whose tick box switches this subject for the vendor."""
+    own = {k for k, _ in CATALOG.get(vendor, [])}
+    if subject in own: return subject
+    if subject in ("cpu", "memory") and "resources" in own: return "resources"
+    if subject == "interface errors" and vendor in ERRORS_IN_INTERFACES: return "interfaces"
+    return subject
+
+
+# SSH and API devices get the SNMP entry for each subject no check of their own covers
+for _vendor in list(CATALOG):
+    if vendors.fills(_vendor):
+        _own = {k for k, _ in CATALOG[_vendor]}
+        CATALOG[_vendor] = CATALOG[_vendor] + [e for e in SNMP_EXTRA if governs(_vendor, e[0]) == e[0] and e[0] not in _own]
 
 
 def key(vendor, check):
