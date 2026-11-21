@@ -114,13 +114,17 @@ check("a token that may not read the configuration: no neighbours reads as not c
 r = run({"router/bgp/neighbors": BGP, "router/ospf/neighbors": OSPF}, disabled=("fortinet:bgp",))
 check("switched off in Settings: no row and no call; the other one still runs", "bgp" not in r and not [c for c in CALLS if "router/bgp" in c] and r["ospf"].value == "2/8 established", (list(r), CALLS))
 
-print("== uptime, from web-ui/state (snapshot_utc_time and utc_last_reboot; the unit is not confirmed, so both are read)")
+print("== uptime, from web-ui/state (snapshot_utc_time and utc_last_reboot: milliseconds on FortiOS 8.0.0; seconds are still read)")
 from core import checks
 check("Fortinet lists the uptime check, with the label the other vendors use", ("uptime", "Uptime and recent reboots") in checks.CATALOG["fortinet"])
 T0 = 1_700_000_000
 r = run({"web-ui/state": {"snapshot_utc_time": (T0 + 90 * 3600) * 1000, "utc_last_reboot": T0 * 1000}})
 check("milliseconds: 90 hours up is OK, shown like the others", "uptime" in r and row(r["uptime"]) == ("OK", "3:18:00:00", "") and abs(r["uptime"].numeric - 90) < 1e-6, r.get("uptime"))
 r = run({"web-ui/state": {"snapshot_utc_time": T0 + 1800, "utc_last_reboot": T0}})
+# the two values a FortiGate VM on FortiOS v8.0.0 (build 167) returned on 2026-11-21, while its CLI said "Uptime: 31 days,  4 hours"
+r_real = run({"web-ui/state": {"model": "FGVM64", "snapshot_utc_time": 1795243719000, "utc_last_reboot": 1792550067000, "time_zone_offset": 360, "ha_mode": 0}})
+check("a real FortiOS 8.0.0 reply: 31 days and 4 hours up, as its own CLI reports", "uptime" in r_real and row(r_real["uptime"]) == ("OK", "31:04:14:12", "")
+      and abs(r_real["uptime"].numeric - 2693652 / 3600) < 1e-6, r_real.get("uptime"))
 check("seconds: half an hour up is a recent reboot", "uptime" in r and row(r["uptime"])[0] == "WARN" and r["uptime"].message == "recent reboot" and abs(r["uptime"].numeric - 0.5) < 1e-6, r.get("uptime"))
 r = run({"web-ui/state": {"utc_last_reboot": T0}})
 check("a reply without the snapshot time gives no uptime row and no error", "web-ui/state" in " ".join(CALLS) and "uptime" not in r and not [k for k, v in r.items() if v.status == "ERROR"], list(r))

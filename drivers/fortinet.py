@@ -89,10 +89,10 @@ class FortinetDriver(Driver):
                 self.level_check("memory", res["mem"][0]["current"])]
 
     def uptime(self):
-        """monitor/web-ui/state: snapshot_utc_time (now) and utc_last_reboot, as Fortinet staff name them at
-        https://community.fortinet.com/t5/Support-Forum/Finding-System-boot-time-or-uptime-from-FortiGate-API/m-p/295596 (a forum answer, with no
-        sample reply). Not confirmed in Fortinet's documentation (its reference is on the developer network, behind a login): the endpoint, the
-        two field names, their unit (a value above 1e11 is taken as milliseconds, else seconds) and that they sit under results."""
+        """monitor/web-ui/state: snapshot_utc_time (now) and utc_last_reboot, both under results and in milliseconds. Seen in the reply of a
+        FortiGate VM on FortiOS v8.0.0 (build 167), where they agreed with the CLI's "Uptime:" line; Fortinet staff name the two fields at
+        https://community.fortinet.com/t5/Support-Forum/Finding-System-boot-time-or-uptime-from-FortiGate-API/m-p/295596. Not confirmed for
+        earlier releases (Fortinet's reference is behind a login), so a value of 1e11 or less is still read as seconds."""
         st = _one(self._optional("web-ui/state"))
         try:
             now, boot = float(st["snapshot_utc_time"]), float(st["utc_last_reboot"])
