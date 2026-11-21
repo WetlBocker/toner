@@ -341,6 +341,13 @@ def boom(self): raise OSError("no answer")
 SD.SnmpDriver.run = boom
 rows = runner.snmp_extras(ise, TH, OPTS, [])
 check("an SNMP failure is one ERROR row that names SNMP, not a lost run", len(rows) == 1 and rows[0].check == "snmp" and rows[0].status == "ERROR" and "SNMP" in rows[0].message)
+counts = iter([3, 5])
+def errs_run(self): return [self.error_counter_rows("interface errors", {"Gi1": next(counts)})]
+SD.SnmpDriver.run = errs_run
+dopts = {**OPTS, "counter_mode": "delta"}
+runner.snmp_extras(ise, TH, dopts, [])
+rows = runner.snmp_extras(ise, TH, dopts, [])
+check("the SNMP fill-in remembers error counters between runs (since last run)", len(rows) == 1 and str(rows[0].value) == "1" and rows[0].message == "Gi1 (+2)", [(r.value, r.message) for r in rows])
 
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)

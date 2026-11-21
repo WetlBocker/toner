@@ -102,6 +102,7 @@ def snmp_extras(dev, thresholds, opts, have, on_check=None):
         rows = drv.run()
     except Exception as e:
         return [Result(dev["name"], "snmp", ERROR, "", "SNMP: " + Driver.explain(e))]
+    drv.flush_baselines()
     return [r for r in rows if r.check != "reachability"]
 
 
