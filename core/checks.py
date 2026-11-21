@@ -117,6 +117,7 @@ def governs(vendor, subject):
     if subject in own: return subject
     if subject in ("cpu", "memory") and "resources" in own: return "resources"
     if subject == "interface errors" and vendor in ERRORS_IN_INTERFACES: return "interfaces"
+    if subject == "storage": return next((k for k in ("disk", "flash") if k in own), subject)     # its own disk check (Fortinet's log disk is not one)
     return subject
 
 

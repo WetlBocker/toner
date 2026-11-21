@@ -170,7 +170,8 @@ def uses_ssh_login(vendor):
 
 def ssh_reachable(vendor):
     """Whether an SSH session can be opened to this kind of device with the login it stores: switches and routers, UniFi, and the
-    Cisco managers whose one account serves SSH too. (A FortiGate or Palo Alto keeps an SSH login only for the Command Runner.)"""
+    Cisco managers whose one account serves SSH too. (A FortiGate or Palo Alto keeps an SSH login for the Command Runner, and its checks
+    use it to fill CPU, memory and uptime the API and SNMP did not give.)"""
     return uses_ssh_login(vendor) or shared_login(vendor)
 
 

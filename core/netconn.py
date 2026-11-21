@@ -91,7 +91,14 @@ def any_mode(conn):
 
 class FortinetReadOnly(FortinetSSH):
     """FortinetSSH that changes nothing on the firewall: netmiko's sign-in sets `config system console` / `set output standard` and
-    puts `set output more` back on exit, two configuration changes per session. The checks send commands too short to page instead."""
+    puts `set output more` back on exit, two configuration changes per session. The checks send commands too short to page instead.
+    It reaches netmiko as "fortinet", so an error text never shows the internal name."""
+
+    def __init__(self, *args, **kw):
+        super().__init__(*args, **{**kw, "device_type": "fortinet"})
+
+    def _get_output_mode(self):
+        return "more"                        # nothing reads it now; asking needs `config global`, which a one-VDOM admin may not have
 
     def disable_paging(self, *args, **kw):
         return ""

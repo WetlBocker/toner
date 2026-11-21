@@ -3,7 +3,7 @@
 import os as _os, sys as _sys, tempfile as _tmp
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 _os.environ.setdefault("SP", _tmp.mkdtemp(prefix="netcheck_test_"))
-import os, time
+import os, sys, time
 SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = os.path.join(SP, "fill%d.db" % int(time.time())); os.environ["APPDATA"] = os.path.join(SP, "roamingfill%d" % int(time.time()))
 from core import checks, db, vendors
 db.init()
@@ -19,7 +19,8 @@ def check(name, cond, extra=""):
 print("== governs")
 for v, s, want in [("fortinet", "cpu", "resources"), ("fortinet", "memory", "resources"), ("fortinet", "interface errors", "interfaces"),
                    ("fortinet", "storage", "storage"), ("paloalto", "interface errors", "interface errors"), ("cisco", "cpu", "cpu"),
-                   ("juniper", "storage", "storage")]:
+                   ("juniper", "storage", "storage"), ("paloalto", "storage", "disk"), ("mikrotik", "storage", "disk"), ("opnsense", "storage", "disk"),
+                   ("cisco", "storage", "flash"), ("arista", "storage", "flash"), ("fortinet", "storage", "storage"), ("truenas", "storage", "storage")]:
     check(f"{v} {s} -> {want}", checks.governs(v, s) == want, checks.governs(v, s))
 
 print("== the catalogue gains the SNMP entries")
@@ -28,6 +29,8 @@ check("fortinet gains storage via SNMP", ("storage", "Disk and storage (via SNMP
 check("fortinet has no interface errors key", "interface errors" not in [k for k, _ in fg])
 check("paloalto gains interface errors via SNMP", ("interface errors", "Interface errors (via SNMP)") in checks.CATALOG["paloalto"])
 jun = [e for e in checks.CATALOG["juniper"] if e[0] == "storage"]
+for v in ("paloalto", "mikrotik", "opnsense", "cisco", "arista"):
+    check(f"{v} gains no storage key beside its own disk check", "storage" not in [k for k, _ in checks.CATALOG[v]], [k for k, _ in checks.CATALOG[v]])
 check("juniper keeps its own storage label, once", jun == [("storage", "Storage space")], jun)
 def _dups(l):
     ks = [k for k, _ in l]; return {k for k in ks if ks.count(k) > 1}
@@ -122,6 +125,21 @@ reset(); out = fill([], signed_in=False)
 check("signed_in=False: six rows tagged exactly 'via SNMP'", [r.check for r in out] == list(checks.SUBJECTS) and all(r.message == "via SNMP" for r in out),
       [(r.check, r.message) for r in out])
 check("another device's rows do not cover this one's", [r.check for r in fill([R("other", "cpu", "OK", "1")])] == ["cpu"] + list(checks.SUBJECTS))
+pve = {"name": "pve", "vendor": "proxmox", "host": "h"}
+reset(); out = fill([R("pve / n1", c, "OK", "1") for c in ("cpu", "memory", "uptime")], dev=pve)
+check("a Proxmox's rows labelled 'pve / n1' cover cpu, memory and uptime: none of them added via SNMP",
+      not [r for r in out if r.check in ("cpu", "memory", "uptime") and "via SNMP" in r.message], [(r.device, r.check, r.message) for r in out])
+reset(); out = fill([R("pve2", "cpu", "OK", "1"), R("pvx / n1", "cpu", "OK", "1")], dev=pve)
+check("...but rows of 'pve2' or 'pvx / n1' do not cover 'pve'", [r.message for r in named(out, "cpu") if r.device == "pve"] == ["via SNMP"], [(r.device, r.check, r.message) for r in out])
+pa = {"name": "pa", "vendor": "paloalto", "host": "h"}
+PA = [R("pa", c, "OK", "1") for c in ("resources", "uptime", "interfaces", "interface errors")]
+reset(); out = fill(PA + [R("pa", "disk", "OK", "1")], dev=pa)
+check("a Palo Alto whose API disk row is OK gets no storage row via SNMP", not named(out, "storage"), [(r.check, r.message) for r in out])
+reset(); out = fill(PA + [R("pa", "disk", "ERROR", "", "HTTP 500")], dev=pa)
+check("a Palo Alto disk ERROR HTTP 500: storage filled, 'via SNMP; the API check failed: HTTP 500', no disk ERROR row left",
+      [r.message for r in named(out, "storage")] == ["via SNMP; the API check failed: HTTP 500"] and not named(out, "disk"), [(r.check, r.status, r.message) for r in out])
+reset(); out = fill(PA, dev=pa, disabled={"paloalto:disk"})
+check("paloalto:disk switched off: no storage row", not named(out, "storage"), [(r.check, r.message) for r in out])
 
 print("== run_one")
 class Fake:
@@ -147,5 +165,18 @@ check("a rejected login: the connection ERROR row, then the filled rows",
 reset(); Fake.rows = [("cpu", "OK", "1"), ("memory", "OK", "1")]
 out = runner.run_one(dict(fw), TH, dict(OPTS))
 check("a FortiGate that signs in gains what its API lacks", [r.check for r in out] == ["cpu", "memory", "storage", "uptime", "interfaces", "interface errors"], [r.check for r in out])
+for exc in (TimeoutError("timed out"), ConnectionError("refused")):
+    reset(); Fake.rows = exc
+    out = runner.run_one(dict(fw), TH, dict(OPTS))
+    check(f"a connection that failed ({type(exc).__name__}): the connection row, nothing filled, SNMP not run",
+          [r.check for r in out] == ["connection"] and SN["calls"] == 0, ([(r.check, r.message) for r in out], SN["calls"]))
+reset(); Fake.rows = [("cpu", "OK", "1")]; called = []; real_fill = runner.fill_gaps
+runner.fill_gaps = lambda *a, **k: called.append(a) or []
+runner.reachability = lambda d, o: [R(d["name"], "reachability", "FAIL", "", "no answer on port 443")]
+out = runner.run_one(dict(fw), TH, dict(OPTS))
+runner.fill_gaps = real_fill; runner.reachability = lambda d, o: []
+check("a FortiGate whose port did not answer: fill_gaps not called, no filled row",
+      called == [] and [r.check for r in out] == ["reachability", "connection"] and not any("via" in r.message for r in out), [(r.check, r.message) for r in out])
 
 print(f"\n{ok} passed, {bad} failed")
+sys.exit(1 if bad else 0)

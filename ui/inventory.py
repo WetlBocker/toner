@@ -43,7 +43,7 @@ class DeviceDialog(QDialog):
         self._keep = "leave blank to keep the stored value" if dev else ""     # a new device has nothing stored yet
         self.setMinimumWidth(460)
         self.name, self.host, self.username = QLineEdit(), QLineEdit(), QLineEdit()
-        self.ssh_pw = QLineEdit()                                  # a firewall's SSH password, for the Command Runner (its checks use the API key)
+        self.ssh_pw = QLineEdit()                                  # a firewall's SSH password, for the Command Runner, and for the checks to fill CPU, memory and uptime the API and SNMP did not give (Fortinet, Palo Alto)
         self.ssh_pw.setEchoMode(QLineEdit.EchoMode.Password)
         self.ssh_pw.setPlaceholderText(self._keep)
         self.enable_pw = QLineEdit()                               # Cisco: enable mode's own password, when it differs from the login

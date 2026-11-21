@@ -147,7 +147,7 @@ def ssh_extras(dev, thresholds, opts, wanted, on_check=None):
     for s in SSH_FILL[vendor]:
         try:
             r = s in wanted and read[s]()
-        except ValueError:                                     # not in the output: no row
+        except Exception:                                      # not in the output, or unreadable: no row for it, the others kept
             r = None
         if r:
             rows.append(r)
@@ -171,7 +171,8 @@ def fill_gaps(dev, thresholds, opts, res, on_check=None, signed_in=True):
     subjects = checks.SUBJECTS + (("firmware",) if by_ssh else ())
     gov = {s: checks.governs(vendor, s) for s in subjects}
     on = [s for s in subjects if checks.key(vendor, gov[s]) not in opts["disabled"]]
-    mine = [r for r in res if r.device == name] if signed_in else []
+    own = lambda r: r.device == name or r.device.startswith(name + " / ")     # Proxmox and UniFi label rows "device / node"
+    mine = [r for r in res if own(r)] if signed_in else []
     about = {s: [r for r in mine if r.check in (s, gov[s])] for s in on}
     failed = {s: rows[0].message for s, rows in about.items() if rows and all(r.status == ERROR for r in rows)}
     wanted = [s for s in on if s in failed or not about[s] and (s != "firmware" or not signed_in)]
@@ -195,7 +196,7 @@ def fill_gaps(dev, thresholds, opts, res, on_check=None, signed_in=True):
 
     def dropped(r):
         covers = [s for s in on if r.check in (s, gov[s])]
-        return r.device == name and r.status == ERROR and covers and all(s in done for s in covers)
+        return own(r) and r.status == ERROR and covers and all(s in done for s in covers)
     return [r for r in res if not dropped(r)] + [tagged(r, src, failed.get(r.check, ""), main) for r, src in filled] + errors
 
 
@@ -261,7 +262,8 @@ def run_one(dev, thresholds, opts=None, on_check=None):
                 rows = pre + [Result(dev["name"], "connection", ERROR, "", f"{said}{tail}")]
             try:                                   # web, port, certificate and ping checks do not need the login
                 rows += _no_login(dev, opts)
-                rows += fill_gaps(dev, thresholds, opts, [], on_check, signed_in=False)    # nor does SNMP
+                if not _transient(e):              # nor does SNMP; a device that did not answer is not filled
+                    rows += fill_gaps(dev, thresholds, opts, [], on_check, signed_in=False)
             except Exception:
                 quiet.ignored()
             return rows

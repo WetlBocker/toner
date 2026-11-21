@@ -128,6 +128,16 @@ check("...nor with a blank user name", CLI["calls"] == [] and not named(out, "ss
 reset(); CLI["top"] = OLD_TOP; out = fill([], dev=pa, signed_in=False)
 check("review focus 5: the older top layout: uptime and firmware, no cpu or memory, no ssh ERROR row",
       named(out, "uptime") and named(out, "firmware") and not named(out, "cpu") and not named(out, "memory") and not named(out, "ssh"), show(out))
+reset(); SNMP_ON[0] = True; CLI["top"] = PA_TOP.replace("5447.1 total", "0.0 total"); SD_run = SD.SnmpDriver.run
+SD.SnmpDriver.run = lambda self: [R(self.name, "interfaces", "OK", "2/2 up")]
+try:
+    out = fill([], dev=pa, signed_in=False)
+except Exception as e:
+    out = [R("pa", "raised", "ERROR", "", repr(e))]
+SD.SnmpDriver.run = SD_run
+check("a memory total of 0 in top: uptime, firmware and SNMP's interfaces kept, no cpu or memory, no ssh ERROR row",
+      named(out, "uptime") and named(out, "firmware") and [r.message for r in named(out, "interfaces")] == ["via SNMP"]
+      and not named(out, "cpu") and not named(out, "memory") and not named(out, "ssh") and not named(out, "raised"), show(out))
 reset(); seen = []; real_extras = runner.ssh_extras
 runner.ssh_extras = lambda d, *a, **k: (seen.append(d["vendor"]), real_extras(d, *a, **k))[1]
 db.set_secret(db.secret_name("sw"), "x")
@@ -224,6 +234,34 @@ except AssertionError:
 BaseConnection.cleanup = real_cleanup
 check("cleanup writes no 'config system console' (send_multiline never called)", not wrote)
 check("registered as SPECIAL['fortinet_readonly']", netconn.SPECIAL.get("fortinet_readonly") is netconn.FortinetReadOnly)
+ro = netconn.FortinetReadOnly(device_type="fortinet_readonly", host="h", username="u", password="p", auto_connect=False)
+check("it reaches netmiko as device_type 'fortinet' (an error text never shows the internal name)", ro.device_type == "fortinet", ro.device_type)
+ro.write_channel = never; ro._vdoms = True; ro._os_version = "v7_or_later"
+try:
+    mode = ro._get_output_mode()
+except Exception as e:                     # (a write raises; netmiko turns it into a ValueError)
+    mode = repr(e)
+check("_get_output_mode is 'more' and sends nothing", mode == "more", mode)
+
+class FortiChan:
+    """A FortiGate with VDOMs on FortiOS 7 behind a fake channel: answers the commands netmiko sends while signing in."""
+    ANSWERS = {"get system status | grep Virtual": "Virtual domain configuration: multiple",
+               "get system status | grep Version": "Version: FortiGate-60F v7.2.5,build1517,230606 (GA.F)", "get system console": "output              : more"}
+    def __init__(self): self.pending, self.sent = "FGT # ", []
+    def write_channel(self, data):
+        for line in data.splitlines(True):
+            if line.endswith("\n"):
+                cmd = line.strip(); self.sent.append(cmd)
+                self.pending += cmd + "\n" + (self.ANSWERS[cmd] + "\n" if cmd in self.ANSWERS else "") + "FGT # "
+    def read_channel(self):
+        out, self.pending = self.pending, ""; return out
+ro = netconn.FortinetReadOnly(device_type="fortinet_readonly", host="h", username="u", password="p", auto_connect=False, fast_cli=True)
+ro.channel = FortiChan()
+ro.session_preparation(); ro.cleanup()
+typed = ro.channel.sent
+check("a session (sign-in and clean-up) on a VDOM FortiGate sends no 'config ' or 'set ' line, nor 'get system console'",
+      typed and not [c for c in typed if c.startswith(("config ", "set ")) or c == "get system console"], typed)
+check("...and it read the VDOM setting the fill's before hook needs", ro._vdoms is True, ro._vdoms)
 
 print(f"\n{ok} passed, {bad} failed")
 sys.exit(1 if bad else 0)
