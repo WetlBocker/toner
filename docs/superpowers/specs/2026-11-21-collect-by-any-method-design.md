@@ -29,7 +29,7 @@
 | Uptime | `uptime` |
 | Interfaces | `interfaces` |
 | Interface errors | `interface errors`, and `interfaces` where the vendor's check includes error counters (Cisco) |
-| Storage | `storage` where the vendor has its own (Juniper, Proxmox); otherwise none, and it is SNMP's own |
+| Storage | the vendor's own `storage` (Juniper, Proxmox), else its `disk` (Palo Alto, MikroTik, OPNsense), else its `flash` (Cisco, Arista); otherwise none, and it is SNMP's own. Fortinet's `log disk` is a different thing and does not count |
 
 **C. A failed check is a gap too.** When the main method's row for a subject is an ERROR, or the main method could not sign in at all, the next method supplies that subject and the row says why (section 6). The main method's sign-in failure keeps its own ERROR row, as today.
 
@@ -78,6 +78,8 @@ Found while planning, approved by the owner 2026-11-21:
 - For a vendor whose main method is SSH (Cisco, Juniper and the other switches): "via SNMP; the SSH check failed: {reason}".
 - When the SSH fill-in cannot sign in or run, one row named `ssh`: "SSH: {reason}", as today's `snmp` row says "SNMP: {reason}".
 
+- Edit device > Access, SSH user name field of a Fortinet or Palo Alto (approved 2026-11-21, after the whole-branch review found the old text untrue): placeholder "optional, for the Command Runner, config backups and checks the API can't answer"; the tooltip ends "The checks use the API key, and this login for what the API can't answer."
+
 ## 7. Decided (owner, 2026-11-21)
 
 - **The five vendors that already have SNMP fill-in** (ISE, FMC, SD-WAN, vCenter, SonicWall) keep exactly the rows they have today. The subject rule applies to the vendors gaining fill-in.
@@ -94,3 +96,19 @@ Found while planning, approved by the owner 2026-11-21:
 4. **A FortiGate with VDOMs is not filled over SSH** until one is available to test against.
 5. **Interface errors via SNMP never reported a change** in the "since last run" counter mode, on the five existing vendors: the counters were not kept between runs. Fixed as part of this work, since the check is now on for every vendor; found by reading the code, to be proven by a failing test first.
 6. **The owner's FortiGate has not been asked the three `| grep` commands.** One run of each in the Command Runner before release confirms they print one line each.
+7. **A failed connection is not filled either** (added after the whole-branch review). Ruling 2 relied on the port probe, which only some vendors have. On a failed run the fill is skipped when the failure is a network failure (a time-out, a refused or dropped connection); a refused sign-in, an HTTP error and a host-key problem are still filled.
+8. **Rows named "device / part" count as the device's own** (Proxmox nodes, UniFi console devices), so SNMP does not repeat CPU, memory or uptime the API gave per node.
+9. **Storage is not repeated beside a disk check** (section 2B's table, corrected above).
+10. **A device with its own list of checks, or under a monitoring profile, does not gain the new via-SNMP checks:** they appear there unticked, as any new check does. No database upgrade step was added.
+11. **The Choose interfaces picker lists via SNMP** for a device type whose driver has no interface list of its own, when SNMP is set up. This also repairs the picker on ISE, FMC, SD-WAN Manager and vCenter, where it was offered and failed.
+
+## 9. Known limits, left for later
+
+- When a Cisco's own interfaces check fails and SNMP stands in, a chosen interface list can warn "not found": the picker stores long names (GigabitEthernet1/0/1) and SNMP uses short ones (Gi1/0/1).
+- On SonicWall the picker lists via SNMP while the check is the API's; whether the names match is unverified.
+- A device that is up but fails TLS certificate checks counts as a failed connection and is not filled.
+- On Proxmox a failed `nodes` check lets SNMP fill CPU and memory without the "the API check failed" note, and unticking `nodes` does not stop them (they have their own tick boxes).
+- On a UniFi console that reports no row of its own, an adopted device's CPU, memory or uptime row counts as covering the console.
+- The FortiGate driver and the SNMP fill share the error-counter memory per port; in "since last run" mode one false increase is possible when SNMP stands in for one run.
+- The Command Runner, config backups and custom SSH checks on a FortiGate still use the SSH library's normal login, with its two console changes per session.
+- Not run on a real device: the three FortiGate `| grep` commands, and `show system resources` over SSH on a Palo Alto.
