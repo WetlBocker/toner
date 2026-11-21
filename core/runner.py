@@ -1,3 +1,4 @@
+import dataclasses
 import socket
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -84,9 +85,10 @@ NO_VENDOR = "No vendor chosen. Edit the device to choose one. Until then only it
 SNMP_EXTRA_CHECKS = ("cpu", "memory", "storage", "uptime", "interfaces", "interface errors")
 
 
-def snmp_extras(dev, thresholds, opts, have, on_check=None):
+def snmp_extras(dev, thresholds, opts, have, on_check=None, only=None):
     """A manager checked through its API that also answers SNMP once that is set up on it and in the device's SNMP tab (ISE, FMC,
     the SD-WAN Manager, vCenter, SonicWall): CPU, memory, storage, uptime and interfaces by SNMP, for whatever the API did not give.
+    With `only` (subjects, for fill_gaps) exactly those are read, whatever `have` holds, without asking their tick boxes (the caller has).
     An SNMP failure is one ERROR row, never the loss of the API's rows."""
     from drivers.snmpdev import SnmpDriver
     done = {r.check for r in have if r.device == dev["name"]}
@@ -95,7 +97,10 @@ def snmp_extras(dev, thresholds, opts, have, on_check=None):
         def check_list(self):
             own = dict([("cpu", self.cpu), ("memory", self.memory), ("storage", self.storage), ("uptime", self.uptime),
                         ("interfaces", self.interfaces), ("interface errors", self.errors)])
-            return [(k, own[k]) for k in SNMP_EXTRA_CHECKS if k not in done]
+            return [(k, own[k]) for k in SNMP_EXTRA_CHECKS if (k in only if only is not None else k not in done)]
+
+        def enabled(self, check_key):
+            return (only is not None and check_key in only) or super().enabled(check_key)
     drv = Extras(dev, thresholds, opts)
     drv.on_check = on_check
     try:
@@ -104,6 +109,38 @@ def snmp_extras(dev, thresholds, opts, have, on_check=None):
         return [Result(dev["name"], "snmp", ERROR, "", "SNMP: " + Driver.explain(e))]
     drv.flush_baselines()
     return [r for r in rows if r.check != "reachability"]
+
+
+def tagged(row, source, failed="", main="API"):
+    """A copy of a row another method filled in, its message saying so."""
+    msg = f"{row.message}, via {source}" if row.message else f"via {source}"
+    return dataclasses.replace(row, message=f"{msg}; the {main} check failed: {failed}" if failed else msg)
+
+
+def fill_gaps(dev, thresholds, opts, res, on_check=None, signed_in=True):
+    """After a device's own driver: the CPU, memory, storage, uptime and interfaces it did not give, or failed at, by SNMP once that
+    is set up, each filled row saying so. A main ERROR row goes once all it covers is filled. signed_in=False: the run raised."""
+    vendor, name = dev["vendor"], dev["name"]
+    if not vendors.fills(vendor):
+        return res
+    gov = {s: checks.governs(vendor, s) for s in checks.SUBJECTS}
+    on = [s for s in checks.SUBJECTS if checks.key(vendor, gov[s]) not in opts["disabled"]]
+    mine = [r for r in res if r.device == name] if signed_in else []
+    about = {s: [r for r in mine if r.check in (s, gov[s])] for s in on}
+    failed = {s: rows[0].message for s, rows in about.items() if rows and all(r.status == ERROR for r in rows)}
+    wanted = [s for s in on if not about[s] or s in failed]
+    if not wanted or not profiles.snmp_configured(dev):
+        return res
+    got = snmp_extras(dev, thresholds, opts, res, on_check, only=wanted)
+    main = "SSH" if vendors.get(vendor).get("kind") == "ssh" else "API"
+    filled = sorted((r for r in got if r.check in wanted and r.status != ERROR), key=lambda r: checks.SUBJECTS.index(r.check))
+    done = {r.check for r in filled}
+    errors = [r for r in got if r.status == ERROR and r.check not in failed]     # SNMP's own failure stays only where the main method said nothing
+
+    def dropped(r):
+        covers = [s for s in on if r.check in (s, gov[s])]
+        return r.device == name and r.status == ERROR and covers and all(s in done for s in covers)
+    return [r for r in res if not dropped(r)] + [tagged(r, "SNMP", failed.get(r.check, ""), main) for r in filled] + errors
 
 
 def _no_login(dev, opts):
@@ -140,7 +177,9 @@ def run_one(dev, thresholds, opts=None, on_check=None):
             if not getattr(drv, "wan_in_run", True) and ifaces.wan_capable(dev["vendor"]) and drv.enabled("wan usage"):
                 drv.safe(res, "wan usage", drv.wan_usage)                  # by SNMP once it is set up (Driver.interface_counters)
             if dev["vendor"] in vendors.SNMP_EXTRAS and profiles.snmp_configured(dev):
-                res += snmp_extras(dev, thresholds, opts, res, on_check)     # CPU, memory, storage, uptime, interfaces by SNMP, beside the API
+                res += snmp_extras(dev, thresholds, opts, res, on_check)     # the managers: CPU, memory, storage, uptime, interfaces by SNMP, beside the API
+            elif vendors.fills(dev["vendor"]):
+                res = fill_gaps(dev, thresholds, opts, res, on_check)        # what the device's own checks lacked or failed at, by SNMP
             res += custom.run_network(dev, drv.custom)                       # web, port, certificate, ping, SNMP
             if "all:support" not in opts.get("disabled", ()):
                 res += support.rows(dev, thresholds)                         # support, warranty and licence dates kept in the device's fields
@@ -163,6 +202,7 @@ def run_one(dev, thresholds, opts=None, on_check=None):
                 rows = pre + [Result(dev["name"], "connection", ERROR, "", f"{said}{tail}")]
             try:                                   # web, port, certificate and ping checks do not need the login
                 rows += _no_login(dev, opts)
+                rows += fill_gaps(dev, thresholds, opts, [], on_check, signed_in=False)    # nor does SNMP
             except Exception:
                 quiet.ignored()
             return rows
