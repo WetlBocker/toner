@@ -104,11 +104,11 @@ Found while planning, approved by the owner 2026-11-21:
 
 ## 9. Known limits, left for later
 
-- When a Cisco's own interfaces check fails and SNMP stands in, a chosen interface list can warn "not found": the picker stores long names (GigabitEthernet1/0/1) and SNMP uses short ones (Gi1/0/1).
+- Fixed 2026-11-22: a chosen interface list that holds long names (GigabitEthernet1/0/1, as a Cisco's command line gives them) is matched against SNMP's long name as well as its short one (Gi1/0/1). Still open on a Cisco ASA, where SNMP's long name is a sentence ("Adaptive Security Appliance 'outside' interface"), not the port name.
 - On SonicWall the picker lists via SNMP while the check is the API's; whether the names match is unverified.
 - A device that is up but fails TLS certificate checks counts as a failed connection and is not filled.
 - On Proxmox a failed `nodes` check lets SNMP fill CPU and memory without the "the API check failed" note, and unticking `nodes` does not stop them (they have their own tick boxes).
 - On a UniFi console that reports no row of its own, an adopted device's CPU, memory or uptime row counts as covering the console.
 - The FortiGate driver and the SNMP fill share the error-counter memory per port; in "since last run" mode one false increase is possible when SNMP stands in for one run.
 - The Command Runner, config backups and custom SSH checks on a FortiGate still use the SSH library's normal login, with its two console changes per session.
-- Not run on a real device: the three FortiGate `| grep` commands, and `show system resources` over SSH on a Palo Alto.
+- Confirmed by the owner on 2026-11-22 through the Command Runner: each of the three FortiGate `| grep` commands prints its one line (quoted pattern included), and `show system resources` on the Palo Alto prints the layout the parser reads; both outputs are test fixtures. The fill-in itself (the read-only login and a whole run) has not been run against a real device.

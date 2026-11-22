@@ -55,6 +55,17 @@ check("cpu is 100 minus idle", fortinet.cli_cpu(FG_CPU) == 0.0, fortinet.cli_cpu
 check("cpu with load", fortinet.cli_cpu(FG_CPU.replace("100% idle", "40% idle")) == 60.0)
 check("memory is the percent after used", fortinet.cli_memory(FG_MEM) == 58.1, fortinet.cli_memory(FG_MEM))
 check("uptime through sshbase.uptime_hours", sshbase.uptime_hours(FG_UP) == 748)
+# what the three commands printed on the FortiGate through the Command Runner on 2026-11-22: one line each, so the pager never starts
+check("the FortiGate's own answers to the three grep commands parse",
+      fortinet.cli_cpu("CPU states: 38% user 1% system 0% nice 60% idle 1% iowait 0% irq 0% softirq") == 40.0
+      and fortinet.cli_memory("Memory: 2042628k total, 1182056k used (57.9%), 586460k free (28.7%), 274112k freeable (13.4%)") == 57.9
+      and round(sshbase.uptime_hours("Uptime: 32 days,  10 hours,  14 minutes"), 2) == 778.23)
+# and `show system resources` on the Palo Alto the same way (pager off, so no "lines 1-73" markers)
+cpu2, mem2 = paloalto.cpu_memory("top - 05:52:42 up 32 days, 11:18,  1 user,  load average: 1.16, 1.19, 1.19\n"
+                                 "Tasks: 250 total,   1 running, 248 sleeping,   0 stopped,   1 zombie\n"
+                                 "%Cpu(s): 28.1 us, 12.5 sy,  0.0 ni, 53.1 id,  0.0 wa,  6.2 hi,  0.0 si,  0.0 st\n"
+                                 "MiB Mem :   5447.1 total,    206.4 free,   2526.9 used,   2713.9 buff/cache\n")
+check("show system resources as the Command Runner returned it parses", (round(cpu2, 1), round(mem2, 1)) == (46.9, 46.4), (cpu2, mem2))
 check("nothing to read gives None", fortinet.cli_cpu("") is None and fortinet.cli_memory("") is None)
 check("a per-core CPU0 line is not read", fortinet.cli_cpu(FG_CPU.replace("CPU states", "CPU0 states")) is None)
 
