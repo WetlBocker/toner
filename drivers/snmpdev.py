@@ -167,8 +167,14 @@ class SnmpDriver(SnmpExtras, Driver):
         return self._if_cache
 
     def _label(self, i):
+        """The short name (ifName), unless this device's own list of interfaces holds the long one (ifDescr): a list chosen from a
+        Cisco's command line says GigabitEthernet1/0/1 where SNMP says Gi1/0/1."""
         d = self._ifs()
-        return text_of(d["name"].get(i)) or text_of(d["descr"].get(i, i))
+        name, descr = text_of(d["name"].get(i)), text_of(d["descr"].get(i, i))
+        flt = self.interface_filter()
+        if flt and name.lower() not in flt and descr.lower() in flt:
+            return descr
+        return name or descr
 
     def _real_ifs(self):
         d, out = self._ifs(), []
