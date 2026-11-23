@@ -8,6 +8,7 @@ _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import ftplib, io, os, socket, sys, time
 SP = os.environ["SP"]; os.environ["NETCHECK_DB"] = os.path.join(SP, "fsdb.db"); os.environ["APPDATA"] = SP; os.makedirs(SP, exist_ok=True)
 from core import fileserver as F
+from _ports import free_range                              # found beside this file: tests run as scripts
 ok = bad = 0
 def check(name, cond, extra=""):
     global ok, bad
@@ -21,7 +22,7 @@ open(os.path.join(base, "outside.txt"), "wb").write(b"SECRET")
 put_file("hello.txt", b"hello world"); put_file("sub/inner.bin", bytes(range(256)) * 10); put_file("big.bin", os.urandom(300000))
 put_file("old.bin" + F.PART, b"half")                      # an unfinished upload is never listed or served
 ev = []
-PASV = (50200, 50210)
+PASV = free_range()
 CRLF = b"\r\n"
 def server(**kw):
     s = F.FtpServer(root, "toner", "S3cret-pass!", port=0, bind="127.0.0.1", passive_ports=PASV, on_event=ev.append, **kw); s.start(); return s
@@ -161,7 +162,7 @@ p1, p2 = F._part_for(a), F._part_for(a)
 check("each upload writes its own unfinished file, which is never listed", p1 != p2 and p1.endswith(F.PART) and p2.endswith(F.PART))
 
 print("== passive ports used again at once")
-s = F.FtpServer(root, "toner", "S3cret-pass!", port=0, bind="127.0.0.1", passive_ports=(50230, 50232)); s.start()
+s = F.FtpServer(root, "toner", "S3cret-pass!", port=0, bind="127.0.0.1", passive_ports=free_range(3)); s.start()
 c = client(s)
 got = [get(c, "hello.txt") for _ in range(10)]              # ten transfers through three ports, back to back
 check("more transfers than passive ports, one after another (a closed port is free again at once, on Linux too)", got == [b"hello world"] * 10)

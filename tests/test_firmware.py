@@ -18,6 +18,7 @@ db.init()
 logging.getLogger("paramiko").setLevel(logging.CRITICAL)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _ssh_shell import ShellServer
+from _ports import free_range
 ok = bad = 0
 def check(name, cond, extra=""):
     global ok, bad
@@ -67,7 +68,7 @@ check("ls -l / LIST lines: files only, with size, date and a name that has space
       and p[0]["modified"].year == 2025 and p[1]["modified"].hour == 9, p)
 
 print("== another server: FTP")
-ftp = F.FtpServer(base, "fwuser", "Ftp-pass-123", port=0, bind="127.0.0.1", passive_ports=(50500, 50510)); ftp.start()
+ftp = F.FtpServer(base, "fwuser", "Ftp-pass-123", port=0, bind="127.0.0.1", passive_ports=free_range()); ftp.start()
 fsrc = {"own": False, "proto": "ftp", "host": "127.0.0.1", "port": ftp.port, "user": "fwuser", "password": "Ftp-pass-123", "folder": "/firmware", "anonymous": False}
 files = FW.list_files(fsrc)
 check("lists the folder: files only (not the sub-folder, not an unfinished upload), by name", names(files) == WANT, names(files))
@@ -88,7 +89,7 @@ class AnonSession(F._FtpSession):                       # a server that lets ano
         self.reply("502 Command not implemented.")
 real_session = F._FtpSession
 F._FtpSession = AnonSession
-anon = F.FtpServer(base, "fwuser", "Ftp-pass-123", port=0, bind="127.0.0.1", passive_ports=(50520, 50530)); anon.start()
+anon = F.FtpServer(base, "fwuser", "Ftp-pass-123", port=0, bind="127.0.0.1", passive_ports=free_range()); anon.start()
 files = FW.list_files({**fsrc, "port": anon.port, "anonymous": True, "user": "", "password": ""})
 check("anonymous login, on a server without MLSD (read from LIST instead)", names(files) == WANT and {f["name"]: f["size"] for f in files} == IMAGES, names(files))
 anon.stop(); F._FtpSession = real_session
@@ -189,7 +190,7 @@ check("the fake device fetches over HTTP and HTTPS (no trustpoint, like a lab)",
       and _cisco_fake.fetch(FW.copy_url(ssl_src, IOS_)) == open(os.path.join(images, IOS_), "rb").read())
 
 print("== Toner's own servers")
-own_ftp = F.FtpServer(images, "toner", "Own-ftp-pass1", port=0, bind="127.0.0.1", passive_ports=(50540, 50550)); own_ftp.start()
+own_ftp = F.FtpServer(images, "toner", "Own-ftp-pass1", port=0, bind="127.0.0.1", passive_ports=free_range()); own_ftp.start()
 own_tftp = F.TftpServer(images, port=0, bind="127.0.0.1"); own_tftp.start()
 servers = {"ftp": own_ftp, "sftp": sftp_srv, "tftp": own_tftp}
 choices = FW.own_choices(servers)
